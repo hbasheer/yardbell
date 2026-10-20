@@ -4,6 +4,7 @@ mod creds;
 mod launch;
 mod main_window;
 mod notify;
+mod panel;
 mod poller;
 mod settings;
 mod shortcuts;
@@ -154,6 +155,7 @@ async fn begin_session(app: &AppHandle, client: Client) {
     let generation = session.generation.bump();
     *slot = Some(client.clone());
     tray::reset_tray(app, &app.state::<Settings>().switches());
+    panel::reset(app);
     let poller = tauri::async_runtime::spawn(poll(app.clone(), client, generation));
     let previous = session.poller.lock().unwrap().replace(poller);
     if let Some(previous) = previous {
@@ -214,6 +216,7 @@ fn deliver(
         }
         let switches = handle.state::<Settings>().switches();
         tray::update_tray(&handle, view.as_ref(), &switches);
+        panel::publish(&handle, view.as_ref());
         let Some(view) = view else {
             return;
         };
@@ -257,6 +260,7 @@ fn toggle_switch(app: &AppHandle, id: &str) {
         if let Err(e) = set_autostart(app, next.autostart) {
             eprintln!("yardbell: can't change Start at login: {e}");
             tray::show_switches(app, &current);
+            panel::show_switches(app, &current);
             return;
         }
     }
@@ -264,6 +268,7 @@ fn toggle_switch(app: &AppHandle, id: &str) {
         eprintln!("yardbell: can't save the settings: {e}");
     }
     tray::show_switches(app, &next);
+    panel::show_switches(app, &next);
 }
 
 fn set_autostart(app: &AppHandle, enabled: bool) -> Result<(), String> {
@@ -414,6 +419,7 @@ async fn end_session(app: &AppHandle, generation: Option<u64>, message: Option<&
     }
     session.store.clear();
     tray::reset_tray(app, &app.state::<Settings>().switches());
+    panel::reset(app);
     if let Err(e) = windows::show_connect(app, message) {
         eprintln!("yardbell: can't show the connect window: {e}");
     }
@@ -462,9 +468,26 @@ fn main() {
             change_server,
             select_tab,
             close_tab,
-            tab_list
+            tab_list,
+            panel::panel_state,
+            panel::panel_resize,
+            panel::panel_close,
+            panel::panel_open_session,
+            panel::panel_open_machine,
+            panel::panel_open_app,
+            panel::panel_new_session,
+            panel::panel_switches,
+            panel::panel_toggle,
+            panel::panel_quit,
+            panel::panel_disconnect
         ])
         .on_window_event(|window, event| {
+            if window.label() == panel::PANEL {
+                if let WindowEvent::Focused(false) = event {
+                    panel::closed_by_blur(window.app_handle());
+                }
+                return;
+            }
             if window.label() != windows::MAIN {
                 return;
             }
@@ -512,6 +535,7 @@ fn main() {
             });
             #[cfg(target_os = "macos")]
             notify::send_as(&app.config().identifier);
+            panel::init(app.handle());
             if let Err(e) = tray::init(app.handle(), &switches) {
                 eprintln!("yardbell: can't create the tray icon: {e}");
             }

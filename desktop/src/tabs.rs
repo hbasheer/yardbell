@@ -43,9 +43,14 @@ impl Tab {
                 })
             })
             .map(|session| session.folder.as_str())
-            .filter(|folder| !folder.is_empty());
-        format!("{} · {machine}", folder.unwrap_or(tmux))
+            .unwrap_or_default();
+        session_title(folder, tmux, machine)
     }
+}
+
+pub fn session_title(folder: &str, tmux: &str, machine: &str) -> String {
+    let name = if folder.is_empty() { tmux } else { folder };
+    format!("{name} · {machine}")
 }
 
 #[derive(Debug, PartialEq, Eq)]

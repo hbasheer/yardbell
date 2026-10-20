@@ -70,11 +70,15 @@ pub fn open(app: &AppHandle, server: &str) -> tauri::Result<()> {
 }
 
 fn build(app: &AppHandle, server: &str) -> tauri::Result<Window> {
-    let window = WindowBuilder::new(app, MAIN)
+    let builder = WindowBuilder::new(app, MAIN)
         .title("Yardbell")
         .inner_size(1280.0, 820.0)
-        .visible(false)
-        .build()?;
+        .visible(false);
+    // Tauri's default macOS style extends the content view under the title bar, and child
+    // webviews are placed from the top of that view, so the tab bar would sit behind it.
+    #[cfg(target_os = "macos")]
+    let builder = builder.title_bar_style(tauri::TitleBarStyle::Transparent);
+    let window = builder.build()?;
     if let Err(e) = add_bar_and_dashboard(app, &window, server) {
         let _ = window.destroy();
         return Err(e);

@@ -176,8 +176,14 @@ Closing is in the shortcuts table below.
 **Tray.** The icon is green when every machine is up, amber when a machine is at 85% memory or more,
 red when a machine is down and gray when the server cannot be reached. On macOS the menu bar shows
 the logo's mark in the menu bar's color, with a dot when a machine is down or memory is high,
-faded when not connected, and a left click opens the menu. The menu lists each machine
-with its state and memory, then **Open Yardbell**, **New session**, **Notifications**, **Start at
+faded when not connected. A left click there opens a panel with every machine's memory and CPU
+(the 1-minute load per core) and the sessions you can open; its gear holds the notification
+switches, Start at login, Disconnect and Quit. A right click, and any click on Linux, opens the
+menu. The menu lists each machine
+under **Machines** with its state and memory (click one to see it in the dashboard), then every
+session you can open under **Sessions**, named like its tab, with **working** after the ones whose
+agent is busy. Click a session to bring the window forward on its tab. Past 15 sessions,
+**All sessions…** opens the dashboard. After that come **Open Yardbell**, **New session**, **Notifications**, **Start at
 login**, **Disconnect** (forgets the session and shows the sign-in again) and **Quit**. Closing the
 window only hides it: the app keeps running in the tray until you choose **Quit**. On Linux the
 tray needs a desktop with tray support; GNOME needs the AppIndicator extension, which Ubuntu turns
@@ -191,7 +197,8 @@ on by default.
 - a machine's memory passed 95%.
 
 Each kind has a switch under **Notifications** in the tray menu. All four are on by default and the
-choice is kept between launches. Click an agent notification to open that session's terminal.
+choice is kept between launches. These switches are for the desktop app on that computer; phone
+notifications have their own in Settings. Click an agent notification to open that session's terminal.
 Notifications that stay in the macOS Notification Center or in GNOME's list keep their click
 routing. Once 8 of them are waiting, newer ones show without an **Open** button until older ones
 are cleared.
