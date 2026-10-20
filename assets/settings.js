@@ -65,11 +65,75 @@ function machineForm(m) {
   </form>`;
 }
 
+function clock(stamp) {
+  return new Date(stamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function renderPhone(p) {
+  $("phone-intro").hidden = p.on;
+  $("phone-on").hidden = !p.on;
+  $("phone-turn-off").hidden = !p.on;
+  if (!p.on) {
+    testResult("");
+    return;
+  }
+  const host = p.server.split("/")[2];
+  $("phone-subscribe").href = `ntfy://${host}/${p.topic}?display=Yardbell${p.server.startsWith("http://") ? "&secure=false" : ""}`;
+  $("phone-topic").textContent = p.topic;
+  $("phone-server").textContent = p.server;
+  $("phone-server-line").hidden = p.server.replace(/\/+$/, "") === "https://ntfy.sh";
+  const f = $("phone-form");
+  for (const name of ["agent_waiting", "session_ended", "machines", "memory"]) f.elements[name].checked = p[name];
+  f.elements.wait_minutes.value = p.wait_minutes;
+  f.elements.server.value = p.server;
+  f.elements.token.value = "";
+  f.elements.token.placeholder = p.token_set ? "Saved" : "";
+  f.elements.clear_token.checked = false;
+  $("phone-clear-token").hidden = !p.token_set;
+  renderPhoneStatus(p);
+}
+
+function renderPhoneStatus(p) {
+  const failed = Boolean(p.last_error_at) && (!p.last_sent || Date.parse(p.last_error_at) > Date.parse(p.last_sent));
+  const status = $("phone-status");
+  status.textContent = failed
+    ? `Last attempt failed at ${clock(p.last_error_at)}: ${p.last_error}`
+    : p.last_sent ? `Last sent at ${clock(p.last_sent)}` : "Nothing sent yet.";
+  status.classList.toggle("bad", failed);
+}
+
+function testResult(text, state) {
+  const el = $("phone-test-result");
+  el.textContent = text;
+  el.classList.toggle("ok", state === "ok");
+  el.classList.toggle("bad", state === "bad");
+}
+
+function phoneBusy(busy) {
+  $("phone").querySelectorAll("button").forEach((b) => { b.disabled = busy; });
+}
+
+function copyText(text) {
+  const area = document.createElement("textarea");
+  area.value = text;
+  area.setAttribute("readonly", "");
+  area.style.cssText = "position:fixed;top:0;left:0;opacity:0";
+  document.body.append(area);
+  area.select();
+  // select() alone selects nothing on iOS.
+  area.setSelectionRange(0, text.length);
+  let ok = false;
+  try { ok = document.execCommand("copy"); } catch {}
+  area.remove();
+  return ok;
+}
+
 async function load() {
   data = await api("GET", "/api/settings");
   $("provider").value = data.mesh;
   $("mesh-current").textContent = `currently ${LABELS[data.mesh] || data.mesh}`;
   $("machine-forms").innerHTML = data.machines.map(machineForm).join("");
+  renderPhone(data.phone);
   if (!data.can_undo) $("undo-btn").hidden = true;
 }
 
@@ -153,6 +217,82 @@ $("machine-forms").addEventListener("click", async (e) => {
   } catch (err) {
     toast(err.message);
   }
+});
+
+$("phone-setup").addEventListener("click", async () => {
+  phoneBusy(true);
+  try {
+    await api("POST", "/api/settings/phone/setup", {});
+    saved("Phone notifications are on.");
+    await load();
+    $("phone-subscribe").focus();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    phoneBusy(false);
+  }
+});
+
+$("phone-copy").addEventListener("click", () => {
+  if (copyText($("phone-topic").textContent)) toast("Topic copied", "ok");
+  else toast("Couldn't copy. Select the topic and copy it.");
+});
+
+$("phone-test").addEventListener("click", async () => {
+  testResult("Sending…");
+  phoneBusy(true);
+  try {
+    await api("POST", "/api/settings/phone/test", {});
+    testResult("Sent", "ok");
+  } catch (err) {
+    testResult(err.message, "bad");
+  } finally {
+    await api("GET", "/api/settings")
+      .then((fresh) => renderPhoneStatus(fresh.phone))
+      .catch((err) => toast(err.message));
+    phoneBusy(false);
+  }
+});
+
+$("phone-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    server: f.elements.server.value.trim(),
+    wait_minutes: Number(f.elements.wait_minutes.value.trim()),
+    agent_waiting: f.elements.agent_waiting.checked,
+    session_ended: f.elements.session_ended.checked,
+    machines: f.elements.machines.checked,
+    memory: f.elements.memory.checked,
+  };
+  const token = f.elements.token.value.trim();
+  if (token) body.token = token;
+  if (f.elements.clear_token.checked) body.clear_token = true;
+  phoneBusy(true);
+  try {
+    await api("POST", "/api/settings/phone", body);
+    saved("Phone notifications updated.");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    phoneBusy(false);
+  }
+});
+
+$("phone-turn-off").addEventListener("click", async () => {
+  if (!(await Nav.confirm("Turn off phone notifications?", "Your phone stops getting notifications. Setting up again makes a new topic.", { confirm: "Turn off", danger: true }))) return;
+  phoneBusy(true);
+  try {
+    await api("POST", "/api/settings/phone/off", {});
+    saved("Phone notifications are off.");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    phoneBusy(false);
+  }
+  if (!$("phone-intro").hidden) $("phone-setup").focus();
 });
 
 $("pass-form").addEventListener("submit", async (e) => {

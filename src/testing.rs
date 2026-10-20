@@ -1,3 +1,4 @@
+use crate::phone::ntfy::{Push, Sender, Target};
 use crate::shell::{Output, Runner};
 use futures::future::BoxFuture;
 use std::path::PathBuf;
@@ -73,6 +74,72 @@ impl Runner for FakeRunner {
 
     fn kill(&self, pid: u32) {
         self.die(pid);
+    }
+}
+
+struct Fault {
+    message: String,
+    title: Option<String>,
+    remaining: Option<usize>,
+}
+
+#[derive(Default)]
+pub struct FakeSender {
+    calls: Mutex<Vec<(Target, Push)>>,
+    faults: Mutex<Vec<Fault>>,
+}
+
+impl FakeSender {
+    pub fn calls(&self) -> Vec<(Target, Push)> {
+        self.calls.lock().unwrap().clone()
+    }
+
+    pub fn fail_all(&self, message: &str) {
+        self.add_fault(message, None, None);
+    }
+
+    pub fn fail_next(&self, count: usize, message: &str) {
+        self.add_fault(message, None, Some(count));
+    }
+
+    pub fn fail_title(&self, title: &str, message: &str) {
+        self.add_fault(message, Some(title.into()), None);
+    }
+
+    fn add_fault(&self, message: &str, title: Option<String>, remaining: Option<usize>) {
+        self.faults.lock().unwrap().push(Fault {
+            message: message.into(),
+            title,
+            remaining,
+        });
+    }
+
+    fn verdict(&self, push: &Push) -> Result<(), String> {
+        let mut faults = self.faults.lock().unwrap();
+        for fault in faults.iter_mut() {
+            if fault
+                .title
+                .as_ref()
+                .is_some_and(|title| *title != push.title)
+            {
+                continue;
+            }
+            match &mut fault.remaining {
+                Some(0) => continue,
+                Some(left) => *left -= 1,
+                None => {}
+            }
+            return Err(fault.message.clone());
+        }
+        Ok(())
+    }
+}
+
+impl Sender for FakeSender {
+    fn send<'a>(&'a self, to: &'a Target, push: &'a Push) -> BoxFuture<'a, Result<(), String>> {
+        self.calls.lock().unwrap().push((to.clone(), push.clone()));
+        let verdict = self.verdict(push);
+        Box::pin(async move { verdict })
     }
 }
 

@@ -1,4 +1,4 @@
-use crate::config::{Config, MeshProvider};
+use crate::config::{new_topic, Config, MeshProvider};
 use crate::onboarding::peers::Peer;
 use crate::onboarding::valid_host;
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
@@ -27,6 +27,20 @@ pub struct MachineEdit {
     pub port_prefix: Option<u8>,
     pub root: String,
     pub mesh: Option<MeshProvider>,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct PhoneEdit {
+    pub server: String,
+    pub wait_minutes: u64,
+    pub agent_waiting: bool,
+    pub session_ended: bool,
+    pub machines: bool,
+    pub memory: bool,
+    #[serde(default)]
+    pub token: Option<String>,
+    #[serde(default)]
+    pub clear_token: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -248,6 +262,48 @@ impl Settings {
         }
         m.root = edit.root.trim().to_string();
         m.mesh = edit.mesh;
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
+    pub fn phone_setup(&self) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        if cfg.phone_notifications.on() {
+            return Ok(());
+        }
+        cfg.phone_notifications.topic = new_topic();
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
+    pub fn update_phone(&self, edit: &PhoneEdit) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        let phone = &mut cfg.phone_notifications;
+        phone.server = edit.server.trim().to_string();
+        phone.wait_minutes = edit.wait_minutes;
+        phone.agent_waiting = edit.agent_waiting;
+        phone.session_ended = edit.session_ended;
+        phone.machines = edit.machines;
+        phone.memory = edit.memory;
+        let token = edit.token.as_deref().map(str::trim).unwrap_or_default();
+        if !token.is_empty() {
+            phone.token = token.to_string();
+        } else if edit.clear_token {
+            phone.token.clear();
+        }
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
+    pub fn phone_off(&self) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        if !cfg.phone_notifications.on() {
+            return Ok(());
+        }
+        cfg.phone_notifications.topic.clear();
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
         self.save(&cfg, backup, None)
