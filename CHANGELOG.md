@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-20
+
 - On macOS the desktop app shows the Yardbell mark in the menu bar instead of a colored dot. It
   gets a dot when a machine is down or memory is high, and fades when the server can't be
   reached. A left click on it opens the menu like other menu bar items.
