@@ -11,6 +11,8 @@ and the project uses [Semantic Versioning](https://semver.org).
   app open. Set them up, send a test and choose what to hear about in the new
   **Phone notifications** section of Settings, or under `phone_notifications` in the config.
   Self-hosted ntfy servers work too.
+- Terminals on other machines show symbols and other non-ASCII characters. tmux drew `_` for
+  them when the ssh session had no locale, which is usual on a Mac.
 
 ## [0.2.1] - 2026-10-20
 
