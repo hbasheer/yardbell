@@ -568,4 +568,10 @@ mod tests {
             Action::Deny
         );
     }
+
+    #[test]
+    fn the_mac_web_view_may_open_http_servers() {
+        let plist: String = include_str!("../Info.plist").split_whitespace().collect();
+        assert!(plist.contains("<key>NSAllowsArbitraryLoadsInWebContent</key><true/>"));
+    }
 }
