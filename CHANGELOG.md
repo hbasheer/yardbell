@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- New session and Move to tmux work on the machine running the server when the server was started
+  from a terminal. The login shell that starts the session was stopped by that terminal, and the
+  request failed with "did not answer in time".
+
 ## [0.3.1] - 2026-10-20
 
 - The macOS app shows its tab bar. It sat behind the window's title bar, so new sessions opened in
