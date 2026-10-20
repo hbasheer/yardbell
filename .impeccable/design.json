@@ -1,0 +1,870 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-10-18T23:49:49+00:00",
+  "title": "Design System: Yardbell",
+  "extensions": {
+    "colorMeta": {
+      "bg": {
+        "role": "neutral",
+        "displayName": "Paper",
+        "canonical": "#ffffff",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.000 90)",
+          "oklch(26% 0.000 90)",
+          "oklch(37% 0.000 90)",
+          "oklch(48% 0.000 90)",
+          "oklch(60% 0.000 90)",
+          "oklch(72% 0.000 90)",
+          "oklch(84% 0.000 90)",
+          "oklch(95% 0.000 90)"
+        ]
+      },
+      "side": {
+        "role": "neutral",
+        "displayName": "Rail",
+        "canonical": "#f8fafc",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.003 248)",
+          "oklch(26% 0.003 248)",
+          "oklch(37% 0.003 248)",
+          "oklch(48% 0.003 248)",
+          "oklch(60% 0.003 248)",
+          "oklch(72% 0.003 248)",
+          "oklch(84% 0.003 248)",
+          "oklch(95% 0.003 248)"
+        ]
+      },
+      "surface": {
+        "role": "neutral",
+        "displayName": "Paper Surface",
+        "canonical": "#ffffff",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.000 90)",
+          "oklch(26% 0.000 90)",
+          "oklch(37% 0.000 90)",
+          "oklch(48% 0.000 90)",
+          "oklch(60% 0.000 90)",
+          "oklch(72% 0.000 90)",
+          "oklch(84% 0.000 90)",
+          "oklch(95% 0.000 90)"
+        ]
+      },
+      "hover": {
+        "role": "neutral",
+        "displayName": "Hover Slate",
+        "canonical": "#f1f5f9",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.007 248)",
+          "oklch(26% 0.007 248)",
+          "oklch(37% 0.007 248)",
+          "oklch(48% 0.007 248)",
+          "oklch(60% 0.007 248)",
+          "oklch(72% 0.007 248)",
+          "oklch(84% 0.007 248)",
+          "oklch(95% 0.007 248)"
+        ]
+      },
+      "selected": {
+        "role": "primary",
+        "displayName": "Selected Indigo",
+        "canonical": "#eef2ff",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.018 272)",
+          "oklch(26% 0.018 272)",
+          "oklch(37% 0.018 272)",
+          "oklch(48% 0.018 272)",
+          "oklch(60% 0.018 272)",
+          "oklch(72% 0.018 272)",
+          "oklch(84% 0.018 272)",
+          "oklch(95% 0.018 272)"
+        ]
+      },
+      "ink": {
+        "role": "neutral",
+        "displayName": "Ink",
+        "canonical": "#0f172a",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.040 266)",
+          "oklch(26% 0.040 266)",
+          "oklch(37% 0.040 266)",
+          "oklch(48% 0.040 266)",
+          "oklch(60% 0.040 266)",
+          "oklch(72% 0.040 266)",
+          "oklch(84% 0.040 266)",
+          "oklch(95% 0.040 266)"
+        ]
+      },
+      "ink-2": {
+        "role": "neutral",
+        "displayName": "Ink 2",
+        "canonical": "#334155",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.039 257)",
+          "oklch(26% 0.039 257)",
+          "oklch(37% 0.039 257)",
+          "oklch(48% 0.039 257)",
+          "oklch(60% 0.039 257)",
+          "oklch(72% 0.039 257)",
+          "oklch(84% 0.039 257)",
+          "oklch(95% 0.039 257)"
+        ]
+      },
+      "muted": {
+        "role": "neutral",
+        "displayName": "Muted Slate",
+        "canonical": "#64748b",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.041 257)",
+          "oklch(26% 0.041 257)",
+          "oklch(37% 0.041 257)",
+          "oklch(48% 0.041 257)",
+          "oklch(60% 0.041 257)",
+          "oklch(72% 0.041 257)",
+          "oklch(84% 0.041 257)",
+          "oklch(95% 0.041 257)"
+        ]
+      },
+      "line": {
+        "role": "neutral",
+        "displayName": "Rule",
+        "canonical": "#e2e8f0",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.013 256)",
+          "oklch(26% 0.013 256)",
+          "oklch(37% 0.013 256)",
+          "oklch(48% 0.013 256)",
+          "oklch(60% 0.013 256)",
+          "oklch(72% 0.013 256)",
+          "oklch(84% 0.013 256)",
+          "oklch(95% 0.013 256)"
+        ]
+      },
+      "line-strong": {
+        "role": "neutral",
+        "displayName": "Strong Rule",
+        "canonical": "#cbd5e1",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.020 253)",
+          "oklch(26% 0.020 253)",
+          "oklch(37% 0.020 253)",
+          "oklch(48% 0.020 253)",
+          "oklch(60% 0.020 253)",
+          "oklch(72% 0.020 253)",
+          "oklch(84% 0.020 253)",
+          "oklch(95% 0.020 253)"
+        ]
+      },
+      "accent": {
+        "role": "primary",
+        "displayName": "Signal Blue",
+        "canonical": "#2563eb",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.200 263)",
+          "oklch(26% 0.200 263)",
+          "oklch(37% 0.200 263)",
+          "oklch(48% 0.200 263)",
+          "oklch(60% 0.200 263)",
+          "oklch(72% 0.200 263)",
+          "oklch(84% 0.200 263)",
+          "oklch(95% 0.200 263)"
+        ]
+      },
+      "accent-hover": {
+        "role": "primary",
+        "displayName": "Pressed Blue",
+        "canonical": "#1d4ed8",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.200 264)",
+          "oklch(26% 0.200 264)",
+          "oklch(37% 0.200 264)",
+          "oklch(48% 0.200 264)",
+          "oklch(60% 0.200 264)",
+          "oklch(72% 0.200 264)",
+          "oklch(84% 0.200 264)",
+          "oklch(95% 0.200 264)"
+        ]
+      },
+      "accent-ink": {
+        "role": "primary",
+        "displayName": "On Blue",
+        "canonical": "#ffffff",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.000 90)",
+          "oklch(26% 0.000 90)",
+          "oklch(37% 0.000 90)",
+          "oklch(48% 0.000 90)",
+          "oklch(60% 0.000 90)",
+          "oklch(72% 0.000 90)",
+          "oklch(84% 0.000 90)",
+          "oklch(95% 0.000 90)"
+        ]
+      },
+      "accent-soft": {
+        "role": "primary",
+        "displayName": "Blue Wash",
+        "canonical": "#dbeafe",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.032 256)",
+          "oklch(26% 0.032 256)",
+          "oklch(37% 0.032 256)",
+          "oklch(48% 0.032 256)",
+          "oklch(60% 0.032 256)",
+          "oklch(72% 0.032 256)",
+          "oklch(84% 0.032 256)",
+          "oklch(95% 0.032 256)"
+        ]
+      },
+      "accent-text": {
+        "role": "primary",
+        "displayName": "Blue Ink",
+        "canonical": "#1d4ed8",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.200 264)",
+          "oklch(26% 0.200 264)",
+          "oklch(37% 0.200 264)",
+          "oklch(48% 0.200 264)",
+          "oklch(60% 0.200 264)",
+          "oklch(72% 0.200 264)",
+          "oklch(84% 0.200 264)",
+          "oklch(95% 0.200 264)"
+        ]
+      },
+      "ok": {
+        "role": "semantic",
+        "displayName": "Healthy Green",
+        "canonical": "#16a34a",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.170 149)",
+          "oklch(26% 0.170 149)",
+          "oklch(37% 0.170 149)",
+          "oklch(48% 0.170 149)",
+          "oklch(60% 0.170 149)",
+          "oklch(72% 0.170 149)",
+          "oklch(84% 0.170 149)",
+          "oklch(95% 0.170 149)"
+        ]
+      },
+      "ok-text": {
+        "role": "semantic",
+        "displayName": "Healthy Green Text",
+        "canonical": "#15803d",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.137 150)",
+          "oklch(26% 0.137 150)",
+          "oklch(37% 0.137 150)",
+          "oklch(48% 0.137 150)",
+          "oklch(60% 0.137 150)",
+          "oklch(72% 0.137 150)",
+          "oklch(84% 0.137 150)",
+          "oklch(95% 0.137 150)"
+        ]
+      },
+      "warn": {
+        "role": "semantic",
+        "displayName": "Caution Amber",
+        "canonical": "#d97706",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.157 58)",
+          "oklch(26% 0.157 58)",
+          "oklch(37% 0.157 58)",
+          "oklch(48% 0.157 58)",
+          "oklch(60% 0.157 58)",
+          "oklch(72% 0.157 58)",
+          "oklch(84% 0.157 58)",
+          "oklch(95% 0.157 58)"
+        ]
+      },
+      "warn-text": {
+        "role": "semantic",
+        "displayName": "Caution Amber Text",
+        "canonical": "#b45309",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.146 49)",
+          "oklch(26% 0.146 49)",
+          "oklch(37% 0.146 49)",
+          "oklch(48% 0.146 49)",
+          "oklch(60% 0.146 49)",
+          "oklch(72% 0.146 49)",
+          "oklch(84% 0.146 49)",
+          "oklch(95% 0.146 49)"
+        ]
+      },
+      "bad": {
+        "role": "semantic",
+        "displayName": "Fault Red",
+        "canonical": "#dc2626",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.200 27)",
+          "oklch(26% 0.200 27)",
+          "oklch(37% 0.200 27)",
+          "oklch(48% 0.200 27)",
+          "oklch(60% 0.200 27)",
+          "oklch(72% 0.200 27)",
+          "oklch(84% 0.200 27)",
+          "oklch(95% 0.200 27)"
+        ]
+      },
+      "bad-text": {
+        "role": "semantic",
+        "displayName": "Fault Red Text",
+        "canonical": "#b91c1c",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.190 28)",
+          "oklch(26% 0.190 28)",
+          "oklch(37% 0.190 28)",
+          "oklch(48% 0.190 28)",
+          "oklch(60% 0.190 28)",
+          "oklch(72% 0.190 28)",
+          "oklch(84% 0.190 28)",
+          "oklch(95% 0.190 28)"
+        ]
+      },
+      "mem": {
+        "role": "neutral",
+        "displayName": "Memory Gray",
+        "canonical": "#94a3b8",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.035 257)",
+          "oklch(26% 0.035 257)",
+          "oklch(37% 0.035 257)",
+          "oklch(48% 0.035 257)",
+          "oklch(60% 0.035 257)",
+          "oklch(72% 0.035 257)",
+          "oklch(84% 0.035 257)",
+          "oklch(95% 0.035 257)"
+        ]
+      },
+      "mem-track": {
+        "role": "neutral",
+        "displayName": "Memory Track",
+        "canonical": "#e2e8f0",
+        "theme": "light",
+        "tonalRamp": [
+          "oklch(15% 0.013 256)",
+          "oklch(26% 0.013 256)",
+          "oklch(37% 0.013 256)",
+          "oklch(48% 0.013 256)",
+          "oklch(60% 0.013 256)",
+          "oklch(72% 0.013 256)",
+          "oklch(84% 0.013 256)",
+          "oklch(95% 0.013 256)"
+        ]
+      },
+      "bg-dark": {
+        "role": "neutral",
+        "displayName": "Paper (dark)",
+        "canonical": "#0a0a0b",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.002 286)",
+          "oklch(26% 0.002 286)",
+          "oklch(37% 0.002 286)",
+          "oklch(48% 0.002 286)",
+          "oklch(60% 0.002 286)",
+          "oklch(72% 0.002 286)",
+          "oklch(84% 0.002 286)",
+          "oklch(95% 0.002 286)"
+        ]
+      },
+      "side-dark": {
+        "role": "neutral",
+        "displayName": "Rail (dark)",
+        "canonical": "#0f1012",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.004 264)",
+          "oklch(26% 0.004 264)",
+          "oklch(37% 0.004 264)",
+          "oklch(48% 0.004 264)",
+          "oklch(60% 0.004 264)",
+          "oklch(72% 0.004 264)",
+          "oklch(84% 0.004 264)",
+          "oklch(95% 0.004 264)"
+        ]
+      },
+      "hover-dark": {
+        "role": "neutral",
+        "displayName": "Hover Slate (dark)",
+        "canonical": "#17181b",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.006 271)",
+          "oklch(26% 0.006 271)",
+          "oklch(37% 0.006 271)",
+          "oklch(48% 0.006 271)",
+          "oklch(60% 0.006 271)",
+          "oklch(72% 0.006 271)",
+          "oklch(84% 0.006 271)",
+          "oklch(95% 0.006 271)"
+        ]
+      },
+      "selected-dark": {
+        "role": "primary",
+        "displayName": "Selected Indigo (dark)",
+        "canonical": "#172033",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.039 264)",
+          "oklch(26% 0.039 264)",
+          "oklch(37% 0.039 264)",
+          "oklch(48% 0.039 264)",
+          "oklch(60% 0.039 264)",
+          "oklch(72% 0.039 264)",
+          "oklch(84% 0.039 264)",
+          "oklch(95% 0.039 264)"
+        ]
+      },
+      "ink-dark": {
+        "role": "neutral",
+        "displayName": "Ink (dark)",
+        "canonical": "#ededef",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.003 286)",
+          "oklch(26% 0.003 286)",
+          "oklch(37% 0.003 286)",
+          "oklch(48% 0.003 286)",
+          "oklch(60% 0.003 286)",
+          "oklch(72% 0.003 286)",
+          "oklch(84% 0.003 286)",
+          "oklch(95% 0.003 286)"
+        ]
+      },
+      "ink-2-dark": {
+        "role": "neutral",
+        "displayName": "Ink 2 (dark)",
+        "canonical": "#c4c6cc",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.009 271)",
+          "oklch(26% 0.009 271)",
+          "oklch(37% 0.009 271)",
+          "oklch(48% 0.009 271)",
+          "oklch(60% 0.009 271)",
+          "oklch(72% 0.009 271)",
+          "oklch(84% 0.009 271)",
+          "oklch(95% 0.009 271)"
+        ]
+      },
+      "muted-dark": {
+        "role": "neutral",
+        "displayName": "Muted Slate (dark)",
+        "canonical": "#8b8f98",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.014 267)",
+          "oklch(26% 0.014 267)",
+          "oklch(37% 0.014 267)",
+          "oklch(48% 0.014 267)",
+          "oklch(60% 0.014 267)",
+          "oklch(72% 0.014 267)",
+          "oklch(84% 0.014 267)",
+          "oklch(95% 0.014 267)"
+        ]
+      },
+      "line-dark": {
+        "role": "neutral",
+        "displayName": "Rule (dark)",
+        "canonical": "#1f2125",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.008 264)",
+          "oklch(26% 0.008 264)",
+          "oklch(37% 0.008 264)",
+          "oklch(48% 0.008 264)",
+          "oklch(60% 0.008 264)",
+          "oklch(72% 0.008 264)",
+          "oklch(84% 0.008 264)",
+          "oklch(95% 0.008 264)"
+        ]
+      },
+      "line-strong-dark": {
+        "role": "neutral",
+        "displayName": "Strong Rule (dark)",
+        "canonical": "#2e3137",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.012 264)",
+          "oklch(26% 0.012 264)",
+          "oklch(37% 0.012 264)",
+          "oklch(48% 0.012 264)",
+          "oklch(60% 0.012 264)",
+          "oklch(72% 0.012 264)",
+          "oklch(84% 0.012 264)",
+          "oklch(95% 0.012 264)"
+        ]
+      },
+      "accent-soft-dark": {
+        "role": "primary",
+        "displayName": "Blue Wash (dark)",
+        "canonical": "#172554",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.087 268)",
+          "oklch(26% 0.087 268)",
+          "oklch(37% 0.087 268)",
+          "oklch(48% 0.087 268)",
+          "oklch(60% 0.087 268)",
+          "oklch(72% 0.087 268)",
+          "oklch(84% 0.087 268)",
+          "oklch(95% 0.087 268)"
+        ]
+      },
+      "accent-text-dark": {
+        "role": "primary",
+        "displayName": "Blue Ink (dark)",
+        "canonical": "#93c5fd",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.096 252)",
+          "oklch(26% 0.096 252)",
+          "oklch(37% 0.096 252)",
+          "oklch(48% 0.096 252)",
+          "oklch(60% 0.096 252)",
+          "oklch(72% 0.096 252)",
+          "oklch(84% 0.096 252)",
+          "oklch(95% 0.096 252)"
+        ]
+      },
+      "ok-dark": {
+        "role": "semantic",
+        "displayName": "Healthy Green (dark)",
+        "canonical": "#22c55e",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.192 150)",
+          "oklch(26% 0.192 150)",
+          "oklch(37% 0.192 150)",
+          "oklch(48% 0.192 150)",
+          "oklch(60% 0.192 150)",
+          "oklch(72% 0.192 150)",
+          "oklch(84% 0.192 150)",
+          "oklch(95% 0.192 150)"
+        ]
+      },
+      "ok-text-dark": {
+        "role": "semantic",
+        "displayName": "Healthy Green Text (dark)",
+        "canonical": "#4ade80",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.182 152)",
+          "oklch(26% 0.182 152)",
+          "oklch(37% 0.182 152)",
+          "oklch(48% 0.182 152)",
+          "oklch(60% 0.182 152)",
+          "oklch(72% 0.182 152)",
+          "oklch(84% 0.182 152)",
+          "oklch(95% 0.182 152)"
+        ]
+      },
+      "warn-dark": {
+        "role": "semantic",
+        "displayName": "Caution Amber (dark)",
+        "canonical": "#f59e0b",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.165 70)",
+          "oklch(26% 0.165 70)",
+          "oklch(37% 0.165 70)",
+          "oklch(48% 0.165 70)",
+          "oklch(60% 0.165 70)",
+          "oklch(72% 0.165 70)",
+          "oklch(84% 0.165 70)",
+          "oklch(95% 0.165 70)"
+        ]
+      },
+      "warn-text-dark": {
+        "role": "semantic",
+        "displayName": "Caution Amber Text (dark)",
+        "canonical": "#fbbf24",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.164 84)",
+          "oklch(26% 0.164 84)",
+          "oklch(37% 0.164 84)",
+          "oklch(48% 0.164 84)",
+          "oklch(60% 0.164 84)",
+          "oklch(72% 0.164 84)",
+          "oklch(84% 0.164 84)",
+          "oklch(95% 0.164 84)"
+        ]
+      },
+      "bad-dark": {
+        "role": "semantic",
+        "displayName": "Fault Red (dark)",
+        "canonical": "#ef4444",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.200 25)",
+          "oklch(26% 0.200 25)",
+          "oklch(37% 0.200 25)",
+          "oklch(48% 0.200 25)",
+          "oklch(60% 0.200 25)",
+          "oklch(72% 0.200 25)",
+          "oklch(84% 0.200 25)",
+          "oklch(95% 0.200 25)"
+        ]
+      },
+      "bad-text-dark": {
+        "role": "semantic",
+        "displayName": "Fault Red Text (dark)",
+        "canonical": "#f87171",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.166 22)",
+          "oklch(26% 0.166 22)",
+          "oklch(37% 0.166 22)",
+          "oklch(48% 0.166 22)",
+          "oklch(60% 0.166 22)",
+          "oklch(72% 0.166 22)",
+          "oklch(84% 0.166 22)",
+          "oklch(95% 0.166 22)"
+        ]
+      },
+      "mem-dark": {
+        "role": "neutral",
+        "displayName": "Memory Gray (dark)",
+        "canonical": "#6b7280",
+        "theme": "dark",
+        "tonalRamp": [
+          "oklch(15% 0.023 264)",
+          "oklch(26% 0.023 264)",
+          "oklch(37% 0.023 264)",
+          "oklch(48% 0.023 264)",
+          "oklch(60% 0.023 264)",
+          "oklch(72% 0.023 264)",
+          "oklch(84% 0.023 264)",
+          "oklch(95% 0.023 264)"
+        ]
+      }
+    },
+    "typographyMeta": {
+      "headline": {
+        "displayName": "Headline",
+        "purpose": "Page title in the main header."
+      },
+      "title": {
+        "displayName": "Title",
+        "purpose": "Dialog headings; wordmark at 650."
+      },
+      "section": {
+        "displayName": "Section",
+        "purpose": "Section headings on the add machine page."
+      },
+      "body": {
+        "displayName": "Body",
+        "purpose": "Table cells, inputs, messages. Tabular numerals always."
+      },
+      "body-strong": {
+        "displayName": "Body Strong",
+        "purpose": "Machine names, folders, checklist labels."
+      },
+      "label": {
+        "displayName": "Label",
+        "purpose": "Buttons, form labels, sidebar links, toasts."
+      },
+      "caption": {
+        "displayName": "Caption",
+        "purpose": "Column headers, badges, status and memory text."
+      },
+      "mono": {
+        "displayName": "Mono",
+        "purpose": "Branch names under folders."
+      },
+      "mono-block": {
+        "displayName": "Mono Block",
+        "purpose": "Port numbers (12.5px) and code blocks."
+      }
+    },
+    "shadows": [
+      {
+        "name": "overlay",
+        "value": "0 1px 2px rgb(0 0 0 / 0.06), 0 16px 40px rgb(0 0 0 / 0.18)",
+        "purpose": "Modal dialogs, over a rgb(15 23 42 / 0.45) backdrop."
+      },
+      {
+        "name": "toast",
+        "value": "0 8px 24px rgb(0 0 0 / 0.2)",
+        "purpose": "Bottom-centered status toast."
+      }
+    ],
+    "motion": [
+      {
+        "name": "state",
+        "value": "120ms ease-out",
+        "purpose": "Background, border and color changes on buttons, machine items, peers."
+      },
+      {
+        "name": "toast",
+        "value": "160ms ease-out",
+        "purpose": "Toast fade and 8px rise."
+      },
+      {
+        "name": "pulse",
+        "value": "1.6s ease-in-out infinite",
+        "purpose": "Working badge dot, off under reduced motion."
+      },
+      {
+        "name": "spin",
+        "value": "0.9s linear infinite",
+        "purpose": "Setup checklist step in progress."
+      }
+    ],
+    "breakpoints": [
+      {
+        "name": "phone",
+        "value": "760px",
+        "purpose": "Sidebar becomes header, table becomes stacked blocks, forms go single column."
+      },
+      {
+        "name": "coarse-pointer",
+        "value": "(pointer: coarse)",
+        "purpose": "Terminal shows the on-screen key row and uses 13px type."
+      }
+    ]
+  },
+  "components": [
+    {
+      "name": "Primary Button",
+      "kind": "button",
+      "refersTo": "button-primary",
+      "description": "The one filled action per region: New session, Start and open.",
+      "html": "<button class=\"ds-btn ds-btn-primary\" type=\"button\"><svg class=\"ds-icon\" viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M8 3v10M3 8h10\"/></svg>New session</button>",
+      "css": ".ds-btn { font: 500 13px/1 var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line-strong, #cbd5e1); border-radius: 6px; background: var(--surface, #ffffff); color: var(--ink, #0f172a); cursor: pointer; white-space: nowrap; transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out; } .ds-btn:hover { background: var(--hover, #f1f5f9); } .ds-btn:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; } .ds-btn-primary { background: var(--accent, #2563eb); border-color: var(--accent, #2563eb); color: var(--accent-ink, #ffffff); } .ds-btn-primary:hover { background: var(--accent-hover, #1d4ed8); border-color: var(--accent-hover, #1d4ed8); } .ds-icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }"
+    },
+    {
+      "name": "Default Button",
+      "kind": "button",
+      "refersTo": "button",
+      "description": "Bordered secondary action: Add machine, Open, Resume.",
+      "html": "<button class=\"ds-btn\" type=\"button\"><svg class=\"ds-icon\" viewBox=\"0 0 16 16\" aria-hidden=\"true\"><path d=\"M3 4.5 6 7.5 3 10.5M7.5 11.5H13\"/></svg>Open</button>",
+      "css": ".ds-btn { font: 500 13px/1 var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line-strong, #cbd5e1); border-radius: 6px; background: var(--surface, #ffffff); color: var(--ink, #0f172a); cursor: pointer; white-space: nowrap; transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out; } .ds-btn:hover { background: var(--hover, #f1f5f9); } .ds-btn:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; } .ds-icon { width: 16px; height: 16px; flex: none; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }"
+    },
+    {
+      "name": "Quiet Button",
+      "kind": "button",
+      "refersTo": "button-quiet",
+      "description": "Low-stakes or recoverable actions: Stop, Forget. Danger turns red on hover.",
+      "html": "<button class=\"ds-btn ds-btn-quiet ds-btn-danger\" type=\"button\">Stop</button>",
+      "css": ".ds-btn { font: 500 13px/1 var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); display: inline-flex; align-items: center; justify-content: center; gap: 6px; height: 32px; padding: 0 12px; border: 1px solid var(--line-strong, #cbd5e1); border-radius: 6px; background: var(--surface, #ffffff); color: var(--ink, #0f172a); cursor: pointer; white-space: nowrap; transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out; } .ds-btn:hover { background: var(--hover, #f1f5f9); } .ds-btn:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; } .ds-btn-quiet { border-color: transparent; background: transparent; color: var(--muted, #64748b); } .ds-btn-quiet:hover { background: var(--hover, #f1f5f9); color: var(--ink, #0f172a); } .ds-btn-danger:hover { color: var(--bad-text, #b91c1c); }"
+    },
+    {
+      "name": "Text Input",
+      "kind": "input",
+      "refersTo": "input",
+      "description": "Form field with label above, focus by blue border.",
+      "html": "<label class=\"ds-label\">Host<input class=\"ds-input\" type=\"text\" placeholder=\"hp\"></label>",
+      "css": ".ds-label { display: grid; gap: 6px; font: 500 13px var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); color: var(--ink-2, #334155); } .ds-input { font: 14px var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); height: 36px; padding: 0 10px; border: 1px solid var(--line-strong, #cbd5e1); border-radius: 6px; background: var(--surface, #ffffff); color: var(--ink, #0f172a); width: 100%; } .ds-input::placeholder { color: var(--muted, #64748b); } .ds-input:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 0; border-color: var(--accent, #2563eb); }"
+    },
+    {
+      "name": "Status Badges",
+      "kind": "chip",
+      "refersTo": "badge",
+      "description": "Session state pills; Working is the only tinted one.",
+      "html": "<span class=\"ds-badge ds-badge-busy\">Working</span> <span class=\"ds-badge\">Idle</span> <span class=\"ds-badge\">Last known</span>",
+      "css": ".ds-badge { display: inline-flex; align-items: center; gap: 6px; font: 500 12px var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line, #e2e8f0); color: var(--ink-2, #334155); white-space: nowrap; } .ds-badge-busy { background: var(--accent-soft, #dbeafe); border-color: transparent; color: var(--accent-text, #1d4ed8); } .ds-badge-busy::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; animation: ds-pulse 1.6s ease-in-out infinite; } @keyframes ds-pulse { 50% { opacity: 0.35; } } @media (prefers-reduced-motion: reduce) { .ds-badge-busy::before { animation: none; } }"
+    },
+    {
+      "name": "Machine Item",
+      "kind": "nav",
+      "refersTo": "machine-item-selected",
+      "description": "Sidebar entry: status dot, name, count, connection text, memory bar.",
+      "html": "<button class=\"ds-machine ds-selected\" type=\"button\"><span class=\"ds-mrow\"><span class=\"ds-dot ds-ok\"></span><span class=\"ds-mname\">hp</span><span class=\"ds-mcount\">3</span></span><span class=\"ds-mstatus\">Connected · load 1.6</span><div class=\"ds-mem\"><div class=\"ds-mem-bar\"><span class=\"ds-mem-used\" style=\"width:34%\"></span><span class=\"ds-mem-claude\" style=\"width:6%\"></span><span class=\"ds-mem-rated\" style=\"left:85%\"></span></div><div class=\"ds-mem-text\"><span><b>5.2</b> / 15.4 GB</span><span class=\"ds-claude\">Claude 0.9</span></div></div></button>",
+      "css": ".ds-machine { width: 260px; display: grid; gap: 4px; padding: 8px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink, #0f172a); font: 14px/1.5 var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); font-variant-numeric: tabular-nums; text-align: left; cursor: pointer; transition: background-color 120ms ease-out; } .ds-machine:hover { background: var(--hover, #f1f5f9); } .ds-machine:focus-visible { outline: 2px solid var(--accent, #2563eb); outline-offset: 2px; } .ds-selected { background: var(--selected, #eef2ff); border-color: color-mix(in srgb, var(--accent, #2563eb) 25%, transparent); } .ds-mrow { display: flex; align-items: center; gap: 8px; } .ds-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; } .ds-ok { background: var(--ok, #16a34a); } .ds-mname { font-weight: 550; flex: 1; } .ds-mcount, .ds-mstatus { color: var(--muted, #64748b); font-size: 12px; } .ds-mstatus { padding-left: 16px; } .ds-mem { padding-left: 16px; display: grid; gap: 4px; margin-top: 2px; } .ds-mem-bar { position: relative; height: 6px; border-radius: 3px; background: var(--mem-track, #e2e8f0); } .ds-mem-used, .ds-mem-claude { position: absolute; inset: 0 auto 0 0; border-radius: 3px; } .ds-mem-used { background: var(--mem, #94a3b8); } .ds-mem-claude { background: var(--accent, #2563eb); border-radius: 3px 0 0 3px; } .ds-mem-rated { position: absolute; top: -2px; bottom: -2px; width: 2px; margin-left: -1px; background: var(--ink-2, #334155); opacity: 0.55; border-radius: 1px; } .ds-mem-text { display: flex; justify-content: space-between; color: var(--muted, #64748b); font-size: 12px; } .ds-mem-text b { color: var(--ink-2, #334155); font-weight: 550; } .ds-claude { color: var(--accent-text, #1d4ed8); }"
+    },
+    {
+      "name": "Sessions Table",
+      "kind": "card",
+      "refersTo": "table-head",
+      "description": "Bordered table with Rail header, folder plus mono branch, ports with state words.",
+      "html": "<div class=\"ds-table-wrap\"><table class=\"ds-table\"><thead><tr><th>Machine</th><th>Folder</th><th>Ticket</th><th>Ports</th></tr></thead><tbody><tr><td>hp</td><td><span class=\"ds-folder\">acme/slots/slot2</span><span class=\"ds-branch\">eng-1301-inbox-filter</span></td><td class=\"ds-ticket\">ENG-1301</td><td><span class=\"ds-svc\">rails</span> <span class=\"ds-num\">:13020</span> <span class=\"ds-pstat\">tunnel up</span></td></tr><tr><td>pro</td><td><span class=\"ds-folder\">acme/app</span><span class=\"ds-branch\">eng-1290-csv-export</span></td><td class=\"ds-ticket\">ENG-1290</td><td><span class=\"ds-svc\">rails</span> <span class=\"ds-num\">:23000</span> <span class=\"ds-pstat ds-bad\">tunnel down</span></td></tr></tbody></table></div>",
+      "css": ".ds-table-wrap { border: 1px solid var(--line, #e2e8f0); border-radius: 8px; overflow: hidden; } .ds-table { width: 100%; border-collapse: collapse; font: 14px/1.5 var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); font-variant-numeric: tabular-nums; color: var(--ink, #0f172a); } .ds-table th { text-align: left; font-weight: 500; font-size: 12px; color: var(--muted, #64748b); padding: 9px 14px; background: var(--side, #f8fafc); border-bottom: 1px solid var(--line, #e2e8f0); } .ds-table td { padding: 12px 14px; border-bottom: 1px solid var(--line, #e2e8f0); vertical-align: top; } .ds-table tbody tr:last-child td { border-bottom: 0; } .ds-table tbody tr:hover td { background: color-mix(in srgb, var(--hover, #f1f5f9) 60%, transparent); } .ds-folder { font-weight: 550; display: block; } .ds-branch { display: block; font: 12px/1.5 var(--mono, 'JetBrains Mono', ui-monospace, monospace); color: var(--muted, #64748b); margin-top: 2px; } .ds-ticket { font-weight: 600; } .ds-svc { color: var(--ink-2, #334155); } .ds-num { font-family: var(--mono, 'JetBrains Mono', ui-monospace, monospace); font-size: 12.5px; } .ds-pstat { font-size: 12px; color: var(--muted, #64748b); } .ds-bad { color: var(--bad-text, #b91c1c); }"
+    },
+    {
+      "name": "Dialog",
+      "kind": "custom",
+      "refersTo": "dialog",
+      "description": "Modal for New session; the only in-app surface with a shadow.",
+      "html": "<div class=\"ds-dialog\"><h2>New Claude session</h2><p>Machine and folder fields go here.</p><div class=\"ds-actions\"><button class=\"ds-dbtn\" type=\"button\">Cancel</button><button class=\"ds-dbtn ds-dprimary\" type=\"button\">Start and open</button></div></div>",
+      "css": ".ds-dialog { border: 1px solid var(--line, #e2e8f0); border-radius: 12px; background: var(--surface, #ffffff); color: var(--ink, #0f172a); padding: 20px; width: min(440px, calc(100% - 32px)); box-shadow: 0 1px 2px rgb(0 0 0 / 0.06), 0 16px 40px rgb(0 0 0 / 0.18); font: 14px/1.5 var(--sans, 'Inter Variable', Inter, system-ui, sans-serif); } .ds-dialog h2 { margin: 0 0 16px; font-size: 16px; font-weight: 600; } .ds-dialog p { color: var(--muted, #64748b); margin: 0 0 14px; } .ds-actions { display: flex; justify-content: flex-end; gap: 8px; } .ds-dbtn { font: 500 13px/1 inherit; height: 32px; padding: 0 12px; border: 1px solid var(--line-strong, #cbd5e1); border-radius: 6px; background: var(--surface, #ffffff); color: var(--ink, #0f172a); cursor: pointer; } .ds-dbtn:hover { background: var(--hover, #f1f5f9); } .ds-dprimary { background: var(--accent, #2563eb); border-color: var(--accent, #2563eb); color: #ffffff; } .ds-dprimary:hover { background: var(--accent-hover, #1d4ed8); border-color: var(--accent-hover, #1d4ed8); }"
+    }
+  ],
+  "narrative": {
+    "northStar": "The Instrument Panel",
+    "overview": "Yardbell is a working instrument for one developer watching several machines. It sits in the category of Linear, the Vercel dashboard, Tailscale admin and GitHub on purpose: white and slate in light, near-black in dark, one blue, and state colors that only ever mean state. Craft comes from alignment, a tight type scale, complete states (connected, timed out, last known, outside tmux, tunnel down) and the memory bar drawn to scale, never from ornament.\n\nDensity is desk-dense and phone-honest. At 1440px a 272px sidebar carries every machine with its status dot, connection text and memory bar, and the main column is a single bordered sessions table. Under 760px the same content reflows: machines become stacked bordered rows with the memory bar in a right-hand column, and each table row becomes a bordered block with full-width 40px actions. Both light and dark follow the system preference; neither is secondary.\n\nConfirmed rejections from the product owner: anything that reads as a generic admin template (cards on gray), and anything playful or decorative (gradients, glows, mascots, motion for its own sake).",
+    "keyCharacteristics": [
+      "Flat surfaces separated by 1px rules; shadows only on overlays.",
+      "One blue accent for the primary action, selection and the Claude share of memory.",
+      "Green, amber and red carry state only, always paired with words.",
+      "Inter for interface text with tabular numerals; JetBrains Mono for branches, ports and code.",
+      "Light and dark are both first-class, switched by `prefers-color-scheme`."
+    ],
+    "rules": [
+      {
+        "name": "The One Blue Rule",
+        "body": "Blue means \"act here\" or \"this is selected\" or \"this is Claude\". It never decorates, never fills a section, and is never joined by a second accent hue.",
+        "section": "colors"
+      },
+      {
+        "name": "The State Has Words Rule",
+        "body": "A semantic color never appears alone: every dot or tinted bar is paired with text that names the state (SSH timeout, tunnel down, app not running).",
+        "section": "colors"
+      },
+      {
+        "name": "The Machine Text Rule",
+        "body": "If the string came from a shell (branch, port, command, path in a code block), it is set in JetBrains Mono. Human labels and names stay in Inter.",
+        "section": "typography"
+      },
+      {
+        "name": "The Tabular Rule",
+        "body": "Numbers are always tabular. Never switch a numeric column to proportional figures.",
+        "section": "typography"
+      },
+      {
+        "name": "The Overlays Only Rule",
+        "body": "If it scrolls with the page, it has no shadow. Tables, list rows, machine items, panels and buttons are bordered, not lifted.",
+        "section": "elevation"
+      }
+    ],
+    "dos": [
+      "**Do** separate regions with 1px Rule borders and the Paper to Rail tonal step.",
+      "**Do** keep exactly one Signal Blue filled button per view region, placed last in its row.",
+      "**Do** pair every status dot or tinted bar with a word naming the state, set in the matching text color.",
+      "**Do** set branches, ports and commands in JetBrains Mono and keep all numbers tabular.",
+      "**Do** draw resource figures to scale (the memory bar) instead of reporting them as percentages alone.",
+      "**Do** design every state a machine or session can be in: connected, timed out, last known, outside tmux, tunnel down, empty.",
+      "**Do** define both light and dark values for any new color token.",
+      "**Do** use inline stroked SVG icons at 16px with stroke 1.6."
+    ],
+    "donts": [
+      "**Don't** put shadows on in-flow surfaces; shadows are for dialogs and toasts only.",
+      "**Don't** introduce a second accent hue, or use green, amber or red for anything but state.",
+      "**Don't** build the page out of cards floating on a gray canvas; the main canvas is Paper and structure comes from rules.",
+      "**Don't** add gradients, glows, mascots or motion for its own sake. The only loops are the Working pulse (stopped under reduced motion) and the setup step spinner, and both report live work.",
+      "**Don't** add a display typeface or a heading larger than 20px; the page title is the top of the scale."
+    ]
+  }
+}

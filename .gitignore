@@ -1,0 +1,16 @@
+/target/
+/desktop/target
+/desktop/gen
+/yardbell.yml
+*.bak-*
+
+# local agent and design-tool scratch
+.superpowers/
+docs/superpowers/
+.impeccable/mocks/
+.impeccable/questions/
+.impeccable/review/
+.impeccable/build/
+.impeccable/hook.cache.json
+.impeccable/brief-*.md
+.impeccable/critique/

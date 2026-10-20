@@ -1,0 +1,21 @@
+port: 4000
+poll_seconds: 5
+host_terminal: iterm2
+ticket_pattern: '^(eng|ops)-(\d+)'
+forward_services: [rails, mailpit, anycable-go]
+workspaces: [app, app3, 'slots/slot*']
+machines:
+  - name: mini
+    local: true
+    mesh_ip: 100.64.0.10
+    root: ~/code/acme
+  - name: hp
+    ssh: hp
+    mesh_ip: 100.64.0.11
+    port_prefix: 1
+    root: ~/code/acme
+  - name: pro
+    ssh: mac_pro
+    mesh_ip: 100.64.0.12
+    port_prefix: 2
+    root: ~/code/acme

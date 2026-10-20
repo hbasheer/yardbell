@@ -1,0 +1,610 @@
+use crate::snapshot::Activity;
+use crate::state::StateView;
+use std::collections::{HashMap, HashSet};
+use std::time::{Duration, Instant};
+
+pub const IDLE_AFTER: Duration = Duration::from_secs(20);
+const DOWN_CHECKS: u32 = 2;
+const MEMORY_HIGH_PERCENT: u64 = 95;
+const MEMORY_REARM_PERCENT: u64 = 90;
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Event {
+    AgentIdle {
+        machine: String,
+        session_id: String,
+        tmux: Option<String>,
+        folder: String,
+        agent: String,
+    },
+    SessionEnded {
+        machine: String,
+        session_id: String,
+        folder: String,
+        agent: String,
+    },
+    MachineDown {
+        machine: String,
+        reason: Option<String>,
+    },
+    MachineUp {
+        machine: String,
+    },
+    MemoryHigh {
+        machine: String,
+        percent: u8,
+    },
+}
+
+struct SessionState {
+    machine: String,
+    folder: String,
+    agent: String,
+    attachable: bool,
+    was_active: bool,
+    idle_since: Option<Instant>,
+    notified: bool,
+}
+
+struct MachineState {
+    was_up: bool,
+    down_count: u32,
+    notified_down: bool,
+    memory_armed: bool,
+}
+
+#[derive(Default)]
+pub struct Tracker {
+    sessions: HashMap<String, SessionState>,
+    machines: HashMap<String, MachineState>,
+    primed: bool,
+}
+
+impl Tracker {
+    pub fn new() -> Tracker {
+        Tracker::default()
+    }
+
+    pub fn reset(&mut self) {
+        *self = Tracker::default();
+    }
+
+    pub fn observe(&mut self, view: &StateView, now: Instant) -> Vec<Event> {
+        let mut events = Vec::new();
+        self.observe_machines(view, &mut events);
+        self.observe_sessions(view, now, &mut events);
+        if !std::mem::replace(&mut self.primed, true) {
+            events.clear();
+        }
+        events
+    }
+
+    fn observe_machines(&mut self, view: &StateView, events: &mut Vec<Event>) {
+        let names: HashSet<&str> = view.machines.iter().map(|m| m.name.as_str()).collect();
+        self.machines
+            .retain(|name, _| names.contains(name.as_str()));
+
+        for m in &view.machines {
+            let state = self
+                .machines
+                .entry(m.name.clone())
+                .or_insert_with(|| MachineState {
+                    was_up: false,
+                    down_count: 0,
+                    notified_down: false,
+                    memory_armed: true,
+                });
+
+            if m.up {
+                state.was_up = true;
+                if state.notified_down {
+                    events.push(Event::MachineUp {
+                        machine: m.name.clone(),
+                    });
+                }
+                state.down_count = 0;
+                state.notified_down = false;
+            } else {
+                state.down_count += 1;
+                if state.was_up && state.down_count >= DOWN_CHECKS && !state.notified_down {
+                    state.notified_down = true;
+                    events.push(Event::MachineDown {
+                        machine: m.name.clone(),
+                        reason: m.reason.clone(),
+                    });
+                }
+            }
+
+            let Some(health) = m.health.filter(|h| h.mem_total_kb > 0) else {
+                continue;
+            };
+            let percent = health.mem_used_kb * 100 / health.mem_total_kb;
+            if percent < MEMORY_REARM_PERCENT {
+                state.memory_armed = true;
+            } else if percent >= MEMORY_HIGH_PERCENT && state.memory_armed {
+                state.memory_armed = false;
+                events.push(Event::MemoryHigh {
+                    machine: m.name.clone(),
+                    percent: percent.min(u8::MAX as u64) as u8,
+                });
+            }
+        }
+    }
+
+    fn observe_sessions(&mut self, view: &StateView, now: Instant, events: &mut Vec<Event>) {
+        let live: HashSet<&str> = view
+            .sessions
+            .iter()
+            .filter(|s| !s.stale)
+            .map(|s| s.id.as_str())
+            .collect();
+
+        let present: HashSet<&str> = view.sessions.iter().map(|s| s.id.as_str()).collect();
+
+        for (id, state) in &self.sessions {
+            let machine_up = view
+                .machines
+                .iter()
+                .any(|m| m.name == state.machine && m.up);
+            if state.attachable && machine_up && !present.contains(id.as_str()) {
+                events.push(Event::SessionEnded {
+                    machine: state.machine.clone(),
+                    session_id: id.clone(),
+                    folder: state.folder.clone(),
+                    agent: state.agent.clone(),
+                });
+            }
+        }
+
+        self.sessions.retain(|id, _| live.contains(id.as_str()));
+
+        for s in view.sessions.iter().filter(|s| !s.stale) {
+            let state = self
+                .sessions
+                .entry(s.id.clone())
+                .or_insert_with(|| SessionState {
+                    machine: s.machine.clone(),
+                    folder: s.folder.clone(),
+                    agent: s.agent.clone(),
+                    attachable: s.attachable,
+                    was_active: false,
+                    idle_since: None,
+                    notified: false,
+                });
+
+            match s.activity {
+                Activity::Active => {
+                    state.was_active = true;
+                    state.idle_since = None;
+                    state.notified = false;
+                }
+                Activity::Idle => {
+                    if !state.was_active || state.notified {
+                        continue;
+                    }
+                    let since = *state.idle_since.get_or_insert(now);
+                    if now.duration_since(since) >= IDLE_AFTER {
+                        state.notified = true;
+                        events.push(Event::AgentIdle {
+                            machine: s.machine.clone(),
+                            session_id: s.id.clone(),
+                            tmux: s.tmux.clone(),
+                            folder: s.folder.clone(),
+                            agent: s.agent.clone(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::config::HostTerminal;
+    use crate::mesh::MeshView;
+    use crate::snapshot::Health;
+    use crate::state::{AgentView, EndedView, FolderView, MachineView, PortView, SessionView};
+
+    fn machine(name: &str, up: bool) -> MachineView {
+        MachineView {
+            name: name.into(),
+            up,
+            reason: (!up).then(|| "ssh timed out".to_string()),
+            last_seen: None,
+            local: false,
+            health: None,
+            mesh_on: None,
+        }
+    }
+
+    fn with_memory(name: &str, percent: u64) -> MachineView {
+        MachineView {
+            health: Some(Health {
+                mem_total_kb: 1000,
+                mem_used_kb: percent * 10,
+                agent_kb: 0,
+                load1: 0.0,
+                cpus: 4,
+            }),
+            ..machine(name, true)
+        }
+    }
+
+    fn session(id: &str, machine: &str, activity: Activity) -> SessionView {
+        SessionView {
+            id: id.into(),
+            machine: machine.into(),
+            agent: "claude".into(),
+            pid: 1,
+            folder: "api".into(),
+            ticket: "ENG-1".into(),
+            branch: "eng-1-x".into(),
+            activity,
+            attachable: true,
+            tmux: Some("eng-1".into()),
+            stale: false,
+            ports: vec![],
+        }
+    }
+
+    fn stale(id: &str, machine: &str) -> SessionView {
+        SessionView {
+            stale: true,
+            ..session(id, machine, Activity::Idle)
+        }
+    }
+
+    fn ended(id: &str, machine: &str) -> EndedView {
+        EndedView {
+            id: id.into(),
+            machine: machine.into(),
+            agent: "claude".into(),
+            folder: "api".into(),
+            ticket: "ENG-1".into(),
+        }
+    }
+
+    fn view(
+        machines: Vec<MachineView>,
+        sessions: Vec<SessionView>,
+        ended: Vec<EndedView>,
+    ) -> StateView {
+        StateView {
+            agents: vec![],
+            default_agent: "claude".into(),
+            machines,
+            folders: vec![],
+            sessions,
+            ended,
+            host_terminal: HostTerminal::None,
+            mesh: None,
+        }
+    }
+
+    fn one_machine(sessions: Vec<SessionView>) -> StateView {
+        view(vec![machine("hp", true)], sessions, vec![])
+    }
+
+    fn idle_event() -> Event {
+        Event::AgentIdle {
+            machine: "hp".into(),
+            session_id: "s1".into(),
+            tmux: Some("eng-1".into()),
+            folder: "api".into(),
+            agent: "claude".into(),
+        }
+    }
+
+    fn secs(t0: Instant, n: u64) -> Instant {
+        t0 + Duration::from_secs(n)
+    }
+
+    #[test]
+    fn first_observation_is_silent() {
+        let mut t = Tracker::new();
+        let v = view(
+            vec![machine("hp", false), with_memory("pro", 99)],
+            vec![session("s1", "hp", Activity::Idle)],
+            vec![ended("s0", "hp")],
+        );
+        assert_eq!(t.observe(&v, Instant::now()), vec![]);
+    }
+
+    #[test]
+    fn idle_fires_after_20_seconds() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let active = one_machine(vec![session("s1", "hp", Activity::Active)]);
+        let idle = || one_machine(vec![session("s1", "hp", Activity::Idle)]);
+        assert_eq!(t.observe(&active, t0), vec![]);
+        assert_eq!(t.observe(&idle(), secs(t0, 5)), vec![]);
+        assert_eq!(t.observe(&idle(), secs(t0, 26)), vec![idle_event()]);
+        assert_eq!(t.observe(&idle(), secs(t0, 40)), vec![]);
+    }
+
+    #[test]
+    fn idle_flap_does_not_repeat() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let active = || one_machine(vec![session("s1", "hp", Activity::Active)]);
+        let idle = || one_machine(vec![session("s1", "hp", Activity::Idle)]);
+        let mut all = vec![];
+        all.extend(t.observe(&active(), t0));
+        all.extend(t.observe(&idle(), secs(t0, 2)));
+        all.extend(t.observe(&active(), secs(t0, 10)));
+        all.extend(t.observe(&idle(), secs(t0, 12)));
+        all.extend(t.observe(&idle(), secs(t0, 37)));
+        assert_eq!(all, vec![idle_event()]);
+    }
+
+    #[test]
+    fn stale_sessions_are_silent() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        t.observe(
+            &one_machine(vec![session("s1", "hp", Activity::Active)]),
+            t0,
+        );
+        let stale_view = || one_machine(vec![stale("s1", "hp")]);
+        assert_eq!(t.observe(&stale_view(), secs(t0, 1)), vec![]);
+        assert_eq!(t.observe(&stale_view(), secs(t0, 31)), vec![]);
+        let gone = view(vec![machine("hp", true)], vec![], vec![ended("s1", "hp")]);
+        assert_eq!(t.observe(&gone, secs(t0, 40)), vec![]);
+    }
+
+    #[test]
+    fn ended_session_fires_once() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        t.observe(
+            &one_machine(vec![session("s1", "hp", Activity::Active)]),
+            t0,
+        );
+        let gone = || view(vec![machine("hp", true)], vec![], vec![ended("s1", "hp")]);
+        assert_eq!(
+            t.observe(&gone(), secs(t0, 1)),
+            vec![Event::SessionEnded {
+                machine: "hp".into(),
+                session_id: "s1".into(),
+                folder: "api".into(),
+                agent: "claude".into(),
+            }]
+        );
+        assert_eq!(t.observe(&gone(), secs(t0, 2)), vec![]);
+    }
+
+    #[test]
+    fn machine_down_after_two_checks_and_back() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let at = |up| view(vec![machine("hp", up)], vec![], vec![]);
+        assert_eq!(t.observe(&at(true), t0), vec![]);
+        assert_eq!(t.observe(&at(false), secs(t0, 1)), vec![]);
+        assert_eq!(
+            t.observe(&at(false), secs(t0, 2)),
+            vec![Event::MachineDown {
+                machine: "hp".into(),
+                reason: Some("ssh timed out".into()),
+            }]
+        );
+        assert_eq!(t.observe(&at(false), secs(t0, 3)), vec![]);
+        assert_eq!(
+            t.observe(&at(true), secs(t0, 4)),
+            vec![Event::MachineUp {
+                machine: "hp".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn single_down_blip_is_silent() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let at = |up| view(vec![machine("hp", up)], vec![], vec![]);
+        let mut all = vec![];
+        all.extend(t.observe(&at(true), t0));
+        all.extend(t.observe(&at(false), secs(t0, 1)));
+        all.extend(t.observe(&at(true), secs(t0, 2)));
+        assert_eq!(all, vec![]);
+    }
+
+    #[test]
+    fn no_session_ended_for_down_machine() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        t.observe(
+            &one_machine(vec![session("s1", "hp", Activity::Active)]),
+            t0,
+        );
+        let down = || view(vec![machine("hp", false)], vec![], vec![ended("s1", "hp")]);
+        assert_eq!(t.observe(&down(), secs(t0, 1)), vec![]);
+        let events = t.observe(&down(), secs(t0, 2));
+        assert!(events
+            .iter()
+            .all(|e| !matches!(e, Event::SessionEnded { .. })));
+    }
+
+    #[test]
+    fn memory_high_once_and_rearms_below_90() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let at = |p| view(vec![with_memory("hp", p)], vec![], vec![]);
+        let high = |p| {
+            vec![Event::MemoryHigh {
+                machine: "hp".into(),
+                percent: p,
+            }]
+        };
+        assert_eq!(t.observe(&at(94), t0), vec![]);
+        assert_eq!(t.observe(&at(96), secs(t0, 1)), high(96));
+        assert_eq!(t.observe(&at(97), secs(t0, 2)), vec![]);
+        assert_eq!(t.observe(&at(92), secs(t0, 3)), vec![]);
+        assert_eq!(t.observe(&at(96), secs(t0, 4)), vec![]);
+        assert_eq!(t.observe(&at(89), secs(t0, 5)), vec![]);
+        assert_eq!(t.observe(&at(95), secs(t0, 6)), high(95));
+    }
+
+    #[test]
+    fn memory_skips_missing_health_and_zero_total() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let mut zero = with_memory("hp", 99);
+        zero.health.as_mut().unwrap().mem_total_kb = 0;
+        let v = view(vec![machine("pro", true), zero], vec![], vec![]);
+        t.observe(&v, t0);
+        assert_eq!(t.observe(&v, secs(t0, 1)), vec![]);
+    }
+
+    #[test]
+    fn removed_machine_is_silent() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let before = view(
+            vec![machine("a", true), machine("b", true)],
+            vec![session("s1", "a", Activity::Active)],
+            vec![],
+        );
+        let after = view(vec![machine("b", true)], vec![], vec![]);
+        t.observe(&before, t0);
+        assert_eq!(t.observe(&after, secs(t0, 1)), vec![]);
+    }
+
+    #[test]
+    fn reset_makes_next_observation_silent() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let at = |up| view(vec![machine("hp", up)], vec![], vec![]);
+        t.observe(&at(true), t0);
+        t.observe(&at(false), secs(t0, 1));
+        t.reset();
+        assert_eq!(t.observe(&at(false), secs(t0, 2)), vec![]);
+        assert_eq!(t.observe(&at(false), secs(t0, 3)), vec![]);
+        assert_eq!(t.observe(&at(true), secs(t0, 4)), vec![]);
+        assert_eq!(t.observe(&at(false), secs(t0, 5)), vec![]);
+        assert_eq!(t.observe(&at(false), secs(t0, 6)).len(), 1);
+    }
+
+    #[test]
+    fn never_up_machine_is_silent() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let at = |up| view(vec![machine("hp", up)], vec![], vec![]);
+        for n in 0..4 {
+            assert_eq!(t.observe(&at(false), secs(t0, n)), vec![]);
+        }
+        let added = view(
+            vec![machine("hp", false), machine("pro", false)],
+            vec![],
+            vec![],
+        );
+        assert_eq!(t.observe(&added, secs(t0, 5)), vec![]);
+        assert_eq!(t.observe(&added, secs(t0, 6)), vec![]);
+        assert_eq!(t.observe(&at(true), secs(t0, 7)), vec![]);
+    }
+
+    #[test]
+    fn vanished_session_on_up_machine_fires_once() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        t.observe(
+            &one_machine(vec![session("s1", "hp", Activity::Active)]),
+            t0,
+        );
+        let gone = || one_machine(vec![]);
+        assert_eq!(
+            t.observe(&gone(), secs(t0, 1)),
+            vec![Event::SessionEnded {
+                machine: "hp".into(),
+                session_id: "s1".into(),
+                folder: "api".into(),
+                agent: "claude".into(),
+            }]
+        );
+        assert_eq!(t.observe(&gone(), secs(t0, 2)), vec![]);
+    }
+
+    #[test]
+    fn vanished_session_is_silent_when_machine_down_or_removed() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let live = view(
+            vec![machine("hp", true), machine("pro", true)],
+            vec![
+                session("s1", "hp", Activity::Active),
+                session("s2", "pro", Activity::Active),
+            ],
+            vec![],
+        );
+        t.observe(&live, t0);
+        let after = view(vec![machine("hp", false)], vec![], vec![]);
+        assert_eq!(t.observe(&after, secs(t0, 1)), vec![]);
+    }
+
+    #[test]
+    fn outside_tmux_session_vanishing_is_silent() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let outside = SessionView {
+            id: "hp:4242".into(),
+            pid: 4242,
+            attachable: false,
+            tmux: None,
+            ..session("hp:4242", "hp", Activity::Active)
+        };
+        t.observe(&one_machine(vec![outside]), t0);
+        let moved = one_machine(vec![session("hp:eng-1", "hp", Activity::Active)]);
+        assert_eq!(t.observe(&moved, secs(t0, 1)), vec![]);
+        assert_eq!(t.observe(&one_machine(vec![]), secs(t0, 2)).len(), 1);
+    }
+
+    #[test]
+    fn session_in_ended_and_vanished_fires_once() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        t.observe(
+            &one_machine(vec![session("s1", "hp", Activity::Active)]),
+            t0,
+        );
+        let gone = view(vec![machine("hp", true)], vec![], vec![ended("s1", "hp")]);
+        assert_eq!(t.observe(&gone, secs(t0, 1)).len(), 1);
+    }
+
+    #[test]
+    fn state_view_round_trips() {
+        let mut m = with_memory("hp", 50);
+        m.last_seen = Some("12:00".into());
+        m.mesh_on = Some(true);
+        let mut s = session("s1", "hp", Activity::Active);
+        s.ports = vec![PortView {
+            service: "web".into(),
+            remote: 3000,
+            local: Some(13000),
+            status: "tunnel up".into(),
+            url: Some("http://localhost:13000".into()),
+        }];
+        let mut v = view(vec![m], vec![s], vec![ended("s0", "hp")]);
+        v.agents = vec![AgentView {
+            name: "claude".into(),
+            label: "Claude".into(),
+        }];
+        v.folders = vec![FolderView {
+            machine: "hp".into(),
+            label: "api".into(),
+            path: "/r/api".into(),
+            branch: "main".into(),
+        }];
+        v.mesh = Some(MeshView {
+            provider: crate::config::MeshProvider::Tailscale,
+            label: "Tailscale".into(),
+            on: Some(true),
+            can_turn_on: false,
+            hint: None,
+        });
+
+        let json = serde_json::to_value(&v).unwrap();
+        let back: StateView = serde_json::from_value(json.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&back).unwrap(), json);
+    }
+}

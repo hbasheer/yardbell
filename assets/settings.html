@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Settings · Yardbell</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.0.20/index.css" integrity="sha384-6QsiPFEuz7gYJPDZq103sCr5aKoBCbqAXJq1fEUzeUHeJmXFTMGzGuUmfP4j5w5b" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="settings">
+<div class="app">
+  <aside class="side">
+    <div class="side-head">
+      <a class="wordmark" href="/">Yardbell</a>
+      <span class="side-summary" id="nav-summary" aria-live="polite"></span>
+    </div>
+    <nav class="machine-nav" aria-label="Machines">
+      <p class="nav-label">Machines</p>
+      <ul id="nav-machines" class="nav-list"></ul>
+      <a class="nav-add" href="/add"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Add machine</a>
+    </nav>
+    <div class="side-foot">
+      <p class="vpn" id="nav-vpn"></p>
+      <a class="side-link" href="/settings" aria-current="page">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M3.6 12.4l1.3-1.3M11.1 4.9l1.3-1.3"/></svg>Settings
+      </a>
+      <button class="side-link" id="logout" type="button">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 3H3.5v10h3M10 5l3 3-3 3M13 8H6.5"/></svg>Log out
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="main-head"><h1>Settings</h1></header>
+
+    <div class="page-body">
+  <div id="undo-bar" class="banner info" hidden>
+    <div class="banner-text"><strong id="undo-title">Saved.</strong><span id="undo-text"></span></div>
+    <button class="btn" type="button" id="undo-btn">Undo</button>
+    <button class="btn primary" type="button" id="restart-btn" hidden>Restart Yardbell</button>
+  </div>
+
+  <section>
+    <div class="section-head"><h2>Mesh VPN</h2><span class="machine-status-inline" id="mesh-current"></span></div>
+    <div class="panel">
+      <div class="inline-form">
+        <label>Provider
+          <select id="provider">
+            <option value="nordvpn">NordVPN Meshnet</option>
+            <option value="tailscale">Tailscale</option>
+            <option value="headscale">Headscale</option>
+            <option value="netbird">NetBird</option>
+            <option value="zerotier">ZeroTier</option>
+            <option value="none">None (plain network)</option>
+          </select>
+        </label>
+        <button class="btn" type="button" id="preview-btn">Check addresses</button>
+      </div>
+      <p class="help">Switching VPN changes every machine's address. Yardbell looks each machine up in the new VPN's peer list so you can confirm the new addresses before anything is saved.</p>
+      <div id="mapping" hidden>
+        <p class="help" id="mapping-note"></p>
+        <div class="table-wrap">
+          <table class="map-table">
+            <thead><tr><th>Machine</th><th>Current address</th><th>New address</th></tr></thead>
+            <tbody id="mapping-rows"></tbody>
+          </table>
+        </div>
+        <div class="form-foot">
+          <p class="help">Saves <code>yardbell.yml</code> and updates the matching <code>HostName</code> lines in <code>~/.ssh/config</code>, with backups of both.</p>
+          <button class="btn primary" type="button" id="apply-btn">Switch VPN</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Machines</h2><a class="btn small-link" href="/add">Add machine</a></div>
+    <div id="machine-forms" class="machine-forms"></div>
+  </section>
+
+  <section>
+    <div class="section-head"><h2>Security</h2></div>
+    <form class="panel" id="pass-form">
+      <div class="grid3">
+        <label>Current passcode <input type="password" name="current" autocomplete="current-password" required></label>
+        <label>New passcode <input type="password" name="new" autocomplete="new-password" minlength="6" required></label>
+        <label>Repeat new passcode <input type="password" name="repeat" autocomplete="new-password" minlength="6" required></label>
+      </div>
+      <div class="form-foot">
+        <p class="help">At least 6 characters. Other devices stay logged in until you log them out below.</p>
+        <button class="btn primary" type="submit">Change passcode</button>
+      </div>
+    </form>
+    <div class="panel danger-zone">
+      <div class="banner-text"><strong>Log out everywhere</strong><span>Signs out every phone and browser, except this one.</span></div>
+      <button class="btn danger-solid" type="button" id="logout-all">Log out everywhere</button>
+    </div>
+  </section>
+    </div>
+  </main>
+</div>
+<div id="toast" role="status"></div>
+<script src="/nav.js"></script>
+<script src="/settings.js"></script>
+</body>
+</html>

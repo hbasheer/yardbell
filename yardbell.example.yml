@@ -1,0 +1,37 @@
+# Yardbell configuration. Copy to ~/.config/yardbell/yardbell.yml and edit.
+# Run `yardbell passcode` afterwards to set the login passcode.
+
+port: 4000                       # web UI port on the host
+poll_seconds: 5                  # how often every machine is checked
+host_terminal: iterm2            # iterm2 | terminal | none ("Terminal app" button on a macOS host)
+mesh: tailscale                  # nordvpn | tailscale | headscale | netbird | zerotier | none
+
+ticket_pattern: '^[a-z]+-\d+'    # read a ticket id from branch names (eng-142-fix-login -> ENG-142); '' to disable
+forward_services: [web, rails, api, mailpit]   # docker compose services whose ports are tunnelled to the host
+workspaces: ['*', '*/*']         # folders under each machine's root that hold git checkouts
+
+default_agent: claude            # preselected in New session; built in: claude, codex, gemini, qwen,
+                                 # opencode, copilot, cursor, crush, goose, aider
+# agents:                        # add another CLI agent, or change a built-in one's commands
+#   - name: amp
+#     command: amp
+#     resume: amp threads continue
+
+machines:
+  - name: studio                 # the machine Yardbell runs on
+    local: true
+    mesh_ip: 100.64.0.10
+    root: ~/code
+
+  - name: devbox                 # a Linux box reached over ssh
+    ssh: devbox                  # ~/.ssh/config alias (defaults to name)
+    mesh_ip: 100.64.0.11
+    port_prefix: 1               # its port 3000 opens on the host as 13000
+    root: ~/code
+
+  - name: laptop
+    ssh: laptop
+    mesh_ip: 100.64.0.12
+    port_prefix: 2
+    root: ~/code
+    mesh: tailscale              # optional per-machine override

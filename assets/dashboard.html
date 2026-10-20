@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Yardbell</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.0.20/index.css" integrity="sha384-6QsiPFEuz7gYJPDZq103sCr5aKoBCbqAXJq1fEUzeUHeJmXFTMGzGuUmfP4j5w5b" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="dashboard">
+<div class="app">
+  <aside class="side">
+    <div class="side-head">
+      <a class="wordmark" href="/">Yardbell</a>
+      <span class="side-summary" id="nav-summary" aria-live="polite"></span>
+    </div>
+    <nav class="machine-nav" aria-label="Machines">
+      <p class="nav-label">Machines</p>
+      <ul id="nav-machines" class="nav-list"></ul>
+      <a class="nav-add" href="/add"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Add machine</a>
+    </nav>
+    <div class="side-foot">
+      <p class="vpn" id="nav-vpn"></p>
+      <a class="side-link" href="/settings">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M3.6 12.4l1.3-1.3M11.1 4.9l1.3-1.3"/></svg>Settings
+      </a>
+      <button class="side-link" id="logout" type="button">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 3H3.5v10h3M10 5l3 3-3 3M13 8H6.5"/></svg>Log out
+      </button>
+    </div>
+  </aside>
+
+  <main class="main">
+    <header class="main-head">
+      <h1 id="title">Sessions</h1>
+      <span class="updated" id="updated" aria-live="polite"></span>
+      <span class="spacer"></span>
+      <button class="btn icon-btn" id="refresh-btn" type="button" aria-label="Check machines now" title="Check machines now">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 3.5v3h-3M3 12.5v-3h3M12.4 6.5A5 5 0 0 0 3.6 5.2M3.6 9.5a5 5 0 0 0 8.8 1.3"/></svg>
+      </button>
+      <a class="btn desk-only" href="/add">Add machine</a>
+      <button class="btn primary" id="new-btn" type="button">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>New session
+      </button>
+    </header>
+
+    <div class="toolbar" role="search">
+      <label class="search">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="M10.5 10.5 14 14"/></svg>
+        <input type="search" id="search" placeholder="Search sessions" aria-label="Search sessions by folder, branch, ticket or agent" autocomplete="off" autocapitalize="off" spellcheck="false">
+        <kbd class="search-key" aria-hidden="true">/</kbd>
+      </label>
+      <div class="segmented" role="group" aria-label="Show sessions">
+        <button type="button" data-status="all" aria-pressed="true">All<span class="seg-count" id="count-all"></span></button>
+        <button type="button" data-status="active" aria-pressed="false">Working<span class="seg-count" id="count-active"></span></button>
+        <button type="button" data-status="idle" aria-pressed="false">Idle<span class="seg-count" id="count-idle"></span></button>
+      </div>
+    </div>
+
+    <div id="offline" class="banner warn" role="alert" hidden>
+      <div class="banner-text"><strong>Yardbell is not responding.</strong><span>Showing the last data received. Retrying every 5 seconds.</span></div>
+    </div>
+    <div id="mesh-banner" class="banner" role="alert" hidden></div>
+
+    <div id="groups" class="groups"><p class="checking">Checking machines…</p></div>
+    <p class="shortcuts" aria-hidden="true"><kbd>/</kbd> search · <kbd>j</kbd> <kbd>k</kbd> move · <kbd>Enter</kbd> open · <kbd>n</kbd> new session</p>
+  </main>
+</div>
+
+<dialog id="new-dialog" class="wide" aria-labelledby="new-title">
+  <form method="dialog" id="new-form">
+    <div class="dialog-head">
+      <h2 id="new-title">New session</h2>
+      <button class="btn quiet" value="cancel" formnovalidate aria-label="Close">Close</button>
+    </div>
+
+    <section class="step grid2">
+      <label>Machine <select name="machine" id="new-machine"></select></label>
+      <label>Agent <select name="agent" id="new-agent"></select></label>
+    </section>
+
+    <section class="step">
+      <h3 class="step-title">Folder</h3>
+      <div id="recent" class="recent"></div>
+      <nav id="crumbs" class="crumbs" aria-label="Folder path"></nav>
+      <ul id="dir-list" class="dir-list" aria-label="Folders"></ul>
+    </section>
+
+    <section class="step" id="branch-step" hidden>
+      <h3 class="step-title">Branch</h3>
+      <div class="choices">
+        <label class="choice"><input type="radio" name="mode" value="stay" checked>
+          <span>Stay on <b id="current-branch"></b> in this folder</span></label>
+        <label class="choice"><input type="radio" name="mode" value="existing">
+          <span>Another branch, in its own worktree</span></label>
+        <div class="choice-body" id="existing-body" hidden>
+          <input type="text" id="branch-filter" placeholder="Filter branches" autocomplete="off" autocapitalize="off">
+          <ul id="branch-list" class="branch-list" role="listbox" aria-label="Branches"></ul>
+        </div>
+        <label class="choice"><input type="radio" name="mode" value="new">
+          <span>New branch, in its own worktree</span></label>
+        <div class="choice-body grid2" id="new-body" hidden>
+          <label>Name <input type="text" id="new-branch" placeholder="eng-1234-short-description" autocomplete="off" autocapitalize="off"></label>
+          <label>From <select id="new-base"></select></label>
+        </div>
+      </div>
+    </section>
+
+    <label class="check"><input type="checkbox" name="resume"> Continue the last conversation in this folder</label>
+
+    <div class="dialog-foot">
+      <p class="where" id="where"></p>
+      <button class="btn primary" value="start" id="start-btn">Start and open</button>
+    </div>
+  </form>
+</dialog>
+<div id="menu" class="menu" role="menu" hidden></div>
+<div id="toast" role="status"></div>
+<script src="/nav.js"></script>
+<script src="/dashboard.js"></script>
+</body>
+</html>

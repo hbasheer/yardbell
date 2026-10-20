@@ -1,0 +1,1 @@
+{"Self": {"HostName": "mini", "TailscaleIPs": ["100.64.0.10"], "Online": true}, "Peer": {"nodekey:a": {"HostName": "hp", "DNSName": "hp.tail1.ts.net.", "TailscaleIPs": ["100.64.0.11", "fd7a::1"], "Online": true}, "nodekey:b": {"HostName": "pro", "DNSName": "pro.tail1.ts.net.", "TailscaleIPs": ["100.64.0.12"], "Online": false}}, "BackendState": "Running"}

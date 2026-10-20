@@ -1,0 +1,13 @@
+services:
+  yardbell:
+    image: yardbell:latest
+    build:
+      context: .
+      args:
+        UID: ${UID:-1000}
+        GID: ${GID:-1000}
+    network_mode: host
+    restart: unless-stopped
+    volumes:
+      - ~/.ssh:/home/yardbell/.ssh
+      - ~/.config/yardbell:/config

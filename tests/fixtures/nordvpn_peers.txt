@@ -1,0 +1,131 @@
+This device:
+Hostname: user-altai.nord
+Nickname: -
+IP: 100.96.1.16
+Public Key: REDACTED
+OS: linux
+Distribution: Arch Linux
+
+Local Peers:
+Hostname: user-everest.nord
+Nickname: -
+Status: disconnected
+IP: 
+Public Key: REDACTED
+OS: linux
+Distribution: Linux Mint
+Allow Incoming Traffic: enabled
+Allow Routing: disabled
+Allow Local Network Access: disabled
+Allow Sending Files: enabled
+Allows Incoming Traffic: enabled
+Allows Routing: disabled
+Allows Local Network Access: disabled
+Allows Sending Files: enabled
+Accept Fileshare Automatically: disabled
+
+Hostname: user-himalayas.nord
+Nickname: -
+Status: disconnected
+IP: 
+Public Key: REDACTED
+OS: windows
+Distribution: Windows 10 Pro 64-bit (10.0, Build 19045)
+Allow Incoming Traffic: enabled
+Allow Routing: disabled
+Allow Local Network Access: disabled
+Allow Sending Files: enabled
+Allows Incoming Traffic: enabled
+Allows Routing: disabled
+Allows Local Network Access: disabled
+Allows Sending Files: enabled
+Accept Fileshare Automatically: disabled
+
+Hostname: user-alps.nord
+Nickname: -
+Status: disconnected
+IP: 
+Public Key: REDACTED
+OS: android
+Distribution: 31
+Allow Incoming Traffic: enabled
+Allow Routing: disabled
+Allow Local Network Access: disabled
+Allow Sending Files: enabled
+Allows Incoming Traffic: enabled
+Allows Routing: disabled
+Allows Local Network Access: disabled
+Allows Sending Files: enabled
+Accept Fileshare Automatically: disabled
+
+Nickname: studio-mini
+Hostname: user-andes.nord
+Status: connected
+IP: 100.80.12.34
+Public Key: REDACTED
+OS: macos
+Distribution: 26.6.2
+Allow Incoming Traffic: enabled
+Allow Routing: disabled
+Allow Local Network Access: disabled
+Allow Sending Files: enabled
+Allows Incoming Traffic: enabled
+Allows Routing: enabled
+Allows Local Network Access: enabled
+Allows Sending Files: enabled
+Accept Fileshare Automatically: disabled
+
+Hostname: user-olympic.nord
+Nickname: -
+Status: disconnected
+IP: 100.123.164.129
+Public Key: REDACTED
+OS: android
+Distribution: 33
+Allow Incoming Traffic: enabled
+Allow Routing: disabled
+Allow Local Network Access: disabled
+Allow Sending Files: enabled
+Allows Incoming Traffic: enabled
+Allows Routing: disabled
+Allows Local Network Access: disabled
+Allows Sending Files: enabled
+Accept Fileshare Automatically: disabled
+
+Hostname: user-atlas.nord
+Nickname: -
+Status: disconnected
+IP: 100.126.7.144
+Public Key: REDACTED
+OS: macos
+Distribution: 26.2.0
+Allow Incoming Traffic: enabled
+Allow Routing: disabled
+Allow Local Network Access: disabled
+Allow Sending Files: enabled
+Allows Incoming Traffic: enabled
+Allows Routing: disabled
+Allows Local Network Access: disabled
+Allows Sending Files: enabled
+Accept Fileshare Automatically: disabled
+
+Hostname: user-fuji.nord
+Nickname: -
+Status: disconnected
+IP: 100.64.152.101
+Public Key: REDACTED
+OS: android
+Distribution: 34
+Allow Incoming Traffic: enabled
+Allow Routing: disabled
+Allow Local Network Access: disabled
+Allow Sending Files: enabled
+Allows Incoming Traffic: enabled
+Allows Routing: disabled
+Allows Local Network Access: disabled
+Allows Sending Files: enabled
+Accept Fileshare Automatically: disabled
+
+
+External Peers:
+[no peers]

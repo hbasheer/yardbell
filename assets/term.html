@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<title>Yardbell terminal</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" integrity="sha384-LJcOxlx9IMbNXDqJ2axpfEQKkAYbFjJfhXexLfiRJhjDU81mzgkiQq8rkV0j6dVh" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/700.css" integrity="sha384-HqT7jGkVQOXOJ37tiVsHvCU/RCd8jyWr/gC4WgpIgRn5B8LiIqK8eJRiZOI/DGFQ" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+<style>
+  html, body { height: 100%; }
+  body { display: flex; flex-direction: column; background: #0a0a0b; color: #ededef; color-scheme: dark; }
+  .bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); background: #0f1012; border-bottom: 1px solid #1f2125; font-size: 14px; }
+  .bar .btn { background: transparent; color: #ededef; border-color: #2e3137; }
+  .bar .btn:hover { background: #17181b; }
+  .bar .name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar .name strong { font-weight: 600; }
+  .bar .name span { color: #8b8f98; }
+  #banner { display: none; color: #fbbf24; font-size: 13px; }
+  #term { flex: 1; min-height: 0; padding: 6px 4px 4px 8px; }
+  #keys { display: none; gap: 6px; padding: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); background: #0f1012; border-top: 1px solid #1f2125; overflow-x: auto; }
+  #keys .btn { min-width: 52px; min-height: 40px; background: #17181b; color: #ededef; border-color: #2e3137; flex: none; }
+  #keys { touch-action: manipulation; user-select: none; -webkit-user-select: none; }
+  #keys .btn.pressed { background: #2e3137; }
+  #keys .btn.on { background: #2563eb; color: #ffffff; border-color: #2563eb; }
+  @media (pointer: coarse) { #keys { display: flex; } }
+  #notice { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); display: none; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border: 1px solid #2e3137; border-radius: 8px; background: #17181b; color: #ededef; font-size: 13px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); z-index: 30; }
+  #notice.show { display: flex; }
+  #notice .btn { height: 30px; background: #2563eb; border-color: #2563eb; color: #ffffff; }
+  #notice:not(.ask) .btn { display: none; }
+  #text-view { position: fixed; inset: 0; display: none; flex-direction: column; background: #0a0a0b; z-index: 20; }
+  #text-view.show { display: flex; }
+  #text-view pre { flex: 1; margin: 0; padding: 12px; overflow: auto; font: 13px/1.5 "JetBrains Mono", ui-monospace, Menlo, monospace; color: #ededef; white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
+  #text-view pre::selection { background: #172554; }
+</style>
+</head>
+<body>
+<div class="bar">
+  <a class="btn" href="/">Back to Yardbell</a>
+  <span class="name" id="name"></span>
+  <span id="banner">disconnected, reconnecting</span>
+  <button class="btn" type="button" id="text-btn" title="Show the screen as text you can select and copy">Copy text</button>
+</div>
+<div id="term"></div>
+<div id="notice" role="status"><span id="notice-text"></span><button class="btn" type="button" id="notice-copy">Copy</button></div>
+<div id="text-view" role="dialog" aria-label="Screen text">
+  <div class="bar">
+    <span class="name"><strong>Screen text</strong><span> select any part, or copy all</span></span>
+    <button class="btn" type="button" id="text-copy">Copy all</button>
+    <button class="btn" type="button" id="text-close">Close</button>
+  </div>
+  <pre id="text-body"></pre>
+</div>
+<div id="keys">
+  <button class="btn" type="button" data-key="esc">Esc</button>
+  <button class="btn" type="button" data-key="tab">Tab</button>
+  <button class="btn" type="button" data-key="ctrl" id="ctrl">Ctrl</button>
+  <button class="btn" type="button" data-key="up" aria-label="Arrow up"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12.5V3.5M4 7.5l4-4 4 4"/></svg></button>
+  <button class="btn" type="button" data-key="down" aria-label="Arrow down"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M4 8.5l4 4 4-4"/></svg></button>
+  <button class="btn" type="button" data-key="left" aria-label="Arrow left"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M12.5 8h-9M7.5 4l-4 4 4 4"/></svg></button>
+  <button class="btn" type="button" data-key="right" aria-label="Arrow right"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9M8.5 4l4 4-4 4"/></svg></button>
+  <button class="btn" type="button" data-key="enter">Enter</button>
+  <button class="btn" type="button" data-key="ctrlc">Ctrl-C</button>
+</div>
+<script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js" integrity="sha384-/nfmYPUzWMS6v2atn8hbljz7NE0EI1iGx34lJaNzyVjWGDzMv+ciUZUeJpKA3Glc" crossorigin="anonymous"></script>
+<script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js" integrity="sha384-AQLWHRKAgdTxkolJcLOELg4E9rE89CPE2xMy3tIRFn08NcGKPTsELdvKomqji+DL" crossorigin="anonymous"></script>
+<script src="/term.js"></script>
+</body>
+</html>

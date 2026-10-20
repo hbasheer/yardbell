@@ -1,0 +1,125 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light dark">
+<title>Yardbell</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --hover: #f1f5f9;
+    --ink: #0f172a;
+    --ink-2: #334155;
+    --muted: #64748b;
+    --accent: #2563eb;
+    --accent-hover: #1d4ed8;
+    --accent-ink: #ffffff;
+    --bad-text: #b91c1c;
+    --sans: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0a0b;
+      --hover: #17181b;
+      --ink: #ededef;
+      --ink-2: #c4c6cc;
+      --muted: #8b8f98;
+      --bad-text: #f87171;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  html, body { height: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font: 14px/1.5 var(--sans);
+    font-feature-settings: "cv11", "ss01";
+    font-variant-numeric: tabular-nums;
+    -webkit-font-smoothing: antialiased;
+  }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+  .launch { min-height: 100%; display: grid; place-items: center; padding: 24px 16px; }
+  .column {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    width: min(400px, 100%);
+    text-align: center;
+    animation: appear 200ms ease-out 250ms both;
+  }
+  .app-icon { display: block; width: 64px; height: 64px; margin-bottom: 16px; }
+  h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.5; }
+  .states { display: flex; flex-direction: column; align-items: center; min-height: 118.5px; }
+  .icon {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.6;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .status { display: flex; align-items: center; gap: 8px; margin: 4px 0 0; color: var(--muted); font-size: 13px; }
+  .status .icon { animation: spin 0.9s linear infinite; }
+  @keyframes appear { from { opacity: 0; } }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) {
+    .column { animation-duration: 1ms; }
+    .status .icon { animation: none; }
+  }
+  .problem { margin: 4px 0 0; color: var(--ink-2); font-size: 13px; font-weight: 500; }
+  .hint { margin: 2px 0 0; color: var(--muted); font-size: 13px; text-wrap: balance; }
+  .actions { display: flex; justify-content: center; gap: 8px; margin-top: 20px; }
+  .btn {
+    font: 500 13px/1 var(--sans);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    height: 32px;
+    padding: 0 12px;
+    border: 1px solid transparent;
+    border-radius: 6px;
+    background: transparent;
+    color: var(--muted);
+    cursor: pointer;
+    transition: background-color 120ms ease-out, border-color 120ms ease-out, color 120ms ease-out;
+  }
+  .btn.quiet:hover { background: var(--hover); color: var(--ink); }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+  .btn.primary:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
+  .btn:disabled { opacity: 0.55; cursor: progress; }
+  .err { margin: 12px 0 0; color: var(--bad-text); font-size: 13px; }
+</style>
+</head>
+<body>
+<main class="launch">
+  <div class="column">
+    <img class="app-icon" src="icon.png" width="64" height="64" alt="" draggable="false">
+    <h1>Yardbell</h1>
+    <div class="states">
+      <div class="status" id="connecting">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 1-5.5 5.5"/></svg>
+        <span id="status" role="status">Connecting…</span>
+      </div>
+      <div id="unreachable" hidden>
+        <p class="problem" id="problem" role="alert"></p>
+        <p class="hint">Check that Yardbell is running there and your VPN is on.</p>
+        <p class="hint">Retrying in 5 s</p>
+        <div class="actions">
+          <button class="btn quiet" id="change" type="button">Change server</button>
+          <button class="btn primary" id="retry" type="button">Retry</button>
+        </div>
+        <p class="err" id="err" role="alert" hidden></p>
+      </div>
+    </div>
+  </div>
+</main>
+<script src="launch.js"></script>
+</body>
+</html>

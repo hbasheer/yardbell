@@ -1,0 +1,1 @@
+{"agents":[{"agent":"claude","pid":501,"cwd":"/Users/u/code/acme/app3","cpu":0.4,"tmux":null},{"agent":"claude","pid":502,"cwd":"/Users/u/code/acme/app3","cpu":3.0,"tmux":"mini-app3"}],"tmux":[{"name":"mini-app3","attached":false}],"folders":[{"path":"/Users/u/code/acme/app3","branch":""}],"ports":[{"workdir":"/Users/u/code/acme/app3","service":"rails","host_port":3000}]}

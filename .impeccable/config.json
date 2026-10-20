@@ -1,0 +1,122 @@
+{
+  "detector": {
+    "ignoreRules": [],
+    "ignoreFiles": [],
+    "ignoreValues": [
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "assets/term.html"
+        ],
+        "createdAt": "2026-10-18T23:25:35.406Z",
+        "reason": "Claude: bars use padding 8px 12px with max(8px, env(safe-area-inset-*)) on the notch edges, which the static detector cannot resolve"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "assets/dashboard.html"
+        ],
+        "createdAt": "2026-10-18T23:43:14.771Z",
+        "reason": "Claude: the dot is the live 'Claude is working' state (CPU-based activity), the page's only motion, disabled under prefers-reduced-motion"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "assets/login.html"
+        ],
+        "createdAt": "2026-10-18T23:43:14.783Z",
+        "reason": "Claude: the dot is the live 'Claude is working' state (CPU-based activity), the page's only motion, disabled under prefers-reduced-motion"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "assets/add.html"
+        ],
+        "createdAt": "2026-10-18T23:43:14.795Z",
+        "reason": "Claude: the dot is the live 'Claude is working' state (CPU-based activity), the page's only motion, disabled under prefers-reduced-motion"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "assets/dashboard.html"
+        ],
+        "createdAt": "2026-10-18T23:43:14.806Z",
+        "reason": "Claude: table-wrap only clips the rounded border; every th/td has 9-14px padding"
+      },
+      {
+        "rule": "overused-font",
+        "value": "inter",
+        "createdAt": "2026-10-18T23:44:03.643Z",
+        "reason": "user chose the category-standard direction with Linear, Vercel, Tailscale and GitHub as the bar; Inter is that category's workhorse UI face"
+      },
+      {
+        "rule": "wide-tracking",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/challenger-split-flap.html"
+        ],
+        "createdAt": "2026-10-18T23:44:03.655Z",
+        "reason": "Claude: unchosen decision sketch, never shipped"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "assets/term.html"
+        ],
+        "createdAt": "2026-10-18T23:46:47.984Z",
+        "reason": "Claude: shared style.css; the dot is the live 'Claude is working' state, off under reduced motion"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/assigned.html"
+        ],
+        "createdAt": "2026-10-18T23:48:57.485Z",
+        "reason": "Claude: unchosen decision sketch; user picked the canon direction, sketch never ships"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/model-pick.html"
+        ],
+        "createdAt": "2026-10-18T23:48:57.497Z",
+        "reason": "Claude: unchosen decision sketch; user picked the canon direction, sketch never ships"
+      },
+      {
+        "rule": "design-system-font",
+        "value": "*",
+        "files": [
+          ".impeccable/mocks/decision/challenger-split-flap.html"
+        ],
+        "createdAt": "2026-10-18T23:48:57.507Z",
+        "reason": "Claude: unchosen decision sketch; user picked the canon direction, sketch never ships"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "assets/settings.html"
+        ],
+        "createdAt": "2026-10-19T00:33:02.616Z",
+        "reason": "Claude: table-wrap only clips the rounded border; map-table cells have 8-12px padding"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "assets/settings.html"
+        ],
+        "createdAt": "2026-10-19T00:33:02.629Z",
+        "reason": "Claude: shared style.css; live 'Claude is working' state, off under reduced motion"
+      }
+    ]
+  }
+}

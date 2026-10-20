@@ -1,0 +1,18 @@
+Technology: NORDLYNX
+Firewall: enabled
+Firewall Mark: 0xe1f1
+Routing: enabled
+User Consent: enabled
+Kill Switch: disabled
+Real-time protection: disabled
+Notify: enabled
+Tray: enabled
+Auto-connect: disabled
+Meshnet: enabled
+DNS: disabled
+LAN Discovery: disabled
+Virtual Location: enabled
+Post-quantum VPN: disabled
+ARP Ignore: enabled
+Allowlisted subnets:
+	172.16.0.0/12
