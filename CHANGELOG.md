@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-10-20
+
 - New session and Move to tmux work on the machine running the server when the server was started
   from a terminal. The login shell that starts the session was stopped by that terminal, and the
   request failed with "did not answer in time".
