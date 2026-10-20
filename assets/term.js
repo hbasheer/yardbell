@@ -188,8 +188,16 @@ function appKey(e) {
   return held ? e.key.toLowerCase() : "";
 }
 
+function tabKey(e) {
+  if (e.altKey) return "";
+  if (e.key === "Tab") return e.ctrlKey && !e.metaKey ? (e.shiftKey ? "tab-prev" : "tab-next") : "";
+  const held = mac ? e.metaKey && !e.ctrlKey && !e.shiftKey : e.ctrlKey && !e.metaKey && !e.shiftKey;
+  return held && /^[1-9]$/.test(e.key) ? `tab-${e.key}` : "";
+}
+
 if (app) {
   term.attachCustomKeyEventHandler((e) => {
+    if (tabKey(e)) return false;
     const key = appKey(e);
     const copying = key === "c" && term.hasSelection();
     if (!copying && key !== "v") return true;
@@ -201,6 +209,12 @@ if (app) {
     return false;
   });
   document.addEventListener("keydown", (e) => {
+    const tab = tabKey(e);
+    if (tab) {
+      e.preventDefault();
+      app.event.emit("shortcut", tab).catch(() => {});
+      return;
+    }
     const key = appKey(e);
     if (key !== "w" && key !== "q") return;
     e.preventDefault();

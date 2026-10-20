@@ -1,8 +1,8 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "launch",
-  "description": "Permissions for the bundled launch page in the main window",
-  "windows": ["main"],
+  "description": "Permissions for the bundled launch page in the dashboard tab",
+  "webviews": ["dashboard"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten"

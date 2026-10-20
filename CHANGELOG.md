@@ -5,12 +5,15 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
-
-## [0.2.1] - 2026-10-20
-
-- The macOS app opens the dashboard. macOS blocked plain http:// pages in the app's window, so
-  it stayed on Connecting.
-
+- On macOS the desktop app shows the Yardbell mark in the menu bar instead of a colored dot. It
+  gets a dot when a machine is down or memory is high, and fades when the server can't be
+  reached. A left click on it opens the menu like other menu bar items.
+- The desktop app keeps the dashboard and every terminal in one window with a tab bar, instead
+  of a window per terminal. Switch with `Ctrl+1` to `Ctrl+9` (`⌘1` to `⌘9` on macOS) or
+  `Ctrl+Tab`, and close a terminal tab with `⌘W` on macOS and `Ctrl+Shift+W` inside a Linux
+  terminal (plain `Ctrl+W` goes to the shell there).
+- A machine is reported down only after it has been unreachable for a minute, in the desktop app
+  and in phone notifications. A brief mesh or ssh hiccup no longer sends "down" and "back".
 - Phone notifications through ntfy: the server tells your phone when an agent is waiting for you
   (after `wait_minutes`, 2 by default, and only if you have not answered it by then), a session
   ends, a machine goes down or comes back, or memory reaches 95%, with no browser tab or desktop
@@ -24,7 +27,6 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 - The macOS app opens the dashboard. macOS blocked plain http:// pages in the app's window, so
   it stayed on Connecting.
-
 
 ## [0.2.0] - 2026-10-20
 

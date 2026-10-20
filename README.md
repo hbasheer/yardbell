@@ -40,8 +40,8 @@ Yardbell answers all of these on one page.
   tunnel down.
 - **A real terminal anywhere.** Open any tmux session in the browser with xterm.js, from the desktop
   or a phone (with an Esc, Tab, Ctrl and arrow key row). Closing the tab only detaches.
-- **A desktop app.** For macOS and Linux: the dashboard in a window of its own, terminals in their
-  own windows with the system clipboard, every machine's state in the tray, and a notification when
+- **A desktop app.** For macOS and Linux: the dashboard and every terminal as tabs in a window of
+  their own, with the system clipboard, every machine's state in the tray, and a notification when
   an agent is waiting, a session ends, a machine goes down or memory runs out.
 - **Phone notifications.** Through the free ntfy app, the server itself tells your phone when an
   agent is waiting for you, a session ends, a machine goes down or memory runs low, with no browser
@@ -125,7 +125,7 @@ host's mesh address. Docker on macOS is unverified, see
 The desktop app for macOS and Linux opens the dashboard in a window of its own, shows the state of
 every machine in the tray, and sends system notifications, so Yardbell does not need a browser
 tab. It connects to a Yardbell that is already running (see [Quick start](#quick-start)) and does
-not run the server itself. Every terminal opens in a window of its own. The app needs a server from
+not run the server itself. The app needs a server from
 the same release: an older server answers the app's sign-in with a 404, and the app then reports
 that it can't reach the server. To build that release, run `git checkout v<version>` in your clone
 before `cargo build --release`.
@@ -159,8 +159,24 @@ keychain (the macOS Keychain, or the Secret Service on Linux, such as GNOME Keyr
 The passcode itself is not stored. Later launches go straight to the dashboard, and when the server
 ends the session the app asks for the passcode again.
 
+**Tabs.** The window has a tab bar: the first tab is the dashboard, and every terminal you open
+(from the dashboard or from a notification) is a tab after it. A tab shows the session's folder and
+machine, and a terminal you open twice reuses its tab. Close a terminal tab with its cross, a
+middle click or the keys below. The tab keys work in the dashboard and in a terminal:
+
+| Action | macOS | Linux |
+|---|---|---|
+| Go to tab 1 to 8 (1 is the dashboard) | `⌘1` to `⌘8` | `Ctrl+1` to `Ctrl+8` |
+| Go to the last tab | `⌘9` | `Ctrl+9` |
+| Next tab | `Ctrl+Tab` | `Ctrl+Tab` |
+| Previous tab | `Ctrl+Shift+Tab` | `Ctrl+Shift+Tab` |
+
+Closing is in the shortcuts table below.
+
 **Tray.** The icon is green when every machine is up, amber when a machine is at 85% memory or more,
-red when a machine is down and gray when the server cannot be reached. The menu lists each machine
+red when a machine is down and gray when the server cannot be reached. On macOS the menu bar shows
+the logo's mark in the menu bar's color, with a dot when a machine is down or memory is high,
+faded when not connected, and a left click opens the menu. The menu lists each machine
 with its state and memory, then **Open Yardbell**, **New session**, **Notifications**, **Start at
 login**, **Disconnect** (forgets the session and shows the sign-in again) and **Quit**. Closing the
 window only hides it: the app keeps running in the tray until you choose **Quit**. On Linux the
@@ -171,7 +187,7 @@ on by default.
 
 - an agent finished or is waiting for you (it has been idle for 20 seconds),
 - a session ended,
-- a machine went down or came back,
+- a machine went down (it has been unreachable for a minute) or came back,
 - a machine's memory passed 95%.
 
 Each kind has a switch under **Notifications** in the tray menu. All four are on by default and the
@@ -180,19 +196,20 @@ Notifications that stay in the macOS Notification Center or in GNOME's list keep
 routing. Once 8 of them are waiting, newer ones show without an **Open** button until older ones
 are cleared.
 
-**Clipboard and shortcuts.** Terminal windows use the system clipboard directly, so copy and paste
+**Clipboard and shortcuts.** Terminal tabs use the system clipboard directly, so copy and paste
 work without the `https` limit described under [Terminal and phone](#terminal-and-phone).
 
 | | Linux | macOS |
 |---|---|---|
 | Copy the selection | `Ctrl+Shift+C` | `Cmd+C` |
 | Paste | `Ctrl+Shift+V` | `Cmd+V` |
-| Close a terminal window | `Ctrl+Shift+W` | `Cmd+W` |
+| Close a terminal tab | `Ctrl+Shift+W` | `Cmd+W` |
 | Quit | `Ctrl+Shift+Q` | `Cmd+Q` |
-| New session (dashboard window) | `Ctrl+N` | `Cmd+N` |
+| New session (dashboard tab) | `Ctrl+N` | `Cmd+N` |
 
-Plain `Ctrl+C`, `Ctrl+W` and the other control keys still go to the shell and the agent. In the
-dashboard window, `Ctrl+W` hides the window and `Ctrl+Q` quits.
+Plain `Ctrl+C`, `Ctrl+W` and the other control keys still go to the shell and the agent, except
+`Ctrl+1` to `Ctrl+9` and `Ctrl+Tab`, which switch tabs. In the dashboard tab, `Ctrl+W` hides the
+window and `Ctrl+Q` quits.
 
 ## Phone notifications
 

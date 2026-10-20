@@ -116,8 +116,21 @@
     return held ? e.key.toLowerCase() : "";
   }
 
+  function tabKey(e) {
+    if (!app || e.altKey) return "";
+    if (e.key === "Tab") return e.ctrlKey && !e.metaKey ? (e.shiftKey ? "tab-prev" : "tab-next") : "";
+    const key = appKey(e);
+    return /^[1-9]$/.test(key) ? `tab-${key}` : "";
+  }
+
   if (app) {
     document.addEventListener("keydown", (e) => {
+      const tab = tabKey(e);
+      if (tab) {
+        e.preventDefault();
+        app.event.emit("shortcut", tab).catch(() => {});
+        return;
+      }
       const key = appKey(e);
       if (key !== "w" && key !== "q") return;
       e.preventDefault();
@@ -125,7 +138,7 @@
     });
   }
 
-  window.YardbellNav = { render, order, memPct, RATED, appKey, confirm: ask };
+  window.YardbellNav = { render, order, memPct, RATED, appKey, tabKey, confirm: ask };
   if (page !== "dashboard") {
     load();
     setInterval(load, 10000);

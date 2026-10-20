@@ -203,7 +203,7 @@ Every key is optional. The values above are the defaults.
 | `wait_minutes` | `2` | How long an agent must stay waiting before the phone is told. If you answer it sooner, nothing is sent. `0` sends right away. From 0 to 60. |
 | `agent_waiting` | `true` | Notify when an agent is waiting for you. |
 | `session_ended` | `true` | Notify when a session ends. |
-| `machines` | `true` | Notify when a machine goes down and when it comes back. |
+| `machines` | `true` | Notify when a machine has been down for a minute and when it comes back. |
 | `memory` | `true` | Notify when a machine's memory reaches 95%. |
 
 Tapping a notification opens Yardbell on the phone, at the address from `listen_ip` or, by default,

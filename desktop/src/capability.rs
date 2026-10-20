@@ -5,6 +5,7 @@ use tauri::utils::acl::RemoteUrlPattern;
 use tauri::{AppHandle, Manager};
 use url::{Host, Url};
 
+use crate::tabs::DASHBOARD;
 use crate::windows;
 
 const IDENTIFIER: &str = "server";
@@ -71,12 +72,7 @@ fn identifier(granted: &[String], pages: &str) -> Option<String> {
 fn capabilities(identifier: &str, pages: &str) -> Vec<CapabilityBuilder> {
     let terminals = format!("{}*", windows::TERMINAL);
     vec![
-        capability(
-            identifier,
-            pages,
-            &[windows::MAIN, &terminals],
-            &PERMISSIONS,
-        ),
+        capability(identifier, pages, &[DASHBOARD, &terminals], &PERMISSIONS),
         capability(
             &format!("{identifier}-terminal"),
             pages,
@@ -95,7 +91,7 @@ fn capability(
     let builder = CapabilityBuilder::new(identifier)
         .remote(pages.to_string())
         .local(false)
-        .windows(labels.iter().copied());
+        .webviews(labels.iter().copied());
     permissions.iter().fold(builder, |builder, permission| {
         builder.permission(*permission)
     })
@@ -114,6 +110,7 @@ mod tests {
     use url::Url;
 
     use super::*;
+    use crate::main_window::BAR;
 
     const SERVER: &str = "http://100.101.7.20:4100";
     const PAGES: &str = "http://100.101.7.20:4100/*";
@@ -233,14 +230,14 @@ mod tests {
                 capability.remote.as_ref().map(|remote| remote.urls.clone()),
                 Some(vec![PAGES.to_string()])
             );
-            assert!(capability.webviews.is_empty());
+            assert!(capability.windows.is_empty());
         }
         let shown: Vec<(&str, Vec<&str>, Vec<String>)> = capabilities
             .iter()
             .map(|capability| {
                 (
                     capability.identifier.as_str(),
-                    capability.windows.iter().map(String::as_str).collect(),
+                    capability.webviews.iter().map(String::as_str).collect(),
                     permissions(capability),
                 )
             })
@@ -250,7 +247,7 @@ mod tests {
             [
                 (
                     "server",
-                    vec!["main", "term-*"],
+                    vec!["dashboard", "term-*"],
                     vec![
                         "core:event:default".to_string(),
                         "clipboard-manager:allow-write-text".to_string()
@@ -314,9 +311,12 @@ mod tests {
                 let other_port = Url::parse("http://100.101.7.20:5173/").unwrap();
                 assert!(url.test(&server_page), "{command}");
                 assert!(!url.test(&other_port), "{command}");
-                let granted = |label: &str| grant.windows.iter().any(|w| w.matches(label));
+                assert!(grant.windows.is_empty(), "{command} windows");
+                let granted = |label: &str| grant.webviews.iter().any(|w| w.matches(label));
                 assert!(granted(&terminal), "{command} {terminal}");
-                assert_eq!(granted(windows::MAIN), !paste, "{command} main");
+                assert!(granted(&format!("{terminal}-2")), "{command} {terminal}-2");
+                assert_eq!(granted(DASHBOARD), !paste, "{command} dashboard");
+                assert!(!granted(BAR), "{command} tabs");
                 assert!(!granted(windows::CONNECT), "{command} connect");
             }
         }
