@@ -90,35 +90,33 @@ fn view(state: Option<&StateView>) -> PanelView {
     let Some(state) = state else {
         return PanelView::Unreachable;
     };
-    let machines = state
-        .machines
-        .iter()
-        .map(|m| PanelMachine {
-            name: m.name.clone(),
-            up: m.up,
-            reason: m.reason.clone().filter(|reason| !reason.is_empty()),
-            memory: m
-                .health
-                .filter(|health| m.up && health.mem_total_kb > 0)
-                .zip(tray::memory_percent(m))
-                .map(|(health, percent)| Memory {
-                    percent,
-                    used_kb: health.mem_used_kb,
-                    total_kb: health.mem_total_kb,
-                    agent_kb: health.agent_kb,
-                }),
-            cpu: m
-                .health
-                .filter(|health| m.up && health.cpus > 0)
-                .map(|health| Cpu {
-                    percent: (health.load1 / health.cpus as f64 * 100.0)
-                        .round()
-                        .clamp(0.0, 100.0) as u64,
-                    load1: health.load1,
-                    cpus: health.cpus,
-                }),
-        })
-        .collect();
+    let machines =
+        state
+            .machines
+            .iter()
+            .map(|m| PanelMachine {
+                name: m.name.clone(),
+                up: m.up,
+                reason: m.reason.clone().filter(|reason| !reason.is_empty()),
+                memory: m
+                    .health
+                    .filter(|health| m.up && health.mem_total_kb > 0)
+                    .zip(tray::memory_percent(m))
+                    .map(|(health, percent)| Memory {
+                        percent,
+                        used_kb: health.mem_used_kb,
+                        total_kb: health.mem_total_kb,
+                        agent_kb: health.agent_kb,
+                    }),
+                cpu: m.health.filter(|_| m.up).zip(tray::cpu_percent(m)).map(
+                    |(health, percent)| Cpu {
+                        percent,
+                        load1: health.load1,
+                        cpus: health.cpus,
+                    },
+                ),
+            })
+            .collect();
     PanelView::Ready {
         machines,
         sessions: tray::menu_sessions(Some(state)),

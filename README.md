@@ -173,14 +173,17 @@ middle click or the keys below. The tab keys work in the dashboard and in a term
 
 Closing is in the shortcuts table below.
 
-**Tray.** The icon is green when every machine is up, amber when a machine is at 85% memory or more,
-red when a machine is down and gray when the server cannot be reached. On macOS the menu bar shows
+**Tray.** On Linux the icon is the Yardbell mark in green when every machine is up, amber when a
+machine is at 85% memory or more, red when a machine is down and gray when the server cannot be
+reached. On macOS the menu bar shows
 the logo's mark in the menu bar's color, with a dot when a machine is down or memory is high,
 faded when not connected. A left click there opens a panel with every machine's memory and CPU
 (the 1-minute load per core) and the sessions you can open; its gear holds the notification
-switches, Start at login, Disconnect and Quit. A right click, and any click on Linux, opens the
-menu. The menu lists each machine
-under **Machines** with its state and memory (click one to see it in the dashboard), then every
+switches, Start at login, Disconnect and Quit. A right click opens the
+menu. On Linux the panel draws the menu, so it opens however that panel opens tray menus
+(a right click on Waybar, any click with GNOME's AppIndicator extension). The menu lists each machine
+under **Machines** with a state dot, a memory bar and its memory and CPU use (click one to see it in
+the dashboard), then every
 session you can open under **Sessions**, named like its tab, with **working** after the ones whose
 agent is busy. Click a session to bring the window forward on its tab. Past 15 sessions,
 **All sessions…** opens the dashboard. After that come **Open Yardbell**, **New session**, **Notifications**, **Start at

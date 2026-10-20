@@ -2,7 +2,9 @@ use std::sync::Mutex;
 
 use serde::Serialize;
 use tauri::image::Image;
-use tauri::menu::{CheckMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu};
+use tauri::menu::{
+    CheckMenuItem, IconMenuItem, Menu, MenuEvent, MenuItem, PredefinedMenuItem, Submenu,
+};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Wry};
 use url::Url;
@@ -39,10 +41,16 @@ const AUTOSTART: &str = "autostart";
 const DISCONNECT: &str = "disconnect";
 const QUIT: &str = "quit";
 
-const GREEN: &[u8] = include_bytes!("../icons/tray-green.png");
-const AMBER: &[u8] = include_bytes!("../icons/tray-amber.png");
-const RED: &[u8] = include_bytes!("../icons/tray-red.png");
-const GRAY: &[u8] = include_bytes!("../icons/tray-gray.png");
+const LINUX_GREEN: &[u8] = include_bytes!("../icons/tray-linux-green.png");
+const LINUX_AMBER: &[u8] = include_bytes!("../icons/tray-linux-amber.png");
+const LINUX_RED: &[u8] = include_bytes!("../icons/tray-linux-red.png");
+const LINUX_GRAY: &[u8] = include_bytes!("../icons/tray-linux-gray.png");
+const DOT_GREEN: &[u8] = include_bytes!("../icons/menu-green.png");
+const DOT_AMBER: &[u8] = include_bytes!("../icons/menu-amber.png");
+const DOT_RED: &[u8] = include_bytes!("../icons/menu-red.png");
+const DOT_GRAY: &[u8] = include_bytes!("../icons/menu-gray.png");
+const BAR_CELLS: u64 = 8;
+const DETAIL_INDENT: &str = "  ";
 const MAC_PLAIN: &[u8] = include_bytes!("../icons/tray-mac.png");
 const MAC_DOT: &[u8] = include_bytes!("../icons/tray-mac-dot.png");
 const MAC_DIM: &[u8] = include_bytes!("../icons/tray-mac-dim.png");
@@ -88,6 +96,8 @@ enum Status {
 struct MachineLine {
     name: String,
     label: String,
+    dot: TrayState,
+    details: Vec<String>,
 }
 
 impl Status {
@@ -100,6 +110,8 @@ impl Status {
                     .map(|m| MachineLine {
                         name: m.name.clone(),
                         label: machine_label(m),
+                        dot: machine_dot(m),
+                        details: machine_details(m),
                     })
                     .collect(),
             ),
@@ -119,7 +131,11 @@ impl Status {
 #[derive(Debug, PartialEq)]
 enum Entry {
     Header(&'static str),
-    Item { id: String, text: String },
+    Item {
+        id: String,
+        text: String,
+        dot: Option<TrayState>,
+    },
     Separator,
 }
 
@@ -131,15 +147,29 @@ fn entries(status: &Status, sessions: &[MenuSession]) -> Vec<Entry> {
             entries.push(Entry::Item {
                 id: SERVER_STATUS.into(),
                 text: UNREACHABLE.into(),
+                dot: None,
             });
             entries.push(Entry::Separator);
         }
         Status::Machines(lines) if !lines.is_empty() => {
             entries.push(Entry::Header(MACHINES_TITLE));
-            entries.extend(lines.iter().map(|line| Entry::Item {
-                id: machine_id(&line.name),
-                text: menu_text(&line.label),
-            }));
+            for line in lines {
+                entries.push(Entry::Item {
+                    id: machine_id(&line.name),
+                    text: menu_text(&line.label),
+                    dot: Some(line.dot),
+                });
+                entries.extend(
+                    line.details
+                        .iter()
+                        .enumerate()
+                        .map(|(n, detail)| Entry::Item {
+                            id: detail_id(&line.name, n + 1),
+                            text: menu_text(detail),
+                            dot: None,
+                        }),
+                );
+            }
             entries.push(Entry::Separator);
         }
         Status::Machines(_) => {}
@@ -152,11 +182,13 @@ fn entries(status: &Status, sessions: &[MenuSession]) -> Vec<Entry> {
     entries.extend(listed.iter().map(|session| Entry::Item {
         id: session_id(&session.machine, &session.tmux),
         text: session_text(session),
+        dot: None,
     }));
     if more {
         entries.push(Entry::Item {
             id: ALL_SESSIONS.into(),
             text: "All sessions…".into(),
+            dot: None,
         });
     }
     entries.push(Entry::Separator);
@@ -221,15 +253,54 @@ pub fn tray_state(view: Option<&StateView>) -> TrayState {
 }
 
 pub fn machine_label(m: &MachineView) -> String {
+    let state = if m.up { "up" } else { "down" };
+    format!("{} · {state}", m.name)
+}
+
+fn machine_details(m: &MachineView) -> Vec<String> {
     if !m.up {
-        return match m.reason.as_deref().filter(|reason| !reason.is_empty()) {
-            Some(reason) => format!("{} · down ({reason})", m.name),
-            None => format!("{} · down", m.name),
-        };
+        return m
+            .reason
+            .iter()
+            .filter(|reason| !reason.is_empty())
+            .map(|reason| format!("{DETAIL_INDENT}{reason}"))
+            .collect();
+    }
+    let Some(memory) = memory_percent(m) else {
+        return Vec::new();
+    };
+    [
+        Some(("mem", memory)),
+        cpu_percent(m).map(|cpu| ("cpu", cpu)),
+    ]
+    .into_iter()
+    .flatten()
+    .map(|(name, percent)| format!("{DETAIL_INDENT}{name} {} {percent}%", bar(percent)))
+    .collect()
+}
+
+fn bar(percent: u64) -> String {
+    let filled = ((percent.min(100) * BAR_CELLS + 50) / 100) as usize;
+    format!(
+        "{}{}",
+        "━".repeat(filled),
+        "─".repeat(BAR_CELLS as usize - filled)
+    )
+}
+
+pub fn cpu_percent(m: &MachineView) -> Option<u64> {
+    let health = m.health.filter(|health| health.cpus > 0)?;
+    let per_core = health.load1 / health.cpus as f64 * 100.0;
+    Some(per_core.round().clamp(0.0, 100.0) as u64)
+}
+
+pub fn machine_dot(m: &MachineView) -> TrayState {
+    if !m.up {
+        return TrayState::Red;
     }
     match memory_percent(m) {
-        Some(percent) => format!("{} · up · {percent}% memory", m.name),
-        None => format!("{} · up", m.name),
+        Some(percent) if percent >= MEMORY_WARNING_PERCENT => TrayState::Amber,
+        _ => TrayState::Green,
     }
 }
 
@@ -294,8 +365,17 @@ fn machine_id(name: &str) -> String {
     format!("{MACHINE_PREFIX}{name}")
 }
 
+fn detail_id(name: &str, n: usize) -> String {
+    format!("{MACHINE_PREFIX}{name}{SESSION_SEPARATOR}{n}")
+}
+
 fn machine_target(id: &str) -> Option<&str> {
-    id.strip_prefix(MACHINE_PREFIX)
+    let machine = id.strip_prefix(MACHINE_PREFIX)?;
+    Some(
+        machine
+            .split_once(SESSION_SEPARATOR)
+            .map_or(machine, |(name, _)| name),
+    )
 }
 
 fn machine_url(server: &str, name: &str) -> Option<String> {
@@ -408,8 +488,25 @@ fn menu(
             Entry::Header(title) => {
                 menu.append(&MenuItem::new(app, title, false, None::<&str>)?)?
             }
-            Entry::Item { id, text } => {
-                menu.append(&MenuItem::with_id(app, id, text, true, None::<&str>)?)?
+            Entry::Item {
+                id,
+                text,
+                dot: None,
+            } => menu.append(&MenuItem::with_id(app, id, text, true, None::<&str>)?)?,
+            Entry::Item {
+                id,
+                text,
+                dot: Some(dot),
+            } => {
+                let icon = Image::from_bytes(menu_dot(dot))?;
+                menu.append(&IconMenuItem::with_id(
+                    app,
+                    id,
+                    text,
+                    true,
+                    Some(icon),
+                    None::<&str>,
+                )?)?
             }
             Entry::Separator => menu.append(&PredefinedMenuItem::separator(app)?)?,
         }
@@ -494,15 +591,24 @@ fn icon(state: TrayState) -> tauri::Result<Image<'static>> {
     if cfg!(target_os = "macos") {
         return Image::from_bytes(mac_icon(state));
     }
-    Image::from_bytes(dot_icon(state))
+    Image::from_bytes(linux_icon(state))
 }
 
-fn dot_icon(state: TrayState) -> &'static [u8] {
+fn linux_icon(state: TrayState) -> &'static [u8] {
     match state {
-        TrayState::Green => GREEN,
-        TrayState::Amber => AMBER,
-        TrayState::Red => RED,
-        TrayState::Gray => GRAY,
+        TrayState::Green => LINUX_GREEN,
+        TrayState::Amber => LINUX_AMBER,
+        TrayState::Red => LINUX_RED,
+        TrayState::Gray => LINUX_GRAY,
+    }
+}
+
+fn menu_dot(state: TrayState) -> &'static [u8] {
+    match state {
+        TrayState::Green => DOT_GREEN,
+        TrayState::Amber => DOT_AMBER,
+        TrayState::Red => DOT_RED,
+        TrayState::Gray => DOT_GRAY,
     }
 }
 
@@ -667,40 +773,88 @@ mod tests {
     }
 
     #[test]
-    fn machine_labels() {
+    fn machine_lines_name_the_state() {
         assert_eq!(
             machine_label(&machine("devbox", true, None, Some(88))),
-            "devbox · up · 88% memory"
-        );
-        assert_eq!(
-            machine_label(&machine("devbox", true, None, None)),
             "devbox · up"
         );
         assert_eq!(
             machine_label(&machine("laptop", false, Some("ssh timeout"), None)),
-            "laptop · down (ssh timeout)"
-        );
-        assert_eq!(
-            machine_label(&machine("laptop", false, None, None)),
             "laptop · down"
         );
     }
 
     #[test]
-    fn machine_label_edge_cases() {
-        assert_eq!(
-            machine_label(&machine("laptop", false, Some(""), None)),
-            "laptop · down"
-        );
-        assert_eq!(
-            machine_label(&machine("laptop", false, Some("no mesh"), Some(90))),
-            "laptop · down (no mesh)"
-        );
+    fn machine_details_are_short_bars_or_the_down_reason() {
         let mut m = machine("devbox", true, None, None);
+        m.health = Some(Health {
+            load1: 5.1,
+            cpus: 8,
+            ..health(370, 1000)
+        });
+        assert_eq!(
+            machine_details(&m),
+            vec!["  mem ━━━───── 37%", "  cpu ━━━━━─── 64%"]
+        );
+        m.health = Some(Health {
+            cpus: 0,
+            ..health(1000, 1000)
+        });
+        assert_eq!(machine_details(&m), vec!["  mem ━━━━━━━━ 100%"]);
         m.health = Some(health(500, 0));
-        assert_eq!(machine_label(&m), "devbox · up");
-        m.health = Some(health(846, 1000));
-        assert_eq!(machine_label(&m), "devbox · up · 85% memory");
+        assert!(machine_details(&m).is_empty());
+
+        assert_eq!(
+            machine_details(&machine("laptop", false, Some("ssh timeout"), Some(90))),
+            vec!["  ssh timeout"]
+        );
+        assert!(machine_details(&machine("laptop", false, Some(""), None)).is_empty());
+    }
+
+    #[test]
+    fn machine_menu_lines_fit_a_narrow_tray_menu() {
+        let mut m = machine("devbox", true, None, None);
+        m.health = Some(Health {
+            load1: 64.0,
+            cpus: 8,
+            ..health(1000, 1000)
+        });
+        for line in machine_details(&m) {
+            assert!(line.chars().count() <= 20, "{line:?} is too wide");
+        }
+    }
+
+    #[test]
+    fn machine_dots_follow_state_and_memory() {
+        assert_eq!(
+            machine_dot(&machine("devbox", true, None, Some(84))),
+            TrayState::Green
+        );
+        assert_eq!(
+            machine_dot(&machine("devbox", true, None, Some(85))),
+            TrayState::Amber
+        );
+        assert_eq!(
+            machine_dot(&machine("devbox", true, None, None)),
+            TrayState::Green
+        );
+        assert_eq!(
+            machine_dot(&machine("laptop", false, None, Some(20))),
+            TrayState::Red
+        );
+    }
+
+    #[test]
+    fn menu_dots_are_small_round_icons() {
+        for state in [
+            TrayState::Green,
+            TrayState::Amber,
+            TrayState::Red,
+            TrayState::Gray,
+        ] {
+            let image = Image::from_bytes(menu_dot(state)).unwrap();
+            assert_eq!((image.width(), image.height()), (16, 16), "{state:?}");
+        }
     }
 
     #[test]
@@ -715,11 +869,7 @@ mod tests {
         ]);
         assert_eq!(
             Status::of(Some(&listed)).lines(),
-            vec![
-                "devbox · up · 88% memory",
-                "laptop · down (ssh timeout)",
-                "studio · up · 59% memory"
-            ]
+            vec!["devbox · up", "laptop · down", "studio · up"]
         );
 
         assert!(Status::of(Some(&view(vec![]))).lines().is_empty());
@@ -800,15 +950,24 @@ mod tests {
     }
 
     #[test]
-    fn every_state_has_a_32px_icon() {
-        for state in [
-            TrayState::Green,
-            TrayState::Amber,
-            TrayState::Red,
-            TrayState::Gray,
+    fn linux_icons_are_the_mark_in_the_state_color() {
+        for (state, rgb) in [
+            (TrayState::Green, [0x22, 0xc5, 0x5e]),
+            (TrayState::Amber, [0xf5, 0x9e, 0x0b]),
+            (TrayState::Red, [0xef, 0x44, 0x44]),
+            (TrayState::Gray, [0x8b, 0x8f, 0x98]),
         ] {
-            let image = Image::from_bytes(dot_icon(state)).unwrap();
-            assert_eq!((image.width(), image.height()), (32, 32), "{state:?}");
+            let image = Image::from_bytes(linux_icon(state)).unwrap();
+            assert_eq!((image.width(), image.height()), (36, 36), "{state:?}");
+            let pixels = image.rgba();
+            assert!(
+                pixels.chunks(4).any(|p| p[3] == 0),
+                "{state:?} has no transparency"
+            );
+            assert!(
+                pixels.chunks(4).filter(|p| p[3] > 0).all(|p| p[..3] == rgb),
+                "{state:?} is not drawn in its color"
+            );
         }
     }
 
@@ -936,6 +1095,15 @@ mod tests {
         Entry::Item {
             id: id.into(),
             text: text.into(),
+            dot: None,
+        }
+    }
+
+    fn dotted(id: &str, text: &str, dot: TrayState) -> Entry {
+        Entry::Item {
+            id: id.into(),
+            text: text.into(),
+            dot: Some(dot),
         }
     }
 
@@ -952,8 +1120,10 @@ mod tests {
             entries(&shown.status, &shown.sessions),
             vec![
                 Entry::Header("Machines"),
-                item("machine:devbox", "devbox · up · 40% memory"),
-                item("machine:laptop", "laptop · down"),
+                dotted("machine:devbox", "devbox · up", TrayState::Green),
+                item("machine:devbox\u{1f}1", "  mem ━━━───── 40%"),
+                item("machine:devbox\u{1f}2", "  cpu ──────── 0%"),
+                dotted("machine:laptop", "laptop · down", TrayState::Red),
                 Entry::Separator,
                 Entry::Header("Sessions"),
                 item(&session_id("devbox", "api"), "acme/api · devbox · working"),
@@ -985,6 +1155,7 @@ mod tests {
     #[test]
     fn a_machine_menu_id_names_its_machine() {
         assert_eq!(machine_target(&machine_id("dev box")), Some("dev box"));
+        assert_eq!(machine_target(&detail_id("dev box", 2)), Some("dev box"));
         assert_eq!(machine_target(OPEN), None);
     }
 

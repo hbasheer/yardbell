@@ -14,8 +14,10 @@ and the project uses [Semantic Versioning](https://semver.org).
   for the notification switches, Start at login, Disconnect and Quit. A right click opens the menu.
 - The menu bar menu lists every session you can open under **Sessions**, with "working" after the
   busy ones. Clicking one brings the app forward on that session's tab.
-- The menu's machine lines sit under **Machines** and are readable in a dark menu bar. Clicking one
-  opens the dashboard on that machine.
+- The menu's machine lines sit under **Machines** with a state dot, a memory bar, and memory and
+  CPU percentages, and are readable in a dark menu bar. Clicking one opens the dashboard on that
+  machine.
+- On Linux the tray icon is the Yardbell mark in the state color instead of a plain dot.
 
 ## [0.3.0] - 2026-10-20
 
