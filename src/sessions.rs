@@ -111,9 +111,12 @@ impl Sessions {
     }
 
     pub fn attach_argv(&self, m: &Machine, name: &str) -> Vec<String> {
+        // The browser terminal is always UTF-8, but ssh and login services often start without
+        // a locale, and tmux then draws "_" for every non-ASCII character unless told with -u.
         if m.is_local() {
             return [
                 "tmux",
+                "-u",
                 "-T",
                 "clipboard",
                 "attach",
@@ -130,7 +133,7 @@ impl Sessions {
             .collect();
         }
         let remote = format!(
-            r"tmux -T clipboard attach -t {} \; set-option -w window-size latest",
+            r"tmux -u -T clipboard attach -t {} \; set-option -w window-size latest",
             quote(&exact(name))
         );
         self.ssh.tty_command(m, &remote)
@@ -318,12 +321,13 @@ mod tests {
         assert_eq!(remote[1], "-t");
         assert_eq!(
             remote.last().unwrap(),
-            r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"; export PATH; tmux -T clipboard attach -t '=hp-app' \; set-option -w window-size latest"#
+            r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"; export PATH; tmux -u -T clipboard attach -t '=hp-app' \; set-option -w window-size latest"#
         );
         assert_eq!(
             s.attach_argv(&machine(true), "hp-app"),
             vec![
                 "tmux",
+                "-u",
                 "-T",
                 "clipboard",
                 "attach",
