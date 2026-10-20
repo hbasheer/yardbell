@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-10-20
+
+- The macOS app opens the dashboard. macOS blocked plain http:// pages in the app's window, so
+  it stayed on Connecting.
+
 ## [0.2.0] - 2026-10-20
 
 - Support for AI coding agents besides Claude Code: Codex, Gemini CLI, Qwen Code, opencode, Copilot
