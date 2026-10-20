@@ -20,22 +20,31 @@ impl Check for Probe {
 }
 
 pub type Hook = Arc<dyn Fn(&Config, &MachineStatus) + Send + Sync>;
+pub type AfterTick = Arc<dyn Fn(&Config) + Send + Sync>;
 
 pub struct Poller {
     cfg_path: PathBuf,
     check: Arc<dyn Check>,
     state: State,
     hook: Hook,
+    after: AfterTick,
     ticking: tokio::sync::Mutex<()>,
 }
 
 impl Poller {
-    pub fn new(cfg_path: PathBuf, check: Arc<dyn Check>, state: State, hook: Hook) -> Poller {
+    pub fn new(
+        cfg_path: PathBuf,
+        check: Arc<dyn Check>,
+        state: State,
+        hook: Hook,
+        after: AfterTick,
+    ) -> Poller {
         Poller {
             cfg_path,
             check,
             state,
             hook,
+            after,
             ticking: tokio::sync::Mutex::new(()),
         }
     }
@@ -78,6 +87,7 @@ impl Poller {
             self.state.update(st.clone());
             (self.hook)(&cfg, &st);
         }
+        (self.after)(&cfg);
         Some(Arc::unwrap_or_clone(cfg))
     }
 
@@ -142,6 +152,7 @@ mod tests {
             Arc::new(move |_cfg: &Config, st: &MachineStatus| {
                 hook_seen.lock().unwrap().push(st.name.clone())
             }),
+            Arc::new(|_: &Config| {}),
         );
         let start = Instant::now();
         poller.tick().await;
@@ -186,10 +197,47 @@ mod tests {
             check.clone(),
             State::default(),
             Arc::new(|_: &Config, _: &MachineStatus| {}),
+            Arc::new(|_: &Config| {}),
         );
         tokio::join!(poller.tick(), poller.tick(), poller.tick());
         assert_eq!(check.most.load(Ordering::SeqCst), 1);
         assert_eq!(check.inside.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn after_tick_runs_once_per_tick_after_the_updates() {
+        let hooked = Arc::new(AtomicUsize::new(0));
+        let after_hooked = hooked.clone();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        let after_seen = seen.clone();
+        let state = State::default();
+        let after_state = state.clone();
+        let poller = Poller::new(
+            cfg_path(),
+            Arc::new(SlowCheck {
+                delay: Duration::from_millis(10),
+                panic_on: None,
+            }),
+            state,
+            Arc::new(move |_: &Config, _: &MachineStatus| {
+                hooked.fetch_add(1, Ordering::SeqCst);
+            }),
+            Arc::new(move |cfg: &Config| {
+                let reported = cfg
+                    .machines
+                    .iter()
+                    .filter(|m| after_state.status(&m.name).is_some())
+                    .count();
+                after_seen.lock().unwrap().push((
+                    cfg.machines.len(),
+                    reported,
+                    after_hooked.load(Ordering::SeqCst),
+                ));
+            }),
+        );
+        poller.tick().await;
+        poller.tick().await;
+        assert_eq!(*seen.lock().unwrap(), [(3, 3, 3), (3, 3, 6)]);
     }
 
     #[tokio::test]
@@ -203,6 +251,7 @@ mod tests {
             }),
             state.clone(),
             Arc::new(|_: &Config, _: &MachineStatus| {}),
+            Arc::new(|_: &Config| {}),
         );
         poller.tick().await;
         assert_eq!(state.status("pro").unwrap().reason, Some(Reason::NoMesh));

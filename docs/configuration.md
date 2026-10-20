@@ -171,6 +171,45 @@ Yardbell finds running sessions by process name: the `process` value, or else th
 machine while the agent runs. The agent must be installed on each machine where you use it; Add
 machine lists which ones it finds.
 
+### `phone_notifications` (optional)
+
+Sends notifications to your phone through [ntfy](https://ntfy.sh), a free app that shows what is
+posted to a topic name. Yardbell posts when an agent is waiting for you, a session ends, a machine
+goes down or comes back, or a machine's memory reaches 95%. No browser tab or desktop app has to be
+open. Nothing is sent until `topic` is set. The **Phone notifications** section of the Settings page
+creates a topic for you and walks you through subscribing on the phone, so you rarely need to edit
+this by hand. The steps, and what the ntfy server gets to see, are in
+[README: Phone notifications](../README.md#phone-notifications).
+
+```yaml
+phone_notifications:
+  server: https://ntfy.sh   # any ntfy server
+  topic: ""                 # empty or missing: off; "Set up" on the Settings page writes it
+  token: ""                 # optional, for protected topics
+  wait_minutes: 2           # agent waiting; 0 = right away
+  agent_waiting: true
+  session_ended: true
+  machines: true            # down and back
+  memory: true
+```
+
+Every key is optional. The values above are the defaults.
+
+| Key | Default | Meaning |
+|---|---|---|
+| `server` | `https://ntfy.sh` | The ntfy server to post to. Must start with `http://` or `https://`. Use your own address for a self-hosted ntfy. |
+| `topic` | empty | The topic your phone subscribes to. Empty turns phone notifications off. Letters, digits, `-` and `_`, at most 64. Anyone who knows the topic can read your notifications, so treat it like a password. |
+| `token` | empty | An access token, for a topic your ntfy server protects. Sent as a bearer token. Printable ASCII with no spaces, at most 200 characters. |
+| `wait_minutes` | `2` | How long an agent must stay waiting before the phone is told. If you answer it sooner, nothing is sent. `0` sends right away. From 0 to 60. |
+| `agent_waiting` | `true` | Notify when an agent is waiting for you. |
+| `session_ended` | `true` | Notify when a session ends. |
+| `machines` | `true` | Notify when a machine goes down and when it comes back. |
+| `memory` | `true` | Notify when a machine's memory reaches 95%. |
+
+Tapping a notification opens Yardbell on the phone, at the address from `listen_ip` or, by default,
+the `mesh_ip` of the `local: true` machine. A waiting agent's notification opens that session's
+terminal, the others open the dashboard. With no such address, notifications carry no link.
+
 ### `listen_ip` (optional)
 
 The address Yardbell listens on besides `127.0.0.1`. By default it uses the `mesh_ip` of the
@@ -224,14 +263,16 @@ If you write entries yourself, test them from the host with `ssh -o BatchMode=ye
 | `passcode_hash` | `yardbell passcode`, Settings | argon2id hash, never the passcode itself |
 | `cookie_key` | `yardbell passcode`, Settings, "Log out everywhere" | signs login cookies; changing it signs everyone out |
 | `machines[].recent` | New session | the last 8 folders per machine |
+| `phone_notifications.topic` | Settings, "Set up" | a generated name, `yardbell-` and 24 random letters and digits |
 
-Keep `yardbell.yml` private (`chmod 600`): the cookie key can forge a login.
+Keep `yardbell.yml` private (`chmod 600`): the cookie key can forge a login, and the notification
+topic and token are secrets too.
 
 ## 6. What applies when
 
 | Change | Takes effect |
 |---|---|
-| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds` | on the next check, a few seconds |
+| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications` | on the next check, a few seconds |
 | passcode, "Log out everywhere" (from Settings) | immediately |
 | `port`, `listen_ip`, the host machine's `mesh_ip` | after restarting Yardbell |
 
@@ -253,6 +294,10 @@ Yardbell refuses to start or save an invalid file and says why:
 | `agent "x" needs a command and a resume` | give every entry under `agents` both commands |
 | `agent "x" process "a b" must be a plain program name` | set `process` to the program name only |
 | `default_agent "x" is not a known agent` | use a built-in name or add the agent under `agents` |
+| `phone_notifications.server must be an http:// or https:// address` | start the address with `http://` or `https://`, for example `https://ntfy.sh` |
+| `phone_notifications.topic may only use letters, digits, - and _ (at most 64)` | rename the topic, or leave it empty to turn notifications off |
+| `phone_notifications.wait_minutes must be from 0 to 60` | use a whole number of minutes from 0 to 60 |
+| `phone_notifications.token must be at most 200 characters without spaces` | paste the token again, with no spaces or line breaks |
 | `cannot read ...yardbell.yml` | the file is missing; Yardbell prints an example to start from |
 
 ## 8. Common setups

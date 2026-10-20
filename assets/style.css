@@ -533,7 +533,7 @@ dialog.wide > form > .check { padding: 4px 20px 12px; margin: 0; }
 
 label { display: grid; gap: 6px; margin-bottom: 14px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
 label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
-select, input[type=text], input[type=password], input[type=search] {
+select, input[type=text], input[type=password], input[type=search], input[type=number] {
   font: 14px var(--sans);
   height: 36px;
   padding: 0 10px;
@@ -668,6 +668,33 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .danger-zone { display: flex; align-items: center; gap: 16px; margin-top: 10px; }
 .btn.danger-solid { color: var(--bad-text); border-color: var(--bad-text); }
 .btn.danger-solid:hover { background: color-mix(in srgb, var(--bad) 8%, var(--surface)); }
+.phone-intro { display: flex; align-items: center; gap: 16px; }
+.phone-intro p { flex: 1; margin: 0; color: var(--ink-2); }
+.phone-on { display: grid; gap: 10px; }
+.phone-steps { list-style: none; margin: 0; display: grid; gap: 14px; }
+.phone-steps > li { display: grid; grid-template-columns: 20px minmax(0, 1fr); gap: 10px; align-items: baseline; }
+.phone-steps .mark { font-size: 12px; font-weight: 600; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.phone-steps p { margin: 0; }
+.phone-steps a { color: var(--accent-text); white-space: nowrap; }
+#phone-subscribe { font-weight: 550; }
+.phone-steps code { overflow-wrap: anywhere; }
+.phone-step { display: grid; gap: 8px; }
+.phone-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
+.phone-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.phone-field code { min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--side); font-size: 12.5px; }
+.phone-result { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
+.phone-result.ok { color: var(--ok-text); }
+.phone-result.bad, #phone-status.bad { color: var(--bad-text); }
+.phone-switches { display: grid; gap: 2px; justify-items: start; }
+.phone-switches > * { min-height: 32px; }
+.phone-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+.phone-wait { color: var(--ink-2); }
+.phone-wait input { width: 64px; height: 32px; font-variant-numeric: tabular-nums; }
+.phone-advanced { margin-top: 10px; }
+.phone-advanced > summary { list-style: none; margin-left: -6px; }
+.phone-advanced > summary::-webkit-details-marker { display: none; }
+.phone-advanced[open] > summary .chevron { transform: rotate(90deg); }
+.phone-advanced .grid2 { margin-top: 10px; }
 
 /* phone */
 
@@ -756,7 +783,7 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
   .map-table td { padding: 0; border: 0; }
   .map-table td:last-child { grid-column: 1 / -1; }
   .span2 { grid-column: auto; }
-  .inline-form, .form-foot, .danger-zone { flex-direction: column; align-items: stretch; }
+  .inline-form, .form-foot, .danger-zone, .phone-intro { flex-direction: column; align-items: stretch; }
   dialog.wide { width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; border-radius: 0; }
   dialog.wide form { display: flex; flex-direction: column; max-height: 100dvh; height: 100%; overflow-y: auto; }
   .dialog-foot { border-radius: 0; padding-bottom: max(12px, env(safe-area-inset-bottom)); position: sticky; bottom: 0; margin-top: auto; }

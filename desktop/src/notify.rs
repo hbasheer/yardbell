@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use notify_rust::{Notification, NotificationResponse};
-use yardbell::events::Event;
+use yardbell::events::{message, Event, Message};
 use yardbell::state::StateView;
 
 use crate::settings::Switches;
@@ -22,60 +22,25 @@ pub enum Target {
 }
 
 pub fn note_for(event: &Event, view: &StateView) -> Note {
-    match event {
-        Event::AgentIdle {
-            machine,
-            tmux,
-            folder,
-            agent,
-            ..
-        } => Note {
-            title: format!("{folder} is waiting"),
-            body: format!(
-                "{} on {machine} finished or needs you",
-                agent_label(view, agent)
-            ),
-            open: match tmux.as_deref().filter(|tmux| !tmux.is_empty()) {
-                Some(tmux) => Target::Terminal {
-                    machine: machine.clone(),
-                    tmux: tmux.to_string(),
-                },
-                None => Target::Main,
-            },
-        },
-        Event::SessionEnded {
-            machine,
-            folder,
-            agent,
-            ..
-        } => note(
-            format!("{folder} ended"),
-            format!("{} on {machine}", agent_label(view, agent)),
-        ),
-        Event::MachineDown { machine, reason } => note(
-            format!("{machine} is down"),
-            reason.clone().unwrap_or_default(),
-        ),
-        Event::MachineUp { machine } => note(format!("{machine} is back"), String::new()),
-        Event::MemoryHigh { machine, percent } => {
-            note(format!("{machine} memory at {percent}%"), String::new())
-        }
-    }
-}
-
-fn note(title: String, body: String) -> Note {
+    let Message { title, body } = message(event, view, 0);
     Note {
         title,
         body,
-        open: Target::Main,
+        open: target_for(event),
     }
 }
 
-fn agent_label<'a>(view: &'a StateView, agent: &'a str) -> &'a str {
-    view.agents
-        .iter()
-        .find(|known| known.name == agent)
-        .map_or(agent, |known| known.label.as_str())
+fn target_for(event: &Event) -> Target {
+    let Event::AgentIdle { machine, tmux, .. } = event else {
+        return Target::Main;
+    };
+    match tmux.as_deref().filter(|tmux| !tmux.is_empty()) {
+        Some(tmux) => Target::Terminal {
+            machine: machine.clone(),
+            tmux: tmux.to_string(),
+        },
+        None => Target::Main,
+    }
 }
 
 pub fn allowed(event: &Event, s: &Switches) -> bool {

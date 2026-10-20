@@ -7,6 +7,7 @@ pub mod events;
 pub mod folders;
 pub mod mesh;
 pub mod onboarding;
+pub mod phone;
 pub mod poller;
 pub mod probe;
 pub mod service;

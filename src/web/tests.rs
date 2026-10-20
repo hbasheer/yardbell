@@ -1,10 +1,11 @@
 use super::*;
 use crate::config::Config;
+use crate::phone::ntfy::Target;
 use crate::probe::MachineStatus;
 use crate::shell::Output;
 use crate::snapshot::{Port, Snapshot};
 use crate::ssh::Ssh;
-use crate::testing::FakeRunner;
+use crate::testing::{FakeRunner, FakeSender};
 use axum::body::Body;
 use axum::http::{header, Request, StatusCode};
 use http_body_util::BodyExt;
@@ -25,6 +26,7 @@ impl PortStatus for FakePorts {
 struct Rig {
     app: Arc<AppState>,
     fake: Arc<FakeRunner>,
+    phone_sender: Arc<FakeSender>,
     refreshes: Arc<std::sync::atomic::AtomicUsize>,
     now: Arc<std::sync::Mutex<std::time::Instant>>,
     _dir: tempfile::TempDir,
@@ -109,6 +111,7 @@ fn rig() -> Rig {
         dir.path().join("id_ed25519"),
     ));
     let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let phone_sender = Arc::new(FakeSender::default());
     let services = Services {
         state,
         ports: Arc::new(FakePorts),
@@ -121,6 +124,7 @@ fn rig() -> Rig {
             dir.path().join("ssh_config"),
             Arc::new(chrono::Local::now),
         ),
+        phone: Arc::new(Phone::new(phone_sender.clone())),
         refresh: {
             let refreshes = refreshes.clone();
             Arc::new(move || {
@@ -140,6 +144,7 @@ fn rig() -> Rig {
     Rig {
         app,
         fake,
+        phone_sender,
         refreshes,
         now,
         _dir: dir,
@@ -927,4 +932,361 @@ async fn shell_opens_a_plain_session_on_the_machine() {
         .unwrap();
     let (status, _, _) = send(&r.app, req).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+const OK_BODY: &str = r#"{"ok":true}"#;
+
+async fn get_settings(r: &Rig, c: &str) -> (serde_json::Value, String) {
+    let req = Request::get("/api/settings")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    (serde_json::from_str(&body).unwrap(), body)
+}
+
+async fn phone_post(r: &Rig, c: &str, route: &str) -> (StatusCode, String) {
+    let url = format!("/api/settings/phone/{route}");
+    let (status, _, body) = post_json(&r.app, c, &url, "{}").await;
+    (status, body)
+}
+
+async fn save_phone(r: &Rig, c: &str, changes: serde_json::Value) -> (StatusCode, String) {
+    let mut form = json!({
+        "server": "https://ntfy.sh",
+        "wait_minutes": 2,
+        "agent_waiting": true,
+        "session_ended": true,
+        "machines": true,
+        "memory": true,
+    });
+    form.as_object_mut()
+        .unwrap()
+        .extend(changes.as_object().unwrap().clone());
+    let (status, _, body) = post_json(&r.app, c, "/api/settings/phone", &form.to_string()).await;
+    (status, body)
+}
+
+fn stored_token(r: &Rig) -> String {
+    Config::load(&r.app.cfg_path)
+        .unwrap()
+        .phone_notifications
+        .token
+}
+
+#[tokio::test]
+async fn phone_setup_creates_a_topic_once() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (before, _) = get_settings(&r, &c).await;
+    assert_eq!(
+        before["phone"],
+        json!({
+            "on": false,
+            "server": "https://ntfy.sh",
+            "topic": "",
+            "wait_minutes": 2,
+            "agent_waiting": true,
+            "session_ended": true,
+            "machines": true,
+            "memory": true,
+            "token_set": false,
+            "last_sent": null,
+            "last_error": null,
+            "last_error_at": null,
+        })
+    );
+
+    let mut topics = Vec::new();
+    for _ in 0..2 {
+        let (status, body) = phone_post(&r, &c, "setup").await;
+        assert_eq!((status, body.as_str()), (StatusCode::OK, OK_BODY));
+        let (settings, _) = get_settings(&r, &c).await;
+        assert_eq!(settings["phone"]["on"], true);
+        topics.push(settings["phone"]["topic"].as_str().unwrap().to_string());
+    }
+    let shape = regex::Regex::new("^yardbell-[A-Za-z0-9]{24}$").unwrap();
+    assert!(shape.is_match(&topics[0]), "{topics:?}");
+    assert_eq!(topics[0], topics[1]);
+
+    let (status, _, body) = post_json(&r.app, &c, "/api/settings/undo", "{}").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (settings, _) = get_settings(&r, &c).await;
+    assert_eq!(
+        settings["phone"]["on"], false,
+        "the second setup must not write, so one Undo goes back to off"
+    );
+}
+
+#[tokio::test]
+async fn phone_settings_are_validated_and_trimmed() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, body) = save_phone(
+        &r,
+        &c,
+        json!({
+            "server": " https://ntfy.example.com ",
+            "wait_minutes": 7,
+            "agent_waiting": false,
+            "session_ended": false,
+            "machines": false,
+            "memory": false,
+        }),
+    )
+    .await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, OK_BODY));
+    let (saved, _) = get_settings(&r, &c).await;
+    assert_eq!(
+        saved["phone"],
+        json!({
+            "on": false,
+            "server": "https://ntfy.example.com",
+            "topic": "",
+            "wait_minutes": 7,
+            "agent_waiting": false,
+            "session_ended": false,
+            "machines": false,
+            "memory": false,
+            "token_set": false,
+            "last_sent": null,
+            "last_error": null,
+            "last_error_at": null,
+        })
+    );
+
+    let (status, body) = save_phone(&r, &c, json!({"wait_minutes": 61})).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body.contains("phone_notifications.wait_minutes must be from 0 to 60"),
+        "{body}"
+    );
+    let (after, _) = get_settings(&r, &c).await;
+    assert_eq!(
+        after["phone"], saved["phone"],
+        "a refused save changes nothing"
+    );
+}
+
+#[tokio::test]
+async fn phone_token_is_kept_replaced_or_cleared_and_never_returned() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let mut seen = Vec::new();
+    for (changes, stored) in [
+        (json!({"token": " tk_secret "}), "tk_secret"),
+        (json!({"wait_minutes": 9}), "tk_secret"),
+        (json!({"token": "  "}), "tk_secret"),
+        (json!({"token": "tk_other"}), "tk_other"),
+        (
+            json!({"token": "tk_third", "clear_token": true}),
+            "tk_third",
+        ),
+        (json!({"clear_token": true}), ""),
+    ] {
+        let (status, body) = save_phone(&r, &c, changes.clone()).await;
+        assert_eq!(
+            (status, body.as_str()),
+            (StatusCode::OK, OK_BODY),
+            "{changes}"
+        );
+        assert_eq!(stored_token(&r), stored, "{changes}");
+        let (settings, raw) = get_settings(&r, &c).await;
+        assert_eq!(
+            settings["phone"]["token_set"],
+            !stored.is_empty(),
+            "{changes}"
+        );
+        seen.extend([body, raw]);
+    }
+    for body in seen {
+        assert!(!body.contains("tk_"), "{body}");
+    }
+}
+
+#[tokio::test]
+async fn phone_test_sends_one_notification() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    phone_post(&r, &c, "setup").await;
+    save_phone(
+        &r,
+        &c,
+        json!({"server": "https://ntfy.example.com", "token": "tk_secret"}),
+    )
+    .await;
+    let (settings, _) = get_settings(&r, &c).await;
+    let topic = settings["phone"]["topic"].as_str().unwrap().to_string();
+
+    let (status, body) = phone_post(&r, &c, "test").await;
+
+    assert_eq!((status, body.as_str()), (StatusCode::OK, OK_BODY));
+    let calls = r.phone_sender.calls();
+    assert_eq!(calls.len(), 1, "{calls:?}");
+    let (to, push) = &calls[0];
+    assert_eq!(
+        *to,
+        Target {
+            server: "https://ntfy.example.com".into(),
+            topic,
+            token: Some("tk_secret".into()),
+        }
+    );
+    assert_eq!(
+        (push.title.as_str(), push.message.as_str()),
+        ("Yardbell", "Notifications from mini work.")
+    );
+    let (settings, raw) = get_settings(&r, &c).await;
+    assert!(settings["phone"]["last_sent"].is_string(), "{raw}");
+    assert!(!raw.contains("tk_secret"), "{raw}");
+}
+
+#[tokio::test]
+async fn phone_test_names_yardbell_without_a_local_machine() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    phone_post(&r, &c, "setup").await;
+    let mut cfg = Config::load(&r.app.cfg_path).unwrap();
+    let host = cfg.machines.iter_mut().find(|m| m.local).unwrap();
+    host.local = false;
+    host.port_prefix = Some(3);
+    cfg.save(&r.app.cfg_path).unwrap();
+
+    let (status, body) = phone_post(&r, &c, "test").await;
+
+    assert_eq!((status, body.as_str()), (StatusCode::OK, OK_BODY));
+    assert_eq!(
+        r.phone_sender.calls()[0].1.message,
+        "Notifications from Yardbell work."
+    );
+}
+
+#[tokio::test]
+async fn phone_test_reports_the_error() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    phone_post(&r, &c, "setup").await;
+    let failure = "https://ntfy.example.com answered 429: limit reached";
+    r.phone_sender.fail_all(failure);
+
+    let (status, body) = phone_post(&r, &c, "test").await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert!(body.contains(failure), "{body}");
+    assert_eq!(r.phone_sender.calls().len(), 1, "a test is one attempt");
+    let (settings, _) = get_settings(&r, &c).await;
+    assert_eq!(settings["phone"]["last_error"], failure);
+    assert!(settings["phone"]["last_error_at"].is_string());
+    assert!(settings["phone"]["last_sent"].is_null());
+}
+
+#[tokio::test]
+async fn phone_test_error_hides_the_token_a_server_echoes() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    phone_post(&r, &c, "setup").await;
+    save_phone(&r, &c, json!({"token": "tk_secret"})).await;
+    r.phone_sender
+        .fail_all("https://ntfy.sh answered 401: Bearer tk_secret is not valid");
+
+    let (status, body) = phone_post(&r, &c, "test").await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY, "{body}");
+    assert!(!body.contains("tk_secret"), "{body}");
+    let (settings, raw) = get_settings(&r, &c).await;
+    assert!(!raw.contains("tk_secret"), "{raw}");
+    assert_eq!(
+        settings["phone"]["last_error"],
+        "https://ntfy.sh answered 401: Bearer [token] is not valid"
+    );
+}
+
+#[tokio::test]
+async fn phone_test_is_refused_while_off() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+
+    let (status, body) = phone_post(&r, &c, "test").await;
+
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("Set up phone notifications first"), "{body}");
+    assert!(r.phone_sender.calls().is_empty());
+}
+
+#[tokio::test]
+async fn phone_off_clears_the_topic_and_undo_restores_it() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    phone_post(&r, &c, "setup").await;
+    save_phone(
+        &r,
+        &c,
+        json!({
+            "server": "https://ntfy.example.com",
+            "wait_minutes": 0,
+            "memory": false,
+            "token": "tk_secret",
+        }),
+    )
+    .await;
+    let (on, _) = get_settings(&r, &c).await;
+    assert_eq!(on["phone"]["on"], true);
+
+    let (status, body) = phone_post(&r, &c, "off").await;
+
+    assert_eq!((status, body.as_str()), (StatusCode::OK, OK_BODY));
+    let (off, _) = get_settings(&r, &c).await;
+    let mut expected = on["phone"].clone();
+    expected["on"] = json!(false);
+    expected["topic"] = json!("");
+    assert_eq!(off["phone"], expected, "only the topic is cleared");
+    assert_eq!(stored_token(&r), "tk_secret");
+
+    let (status, body) = phone_post(&r, &c, "off").await;
+    assert_eq!((status, body.as_str()), (StatusCode::OK, OK_BODY));
+    let (status, _, body) = post_json(&r.app, &c, "/api/settings/undo", "{}").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (restored, _) = get_settings(&r, &c).await;
+    assert_eq!(
+        restored["phone"], on["phone"],
+        "the second off must not write, so Undo restores the topic"
+    );
+}
+
+#[tokio::test]
+async fn phone_routes_need_a_login_and_the_page_origin() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    for url in [
+        "/api/settings/phone/setup",
+        "/api/settings/phone",
+        "/api/settings/phone/test",
+        "/api/settings/phone/off",
+    ] {
+        let anonymous = Request::post(url)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        assert_eq!(
+            send(&r.app, anonymous).await.0,
+            StatusCode::UNAUTHORIZED,
+            "{url}"
+        );
+        let foreign = Request::post(url)
+            .header(header::HOST, "localhost:4000")
+            .header(header::ORIGIN, "http://localhost:13020")
+            .header(header::COOKIE, c.clone())
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap();
+        assert_eq!(
+            send(&r.app, foreign).await.0,
+            StatusCode::FORBIDDEN,
+            "{url}"
+        );
+    }
+    let (settings, _) = get_settings(&r, &c).await;
+    assert_eq!(settings["phone"]["on"], false);
+    assert!(r.phone_sender.calls().is_empty());
 }

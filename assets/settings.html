@@ -80,6 +80,54 @@
     <div id="machine-forms" class="machine-forms"></div>
   </section>
 
+  <section id="phone">
+    <div class="section-head"><h2>Phone notifications</h2><button class="btn quiet danger small-link" type="button" id="phone-turn-off" hidden>Turn off</button></div>
+    <div class="panel phone-intro" id="phone-intro" hidden>
+      <p>Get a notification on your phone when an agent is waiting for you, a session ends, a machine goes down or memory runs low. Uses the free ntfy app.</p>
+      <button class="btn primary" type="button" id="phone-setup">Set up</button>
+    </div>
+    <div class="phone-on" id="phone-on" hidden>
+      <ol class="panel phone-steps">
+        <li><span class="mark">1</span>
+          <p>Install ntfy on your phone: <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Google Play</a>, <a href="https://f-droid.org/en/packages/io.heckel.ntfy/" target="_blank" rel="noopener">F-Droid</a>, <a href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener">App Store</a></p>
+        </li>
+        <li><span class="mark">2</span>
+          <div class="phone-step">
+            <p>On Android, open this page on your phone and tap <a id="phone-subscribe" href="#">Subscribe in ntfy</a>.</p>
+            <p class="phone-line"><span>On iPhone, or by hand, subscribe to this topic in the ntfy app:</span><span class="phone-field"><code id="phone-topic"></code><button class="btn" type="button" id="phone-copy">Copy</button></span></p>
+            <p id="phone-server-line" hidden>Use the server <code id="phone-server"></code>.</p>
+          </div>
+        </li>
+        <li><span class="mark">3</span>
+          <p class="phone-line"><button class="btn" type="button" id="phone-test">Send a test notification</button><span class="phone-result" id="phone-test-result" role="status"></span></p>
+        </li>
+      </ol>
+      <form class="panel" id="phone-form">
+        <div class="phone-switches">
+          <div class="phone-switch">
+            <label class="choice"><input type="checkbox" name="agent_waiting">Agent waiting</label>
+            <label class="choice phone-wait">after <input type="number" name="wait_minutes" min="0" max="60" step="1" inputmode="numeric" required> minutes</label>
+          </div>
+          <label class="choice"><input type="checkbox" name="session_ended">Session ended</label>
+          <label class="choice"><input type="checkbox" name="machines">Machine down or back</label>
+          <label class="choice"><input type="checkbox" name="memory">Memory at 95%</label>
+        </div>
+        <details class="phone-advanced">
+          <summary class="mg-toggle"><svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>Advanced</summary>
+          <div class="grid2">
+            <label>ntfy server <input type="text" name="server" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+            <label>Access token <input type="text" name="token" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
+          </div>
+          <label class="choice" id="phone-clear-token"><input type="checkbox" name="clear_token">Remove the token</label>
+        </details>
+        <div class="form-foot">
+          <p class="help" id="phone-status"></p>
+          <button class="btn primary" type="submit">Save</button>
+        </div>
+      </form>
+    </div>
+  </section>
+
   <section>
     <div class="section-head"><h2>Security</h2></div>
     <form class="panel" id="pass-form">
