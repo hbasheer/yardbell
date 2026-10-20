@@ -2,11 +2,14 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use tauri::webview::{Color, NewWindowResponse, PageLoadEvent};
+use tauri::webview::{Color, NewWindowResponse, PageLoadEvent, WebviewBuilder};
+use tauri::window::Window;
 use tauri::{AppHandle, Manager, Theme, WebviewUrl, WebviewWindow, WebviewWindowBuilder, Wry};
 use tauri_plugin_opener::OpenerExt;
 use url::Url;
 
+use crate::main_window;
+use crate::tabs::DASHBOARD;
 use crate::Session;
 
 #[derive(Debug, PartialEq)]
@@ -28,7 +31,7 @@ pub enum Action {
 }
 
 #[derive(Clone, Copy)]
-enum Backdrop {
+pub enum Backdrop {
     Paper,
     Rail,
     Terminal,
@@ -37,7 +40,7 @@ enum Backdrop {
 impl Backdrop {
     // A light theme is also what tao reports when it cannot tell, and a light
     // backdrop behind a dark page would flash, so only a known dark theme paints.
-    fn color(self, theme: Theme) -> Option<Color> {
+    pub fn color(self, theme: Theme) -> Option<Color> {
         match (self, theme) {
             (Backdrop::Terminal, _) | (Backdrop::Paper, Theme::Dark) => {
                 Some(Color(0x0a, 0x0a, 0x0b, 0xff))
@@ -51,76 +54,16 @@ impl Backdrop {
 pub const MAIN: &str = "main";
 pub const CONNECT: &str = "connect";
 pub const TERMINAL: &str = "term-";
-const LAUNCH_PAGE: &str = "launch.html";
-const SHOW_AT_THE_LATEST: Duration = Duration::from_secs(2);
+pub const SHOW_AT_THE_LATEST: Duration = Duration::from_secs(2);
 
-pub fn open_main(app: &AppHandle, server: &str) -> tauri::Result<()> {
-    if let Some(window) = app.get_webview_window(MAIN) {
-        window.show()?;
-        return window.set_focus();
-    }
-    build_hidden(
-        routed(app, MAIN, WebviewUrl::App(LAUNCH_PAGE.into()), server)
-            .title("Yardbell")
-            .inner_size(1280.0, 820.0),
-        Backdrop::Paper,
-    )
-}
-
-pub fn navigate_main(app: &AppHandle, url: &str) -> tauri::Result<bool> {
-    let Some(window) = app.get_webview_window(MAIN) else {
-        return Ok(false);
-    };
-    window.navigate(parse(url)?)?;
-    Ok(true)
-}
-
-pub fn open_terminal(
-    app: &AppHandle,
-    server: &str,
-    machine: &str,
-    tmux: &str,
-) -> tauri::Result<()> {
-    let label = terminal_label(machine, tmux);
-    if let Some(window) = app.get_webview_window(&label) {
-        window.show()?;
-        window.unminimize()?;
-        return window.set_focus();
-    }
-    let url = parse(&terminal_url(server, machine, tmux))?;
-    build_hidden(
-        routed(app, &label, WebviewUrl::External(url), server)
-            .title(format!("{tmux} on {machine}"))
-            .inner_size(1000.0, 680.0),
-        Backdrop::Terminal,
-    )
-}
-
-pub fn reveal(app: &AppHandle) -> tauri::Result<()> {
-    let Some(window) = app
-        .get_webview_window(MAIN)
-        .or_else(|| app.get_webview_window(CONNECT))
-    else {
-        return match live_server(app) {
-            Some(server) => open_main(app, &server),
-            None => show_connect(app, None),
-        };
-    };
-    window.show()?;
-    window.unminimize()?;
-    window.set_focus()
-}
-
-fn live_server(app: &AppHandle) -> Option<String> {
+pub fn live_server(app: &AppHandle) -> Option<String> {
     let session = app.state::<Session>();
     let client = session.client.try_read().ok()?;
     client.as_ref().map(|client| client.server().to_string())
 }
 
-pub fn focused(app: &AppHandle) -> Option<WebviewWindow> {
-    app.webview_windows()
-        .into_values()
-        .find(|window| window.is_focused().unwrap_or(false))
+pub fn focused(app: &AppHandle) -> Option<Window> {
+    app.get_focused_window()
 }
 
 pub fn show_connect(app: &AppHandle, message: Option<&str>) -> tauri::Result<()> {
@@ -139,7 +82,7 @@ pub fn show_connect(app: &AppHandle, message: Option<&str>) -> tauri::Result<()>
 }
 
 pub fn close_all_but_connect(app: &AppHandle) {
-    for (label, window) in app.webview_windows() {
+    for (label, window) in app.windows() {
         if label != CONNECT {
             let _ = window.destroy();
         }
@@ -156,7 +99,7 @@ fn build_hidden(
         .visible(false)
         .on_page_load(move |window, payload| {
             if matches!(payload.event(), PageLoadEvent::Finished) {
-                show_once(&window, &on_load);
+                show_once(&window.as_ref().window(), &on_load);
             }
         })
         .build()?;
@@ -168,6 +111,7 @@ fn build_hidden(
     }
     // WKWebView reports no finished load for a page that fails, and a stalled
     // subresource holds it back, so the window must not wait on it forever.
+    let window = window.as_ref().window();
     tauri::async_runtime::spawn(async move {
         tokio::time::sleep(SHOW_AT_THE_LATEST).await;
         show_once(&window, &shown);
@@ -182,7 +126,7 @@ fn paint(window: &WebviewWindow, backdrop: Backdrop) -> tauri::Result<()> {
     }
 }
 
-fn show_once(window: &WebviewWindow, shown: &AtomicBool) {
+pub fn show_once(window: &Window, shown: &AtomicBool) {
     if shown.swap(true, Ordering::Relaxed) {
         return;
     }
@@ -191,28 +135,32 @@ fn show_once(window: &WebviewWindow, shown: &AtomicBool) {
     }
 }
 
-fn parse(url: &str) -> tauri::Result<Url> {
+pub fn parse(url: &str) -> tauri::Result<Url> {
     Url::parse(url).map_err(tauri::Error::InvalidUrl)
 }
 
-fn routed<'a>(
-    app: &'a AppHandle,
+pub fn routed(
+    app: &AppHandle,
     label: &str,
     url: WebviewUrl,
     server: &str,
-) -> WebviewWindowBuilder<'a, Wry, AppHandle> {
+    session: Option<(String, String)>,
+) -> WebviewBuilder<Wry> {
     let (nav_app, nav_server, nav_label) = (app.clone(), server.to_string(), label.to_string());
     let (new_app, new_server) = (app.clone(), server.to_string());
-    WebviewWindowBuilder::new(app, label, url)
-        .on_navigation(
-            move |url| match on_navigation(&nav_server, url, &nav_label) {
+    WebviewBuilder::new(label, url)
+        .on_navigation(move |url| {
+            let session = session
+                .as_ref()
+                .map(|(machine, tmux)| (machine.as_str(), tmux.as_str()));
+            match on_navigation(&nav_server, url, &nav_label, session) {
                 Action::Allow => true,
                 action => {
                     perform(&nav_app, &nav_server, action, url);
                     false
                 }
-            },
-        )
+            }
+        })
         .on_new_window(move |url, _| {
             perform(
                 &new_app,
@@ -230,9 +178,11 @@ fn perform(app: &AppHandle, server: &str, action: Action, url: &Url) {
         let result = match action {
             Action::Allow | Action::Deny => Ok(()),
             Action::Terminal { machine, tmux } => {
-                open_terminal(&app, &server, &machine, &tmux).map_err(|e| e.to_string())
+                main_window::open_session(&app, &server, &machine, &tmux).map_err(|e| e.to_string())
             }
-            Action::Main => show_main_at(&app, url.clone()).map_err(|e| e.to_string()),
+            Action::Main => main_window::navigate_dashboard(&app, url.as_str())
+                .map(|_| ())
+                .map_err(|e| e.to_string()),
             Action::Browser => app
                 .opener()
                 .open_url(url.as_str(), None::<&str>)
@@ -242,15 +192,6 @@ fn perform(app: &AppHandle, server: &str, action: Action, url: &Url) {
             eprintln!("yardbell: can't open {url}: {e}");
         }
     });
-}
-
-fn show_main_at(app: &AppHandle, url: Url) -> tauri::Result<()> {
-    let Some(window) = app.get_webview_window(MAIN) else {
-        return Ok(());
-    };
-    window.navigate(url)?;
-    window.show()?;
-    window.set_focus()
 }
 
 pub fn classify(server: &str, url: &Url) -> Link {
@@ -318,13 +259,18 @@ pub fn terminal_url(server: &str, machine: &str, tmux: &str) -> String {
     url.to_string()
 }
 
-pub fn on_navigation(server: &str, url: &Url, label: &str) -> Action {
+pub fn on_navigation(
+    server: &str,
+    url: &Url,
+    label: &str,
+    session: Option<(&str, &str)>,
+) -> Action {
     match classify(server, url) {
-        Link::Terminal { machine, tmux } if terminal_label(&machine, &tmux) == label => {
+        Link::Terminal { machine, tmux } if session == Some((machine.as_str(), tmux.as_str())) => {
             Action::Allow
         }
         Link::Terminal { machine, tmux } => Action::Terminal { machine, tmux },
-        Link::Page | Link::Bundled if label == MAIN => Action::Allow,
+        Link::Page | Link::Bundled if label == DASHBOARD => Action::Allow,
         Link::Page => Action::Main,
         Link::External => Action::Browser,
         Link::Other if url.scheme() == "about" => Action::Allow,
@@ -489,61 +435,91 @@ mod tests {
     }
 
     #[test]
-    fn main_window_navigation() {
+    fn dashboard_navigation() {
         let at = |path: &str| url(&format!("{SERVER}{path}"));
+        let dashboard = |link: &Url| on_navigation(SERVER, link, DASHBOARD, None);
+        assert_eq!(dashboard(&at("/app/handoff/x")), Action::Allow);
+        assert_eq!(dashboard(&at("/")), Action::Allow);
+        assert_eq!(dashboard(&url("about:blank")), Action::Allow);
         assert_eq!(
-            on_navigation(SERVER, &at("/app/handoff/x"), "main"),
-            Action::Allow
-        );
-        assert_eq!(on_navigation(SERVER, &at("/"), "main"), Action::Allow);
-        assert_eq!(
-            on_navigation(SERVER, &url("about:blank"), "main"),
-            Action::Allow
-        );
-        assert_eq!(
-            on_navigation(SERVER, &url("tauri://localhost/launch.html"), "main"),
+            dashboard(&url("tauri://localhost/launch.html")),
             Action::Allow
         );
         assert_eq!(
-            on_navigation(SERVER, &at("/term/mini/s1"), "main"),
+            dashboard(&at("/term/mini/s1")),
             Action::Terminal {
                 machine: "mini".into(),
                 tmux: "s1".into()
             }
         );
         assert_eq!(
-            on_navigation(SERVER, &url("http://100.101.7.20:3000/"), "main"),
+            dashboard(&url("http://100.101.7.20:3000/")),
             Action::Browser
         );
-        assert_eq!(
-            on_navigation(SERVER, &url("file:///etc/passwd"), "main"),
-            Action::Deny
-        );
+        assert_eq!(dashboard(&url("file:///etc/passwd")), Action::Deny);
     }
 
     #[test]
-    fn terminal_window_navigation() {
+    fn session_tab_navigation() {
         let label = terminal_label("mini", "s1");
+        let session = Some(("mini", "s1"));
         let at = |path: &str| url(&format!("{SERVER}{path}"));
         assert_eq!(
-            on_navigation(SERVER, &at("/term/mini/s1"), &label),
+            on_navigation(SERVER, &at("/term/mini/s1"), &label, session),
             Action::Allow
         );
         assert_eq!(
-            on_navigation(SERVER, &at("/term/mini/s2"), &label),
+            on_navigation(SERVER, &at("/term/mini/s2"), &label, session),
             Action::Terminal {
                 machine: "mini".into(),
                 tmux: "s2".into()
             }
         );
-        assert_eq!(on_navigation(SERVER, &at("/"), &label), Action::Main);
         assert_eq!(
-            on_navigation(SERVER, &url("https://example.com/"), &label),
+            on_navigation(SERVER, &at("/"), &label, session),
+            Action::Main
+        );
+        assert_eq!(
+            on_navigation(SERVER, &url("https://example.com/"), &label, session),
             Action::Browser
         );
         assert_eq!(
-            on_navigation(SERVER, &url("tauri://localhost/launch.html"), &label),
+            on_navigation(
+                SERVER,
+                &url("tauri://localhost/launch.html"),
+                &label,
+                session
+            ),
             Action::Deny
+        );
+    }
+
+    #[test]
+    fn a_session_tab_loads_its_own_terminal() {
+        let session = Some(("mini", "a b"));
+        let own = url(&format!("{SERVER}/term/mini/a%20b"));
+        let other = url(&format!("{SERVER}/term/mini/other"));
+        for label in ["term-mini-a_b", "term-mini-a_b-2", "term-mini-a_b-3"] {
+            assert_eq!(
+                on_navigation(SERVER, &own, label, session),
+                Action::Allow,
+                "{label}"
+            );
+            assert_eq!(
+                on_navigation(SERVER, &other, label, session),
+                Action::Terminal {
+                    machine: "mini".into(),
+                    tmux: "other".into()
+                },
+                "{label}"
+            );
+        }
+        assert_eq!(
+            on_navigation(SERVER, &own, "term-mini-a_b", Some(("hp", "a b"))),
+            Action::Terminal {
+                machine: "mini".into(),
+                tmux: "a b".into()
+            }
         );
     }
 

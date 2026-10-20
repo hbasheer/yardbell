@@ -6615,6 +6615,7 @@ name = "yardbell-desktop"
 version = "0.2.1"
 dependencies = [
  "axum",
+ "gtk",
  "keyring",
  "notify-rust",
  "percent-encoding",

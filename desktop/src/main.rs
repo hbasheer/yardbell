@@ -2,13 +2,16 @@ mod capability;
 mod client;
 mod creds;
 mod launch;
+mod main_window;
 mod notify;
 mod poller;
 mod settings;
 mod shortcuts;
+mod tabs;
 mod tray;
 mod windows;
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
@@ -23,14 +26,18 @@ use yardbell::state::StateView;
 use client::Client;
 use creds::{Keychain, Store};
 use launch::Startup;
+use main_window::OpenTabs;
 use notify::Target;
 use poller::{Generation, Outcome, Poller};
 use settings::Settings;
 use shortcuts::Action;
+use tabs::{Tab, TabView, Tabs, DASHBOARD};
 
 const WINDOW_STATE: StateFlags = StateFlags::all().difference(StateFlags::VISIBLE);
 const CONNECTING: &str = "connecting";
 const UNREACHABLE: &str = "unreachable";
+
+static QUITTING: AtomicBool = AtomicBool::new(false);
 
 pub struct Session {
     client: RwLock<Option<Client>>,
@@ -39,6 +46,7 @@ pub struct Session {
     poll_now: Notify,
     store: Arc<dyn Store>,
     message: Mutex<Option<String>>,
+    view: Mutex<Option<StateView>>,
 }
 
 #[tauri::command]
@@ -56,7 +64,7 @@ async fn connect(
     session.store.save(&server, &cookie)?;
     begin_session(&app, Client::new(&server, Some(&cookie))).await;
     *session.message.lock().unwrap() = None;
-    windows::open_main(&app, &server).map_err(|e| e.to_string())?;
+    main_window::open(&app, &server).map_err(|e| e.to_string())?;
     if let Some(window) = app.get_webview_window(windows::CONNECT) {
         window.destroy().map_err(|e| e.to_string())?;
     }
@@ -77,6 +85,21 @@ async fn connect_server(session: State<'_, Session>) -> Result<Option<String>, S
 #[tauri::command]
 async fn retry_connect(app: AppHandle) {
     open_dashboard(&app).await;
+}
+
+#[tauri::command]
+fn select_tab(app: AppHandle, label: String) {
+    main_window::select(&app, &label);
+}
+
+#[tauri::command]
+fn close_tab(app: AppHandle, label: String) {
+    main_window::close(&app, &label);
+}
+
+#[tauri::command]
+fn tab_list(app: AppHandle) -> Vec<TabView> {
+    main_window::views(&app)
 }
 
 #[tauri::command]
@@ -105,7 +128,7 @@ async fn open_dashboard(app: &AppHandle) {
         eprintln!("yardbell: can't open the dashboard: {e}");
     }
     match launch::startup(&server, result) {
-        Startup::Open { url } => match windows::navigate_main(app, &url) {
+        Startup::Open { url } => match main_window::navigate_dashboard(app, &url) {
             Ok(true) => session.poll_now.notify_one(),
             Ok(false) => {}
             Err(e) => eprintln!("yardbell: can't open the dashboard: {e}"),
@@ -118,7 +141,7 @@ async fn open_dashboard(app: &AppHandle) {
 }
 
 fn tell_launch(app: &AppHandle, event: &str, server: &str) {
-    if let Err(e) = app.emit_to(EventTarget::webview_window(windows::MAIN), event, server) {
+    if let Err(e) = app.emit_to(EventTarget::webview(DASHBOARD), event, server) {
         eprintln!("yardbell: can't update the launch screen: {e}");
     }
 }
@@ -126,6 +149,7 @@ fn tell_launch(app: &AppHandle, event: &str, server: &str) {
 async fn begin_session(app: &AppHandle, client: Client) {
     capability::grant_server_pages(app, client.server());
     let session = app.state::<Session>();
+    *session.view.lock().unwrap() = None;
     let mut slot = session.client.write().await;
     let generation = session.generation.bump();
     *slot = Some(client.clone());
@@ -202,6 +226,8 @@ fn deliver(
                 open_target(&app, generation, &server, target)
             });
         }
+        *handle.state::<Session>().view.lock().unwrap() = Some(view);
+        main_window::publish(&handle);
     });
     if let Err(e) = queued {
         eprintln!("yardbell: can't update the tray: {e}");
@@ -212,9 +238,9 @@ fn open_target(app: &AppHandle, generation: u64, server: &str, target: Target) {
     let current = app.state::<Session>().generation.is_current(generation);
     let opened = match target {
         Target::Terminal { machine, tmux } if current => {
-            windows::open_terminal(app, server, &machine, &tmux)
+            main_window::open_session(app, server, &machine, &tmux)
         }
-        _ => windows::reveal(app),
+        _ => main_window::reveal(app),
     };
     if let Err(e) = opened {
         eprintln!("yardbell: can't open the window for a notification: {e}");
@@ -264,6 +290,29 @@ fn autostart_enabled(app: &AppHandle) -> Option<bool> {
 }
 
 fn quit(app: &AppHandle) {
+    let Some(window) = app.get_window(windows::MAIN) else {
+        exit(app);
+        return;
+    };
+    // The window-state plugin records maximized and fullscreen only on CloseRequested,
+    // and the close is queued on the event loop, so exit has to queue up behind it.
+    QUITTING.store(true, Ordering::Relaxed);
+    if let Err(e) = window.close() {
+        eprintln!("yardbell: can't record the window state: {e}");
+        exit(app);
+        return;
+    }
+    let app = app.clone();
+    tauri::async_runtime::spawn(async move {
+        let handle = app.clone();
+        if let Err(e) = app.run_on_main_thread(move || exit(&handle)) {
+            eprintln!("yardbell: can't quit on the main thread: {e}");
+            exit(&app);
+        }
+    });
+}
+
+fn exit(app: &AppHandle) {
     if let Err(e) = app.save_window_state(WINDOW_STATE) {
         eprintln!("yardbell: can't save the window state: {e}");
     }
@@ -290,11 +339,20 @@ fn on_run_event(app: &AppHandle, event: RunEvent) {
         }
         #[cfg(target_os = "macos")]
         RunEvent::Reopen { .. } => {
-            if let Err(e) = windows::reveal(app) {
+            if let Err(e) = main_window::reveal(app) {
                 eprintln!("yardbell: can't show the window: {e}");
             }
         }
         _ => {}
+    }
+}
+
+fn selected_session(app: &AppHandle) -> Option<String> {
+    let state = app.state::<OpenTabs>();
+    let tabs = state.0.lock().unwrap();
+    match tabs.selected() {
+        Tab::Dashboard => None,
+        Tab::Session { label, .. } => Some(label.clone()),
     }
 }
 
@@ -305,12 +363,20 @@ fn on_shortcut(app: &AppHandle, payload: String) {
             return;
         };
         match shortcuts::action(&payload, window.label()) {
-            Some(Action::Close) => {
-                if let Err(e) = window.close() {
-                    eprintln!("yardbell: can't close the {} window: {e}", window.label());
+            Some(Action::Close) => match selected_session(&handle) {
+                Some(label) => main_window::close(&handle, &label),
+                None => {
+                    if let Err(e) = window.close() {
+                        eprintln!("yardbell: can't close the {} window: {e}", window.label());
+                    }
                 }
-            }
+            },
             Some(Action::Quit) => quit(&handle),
+            Some(Action::Select(position)) => {
+                main_window::update(&handle, |tabs| tabs.select_position(position))
+            }
+            Some(Action::Next) => main_window::update(&handle, Tabs::next),
+            Some(Action::Prev) => main_window::update(&handle, Tabs::prev),
             None => {}
         }
     });
@@ -363,7 +429,7 @@ async fn start(app: AppHandle) {
         return;
     };
     begin_session(&app, Client::new(&server, Some(&cookie))).await;
-    if let Err(e) = windows::open_main(&app, &server) {
+    if let Err(e) = main_window::open(&app, &server) {
         eprintln!("yardbell: can't open the main window: {e}");
     }
 }
@@ -371,7 +437,7 @@ async fn start(app: AppHandle) {
 fn main() {
     tauri::Builder::default()
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
-            if let Err(e) = windows::reveal(app) {
+            if let Err(e) = main_window::reveal(app) {
                 eprintln!("yardbell: can't show the window: {e}");
             }
         }))
@@ -393,14 +459,33 @@ fn main() {
             connect_message,
             connect_server,
             retry_connect,
-            change_server
+            change_server,
+            select_tab,
+            close_tab,
+            tab_list
         ])
         .on_window_event(|window, event| {
-            if let WindowEvent::CloseRequested { api, .. } = event {
-                if window.label() == windows::MAIN {
+            if window.label() != windows::MAIN {
+                return;
+            }
+            match event {
+                WindowEvent::CloseRequested { api, .. } => {
                     api.prevent_close();
-                    let _ = window.hide();
+                    // Listener order is a HashMap's, so a quitting window stays visible
+                    // while the window-state plugin reads maximized and fullscreen.
+                    if !QUITTING.load(Ordering::Relaxed) {
+                        let _ = window.hide();
+                    }
                 }
+                WindowEvent::Resized(_) => {
+                    if let Err(e) = main_window::fit(window.app_handle()) {
+                        eprintln!("yardbell: can't lay out the window: {e}");
+                    }
+                }
+                WindowEvent::Destroyed => {
+                    window.state::<OpenTabs>().0.lock().unwrap().reset();
+                }
+                _ => {}
             }
         })
         .setup(|app| {
@@ -417,7 +502,9 @@ fn main() {
                 poll_now: Notify::new(),
                 store: Arc::new(Keychain::new(config_dir)),
                 message: Mutex::new(None),
+                view: Mutex::new(None),
             });
+            app.manage(OpenTabs(Mutex::new(Tabs::new())));
             app.manage(capability::Granted::default());
             let handle = app.handle().clone();
             app.listen_any(shortcuts::EVENT, move |event| {

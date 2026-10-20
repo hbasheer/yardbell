@@ -186,6 +186,21 @@ components:
     textColor: "{colors.bg}"
     rounded: "{rounded.container}"
     padding: "10px 14px"
+  tab:
+    backgroundColor: "{colors.side}"
+    textColor: "{colors.muted}"
+    typography: "{typography.label}"
+    padding: "0 12px"
+    height: "36px"
+  tab-hover:
+    backgroundColor: "{colors.hover}"
+    textColor: "{colors.ink-2}"
+  tab-selected:
+    backgroundColor: "{colors.surface}"
+    textColor: "{colors.ink}"
+  tab-selected-session:
+    backgroundColor: "{colors.side-dark}"
+    textColor: "{colors.ink-dark}"
 ---
 
 # Design System: Yardbell
@@ -343,6 +358,9 @@ Inline SVG on a 16px box, no fill, `currentColor` stroke at 1.6, round caps and 
 
 ### Terminal
 The terminal page is always dark regardless of system theme: a slim top bar with a "Back to Yardbell" button and the session name, xterm.js filling the rest in JetBrains Mono (14px, 13px on touch devices), and on coarse pointers a scrolling row of 40px key buttons (Esc, Tab, Ctrl, arrows, Enter, Ctrl-C) with a lit state for the latched Ctrl. Its colors are currently hard-coded in the page rather than drawn from the token set.
+
+### Tab Bar
+The desktop app's one row above the content: 36px tall, full width, on Rail with a 1px Rule along the bottom, light or dark with the system. Tabs are 13px/500, at most 220px wide each, and share the width as more open, never wrapping; a 1px Rule separates them, and a long name ends in an ellipsis with the full name in the tooltip. Dashboard comes first and keeps its natural width; session tabs read "folder · machine". An inactive tab is Muted Slate; hover fills Hover Slate and raises the text to Ink 2. The selected tab has no bottom rule and a 2px Signal Blue top edge, so it joins the page below it and stays marked in both themes: the Dashboard tab is Paper with Ink text, and a session tab takes the terminal's fixed top bar colors in either theme (#0f1012 fill, #ededef text), since the terminal page is always dark. A selected session tab keeps at least 112px so its name stays readable. Session tabs end in a 20px close button (a 12px cross, 6px radius, Rule fill on hover, #2e3137 on the dark selected tab) that shows on the selected tab, on hover and on keyboard focus, and otherwise keeps its space so names do not shift; an inactive tab narrower than 96px gives that space to its name. A click selects; the close button or a middle click closes. Overflowing names are clipped to their tab. No shadow.
 
 ## Do's and Don'ts
 

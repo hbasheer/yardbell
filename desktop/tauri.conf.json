@@ -19,7 +19,7 @@
     "homepage": "https://github.com/hbasheer/yardbell",
     "category": "DeveloperTool",
     "shortDescription": "One window for every AI coding agent session across your machines",
-    "longDescription": "Yardbell opens the dashboard of a Yardbell server in a window of its own, opens every agent session in a terminal window, shows each machine's state in the tray and sends a notification when an agent is waiting for you. It connects to a running Yardbell server of the same release.",
+    "longDescription": "Yardbell opens the dashboard of a Yardbell server in a window of its own, opens every agent session as a tab in the same window, shows each machine's state in the tray and sends a notification when an agent is waiting for you. It connects to a running Yardbell server of the same release.",
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

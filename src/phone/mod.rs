@@ -454,6 +454,7 @@ mod tests {
                 sessions,
             )
         };
+        let active_s1 = || vec![session("s1", Activity::Active)];
         let idle_s1 = || vec![session("s1", Activity::Idle)];
         let steps = [
             (
@@ -467,10 +468,11 @@ mod tests {
                     ],
                 ),
             ),
-            (1, at(false, 96, idle_s1())),
-            (2, at(false, 96, idle_s1())),
-            (21, at(true, 96, idle_s1())),
-            (81, at(true, 96, idle_s1())),
+            (1, at(false, 96, active_s1())),
+            (61, at(false, 96, active_s1())),
+            (62, at(true, 96, idle_s1())),
+            (82, at(true, 96, idle_s1())),
+            (142, at(true, 96, idle_s1())),
         ];
         steps
             .iter()

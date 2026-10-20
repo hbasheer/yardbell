@@ -6,8 +6,9 @@ use tauri::tray::{MouseButton, MouseButtonState, TrayIcon, TrayIconBuilder, Tray
 use tauri::{AppHandle, Emitter, EventTarget, Manager, Wry};
 use yardbell::state::{MachineView, StateView};
 
+use crate::main_window;
 use crate::settings::Switches;
-use crate::windows;
+use crate::tabs::DASHBOARD;
 
 const TRAY_ID: &str = "yardbell";
 const MEMORY_WARNING_PERCENT: u64 = 85;
@@ -28,6 +29,9 @@ const GREEN: &[u8] = include_bytes!("../icons/tray-green.png");
 const AMBER: &[u8] = include_bytes!("../icons/tray-amber.png");
 const RED: &[u8] = include_bytes!("../icons/tray-red.png");
 const GRAY: &[u8] = include_bytes!("../icons/tray-gray.png");
+const MAC_PLAIN: &[u8] = include_bytes!("../icons/tray-mac.png");
+const MAC_DOT: &[u8] = include_bytes!("../icons/tray-mac-dot.png");
+const MAC_DIM: &[u8] = include_bytes!("../icons/tray-mac-dim.png");
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum TrayState {
@@ -35,6 +39,28 @@ pub enum TrayState {
     Amber,
     Red,
     Gray,
+}
+
+#[derive(Debug, PartialEq)]
+pub enum LeftClick {
+    Menu,
+    Reveal,
+}
+
+pub fn left_click(macos: bool) -> LeftClick {
+    if macos {
+        LeftClick::Menu
+    } else {
+        LeftClick::Reveal
+    }
+}
+
+pub fn mac_icon(state: TrayState) -> &'static [u8] {
+    match state {
+        TrayState::Green => MAC_PLAIN,
+        TrayState::Amber | TrayState::Red => MAC_DOT,
+        TrayState::Gray => MAC_DIM,
+    }
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -155,7 +181,8 @@ pub fn init(app: &AppHandle, switches: &Switches) -> tauri::Result<()> {
         .icon(icon(shown.icon)?)
         .tooltip("Yardbell")
         .menu(&menu(app, &shown.status, switches)?)
-        .show_menu_on_left_click(false)
+        .icon_as_template(cfg!(target_os = "macos"))
+        .show_menu_on_left_click(left_click(cfg!(target_os = "macos")) == LeftClick::Menu)
         .on_menu_event(on_menu_event)
         .on_tray_icon_event(on_tray_icon_event)
         .build(app)?;
@@ -211,7 +238,7 @@ fn apply(app: &AppHandle, next: Shown, menu: Menu<Wry>) {
 
 fn set(tray: &TrayIcon, shown: &Shown, next: &Shown, menu: Menu<Wry>) -> tauri::Result<()> {
     if shown.icon != next.icon {
-        tray.set_icon(Some(icon(next.icon)?))?;
+        tray.set_icon_with_as_template(Some(icon(next.icon)?), cfg!(target_os = "macos"))?;
     }
     tray.set_menu(Some(menu))
 }
@@ -293,26 +320,30 @@ fn menu_text(label: &str) -> String {
 }
 
 fn icon(state: TrayState) -> tauri::Result<Image<'static>> {
-    Image::from_bytes(match state {
+    if cfg!(target_os = "macos") {
+        return Image::from_bytes(mac_icon(state));
+    }
+    Image::from_bytes(dot_icon(state))
+}
+
+fn dot_icon(state: TrayState) -> &'static [u8] {
+    match state {
         TrayState::Green => GREEN,
         TrayState::Amber => AMBER,
         TrayState::Red => RED,
         TrayState::Gray => GRAY,
-    })
+    }
 }
 
 fn on_menu_event(app: &AppHandle, event: MenuEvent) {
     match event.id().as_ref() {
-        OPEN => report("show the window", windows::reveal(app)),
+        OPEN => report("show the window", main_window::reveal(app)),
         NEW_SESSION => {
-            report("show the window", windows::reveal(app));
+            report("show the window", main_window::reveal(app));
+            main_window::select(app, DASHBOARD);
             report(
                 "ask the dashboard for a new session",
-                app.emit_to(
-                    EventTarget::webview_window(windows::MAIN),
-                    NEW_SESSION_EVENT,
-                    (),
-                ),
+                app.emit_to(EventTarget::webview(DASHBOARD), NEW_SESSION_EVENT, ()),
             );
         }
         DISCONNECT => {
@@ -325,13 +356,16 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
 }
 
 fn on_tray_icon_event(tray: &TrayIcon, event: TrayIconEvent) {
-    if let TrayIconEvent::Click {
-        button: MouseButton::Left,
-        button_state: MouseButtonState::Up,
-        ..
-    } = event
-    {
-        report("show the window", windows::reveal(tray.app_handle()));
+    let released = matches!(
+        event,
+        TrayIconEvent::Click {
+            button: MouseButton::Left,
+            button_state: MouseButtonState::Up,
+            ..
+        }
+    );
+    if released && left_click(cfg!(target_os = "macos")) == LeftClick::Reveal {
+        report("show the window", main_window::reveal(tray.app_handle()));
     }
 }
 
@@ -566,8 +600,48 @@ mod tests {
             TrayState::Red,
             TrayState::Gray,
         ] {
-            let image = icon(state).unwrap();
+            let image = Image::from_bytes(dot_icon(state)).unwrap();
             assert_eq!((image.width(), image.height()), (32, 32), "{state:?}");
         }
+    }
+
+    #[test]
+    fn every_state_has_a_mac_template_icon() {
+        for state in [
+            TrayState::Green,
+            TrayState::Amber,
+            TrayState::Red,
+            TrayState::Gray,
+        ] {
+            let image = Image::from_bytes(mac_icon(state)).unwrap();
+            assert_eq!((image.width(), image.height()), (36, 36), "{state:?}");
+            let pixels = image.rgba();
+            assert!(
+                pixels.chunks(4).all(|p| p[..3] == [0, 0, 0]),
+                "{state:?} is not black"
+            );
+            let strongest = pixels.chunks(4).map(|p| p[3]).max().unwrap();
+            if state == TrayState::Gray {
+                assert!(strongest <= 120, "{state:?} is too strong: {strongest}");
+            } else {
+                assert!(strongest > 200, "{state:?} is too faint: {strongest}");
+            }
+        }
+    }
+
+    #[test]
+    fn mac_states_map_to_plain_dot_and_dim() {
+        assert_eq!(mac_icon(TrayState::Green), MAC_PLAIN);
+        assert_eq!(mac_icon(TrayState::Amber), MAC_DOT);
+        assert_eq!(mac_icon(TrayState::Red), MAC_DOT);
+        assert_eq!(mac_icon(TrayState::Gray), MAC_DIM);
+        assert_ne!(MAC_PLAIN, MAC_DOT);
+        assert_ne!(MAC_PLAIN, MAC_DIM);
+    }
+
+    #[test]
+    fn left_click_opens_the_menu_on_macos() {
+        assert_eq!(left_click(true), LeftClick::Menu);
+        assert_eq!(left_click(false), LeftClick::Reveal);
     }
 }

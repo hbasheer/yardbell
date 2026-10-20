@@ -4,7 +4,7 @@ use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 pub const IDLE_AFTER: Duration = Duration::from_secs(20);
-const DOWN_CHECKS: u32 = 2;
+pub const DOWN_AFTER: Duration = Duration::from_secs(60);
 const MEMORY_HIGH_PERCENT: u64 = 95;
 const MEMORY_REARM_PERCENT: u64 = 90;
 
@@ -98,7 +98,7 @@ struct SessionState {
 
 struct MachineState {
     was_up: bool,
-    down_count: u32,
+    down_since: Option<Instant>,
     notified_down: bool,
     memory_armed: bool,
 }
@@ -121,7 +121,7 @@ impl Tracker {
 
     pub fn observe(&mut self, view: &StateView, now: Instant) -> Vec<Event> {
         let mut events = Vec::new();
-        self.observe_machines(view, &mut events);
+        self.observe_machines(view, now, &mut events);
         self.observe_sessions(view, now, &mut events);
         if !std::mem::replace(&mut self.primed, true) {
             events.clear();
@@ -129,7 +129,7 @@ impl Tracker {
         events
     }
 
-    fn observe_machines(&mut self, view: &StateView, events: &mut Vec<Event>) {
+    fn observe_machines(&mut self, view: &StateView, now: Instant, events: &mut Vec<Event>) {
         let names: HashSet<&str> = view.machines.iter().map(|m| m.name.as_str()).collect();
         self.machines
             .retain(|name, _| names.contains(name.as_str()));
@@ -140,7 +140,7 @@ impl Tracker {
                 .entry(m.name.clone())
                 .or_insert_with(|| MachineState {
                     was_up: false,
-                    down_count: 0,
+                    down_since: None,
                     notified_down: false,
                     memory_armed: true,
                 });
@@ -152,11 +152,11 @@ impl Tracker {
                         machine: m.name.clone(),
                     });
                 }
-                state.down_count = 0;
+                state.down_since = None;
                 state.notified_down = false;
             } else {
-                state.down_count += 1;
-                if state.was_up && state.down_count >= DOWN_CHECKS && !state.notified_down {
+                let since = *state.down_since.get_or_insert(now);
+                if state.was_up && now.duration_since(since) >= DOWN_AFTER && !state.notified_down {
                     state.notified_down = true;
                     events.push(Event::MachineDown {
                         machine: m.name.clone(),
@@ -481,22 +481,23 @@ mod tests {
     }
 
     #[test]
-    fn machine_down_after_two_checks_and_back() {
+    fn machine_down_after_a_minute_and_back() {
         let mut t = Tracker::new();
         let t0 = Instant::now();
         let at = |up| view(vec![machine("hp", up)], vec![], vec![]);
         assert_eq!(t.observe(&at(true), t0), vec![]);
-        assert_eq!(t.observe(&at(false), secs(t0, 1)), vec![]);
+        for n in (5..65).step_by(5) {
+            assert_eq!(t.observe(&at(false), secs(t0, n)), vec![], "t({n})");
+        }
         assert_eq!(
-            t.observe(&at(false), secs(t0, 2)),
+            t.observe(&at(false), secs(t0, 65)),
             vec![Event::MachineDown {
                 machine: "hp".into(),
                 reason: Some("ssh timed out".into()),
             }]
         );
-        assert_eq!(t.observe(&at(false), secs(t0, 3)), vec![]);
         assert_eq!(
-            t.observe(&at(true), secs(t0, 4)),
+            t.observe(&at(true), secs(t0, 70)),
             vec![Event::MachineUp {
                 machine: "hp".into()
             }]
@@ -504,15 +505,35 @@ mod tests {
     }
 
     #[test]
-    fn single_down_blip_is_silent() {
+    fn short_down_blips_are_silent() {
         let mut t = Tracker::new();
         let t0 = Instant::now();
         let at = |up| view(vec![machine("hp", up)], vec![], vec![]);
         let mut all = vec![];
         all.extend(t.observe(&at(true), t0));
-        all.extend(t.observe(&at(false), secs(t0, 1)));
-        all.extend(t.observe(&at(true), secs(t0, 2)));
+        all.extend(t.observe(&at(false), secs(t0, 5)));
+        all.extend(t.observe(&at(false), secs(t0, 10)));
+        all.extend(t.observe(&at(false), secs(t0, 15)));
+        all.extend(t.observe(&at(true), secs(t0, 20)));
         assert_eq!(all, vec![]);
+    }
+
+    #[test]
+    fn a_blip_restarts_the_minute() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let at = |up| view(vec![machine("hp", up)], vec![], vec![]);
+        let mut all = vec![];
+        all.extend(t.observe(&at(true), t0));
+        for n in (5..=40).step_by(5) {
+            all.extend(t.observe(&at(false), secs(t0, n)));
+        }
+        all.extend(t.observe(&at(true), secs(t0, 45)));
+        for n in (50..110).step_by(5) {
+            all.extend(t.observe(&at(false), secs(t0, n)));
+        }
+        assert_eq!(all, vec![]);
+        assert_eq!(t.observe(&at(false), secs(t0, 110)).len(), 1);
     }
 
     #[test]
@@ -525,7 +546,8 @@ mod tests {
         );
         let down = || view(vec![machine("hp", false)], vec![], vec![ended("s1", "hp")]);
         assert_eq!(t.observe(&down(), secs(t0, 1)), vec![]);
-        let events = t.observe(&down(), secs(t0, 2));
+        let events = t.observe(&down(), secs(t0, 61));
+        assert_eq!(events.len(), 1);
         assert!(events
             .iter()
             .all(|e| !matches!(e, Event::SessionEnded { .. })));
@@ -588,7 +610,7 @@ mod tests {
         assert_eq!(t.observe(&at(false), secs(t0, 3)), vec![]);
         assert_eq!(t.observe(&at(true), secs(t0, 4)), vec![]);
         assert_eq!(t.observe(&at(false), secs(t0, 5)), vec![]);
-        assert_eq!(t.observe(&at(false), secs(t0, 6)).len(), 1);
+        assert_eq!(t.observe(&at(false), secs(t0, 65)).len(), 1);
     }
 
     #[test]
@@ -606,7 +628,9 @@ mod tests {
         );
         assert_eq!(t.observe(&added, secs(t0, 5)), vec![]);
         assert_eq!(t.observe(&added, secs(t0, 6)), vec![]);
-        assert_eq!(t.observe(&at(true), secs(t0, 7)), vec![]);
+        assert_eq!(t.observe(&added, secs(t0, 65)), vec![]);
+        assert_eq!(t.observe(&added, secs(t0, 125)), vec![]);
+        assert_eq!(t.observe(&at(true), secs(t0, 130)), vec![]);
     }
 
     #[test]
