@@ -76,6 +76,17 @@ pub struct RealRunner {
     children: Mutex<HashMap<u32, Child>>,
 }
 
+// Commands start in a session of their own, with no controlling terminal. When the server runs
+// in a terminal, an interactive login shell (bash -lic) left on that terminal in a background
+// group is stopped by SIGTTOU and never runs. setsid also makes the command its own group
+// leader, so kill_group still reaches everything it started.
+fn new_session() -> std::io::Result<()> {
+    if unsafe { libc::setsid() } == -1 {
+        return Err(std::io::Error::last_os_error());
+    }
+    Ok(())
+}
+
 fn kill_group(pid: u32, signal: i32) {
     unsafe {
         libc::kill(-(pid as i32), signal);
@@ -102,8 +113,10 @@ impl Runner for RealRunner {
                 })
                 .stdout(Stdio::piped())
                 .stderr(Stdio::piped())
-                .process_group(0)
                 .kill_on_drop(true);
+            unsafe {
+                cmd.pre_exec(new_session);
+            }
             let mut child = match cmd.spawn() {
                 Ok(child) => child,
                 Err(e) => return Output::failed(127, &format!("{program}: {e}")),
@@ -140,13 +153,16 @@ impl Runner for RealRunner {
             std::fs::create_dir_all(dir)?;
         }
         let file = std::fs::File::create(&log)?;
-        let child = std::process::Command::new(program)
+        let mut command = std::process::Command::new(program);
+        command
             .args(args)
             .stdin(Stdio::null())
             .stdout(file.try_clone()?)
-            .stderr(file)
-            .process_group(0)
-            .spawn()?;
+            .stderr(file);
+        unsafe {
+            command.pre_exec(new_session);
+        }
+        let child = command.spawn()?;
         let pid = child.id();
         self.children
             .lock()
@@ -240,6 +256,51 @@ mod tests {
             .await;
         assert!(!out.ok());
         assert!(!out.stderr.is_empty());
+    }
+
+    #[cfg(target_os = "linux")]
+    fn session_ids(text: &str) -> (String, String) {
+        let ids: Vec<&str> = text.split_whitespace().collect();
+        (ids[0].to_string(), ids[1].to_string())
+    }
+
+    #[cfg(target_os = "linux")]
+    const SESSION_PROBE: &str = "echo $$ $(cut -d' ' -f6 /proc/$$/stat)";
+
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn run_detaches_commands_from_the_server_terminal() {
+        let out = RealRunner::default()
+            .run(
+                argv(&["sh", "-c", SESSION_PROBE]),
+                None,
+                Duration::from_secs(2),
+            )
+            .await;
+        let (pid, session) = session_ids(&out.stdout);
+        assert_eq!(
+            pid, session,
+            "the command shares the server's session and terminal"
+        );
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn spawn_detaches_commands_from_the_server_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("s.log");
+        let runner = RealRunner::default();
+        let pid = runner
+            .spawn(argv(&["sh", "-c", SESSION_PROBE]), log.clone())
+            .unwrap();
+        while runner.alive(pid) {
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let (pid, session) = session_ids(&std::fs::read_to_string(log).unwrap());
+        assert_eq!(
+            pid, session,
+            "the command shares the server's session and terminal"
+        );
     }
 
     #[test]
