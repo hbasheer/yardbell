@@ -116,6 +116,24 @@
         ],
         "createdAt": "2026-10-19T00:33:02.629Z",
         "reason": "Claude: shared style.css; live 'Claude is working' state, off under reduced motion"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "desktop/ui/panel.html"
+        ],
+        "createdAt": "2026-10-20T21:53:39.095Z",
+        "reason": "The Working badge pulse matches the dashboard's .badge.busy and marks live CPU activity refreshed on every poll"
+      },
+      {
+        "rule": "icon-tile-stack",
+        "value": "*",
+        "files": [
+          "desktop/ui/panel.html"
+        ],
+        "createdAt": "2026-10-20T22:04:00.836Z",
+        "reason": "The settings view's back arrow sits beside the Settings heading in a flex row, not above it; checked in the rendered panel"
       }
     ]
   }

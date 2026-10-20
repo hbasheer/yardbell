@@ -5,6 +5,20 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-10-20
+
+- The macOS app shows its tab bar. It sat behind the window's title bar, so new sessions opened in
+  tabs you could not see.
+- On macOS a left click on the menu bar icon opens a panel: each machine with its memory and CPU,
+  the sessions you can open (click one to go to its tab), New session, Open Yardbell, and a gear
+  for the notification switches, Start at login, Disconnect and Quit. A right click opens the menu.
+- The menu bar menu lists every session you can open under **Sessions**, with "working" after the
+  busy ones. Clicking one brings the app forward on that session's tab.
+- The menu's machine lines sit under **Machines** with a state dot, a memory bar, and memory and
+  CPU percentages, and are readable in a dark menu bar. Clicking one opens the dashboard on that
+  machine.
+- On Linux the tray icon is the Yardbell mark in the state color instead of a plain dot.
+
 ## [0.3.0] - 2026-10-20
 
 - On macOS the desktop app shows the Yardbell mark in the menu bar instead of a colored dot. It
