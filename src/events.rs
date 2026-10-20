@@ -36,6 +36,56 @@ pub enum Event {
     },
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Message {
+    pub title: String,
+    pub body: String,
+}
+
+pub fn message(event: &Event, view: &StateView, waited_minutes: u64) -> Message {
+    let (title, body) = match event {
+        Event::AgentIdle {
+            machine,
+            folder,
+            agent,
+            ..
+        } => {
+            let who = format!("{} on {machine}", agent_label(view, agent));
+            let body = match waited_minutes {
+                0 => format!("{who} finished or needs you"),
+                1 => format!("{who} has been waiting for 1 minute"),
+                n => format!("{who} has been waiting for {n} minutes"),
+            };
+            (format!("{folder} is waiting"), body)
+        }
+        Event::SessionEnded {
+            machine,
+            folder,
+            agent,
+            ..
+        } => (
+            format!("{folder} ended"),
+            format!("{} on {machine}", agent_label(view, agent)),
+        ),
+        Event::MachineDown { machine, reason } => (
+            format!("{machine} is down"),
+            reason.clone().unwrap_or_default(),
+        ),
+        Event::MachineUp { machine } => (format!("{machine} is back"), String::new()),
+        Event::MemoryHigh { machine, percent } => {
+            (format!("{machine} memory at {percent}%"), String::new())
+        }
+    };
+    Message { title, body }
+}
+
+pub fn agent_label<'a>(view: &'a StateView, agent: &'a str) -> &'a str {
+    view.agents
+        .iter()
+        .find(|known| known.name == agent)
+        .map_or(agent, |known| known.label.as_str())
+}
+
 struct SessionState {
     machine: String,
     folder: String,
@@ -294,6 +344,61 @@ mod tests {
             tmux: Some("eng-1".into()),
             folder: "api".into(),
             agent: "claude".into(),
+        }
+    }
+
+    fn labelled() -> StateView {
+        StateView {
+            agents: vec![
+                AgentView {
+                    name: "claude".into(),
+                    label: "Claude Code".into(),
+                },
+                AgentView {
+                    name: "codex".into(),
+                    label: "Codex".into(),
+                },
+            ],
+            ..view(vec![], vec![], vec![])
+        }
+    }
+
+    fn waiting(agent: &str) -> Event {
+        Event::AgentIdle {
+            machine: "devbox".into(),
+            session_id: "s1".into(),
+            tmux: None,
+            folder: "acme/api".into(),
+            agent: agent.into(),
+        }
+    }
+
+    fn ended_event(agent: &str) -> Event {
+        Event::SessionEnded {
+            machine: "devbox".into(),
+            session_id: "s1".into(),
+            folder: "acme/api".into(),
+            agent: agent.into(),
+        }
+    }
+
+    fn down(reason: Option<&str>) -> Event {
+        Event::MachineDown {
+            machine: "laptop".into(),
+            reason: reason.map(str::to_string),
+        }
+    }
+
+    fn up() -> Event {
+        Event::MachineUp {
+            machine: "laptop".into(),
+        }
+    }
+
+    fn memory(percent: u8) -> Event {
+        Event::MemoryHigh {
+            machine: "devbox".into(),
+            percent,
         }
     }
 
@@ -606,5 +711,54 @@ mod tests {
         let json = serde_json::to_value(&v).unwrap();
         let back: StateView = serde_json::from_value(json.clone()).unwrap();
         assert_eq!(serde_json::to_value(&back).unwrap(), json);
+    }
+
+    #[test]
+    fn message_texts() {
+        let v = labelled();
+        let texts = |e: &Event, waited| {
+            let Message { title, body } = message(e, &v, waited);
+            (title, body)
+        };
+        assert_eq!(
+            texts(&waiting("codex"), 0),
+            (
+                "acme/api is waiting".into(),
+                "Codex on devbox finished or needs you".into()
+            )
+        );
+        assert_eq!(
+            texts(&waiting("codex"), 2).1,
+            "Codex on devbox has been waiting for 2 minutes"
+        );
+        assert_eq!(
+            texts(&waiting("codex"), 1).1,
+            "Codex on devbox has been waiting for 1 minute"
+        );
+        assert_eq!(
+            texts(&ended_event("claude"), 0),
+            ("acme/api ended".into(), "Claude Code on devbox".into())
+        );
+        assert_eq!(
+            texts(&down(Some("ssh timeout")), 0),
+            ("laptop is down".into(), "ssh timeout".into())
+        );
+        assert_eq!(
+            texts(&down(None), 0),
+            ("laptop is down".into(), String::new())
+        );
+        assert_eq!(texts(&up(), 0), ("laptop is back".into(), String::new()));
+        assert_eq!(
+            texts(&memory(96), 0),
+            ("devbox memory at 96%".into(), String::new())
+        );
+    }
+
+    #[test]
+    fn unknown_agents_use_their_name() {
+        assert_eq!(
+            message(&waiting("amp"), &labelled(), 0).body,
+            "amp on devbox finished or needs you"
+        );
     }
 }

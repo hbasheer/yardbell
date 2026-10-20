@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Phone notifications through ntfy: the server tells your phone when an agent is waiting for you
+  (after `wait_minutes`, 2 by default, and only if you have not answered it by then), a session
+  ends, a machine goes down or comes back, or memory reaches 95%, with no browser tab or desktop
+  app open. Set them up, send a test and choose what to hear about in the new
+  **Phone notifications** section of Settings, or under `phone_notifications` in the config.
+  Self-hosted ntfy servers work too.
+
 ## [0.2.0] - 2026-10-20
 
 - Support for AI coding agents besides Claude Code: Codex, Gemini CLI, Qwen Code, opencode, Copilot

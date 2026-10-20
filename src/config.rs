@@ -1,4 +1,5 @@
 use crate::agents::{self, Agent};
+use rand::Rng;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
@@ -96,6 +97,54 @@ fn default_poll() -> u64 {
     5
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PhoneNotifications {
+    pub server: String,
+    pub topic: String,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub token: String,
+    pub wait_minutes: u64,
+    pub agent_waiting: bool,
+    pub session_ended: bool,
+    pub machines: bool,
+    pub memory: bool,
+}
+
+impl Default for PhoneNotifications {
+    fn default() -> Self {
+        PhoneNotifications {
+            server: "https://ntfy.sh".into(),
+            topic: String::new(),
+            token: String::new(),
+            wait_minutes: 2,
+            agent_waiting: true,
+            session_ended: true,
+            machines: true,
+            memory: true,
+        }
+    }
+}
+
+impl PhoneNotifications {
+    pub fn on(&self) -> bool {
+        !self.topic.is_empty()
+    }
+
+    pub fn is_default(&self) -> bool {
+        *self == PhoneNotifications::default()
+    }
+}
+
+pub fn new_topic() -> String {
+    let suffix: String = rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(24)
+        .map(char::from)
+        .collect();
+    format!("yardbell-{suffix}")
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_port")]
@@ -116,6 +165,8 @@ pub struct Config {
     pub default_agent: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub agents: Vec<Agent>,
+    #[serde(default, skip_serializing_if = "PhoneNotifications::is_default")]
+    pub phone_notifications: PhoneNotifications,
     pub machines: Vec<Machine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen_ip: Option<String>,
@@ -225,6 +276,29 @@ impl Config {
             if let Err(e) = Regex::new(&self.ticket_pattern) {
                 return invalid(format!("ticket_pattern does not compile: {e}"));
             }
+        }
+        let phone = &self.phone_notifications;
+        let server_re =
+            Regex::new(r"^https?://[A-Za-z0-9.-]+(:[0-9]{1,5})?(/\S*)?$").expect("static regex");
+        if !server_re.is_match(&phone.server) {
+            return invalid(
+                "phone_notifications.server must be an http:// or https:// address".into(),
+            );
+        }
+        let topic_re = Regex::new("^[-_A-Za-z0-9]{1,64}$").expect("static regex");
+        if !phone.topic.is_empty() && !topic_re.is_match(&phone.topic) {
+            return invalid(
+                "phone_notifications.topic may only use letters, digits, - and _ (at most 64)"
+                    .into(),
+            );
+        }
+        if phone.wait_minutes > 60 {
+            return invalid("phone_notifications.wait_minutes must be from 0 to 60".into());
+        }
+        if phone.token.len() > 200 || !phone.token.chars().all(|c| c.is_ascii_graphic()) {
+            return invalid(
+                "phone_notifications.token must be at most 200 characters without spaces".into(),
+            );
         }
         Ok(())
     }
@@ -511,5 +585,126 @@ mod tests {
         }
         stop.store(true, std::sync::atomic::Ordering::Relaxed);
         assert!(reader.join().unwrap() > 0);
+    }
+
+    #[test]
+    fn phone_notifications_default_when_missing() {
+        let p = fixture().phone_notifications;
+        assert_eq!(p, PhoneNotifications::default());
+        assert_eq!(
+            (p.server.as_str(), p.wait_minutes, p.on()),
+            ("https://ntfy.sh", 2, false)
+        );
+        assert!(p.agent_waiting && p.session_ended && p.machines && p.memory && p.token.is_empty());
+    }
+
+    #[test]
+    fn phone_notifications_partial_block_fills_in_defaults() {
+        let cfg = load_str(&format!("{BASE}phone_notifications:\n  topic: abc\n")).unwrap();
+        let p = cfg.phone_notifications;
+        assert_eq!(
+            (p.topic.as_str(), p.server.as_str(), p.wait_minutes),
+            ("abc", "https://ntfy.sh", 2)
+        );
+        assert!(p.agent_waiting && p.session_ended && p.machines && p.memory && p.on());
+    }
+
+    #[test]
+    fn phone_notifications_round_trip_and_default_is_not_written() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        let mut cfg = fixture();
+        cfg.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(!text.contains("phone_notifications"), "{text}");
+
+        cfg.phone_notifications.topic = "abc".into();
+        cfg.phone_notifications.token = "tk_1".into();
+        cfg.save(&path).unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().phone_notifications,
+            cfg.phone_notifications
+        );
+
+        cfg.phone_notifications.token.clear();
+        cfg.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("topic: abc"), "{text}");
+        assert!(!text.contains("token:"), "{text}");
+    }
+
+    #[test]
+    fn phone_notifications_validation() {
+        let long_topic = format!("topic: {}", "a".repeat(65));
+        let cases = [
+            (
+                "server: ftp://x",
+                "phone_notifications.server must be an http:// or https:// address",
+            ),
+            (
+                "server: https://",
+                "phone_notifications.server must be an http:// or https:// address",
+            ),
+            (
+                "topic: a b",
+                "phone_notifications.topic may only use letters, digits, - and _ (at most 64)",
+            ),
+            (
+                long_topic.as_str(),
+                "phone_notifications.topic may only use letters, digits, - and _ (at most 64)",
+            ),
+            (
+                "wait_minutes: 61",
+                "phone_notifications.wait_minutes must be from 0 to 60",
+            ),
+            (
+                "token: a b",
+                "phone_notifications.token must be at most 200 characters without spaces",
+            ),
+        ];
+        for (setting, message) in cases {
+            let yaml = format!("{BASE}phone_notifications:\n  {setting}\n");
+            match load_str(&yaml) {
+                Err(ConfigError::Invalid(got)) => assert_eq!(got, message, "{setting}"),
+                other => panic!("{setting} was not refused: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn phone_notifications_accepts_valid_values() {
+        let accepted = [
+            "server: http://100.64.0.5:8080".to_string(),
+            "server: https://ntfy.example.com/alerts".to_string(),
+            "topic: ''".to_string(),
+            format!("topic: {}", "a".repeat(64)),
+            "wait_minutes: 0".to_string(),
+            "wait_minutes: 60".to_string(),
+            format!("token: {}", "t".repeat(200)),
+        ];
+        for setting in accepted {
+            let yaml = format!("{BASE}phone_notifications:\n  {setting}\n");
+            assert!(load_str(&yaml).is_ok(), "refused: {setting}");
+        }
+    }
+
+    #[test]
+    fn phone_notifications_refuses_a_long_token() {
+        let yaml = format!("{BASE}phone_notifications:\n  token: {}\n", "t".repeat(201));
+        let err = load_str(&yaml).unwrap_err().to_string();
+        assert!(
+            err.contains("phone_notifications.token must be at most 200 characters without spaces"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn new_topic_is_valid_and_random() {
+        let re = Regex::new("^yardbell-[A-Za-z0-9]{24}$").unwrap();
+        let (a, b) = (new_topic(), new_topic());
+        assert!(re.is_match(&a) && re.is_match(&b) && a != b);
+        let mut cfg = fixture();
+        cfg.phone_notifications.topic = a;
+        assert!(cfg.validate().is_ok());
     }
 }

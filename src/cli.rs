@@ -1,7 +1,9 @@
 use crate::config::{expand_tilde, Config};
 use crate::onboarding::ssh_config::SshConfig;
 use crate::onboarding::Onboarding;
-use crate::poller::{Hook, Poller};
+use crate::phone::ntfy::{Ntfy, Target};
+use crate::phone::{base_url, Phone};
+use crate::poller::{AfterTick, Hook, Poller};
 use crate::probe::{MachineStatus, Probe};
 use crate::sessions::Sessions;
 use crate::shell::{RealRunner, Runner};
@@ -126,11 +128,34 @@ async fn serve(path: PathBuf, no_open: bool) -> Result<()> {
             hook_tunnels.sync(m, &hook_state.ports(&m.name));
         }
     });
+    let phone = Arc::new(Phone::new(Arc::new(Ntfy::new())));
+    let after_state = state.clone();
+    let after_tunnels = tunnels.clone();
+    let after_phone = phone.clone();
+    let after: AfterTick = Arc::new(move |cfg: &Config| {
+        let base = base_url(cfg);
+        let host = base
+            .as_deref()
+            .and_then(|text| reqwest::Url::parse(text).ok())
+            .and_then(|url| url.host_str().map(str::to_string))
+            .unwrap_or_else(|| "localhost".into());
+        let view = after_state.view(cfg, after_tunnels.as_ref(), &host);
+        let pushes = after_phone.observe(
+            &cfg.phone_notifications,
+            &view,
+            base.as_deref(),
+            Instant::now(),
+        );
+        if !pushes.is_empty() {
+            after_phone.dispatch(Target::from_settings(&cfg.phone_notifications), pushes);
+        }
+    });
     let poller = Arc::new(Poller::new(
         path.clone(),
         Arc::new(Probe::new(runner.clone(), ssh.clone())),
         state.clone(),
         hook,
+        after,
     ));
     poller.clone().start(Duration::from_secs(cfg.poll_seconds));
 
@@ -155,6 +180,7 @@ async fn serve(path: PathBuf, no_open: bool) -> Result<()> {
             expand_tilde("~/.ssh/config"),
             Arc::new(chrono::Local::now),
         ),
+        phone,
         refresh: Arc::new(move || {
             let poller = poller.clone();
             Box::pin(async move {

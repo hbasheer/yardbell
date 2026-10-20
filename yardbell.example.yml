@@ -17,6 +17,16 @@ default_agent: claude            # preselected in New session; built in: claude,
 #     command: amp
 #     resume: amp threads continue
 
+# phone_notifications:           # notify your phone through ntfy; off until topic is set
+#   server: https://ntfy.sh      # any ntfy server, including your own
+#   topic: ""                    # keep it secret; "Set up" on the Settings page writes it
+#   token: ""                    # optional, for protected topics
+#   wait_minutes: 2              # agent waiting: minutes before you are told; 0 = right away
+#   agent_waiting: true          # notify when an agent is waiting for you
+#   session_ended: true          # notify when a session ends
+#   machines: true               # notify when a machine goes down or comes back
+#   memory: true                 # notify when a machine's memory reaches 95%
+
 machines:
   - name: studio                 # the machine Yardbell runs on
     local: true

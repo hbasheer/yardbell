@@ -3,6 +3,7 @@ use crate::config::{Config, Machine};
 use crate::folders::Folders;
 use crate::mesh::HostMesh;
 use crate::onboarding::Onboarding;
+use crate::phone::Phone;
 use crate::sessions::Sessions;
 use crate::settings::Settings;
 use crate::snapshot;
@@ -44,6 +45,7 @@ pub struct AppState {
     pub host_mesh: HostMesh,
     pub folders: Folders,
     pub settings: Settings,
+    pub phone: Arc<Phone>,
     pub auth: Auth,
     pub key: std::sync::RwLock<Key>,
     pub handoff: std::sync::Mutex<Vec<(String, Instant)>>,
@@ -61,6 +63,7 @@ pub struct Services {
     pub host_mesh: HostMesh,
     pub folders: Folders,
     pub settings: Settings,
+    pub phone: Arc<Phone>,
     pub refresh: Refresh,
 }
 
@@ -74,6 +77,7 @@ impl AppState {
             host_mesh,
             folders,
             settings,
+            phone,
             refresh,
         } = services;
         AppState {
@@ -85,6 +89,7 @@ impl AppState {
             host_mesh,
             folders,
             settings,
+            phone,
             auth: Auth::new(cfg.passcode_hash.clone().unwrap_or_default(), clock.clone()),
             key: std::sync::RwLock::new(cookie_key(cfg)),
             handoff: std::sync::Mutex::new(Vec::new()),
