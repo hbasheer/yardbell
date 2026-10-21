@@ -350,7 +350,7 @@ async fn new_session_starts_the_requested_agent() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let call = r.fake.calls().pop().unwrap();
     assert!(
-        call.last().unwrap().ends_with(r"'\''gemini'\'''"),
+        call.last().unwrap().contains(r"'\''gemini'\'' || exit $?"),
         "{call:?}"
     );
 }
@@ -363,7 +363,7 @@ async fn new_session_defaults_to_claude_and_rejects_unknown_agents() {
     assert_eq!(status, StatusCode::OK);
     let call = r.fake.calls().pop().unwrap();
     assert!(
-        call.last().unwrap().ends_with(r"'\''claude'\'''"),
+        call.last().unwrap().contains(r"'\''claude'\'' || exit $?"),
         "{call:?}"
     );
     let (status, body) =
@@ -1289,4 +1289,93 @@ async fn phone_routes_need_a_login_and_the_page_origin() {
     let (settings, _) = get_settings(&r, &c).await;
     assert_eq!(settings["phone"]["on"], false);
     assert!(r.phone_sender.calls().is_empty());
+}
+
+#[tokio::test]
+async fn move_to_tmux_says_the_agent_was_stopped_when_it_cannot_start_again() {
+    let r = rig();
+    r.fake.stub("kill ", Output::ok_with(""));
+    r.fake.stub(
+        "tmux new",
+        Output::failed(127, "Codex is not installed on hp\n"),
+    );
+    let (status, body) = move_to_tmux(&r, 77).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(body.contains("Codex is not installed on hp"), "{body}");
+    assert!(body.contains("was stopped"), "{body}");
+}
+
+fn with_recent(r: &Rig, recent: &[&str]) {
+    let mut cfg = Config::load(&r.app.cfg_path).unwrap();
+    let hp = cfg.machines.iter_mut().find(|m| m.name == "hp").unwrap();
+    hp.recent = recent.iter().map(|p| p.to_string()).collect();
+    cfg.save(&r.app.cfg_path).unwrap();
+}
+
+#[tokio::test]
+async fn forgetting_a_recent_folder_removes_it_for_that_machine() {
+    let r = rig();
+    with_recent(&r, &["/r/app", "/r/web"]);
+    let c = cookie(&r.app).await;
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/machines/hp/recent/forget",
+        r#"{"path":"/r/app"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["recent"], serde_json::json!(["/r/web"]));
+    let cfg = Config::load(&r.app.cfg_path).unwrap();
+    assert_eq!(cfg.machine("hp").unwrap().recent, vec!["/r/web"]);
+
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/machines/hp/recent/forget",
+        r#"{"path":"/r/gone"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let cfg = Config::load(&r.app.cfg_path).unwrap();
+    assert_eq!(cfg.machine("hp").unwrap().recent, vec!["/r/web"]);
+}
+
+#[tokio::test]
+async fn forgetting_a_recent_folder_needs_a_known_machine() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _, _) = post_json(
+        &r.app,
+        &c,
+        "/machines/nope/recent/forget",
+        r#"{"path":"/r/app"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn state_carries_the_build_of_the_page_files() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let get = || {
+        Request::get("/state")
+            .header(header::COOKIE, c.clone())
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, headers, _) = send(&r.app, get()).await;
+    assert_eq!(status, StatusCode::OK);
+    let build = headers
+        .get("x-yardbell-build")
+        .expect("no build header")
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(build.len(), 16, "{build}");
+    assert!(build.chars().all(|c| c.is_ascii_hexdigit()), "{build}");
+    let (_, again, _) = send(&r.app, get()).await;
+    assert_eq!(again.get("x-yardbell-build").unwrap(), build.as_str());
 }

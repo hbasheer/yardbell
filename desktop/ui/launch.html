@@ -55,6 +55,7 @@
   .app-icon { display: block; width: 64px; height: 64px; margin-bottom: 16px; }
   h1 { margin: 0; font-size: 16px; font-weight: 650; letter-spacing: -0.01em; line-height: 1.5; }
   .states { display: flex; flex-direction: column; align-items: center; min-height: 118.5px; }
+  .connecting { display: flex; flex-direction: column; align-items: center; }
   .icon {
     width: 16px;
     height: 16px;
@@ -76,6 +77,9 @@
   .problem { margin: 4px 0 0; color: var(--ink-2); font-size: 13px; font-weight: 500; }
   .hint { margin: 2px 0 0; color: var(--muted); font-size: 13px; text-wrap: balance; }
   .actions { display: flex; justify-content: center; gap: 8px; margin-top: 20px; }
+  .other { margin-top: 16px; font: 500 13px/1 var(--sans); padding: 6px 10px; border: 0; border-radius: 8px; background: transparent; color: var(--muted); cursor: pointer; }
+  .other:hover { background: var(--hover); color: var(--ink); }
+  .other:disabled { opacity: 0.55; cursor: progress; }
   .btn {
     font: 500 13px/1 var(--sans);
     display: inline-flex;
@@ -103,13 +107,16 @@
     <img class="app-icon" src="icon.png" width="64" height="64" alt="" draggable="false">
     <h1>Yardbell</h1>
     <div class="states">
-      <div class="status" id="connecting">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 1-5.5 5.5"/></svg>
-        <span id="status" role="status">Connecting…</span>
+      <div id="connecting" class="connecting">
+        <div class="status">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2.5a5.5 5.5 0 1 1-5.5 5.5"/></svg>
+          <span id="status" role="status">Connecting…</span>
+        </div>
+        <button class="other" id="other" type="button">Use another server</button>
       </div>
       <div id="unreachable" hidden>
         <p class="problem" id="problem" role="alert"></p>
-        <p class="hint">Check that Yardbell is running there and your VPN is on.</p>
+        <p class="hint" id="hint">Check that Yardbell is running there and your VPN is on.</p>
         <p class="hint">Retrying in 5 s</p>
         <div class="actions">
           <button class="btn quiet" id="change" type="button">Change server</button>

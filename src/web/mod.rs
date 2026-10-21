@@ -36,6 +36,27 @@ const HANDOFF_MAX: usize = 16;
 #[folder = "assets/"]
 struct Assets;
 
+const BUILD_HEADER: &str = "x-yardbell-build";
+
+// Open pages compare this with the build they loaded from and reload when it changes, so a
+// restarted server never leaves a tab running page code that no longer matches it.
+fn page_build() -> &'static str {
+    static BUILD: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    BUILD.get_or_init(|| {
+        use std::hash::{DefaultHasher, Hash, Hasher};
+        let mut names: Vec<_> = Assets::iter().collect();
+        names.sort();
+        let mut hasher = DefaultHasher::new();
+        for name in names {
+            name.hash(&mut hasher);
+            if let Some(file) = Assets::get(&name) {
+                file.metadata.sha256_hash().hash(&mut hasher);
+            }
+        }
+        format!("{:016x}", hasher.finish())
+    })
+}
+
 pub struct AppState {
     pub cfg_path: PathBuf,
     pub state: State,
@@ -248,6 +269,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/ended/{id}/forget", post(forget))
         .route("/mesh/on", post(mesh_on))
         .route("/machines/{machine}/browse", get(browse))
+        .route("/machines/{machine}/recent/forget", post(forget_recent))
         .route("/machines/{machine}/branches", get(branches))
         .route("/term.js", get(|| async { asset("term.js") }))
         .route("/add", get(|| async { asset("add.html") }))
@@ -363,7 +385,7 @@ async fn state_json(
         .state
         .view(&cfg, app.ports.as_ref(), &page_host(&headers));
     view.mesh = Some(app.host_mesh.check(&cfg).await);
-    Ok(Json(view).into_response())
+    Ok(([(BUILD_HEADER, page_build())], Json(view)).into_response())
 }
 
 pub fn find_machine(cfg: &Config, name: &str) -> Result<Machine, ApiError> {
@@ -482,6 +504,33 @@ struct PathQuery {
     path: String,
 }
 
+#[derive(Deserialize)]
+struct ForgetRecent {
+    path: String,
+}
+
+async fn forget_recent(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(machine): UrlPath<String>,
+    Json(req): Json<ForgetRecent>,
+) -> Result<Response, ApiError> {
+    let mut cfg = app.config()?;
+    let m = cfg
+        .machines
+        .iter_mut()
+        .find(|m| m.name == machine)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no machine named {machine}")))?;
+    m.recent.retain(|p| *p != req.path);
+    let recent = m.recent.clone();
+    cfg.save(&app.cfg_path).map_err(|e| {
+        ApiError(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            format!("could not save the config: {e}"),
+        )
+    })?;
+    Ok(Json(json!({ "recent": recent })).into_response())
+}
+
 #[derive(serde::Serialize)]
 struct BrowseResponse {
     #[serde(flatten)]
@@ -580,7 +629,12 @@ async fn move_to_tmux(
         .sessions
         .create(&m, &s.cwd, &s.ticket, &label_of(&s.cwd), &agent, true)
         .await
-        .map_err(ApiError::gateway)?;
+        .map_err(|e| {
+            ApiError::gateway(format!(
+                "{e}. {} was stopped; start it again from its folder.",
+                agent.display()
+            ))
+        })?;
     Ok(Json(json!({ "name": name, "path": s.cwd })).into_response())
 }
 
