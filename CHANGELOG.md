@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-10-21
+
 - Starting a session checks that its agent is installed on that machine, and that it is still
   running a second later. If not, New session, Resume and Move to tmux say so ("Codex is not
   installed on studio") instead of opening a tab for a session that already ended.
