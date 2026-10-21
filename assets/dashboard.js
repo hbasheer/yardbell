@@ -345,6 +345,7 @@ async function refresh() {
     const res = await fetch("/state", { headers: { Accept: "application/json" } });
     if (res.status === 401) { location.href = "/login"; return; }
     if (!res.ok) throw new Error(`status ${res.status}`);
+    Nav.checkBuild(res);
     const text = await res.text();
     lastOk = Date.now();
     $("offline").hidden = true;
@@ -604,10 +605,34 @@ async function browseTo(path) {
   }
 }
 
-function renderBrowser(l) {
-  $("recent").innerHTML = l.recent.length
-    ? `<span class="recent-label">Recent</span>` + l.recent.map((p) => `<button type="button" class="chip" data-path="${esc(p)}">${esc(short(p))}</button>`).join("")
+function tail(path) {
+  const parts = short(path).split("/").filter((p) => p && p !== "~");
+  return parts.length ? parts.slice(-2).join("/") : short(path);
+}
+
+function renderRecent(recent) {
+  $("recent").innerHTML = recent.length
+    ? `<span class="recent-label">Recent</span>` + recent.map((p) => `<span class="recent-chip">
+        <button type="button" class="recent-go" data-path="${esc(p)}" title="${esc(short(p))}">${esc(tail(p))}</button>
+        <button type="button" class="recent-x" data-forget="${esc(p)}" aria-label="Remove ${esc(tail(p))} from Recent" title="Remove from Recent">
+          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 3.5l5 5M8.5 3.5l-5 5"/></svg>
+        </button>
+      </span>`).join("")
     : "";
+}
+
+async function forgetRecent(path) {
+  try {
+    const res = await api("POST", `/machines/${encodeURIComponent(nm.machine)}/recent/forget`, { path });
+    if (nm.listing) nm.listing.recent = res.recent;
+    renderRecent(res.recent);
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+function renderBrowser(l) {
+  renderRecent(l.recent);
   const parts = l.path.split("/").filter(Boolean);
   const crumbs = [`<button type="button" class="crumb home" data-path="~">Home</button><span class="crumb-divider"></span>`, `<button type="button" class="crumb" data-path="/">/</button>`];
   parts.forEach((p, i) => crumbs.push(`${i ? `<span class="sep">/</span>` : ""}<button type="button" class="crumb${i === parts.length - 1 ? " here" : ""}" data-path="/${esc(parts.slice(0, i + 1).join("/"))}">${esc(p)}</button>`));
@@ -714,6 +739,8 @@ function openNew(machine) {
 }
 
 $("new-dialog").addEventListener("click", (e) => {
+  const forget = e.target.closest("[data-forget]");
+  if (forget) { forgetRecent(forget.dataset.forget); return; }
   const target = e.target.closest("[data-path]");
   if (target) { browseTo(target.dataset.path); return; }
   const opt = e.target.closest("[data-branch]");

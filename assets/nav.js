@@ -61,11 +61,22 @@
     vpn.innerHTML = `<span class="dot ${mesh.on === true ? "ok" : mesh.on === false ? "bad" : ""}"></span>${esc(mesh.label)} ${on}`;
   }
 
+  let build = "";
+
+  function checkBuild(res) {
+    const next = res.headers.get("x-yardbell-build");
+    if (!next) return;
+    if (!build) build = next;
+    else if (next !== build && !document.querySelector("dialog[open]")) location.reload();
+  }
+
   async function load() {
     try {
       const res = await fetch("/state", { headers: { Accept: "application/json" } });
       if (res.status === 401) { location.href = "/login"; return; }
-      if (res.ok) render(await res.json(), "");
+      if (!res.ok) return;
+      checkBuild(res);
+      render(await res.json(), "");
     } catch {}
   }
 
@@ -138,7 +149,7 @@
     });
   }
 
-  window.YardbellNav = { render, order, memPct, RATED, appKey, tabKey, confirm: ask };
+  window.YardbellNav = { render, order, memPct, RATED, appKey, tabKey, confirm: ask, checkBuild };
   if (page !== "dashboard") {
     load();
     setInterval(load, 10000);

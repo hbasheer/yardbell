@@ -5,6 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Starting a session checks that its agent is installed on that machine, and that it is still
+  running a second later. If not, New session, Resume and Move to tmux say so ("Codex is not
+  installed on studio") instead of opening a tab for a session that already ended.
+- Recent folders in New session can be removed with the cross on each one, and show the last two
+  parts of the path. "Continue the last conversation" is a switch with a short explanation.
+- Open dashboard and settings pages reload themselves when the server restarts with different page
+  files, so a browser tab or the desktop app never keeps running outdated page code. A page with a
+  dialog open waits until it closes.
+- The desktop app's connecting screen has **Use another server**, and after 20 seconds without an
+  answer it shows the error with **Retry** and **Change server** instead of waiting forever.
+
 ## [0.3.2] - 2026-10-20
 
 - New session and Move to tmux work on the machine running the server when the server was started

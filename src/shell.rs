@@ -55,6 +55,23 @@ pub fn expand_home(path: &str) -> String {
     )
 }
 
+// An interactive bash login shell without a terminal announces that it has no job control,
+// and says "logout" when it exits; neither belongs in an error shown to the user.
+pub fn without_shell_noise(stderr: &str) -> String {
+    stderr
+        .lines()
+        .filter(|line| {
+            let line = line.trim();
+            line != "logout"
+                && !line.ends_with("no job control in this shell")
+                && !line.contains("cannot set terminal process group")
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim()
+        .to_string()
+}
+
 pub fn login_shell(cmd: &str) -> String {
     format!(r#"exec "${{SHELL:-/bin/sh}}" -lic {}"#, quote(cmd))
 }
@@ -300,6 +317,20 @@ mod tests {
         assert_eq!(
             pid, session,
             "the command shares the server's session and terminal"
+        );
+    }
+
+    #[test]
+    fn shell_noise_is_dropped_from_error_text() {
+        let stderr =
+            "bash: cannot set terminal process group (-1): Inappropriate ioctl for device\n\
+                      bash: no job control in this shell\n\
+                      Aider is not installed on hp\n\
+                      logout\n";
+        assert_eq!(without_shell_noise(stderr), "Aider is not installed on hp");
+        assert_eq!(
+            without_shell_noise("duplicate session: hp-app\n"),
+            "duplicate session: hp-app"
         );
     }
 

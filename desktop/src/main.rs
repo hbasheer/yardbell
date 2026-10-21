@@ -112,12 +112,17 @@ async fn change_server(app: AppHandle) -> Result<(), String> {
 
 async fn open_dashboard(app: &AppHandle) {
     let session = app.state::<Session>();
-    let (client, generation) = {
+    let current = {
         let slot = session.client.read().await;
-        let Some(client) = slot.clone() else {
-            return;
-        };
-        (client, session.generation.current())
+        slot.clone()
+            .map(|client| (client, session.generation.current()))
+    };
+    let Some((client, generation)) = current else {
+        if let Err(e) = windows::show_connect(app, None) {
+            eprintln!("yardbell: can't show the connect window: {e}");
+        }
+        windows::close_all_but_connect(app);
+        return;
     };
     let server = client.server().to_string();
     tell_launch(app, CONNECTING, &server);
