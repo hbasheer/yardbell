@@ -453,13 +453,19 @@ document.querySelector(".segmented").addEventListener("click", (e) => {
   applyFilters();
 });
 
+// /state is the server's last machine check, which can be poll_seconds old, so after an action
+// that changes sessions the machines are checked again before the list is drawn.
+async function checkNow() {
+  await api("POST", "/refresh");
+  await refresh();
+}
+
 $("refresh-btn").addEventListener("click", async (e) => {
   const b = e.currentTarget;
   b.disabled = true;
   b.classList.add("spinning");
   try {
-    await api("POST", "/refresh");
-    await refresh();
+    await checkNow();
   } catch (err) {
     toast(err.message);
   } finally {
@@ -822,7 +828,7 @@ document.addEventListener("click", async (e) => {
       const url = `/term/${encodeURIComponent(machine)}/${encodeURIComponent(res.name)}`;
       if (tab) tab.location.href = url; else location.href = url;
       toast(`Moved ${folder} into tmux`, "ok");
-      refresh();
+      checkNow().catch(() => refresh());
     } catch (err) {
       if (tab) tab.close();
       toast(err.message);
@@ -843,7 +849,7 @@ document.addEventListener("click", async (e) => {
     } else if (act === "forget") {
       await api("POST", `/ended/${encodeURIComponent(id)}/forget`);
     }
-    refresh();
+    checkNow().catch(() => refresh());
   } catch (err) {
     toast(err.message);
   } finally {
@@ -884,7 +890,7 @@ $("new-form").addEventListener("submit", async (e) => {
   $("new-dialog").close();
   try {
     await startAndOpen(body);
-    refresh();
+    checkNow().catch(() => refresh());
   } catch (err) {
     toast(err.message);
   }

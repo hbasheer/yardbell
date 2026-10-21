@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-21
+
+- Move to tmux, New session, Resume, Stop and Forget show their result in the session list right
+  away. The list was redrawn from the last machine check, which can be up to `poll_seconds` old,
+  so a moved session stayed under "outside tmux" until the next check or a manual refresh.
+
 ## [0.3.3] - 2026-10-21
 
 - Starting a session checks that its agent is installed on that machine, and that it is still
