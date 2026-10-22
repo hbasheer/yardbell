@@ -2,7 +2,7 @@ use crate::agents::{self, Agent};
 use rand::Rng;
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::path::{Path, PathBuf};
 
 const EXAMPLE: &str = include_str!("../yardbell.example.yml");
@@ -145,6 +145,35 @@ pub fn new_topic() -> String {
     format!("yardbell-{suffix}")
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct McpServer {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub command: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub headers: BTreeMap<String, String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub machines: Vec<String>,
+}
+
+impl McpServer {
+    fn entry(&self) -> serde_json::Value {
+        if !self.url.is_empty() {
+            return serde_json::json!({ "type": "http", "url": self.url, "headers": self.headers });
+        }
+        let mut words = self.command.split_whitespace();
+        serde_json::json!({
+            "command": words.next().unwrap_or_default(),
+            "args": words.collect::<Vec<_>>(),
+            "env": self.env,
+        })
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Config {
     #[serde(default = "default_port")]
@@ -167,6 +196,8 @@ pub struct Config {
     pub agents: Vec<Agent>,
     #[serde(default, skip_serializing_if = "PhoneNotifications::is_default")]
     pub phone_notifications: PhoneNotifications,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mcp_servers: Vec<McpServer>,
     pub machines: Vec<Machine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen_ip: Option<String>,
@@ -174,6 +205,8 @@ pub struct Config {
     pub passcode_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub cookie_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mcp_token: Option<String>,
 }
 
 impl Config {
@@ -300,7 +333,70 @@ impl Config {
                 "phone_notifications.token must be at most 200 characters without spaces".into(),
             );
         }
+        self.validate_mcp_servers().map_err(ConfigError::Invalid)
+    }
+
+    fn validate_mcp_servers(&self) -> Result<(), String> {
+        let name_re = Regex::new("^[A-Za-z0-9_-]+$").expect("static regex");
+        let key_re = Regex::new("^[A-Za-z_][A-Za-z0-9_]*$").expect("static regex");
+        let header_re = Regex::new("^[A-Za-z0-9-]+$").expect("static regex");
+        let mut names = HashSet::new();
+        for s in &self.mcp_servers {
+            if !name_re.is_match(&s.name) {
+                return Err(format!(
+                    "MCP server name {:?} must use only letters, digits, - and _",
+                    s.name
+                ));
+            }
+            if !names.insert(s.name.as_str()) {
+                return Err(format!("MCP server {:?} is listed twice", s.name));
+            }
+            match (s.command.trim().is_empty(), s.url.trim().is_empty()) {
+                (true, true) | (false, false) => {
+                    return Err(format!(
+                        "MCP server {:?} needs either a command or a URL",
+                        s.name
+                    ))
+                }
+                (true, false)
+                    if !s.url.starts_with("http://") && !s.url.starts_with("https://") =>
+                {
+                    return Err(format!(
+                        "MCP server {:?} URL must start with http:// or https://",
+                        s.name
+                    ))
+                }
+                _ => {}
+            }
+            let bad_env = s.env.keys().find(|k| !key_re.is_match(k));
+            let bad_header = s.headers.keys().find(|k| !header_re.is_match(k));
+            if let Some(key) = bad_env.or(bad_header) {
+                return Err(format!(
+                    "MCP server {:?} has an invalid name {key:?}",
+                    s.name
+                ));
+            }
+            if let Some(m) = s.machines.iter().find(|m| self.machine(m).is_none()) {
+                return Err(format!(
+                    "MCP server {:?} lists machine {m:?}, which is not in Yardbell",
+                    s.name
+                ));
+            }
+        }
         Ok(())
+    }
+
+    pub fn mcp_config_for(&self, machine: &str) -> Option<String> {
+        let servers: serde_json::Map<String, serde_json::Value> = self
+            .mcp_servers
+            .iter()
+            .filter(|s| s.machines.is_empty() || s.machines.iter().any(|m| m == machine))
+            .map(|s| (s.name.clone(), s.entry()))
+            .collect();
+        if servers.is_empty() {
+            return None;
+        }
+        Some(serde_json::json!({ "mcpServers": servers }).to_string())
     }
 
     pub fn bind_addresses(&self) -> Vec<String> {
@@ -696,6 +792,71 @@ mod tests {
             err.contains("phone_notifications.token must be at most 200 characters without spaces"),
             "{err}"
         );
+    }
+
+    #[test]
+    fn mcp_servers_build_a_config_per_machine() {
+        let yaml = "mcp_servers:\n  - name: github\n    command: npx -y @modelcontextprotocol/server-github\n    env: {GITHUB_TOKEN: t}\n  - name: linear\n    url: https://mcp.linear.app/mcp\n    headers: {Authorization: Bearer x}\n    machines: [mini]\nmachines:\n  - {name: hp, local: true, root: /r}\n  - {name: mini, port_prefix: 1, root: /r}\n";
+        let cfg = load_str(yaml).unwrap();
+        let hp: serde_json::Value =
+            serde_json::from_str(&cfg.mcp_config_for("hp").unwrap()).unwrap();
+        assert_eq!(
+            hp,
+            serde_json::json!({ "mcpServers": { "github": {
+                "command": "npx",
+                "args": ["-y", "@modelcontextprotocol/server-github"],
+                "env": { "GITHUB_TOKEN": "t" },
+            }}})
+        );
+        let mini: serde_json::Value =
+            serde_json::from_str(&cfg.mcp_config_for("mini").unwrap()).unwrap();
+        assert_eq!(
+            mini["mcpServers"]["linear"],
+            serde_json::json!({ "type": "http", "url": "https://mcp.linear.app/mcp", "headers": { "Authorization": "Bearer x" } })
+        );
+        let none = load_str("machines:\n  - {name: hp, local: true, root: /r}\n").unwrap();
+        assert_eq!(none.mcp_config_for("hp"), None);
+    }
+
+    #[test]
+    fn mcp_servers_are_validated() {
+        let cases = [
+            (
+                "{name: a}",
+                "MCP server \"a\" needs either a command or a URL",
+            ),
+            (
+                "{name: a, command: x, url: 'https://y'}",
+                "MCP server \"a\" needs either a command or a URL",
+            ),
+            (
+                "{name: a, url: 'ftp://y'}",
+                "MCP server \"a\" URL must start with http:// or https://",
+            ),
+            (
+                "{name: 'a b', command: x}",
+                "MCP server name \"a b\" must use only letters, digits, - and _",
+            ),
+            (
+                "{name: a, command: x, machines: [nope]}",
+                "MCP server \"a\" lists machine \"nope\", which is not in Yardbell",
+            ),
+            (
+                "{name: a, command: x, env: {'1X': y}}",
+                "MCP server \"a\" has an invalid name \"1X\"",
+            ),
+            (
+                "{name: a, url: 'https://y', headers: {'a b': y}}",
+                "MCP server \"a\" has an invalid name \"a b\"",
+            ),
+        ];
+        for (server, message) in cases {
+            let yaml = format!("mcp_servers:\n  - {server}\n{BASE}");
+            match load_str(&yaml) {
+                Err(ConfigError::Invalid(got)) => assert_eq!(got, message, "{server}"),
+                other => panic!("{server}: {other:?}"),
+            }
+        }
     }
 
     #[test]

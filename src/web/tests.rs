@@ -125,6 +125,10 @@ fn rig() -> Rig {
             Arc::new(chrono::Local::now),
         ),
         phone: Arc::new(Phone::new(phone_sender.clone())),
+        relay: Arc::new(crate::relay::Relay::new(
+            fake.clone(),
+            dir.path().join("relay"),
+        )),
         refresh: {
             let refreshes = refreshes.clone();
             Arc::new(move || {
@@ -1378,4 +1382,274 @@ async fn state_carries_the_build_of_the_page_files() {
     assert!(build.chars().all(|c| c.is_ascii_hexdigit()), "{build}");
     let (_, again, _) = send(&r.app, get()).await;
     assert_eq!(again.get("x-yardbell-build").unwrap(), build.as_str());
+}
+
+async fn mcp(
+    app: &Arc<AppState>,
+    token: Option<&str>,
+    origin: Option<&str>,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let mut req = Request::post("/mcp")
+        .header(header::HOST, "localhost:4000")
+        .header(header::CONTENT_TYPE, "application/json");
+    if let Some(token) = token {
+        req = req.header(header::AUTHORIZATION, format!("Bearer {token}"));
+    }
+    if let Some(origin) = origin {
+        req = req.header(header::ORIGIN, origin);
+    }
+    let res = router(app.clone())
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    let status = res.status();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+fn mcp_on(r: &Rig) -> String {
+    r.app
+        .settings
+        .set_mcp_token(Some("yb_secret".into()))
+        .unwrap();
+    "yb_secret".into()
+}
+
+fn rpc(method: &str, params: serde_json::Value) -> serde_json::Value {
+    json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })
+}
+
+async fn tool_call(r: &Rig, name: &str, args: serde_json::Value) -> serde_json::Value {
+    let (status, body) = mcp(
+        &r.app,
+        Some("yb_secret"),
+        None,
+        rpc("tools/call", json!({ "name": name, "arguments": args })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body["result"].clone()
+}
+
+#[tokio::test]
+async fn mcp_is_off_until_a_token_is_set() {
+    let r = rig();
+    let (status, body) = mcp(&r.app, Some("anything"), None, rpc("ping", json!({}))).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body["error"],
+        "the MCP server is off, turn it on in Settings"
+    );
+}
+
+#[tokio::test]
+async fn mcp_needs_the_bearer_token_and_rejects_other_sites() {
+    let r = rig();
+    mcp_on(&r);
+    for token in [None, Some("yb_wrong")] {
+        let (status, _) = mcp(&r.app, token, None, rpc("ping", json!({}))).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+    let (status, _) = mcp(
+        &r.app,
+        Some("yb_secret"),
+        Some("http://evil.example"),
+        rpc("ping", json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    let (status, body) = mcp(&r.app, Some("yb_secret"), None, rpc("ping", json!({}))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["result"], json!({}));
+}
+
+#[tokio::test]
+async fn mcp_initialize_lists_tools_and_accepts_notifications() {
+    let r = rig();
+    mcp_on(&r);
+    let (_, body) = mcp(
+        &r.app,
+        Some("yb_secret"),
+        None,
+        rpc("initialize", json!({ "protocolVersion": "2025-03-26" })),
+    )
+    .await;
+    assert_eq!(body["result"]["protocolVersion"], "2025-03-26");
+    assert_eq!(body["result"]["serverInfo"]["name"], "yardbell");
+    let (status, _) = mcp(
+        &r.app,
+        Some("yb_secret"),
+        None,
+        json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let (_, body) = mcp(
+        &r.app,
+        Some("yb_secret"),
+        None,
+        rpc("tools/list", json!({})),
+    )
+    .await;
+    let names: Vec<&str> = body["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "list_machines",
+            "list_sessions",
+            "list_folders",
+            "start_session",
+            "read_session",
+            "send_to_session",
+            "stop_session"
+        ]
+    );
+    let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;
+    assert_eq!(body["error"]["code"], -32601);
+}
+
+#[tokio::test]
+async fn mcp_lists_sessions_for_one_machine() {
+    let r = rig();
+    mcp_on(&r);
+    let result = tool_call(&r, "list_sessions", json!({ "machine": "hp" })).await;
+    assert_eq!(result["isError"], false);
+    let sessions: serde_json::Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(sessions.as_array().unwrap().len(), 2);
+    assert_eq!(sessions[0]["tmux"], "hp-eng-1301");
+    let result = tool_call(&r, "list_sessions", json!({ "machine": "mini" })).await;
+    assert_eq!(result["content"][0]["text"], "[]");
+}
+
+#[tokio::test]
+async fn mcp_start_session_passes_the_task_and_refreshes() {
+    let r = rig();
+    mcp_on(&r);
+    r.fake.stub("tmux new", Output::ok_with(""));
+    let result = tool_call(
+        &r,
+        "start_session",
+        json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox" }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let started: serde_json::Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(started["name"], "hp-eng-1301");
+    let call = r.fake.calls().pop().unwrap();
+    assert!(call.last().unwrap().contains("fix the inbox"), "{call:?}");
+    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+}
+
+#[tokio::test]
+async fn mcp_tool_errors_come_back_as_error_results() {
+    let r = rig();
+    mcp_on(&r);
+    let result = tool_call(
+        &r,
+        "stop_session",
+        json!({ "machine": "nope", "name": "x" }),
+    )
+    .await;
+    assert_eq!(result["isError"], true);
+    assert_eq!(result["content"][0]["text"], "no machine named nope");
+    let result = tool_call(
+        &r,
+        "send_to_session",
+        json!({ "machine": "hp", "name": "hp-eng-1301", "text": "" }),
+    )
+    .await;
+    assert_eq!(result["content"][0]["text"], "text is empty");
+}
+
+#[tokio::test]
+async fn the_relay_token_works_while_mcp_is_off() {
+    let r = rig();
+    let token = r.app.relay.token().to_string();
+    let (status, body) = mcp(&r.app, Some(&token), None, rpc("ping", json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn relay_routes_need_login_and_report_conflicts() {
+    let r = rig();
+    let (status, _, _) = send(
+        &r.app,
+        Request::get("/relay/history")
+            .header(header::ACCEPT, "application/json")
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+    let c = cookie(&r.app).await;
+    let (status, _, body) = send(
+        &r.app,
+        Request::post("/relay/ask")
+            .header(header::COOKIE, &c)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"text":"  "}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body.contains("type a task first"), "{body}");
+    let (status, _, body) = send(
+        &r.app,
+        Request::get("/relay/history")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, r#"{"busy":false,"events":[]}"#);
+}
+
+#[tokio::test]
+async fn mcp_servers_are_saved_from_settings_and_reach_new_sessions() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let save = |body: &'static str| {
+        Request::post("/api/settings/mcp/servers")
+            .header(header::COOKIE, &c)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, save(r#"{"servers":[{"name":"gh"}]}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("needs either a command or a URL"), "{body}");
+    let (status, _, body) = send(
+        &r.app,
+        save(r#"{"servers":[{"name":"gh","command":"npx gh-mcp","env":{"GITHUB_TOKEN":"t"}}]}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(r.app.settings.can_undo());
+
+    r.fake.stub("tmux new", Output::ok_with(""));
+    let (status, _, body) = send(
+        &r.app,
+        Request::post("/sessions")
+            .header(header::COOKIE, &c)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"machine":"hp","folder":"slot2"}"#))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let call = r.fake.calls().pop().unwrap();
+    assert!(call.last().unwrap().contains("--mcp-config"), "{call:?}");
+    assert!(call.last().unwrap().contains("gh-mcp"), "{call:?}");
 }

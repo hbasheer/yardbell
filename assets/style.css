@@ -669,6 +669,39 @@ pre {
 }
 code { font-family: var(--mono); font-size: 0.92em; }
 
+.main-head .small-link { margin-left: auto; height: 28px; }
+.relay-main { display: flex; flex-direction: column; min-height: 100dvh; }
+.relay { flex: 1; display: flex; flex-direction: column; gap: 16px; max-width: 760px; width: 100%; min-height: 0; }
+.relay-log { flex: 1; display: grid; align-content: start; gap: 14px; }
+.relay-intro p { max-width: 60ch; }
+.msg { margin: 0; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink); }
+.msg.user { justify-self: end; max-width: 85%; padding: 10px 14px; border-radius: 12px; background: var(--selected); }
+.msg.error { color: var(--bad-text); }
+.tool { display: grid; gap: 6px; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--side); font-size: 13px; }
+.tool summary { cursor: pointer; color: var(--ink-2); list-style: none; display: flex; align-items: center; gap: 8px; }
+.tool summary::-webkit-details-marker { display: none; }
+.tool .mark { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.tool.ok .mark { background: var(--ok); }
+.tool.bad .mark { background: var(--bad); }
+.tool.running .mark { animation: pulse 1s ease-in-out infinite; }
+.tool pre { margin-top: 6px; max-height: 280px; }
+.tool .btn { justify-self: start; }
+.relay-compose { position: sticky; bottom: 0; display: grid; gap: 8px; padding: 12px 0 16px; background: var(--bg); }
+.relay-compose textarea {
+  font: 14px/1.5 var(--sans);
+  padding: 10px 12px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius);
+  background: var(--surface);
+  color: var(--ink);
+  width: 100%;
+  resize: vertical;
+}
+.relay-compose textarea:focus-visible { outline: none; border-color: var(--accent); }
+.relay-actions { display: flex; align-items: center; gap: 8px; }
+.relay-actions .help { flex: 1; margin: 0; }
+@media (prefers-reduced-motion: reduce) { .tool.running .mark { animation: none; } }
+
 .rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
 .row + .row { border-top: 1px solid var(--line); }
@@ -719,6 +752,16 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .phone-step { display: grid; gap: 8px; }
 .phone-line { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 10px; }
 .phone-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.server-machines { border: 0; padding: 0; margin: 0 0 14px; }
+.server-machines legend { padding: 0; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
+.server-machines > div { display: flex; flex-wrap: wrap; gap: 8px 16px; }
+#server-form textarea { font: 13px/1.5 var(--mono); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); width: 100%; resize: vertical; }
+#server-form { margin-top: 12px; }
+#servers > .help { margin: 0 0 12px; }
+.mcp-on { display: grid; gap: 12px; justify-items: start; }
+.mcp-on p { margin: 0; }
+.mcp-on .phone-field { max-width: 100%; }
+.mcp-on code { overflow-wrap: anywhere; }
 .phone-field code { min-width: 0; padding: 4px 8px; border: 1px solid var(--line); border-radius: 6px; background: var(--side); font-size: 12.5px; }
 .phone-result { font-size: 13px; color: var(--muted); overflow-wrap: anywhere; }
 .phone-result.ok { color: var(--ok-text); }

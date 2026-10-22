@@ -23,6 +23,9 @@
     </nav>
     <div class="side-foot">
       <p class="vpn" id="nav-vpn"></p>
+      <a class="side-link" href="/relay">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z"/></svg>Relay
+      </a>
       <a class="side-link" href="/settings" aria-current="page">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M3.6 12.4l1.3-1.3M11.1 4.9l1.3-1.3"/></svg>Settings
       </a>
@@ -126,6 +129,44 @@
         </div>
       </form>
     </div>
+  </section>
+
+  <section id="mcp">
+    <div class="section-head"><h2>Agent tools (MCP)</h2><button class="btn quiet danger small-link" type="button" id="mcp-turn-off" hidden>Turn off</button></div>
+    <div class="panel phone-intro" id="mcp-intro" hidden>
+      <p>Let AI agents see your machines and sessions, and start, read and answer sessions, through an MCP server built into Yardbell.</p>
+      <button class="btn primary" type="button" id="mcp-on">Turn on</button>
+    </div>
+    <div class="panel mcp-on" id="mcp-panel" hidden>
+      <p>Add Yardbell to Claude Code on any machine on the mesh:</p>
+      <p class="phone-field"><code id="mcp-command"></code><button class="btn" type="button" id="mcp-copy">Copy</button></p>
+      <p class="help">The token lets an agent start and type into sessions on every machine. Keep it secret. Make a new one if it leaks: the old one stops working at once.</p>
+      <button class="btn" type="button" id="mcp-rotate">Make a new token</button>
+    </div>
+  </section>
+
+  <section id="servers">
+    <div class="section-head"><h2>MCP servers for sessions</h2><button class="btn small-link" type="button" id="server-add">Add server</button></div>
+    <p class="help">Claude Code sessions that Yardbell starts get these servers. Nothing is written on the machines: the list is passed when the session starts. Values, tokens included, are visible in that machine's process list while the session runs.</p>
+    <ul class="rows" id="server-rows"></ul>
+    <form class="panel" id="server-form" hidden>
+      <div class="grid2">
+        <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" placeholder="github" autocapitalize="off" spellcheck="false" required></label>
+        <label>Kind
+          <select name="kind"><option value="command">Command (runs on the machine)</option><option value="url">URL (HTTP server)</option></select>
+        </label>
+      </div>
+      <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
+      <label data-kind="url">URL <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
+      <label><span id="server-pairs-label">Environment variables</span>
+        <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=ghp_..." autocapitalize="off" spellcheck="false"></textarea>
+      </label>
+      <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">None picked means every machine.</p></fieldset>
+      <div class="form-foot">
+        <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Save server</button>
+      </div>
+    </form>
   </section>
 
   <section>

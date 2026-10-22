@@ -10,7 +10,7 @@ use crate::tunnels::Tunnels;
 use rand::RngCore;
 use serde::Serialize;
 use serde_json::{json, Value};
-use ssh_config::{SshConfig, SshConfigError};
+use ssh_config::SshConfig;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -44,6 +44,11 @@ impl Step {
             data: Value::Null,
         }
     }
+}
+
+enum SshEntry {
+    Missing,
+    Matches,
 }
 
 pub fn valid_host(host: &str) -> bool {
@@ -308,33 +313,58 @@ impl Onboarding {
         if let Err(step) = check_inputs(Some(name), Some(user), Some(ip)) {
             return step;
         }
-        if let Err(step) = self.check_name(name) {
-            return step;
+        match self.check_name(name, user, ip).await {
+            Err(step) => step,
+            Ok(SshEntry::Matches) => Step::ok(
+                format!(
+                    "{name} is already in ~/.ssh/config for {user}@{ip}, it will be used as is"
+                ),
+                json!({ "reuse": true }),
+            ),
+            Ok(SshEntry::Missing) => Step::ok(
+                format!("will be added to {}", self.ssh_config.path().display()),
+                json!({ "block": self.ssh_config.block(name, ip, user) }),
+            ),
         }
-        Step::ok(
-            format!("will be added to {}", self.ssh_config.path().display()),
-            json!({ "block": self.ssh_config.block(name, ip, user) }),
-        )
     }
 
-    fn check_name(&self, name: &str) -> Result<(), Step> {
+    async fn check_name(&self, name: &str, user: &str, ip: &str) -> Result<SshEntry, Step> {
         let cfg = self.config()?;
         if cfg.machine(name).is_some() {
             return Err(Step::fail("name already used in Yardbell, pick another"));
         }
         match self.ssh_config.has_host(name) {
-            Ok(true) => Err(Step::fail(SshConfigError::Exists.to_string())),
-            Ok(false) => Ok(()),
-            Err(e) => Err(Step::fail(format!("cannot read ~/.ssh/config: {e}"))),
+            Ok(false) => return Ok(SshEntry::Missing),
+            Ok(true) => {}
+            Err(e) => return Err(Step::fail(format!("cannot read ~/.ssh/config: {e}"))),
         }
+        let path = self.ssh_config.path().display().to_string();
+        let out = self.run(argv(&["ssh", "-G", "-F", &path, name])).await;
+        if !out.ok() {
+            return Err(Step::fail(format!(
+                "cannot read the {name} entry in ~/.ssh/config: {}",
+                out.stderr.trim()
+            )));
+        }
+        let (host, login) = resolved_target(&out.stdout);
+        if host.eq_ignore_ascii_case(ip) && login == user {
+            return Ok(SshEntry::Matches);
+        }
+        Err(Step::fail(format!(
+            "name already used in ~/.ssh/config for {login}@{host}, pick another"
+        )))
     }
 
     pub async fn write_ssh_config(&self, name: &str, user: &str, ip: &str) -> Step {
         if let Err(step) = check_inputs(Some(name), Some(user), Some(ip)) {
             return step;
         }
-        if let Err(step) = self.check_name(name) {
-            return step;
+        match self.check_name(name, user, ip).await {
+            Err(step) => return step,
+            Ok(SshEntry::Matches) => {
+                return Step::ok("already in ~/.ssh/config, left unchanged", Value::Null)
+            }
+            Ok(SshEntry::Missing) => {}
         }
         match self
             .ssh_config
@@ -519,6 +549,18 @@ impl Onboarding {
 
 fn argv(parts: &[&str]) -> Vec<String> {
     parts.iter().map(|s| s.to_string()).collect()
+}
+
+fn resolved_target(ssh_g: &str) -> (String, String) {
+    let field = |key: &str| {
+        ssh_g
+            .lines()
+            .find_map(|line| line.strip_prefix(key)?.strip_prefix(' '))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    (field("hostname"), field("user"))
 }
 
 #[cfg(test)]

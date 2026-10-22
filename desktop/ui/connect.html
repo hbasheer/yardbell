@@ -93,6 +93,20 @@
   .btn:hover { background: var(--accent-hover); border-color: var(--accent-hover); }
   .btn:disabled { opacity: 0.55; cursor: progress; }
   .err { color: var(--bad-text); min-height: 1.5em; margin: 10px 0 0; font-size: 13px; }
+  .switch-mode {
+    font: 500 13px/1.5 var(--sans);
+    display: block;
+    width: 100%;
+    margin-top: 4px;
+    padding: 8px 0 0;
+    border: 0;
+    border-top: 1px solid var(--line);
+    background: none;
+    color: var(--accent-text);
+    cursor: pointer;
+    text-align: center;
+  }
+  .switch-mode:hover { text-decoration: underline; }
 </style>
 </head>
 <body>
@@ -110,6 +124,21 @@
     </label>
     <button class="btn" id="submit" type="submit">Connect</button>
     <p class="err" id="err" role="alert"></p>
+    <button class="switch-mode" id="to-local" type="button">No server yet? Run one on this machine</button>
+  </form>
+  <form class="panel" id="local-form" novalidate hidden>
+    <img class="app-icon" src="icon.png" width="48" height="48" alt="" draggable="false">
+    <h1>Run Yardbell on this machine</h1>
+    <p class="lede" id="local-lede"></p>
+    <label>Passcode
+      <input type="password" name="passcode" id="local-passcode" autocomplete="new-password" minlength="6" required>
+    </label>
+    <label id="local-repeat-label">Repeat passcode
+      <input type="password" name="repeat" id="local-repeat" autocomplete="new-password" minlength="6">
+    </label>
+    <button class="btn" id="local-submit" type="submit">Start and sign in</button>
+    <p class="err" id="local-err" role="alert"></p>
+    <button class="switch-mode" id="to-connect" type="button">Connect to a server on another machine</button>
   </form>
 </main>
 <script src="connect.js"></script>

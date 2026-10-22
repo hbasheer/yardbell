@@ -164,7 +164,14 @@ agents:
     command: npx my-agent
     resume: npx my-agent --continue
     process: my-agent             # optional: the process name to look for
+    prompt_arg: --task            # optional: how it takes a starting task, "" for an argument
 ```
+
+`prompt_arg` lets the relay and the MCP `start_session` tool start the agent with a task. Empty
+(`""`) passes the task as the last argument (`claude 'fix the login bug'`); a flag passes it after
+that flag (`gemini -i 'fix the login bug'`). Built-in agents already have it, except Crush, Goose
+and Aider, whose interactive modes take no starting task. Without it, starting that agent with a
+task fails with a message saying so.
 
 Yardbell finds running sessions by process name: the `process` value, or else the program in
 `command` (`goose session` looks for `goose`). Check the name with `pgrep -fl <name>` on that
@@ -209,6 +216,27 @@ Every key is optional. The values above are the defaults.
 Tapping a notification opens Yardbell on the phone, at the address from `listen_ip` or, by default,
 the `mesh_ip` of the `local: true` machine. A waiting agent's notification opens that session's
 terminal, the others open the dashboard. With no such address, notifications carry no link.
+
+### `mcp_servers` (optional)
+
+Other MCP servers that Claude Code sessions started by Yardbell get, through `--mcp-config`.
+Nothing is written on the machines. The **MCP servers for sessions** section of the Settings page
+edits this list.
+
+```yaml
+mcp_servers:
+  - name: github                                       # letters, digits, - and _
+    command: npx -y @modelcontextprotocol/server-github  # runs on the machine; split on spaces
+    env: {GITHUB_PERSONAL_ACCESS_TOKEN: ghp_...}
+  - name: linear
+    url: https://mcp.linear.app/mcp                    # or an HTTP server
+    headers: {Authorization: Bearer lin_...}
+    machines: [mini]                                   # optional; empty means every machine
+```
+
+Each server needs either `command` or `url`. The values, tokens included, are on the agent's
+command line, so other users of that machine can see them in its process list while the session
+runs.
 
 ### `listen_ip` (optional)
 
@@ -264,9 +292,10 @@ If you write entries yourself, test them from the host with `ssh -o BatchMode=ye
 | `cookie_key` | `yardbell passcode`, Settings, "Log out everywhere" | signs login cookies; changing it signs everyone out |
 | `machines[].recent` | New session | the last 8 folders per machine |
 | `phone_notifications.topic` | Settings, "Set up" | a generated name, `yardbell-` and 24 random letters and digits |
+| `mcp_token` | Settings, "Agent tools (MCP)" | `yb_` and 40 random letters and digits; absent means the MCP server is off |
 
-Keep `yardbell.yml` private (`chmod 600`): the cookie key can forge a login, and the notification
-topic and token are secrets too.
+Keep `yardbell.yml` private (`chmod 600`): the cookie key can forge a login, the MCP token can
+start sessions, and the notification topic and token are secrets too.
 
 ## 6. What applies when
 

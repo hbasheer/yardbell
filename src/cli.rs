@@ -56,9 +56,7 @@ enum Cmd {
 }
 
 fn config_path(cli: &Cli) -> PathBuf {
-    cli.config
-        .clone()
-        .unwrap_or_else(|| expand_tilde("~/.config/yardbell/yardbell.yml"))
+    cli.config.clone().unwrap_or_else(default_config_path)
 }
 
 pub fn state_dir() -> PathBuf {
@@ -71,8 +69,8 @@ pub async fn run() -> Result<()> {
     let cli = Cli::parse();
     let path = config_path(&cli);
     match cli.cmd {
-        None => serve(path, false).await,
-        Some(Cmd::Serve { no_open }) => serve(path, no_open).await,
+        None => serve(path, false, shutdown_signal()).await,
+        Some(Cmd::Serve { no_open }) => serve(path, no_open, shutdown_signal()).await,
         Some(Cmd::Passcode) => passcode(path),
         Some(Cmd::InstallAgent) => crate::service::install(&path),
         Some(Cmd::UninstallAgent) => crate::service::uninstall(),
@@ -99,7 +97,15 @@ fn passcode(path: PathBuf) -> Result<()> {
     Ok(())
 }
 
-async fn serve(path: PathBuf, no_open: bool) -> Result<()> {
+pub fn default_config_path() -> PathBuf {
+    expand_tilde("~/.config/yardbell/yardbell.yml")
+}
+
+pub async fn serve(
+    path: PathBuf,
+    no_open: bool,
+    shutdown: impl std::future::Future<Output = ()>,
+) -> Result<()> {
     let cfg = Config::load(&path)?;
     if cfg.passcode_hash.is_none() {
         bail!("no passcode set, run `yardbell passcode` first");
@@ -174,13 +180,14 @@ async fn serve(path: PathBuf, no_open: bool) -> Result<()> {
         sessions: Sessions::new(runner.clone(), ssh.clone()),
         onboarding,
         host_mesh: crate::mesh::HostMesh::new(runner.clone()),
-        folders: crate::folders::Folders::new(runner, ssh.clone()),
+        folders: crate::folders::Folders::new(runner.clone(), ssh.clone()),
         settings: crate::settings::Settings::new(
             path.clone(),
             expand_tilde("~/.ssh/config"),
             Arc::new(chrono::Local::now),
         ),
         phone,
+        relay: Arc::new(crate::relay::Relay::new(runner, dir.join("relay"))),
         refresh: Arc::new(move || {
             let poller = poller.clone();
             Box::pin(async move {
@@ -206,7 +213,7 @@ async fn serve(path: PathBuf, no_open: bool) -> Result<()> {
     if !no_open {
         open_browser(&format!("http://localhost:{}", cfg.port));
     }
-    shutdown_signal().await;
+    shutdown.await;
     tunnels.shutdown();
     for s in servers {
         s.abort();

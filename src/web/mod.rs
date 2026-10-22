@@ -4,7 +4,8 @@ use crate::folders::Folders;
 use crate::mesh::HostMesh;
 use crate::onboarding::Onboarding;
 use crate::phone::Phone;
-use crate::sessions::Sessions;
+use crate::relay::Relay;
+use crate::sessions::{Launch, Sessions, Start};
 use crate::settings::Settings;
 use crate::snapshot;
 use crate::state::{PortStatus, State};
@@ -21,7 +22,7 @@ use base64::Engine;
 use futures::StreamExt;
 use rand::Rng;
 use serde::Deserialize;
-use serde_json::json;
+use serde_json::{json, Value};
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -67,6 +68,7 @@ pub struct AppState {
     pub folders: Folders,
     pub settings: Settings,
     pub phone: Arc<Phone>,
+    pub relay: Arc<Relay>,
     pub auth: Auth,
     pub key: std::sync::RwLock<Key>,
     pub handoff: std::sync::Mutex<Vec<(String, Instant)>>,
@@ -85,6 +87,7 @@ pub struct Services {
     pub folders: Folders,
     pub settings: Settings,
     pub phone: Arc<Phone>,
+    pub relay: Arc<Relay>,
     pub refresh: Refresh,
 }
 
@@ -99,6 +102,7 @@ impl AppState {
             folders,
             settings,
             phone,
+            relay,
             refresh,
         } = services;
         AppState {
@@ -111,6 +115,7 @@ impl AppState {
             folders,
             settings,
             phone,
+            relay,
             auth: Auth::new(cfg.passcode_hash.clone().unwrap_or_default(), clock.clone()),
             key: std::sync::RwLock::new(cookie_key(cfg)),
             handoff: std::sync::Mutex::new(Vec::new()),
@@ -122,6 +127,15 @@ impl AppState {
     pub fn config(&self) -> Result<Config, ApiError> {
         Config::load(&self.cfg_path)
             .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    }
+
+    pub async fn refresh(&self) {
+        if tokio::time::timeout(Duration::from_secs(20), (self.refresh)())
+            .await
+            .is_err()
+        {
+            tracing::warn!("refresh did not finish within 20 seconds");
+        }
     }
 
     pub fn jar(&self, headers: &HeaderMap) -> SignedCookieJar {
@@ -205,6 +219,14 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
         .map(|c| c.0.ip())
         .unwrap_or(IpAddr::from([127, 0, 0, 1]));
     req.extensions_mut().insert(ClientIp(ip));
+    // Agents call /mcp without a browser cookie or Origin; the handler checks a bearer token.
+    // A browser always sends Origin, so a page on another site is still turned away here.
+    if req.uri().path() == "/mcp" {
+        if req.headers().contains_key(header::ORIGIN) && !term::origin_ok(req.headers()) {
+            return error(StatusCode::FORBIDDEN, "request came from another site");
+        }
+        return next.run(req).await;
+    }
     if req.method() != Method::GET && !term::origin_ok(req.headers()) {
         return error(
             StatusCode::FORBIDDEN,
@@ -257,6 +279,16 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
         .route("/nav.js", get(|| async { asset("nav.js") }))
         .route("/state", get(state_json))
+        .route("/relay", get(|| async { asset("relay.html") }))
+        .route("/relay.js", get(|| async { asset("relay.js") }))
+        .route("/relay/history", get(relay_history))
+        .route("/relay/ask", post(relay_ask))
+        .route("/relay/stop", post(relay_stop))
+        .route("/relay/new", post(relay_new))
+        .route(
+            "/mcp",
+            post(crate::mcp::handle).get(|| async { StatusCode::METHOD_NOT_ALLOWED }),
+        )
         .route("/sessions", post(new_session))
         .route("/sessions/{machine}/{name}/stop", post(stop_session))
         .route("/refresh", post(refresh_now))
@@ -388,6 +420,51 @@ async fn state_json(
     Ok(([(BUILD_HEADER, page_build())], Json(view)).into_response())
 }
 
+async fn relay_history(AxState(app): AxState<Arc<AppState>>) -> Response {
+    Json(app.relay.history()).into_response()
+}
+
+#[derive(Deserialize)]
+struct RelayAsk {
+    text: String,
+}
+
+async fn relay_ask(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<RelayAsk>,
+) -> Result<Response, ApiError> {
+    let port = app.config()?.port;
+    let rx = app
+        .relay
+        .ask(&req.text, port)
+        .await
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
+    let lines = futures::stream::unfold(rx, |mut rx| async move {
+        let event = rx.recv().await?;
+        Some((Ok::<_, std::convert::Infallible>(format!("{event}\n")), rx))
+    });
+    Ok((
+        [
+            (header::CONTENT_TYPE, "application/x-ndjson"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        axum::body::Body::from_stream(lines),
+    )
+        .into_response())
+}
+
+async fn relay_stop(AxState(app): AxState<Arc<AppState>>) -> Response {
+    app.relay.stop();
+    Json(json!({ "ok": true })).into_response()
+}
+
+async fn relay_new(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    app.relay
+        .reset()
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
 pub fn find_machine(cfg: &Config, name: &str) -> Result<Machine, ApiError> {
     cfg.machine(name)
         .cloned()
@@ -395,8 +472,8 @@ pub fn find_machine(cfg: &Config, name: &str) -> Result<Machine, ApiError> {
 }
 
 #[derive(Deserialize)]
-struct NewSession {
-    machine: String,
+pub struct NewSession {
+    pub machine: String,
     #[serde(default)]
     folder: String,
     #[serde(default)]
@@ -411,6 +488,8 @@ struct NewSession {
     resume: bool,
     #[serde(default)]
     agent: String,
+    #[serde(default)]
+    prompt: String,
 }
 
 fn label_of(path: &str) -> String {
@@ -422,6 +501,12 @@ async fn new_session(
     AxState(app): AxState<Arc<AppState>>,
     Json(req): Json<NewSession>,
 ) -> Result<Response, ApiError> {
+    start_session(&app, req)
+        .await
+        .map(|v| Json(v).into_response())
+}
+
+pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, ApiError> {
     let cfg = app.config()?;
     let m = find_machine(&cfg, &req.machine)?;
     let agent_name = if req.agent.is_empty() {
@@ -474,13 +559,36 @@ async fn new_session(
         (path, req.branch.clone())
     };
     let ticket = snapshot::ticket(&branch, cfg.ticket_regex().as_ref());
+    let start = match (req.resume, req.prompt.trim()) {
+        (true, _) => Start::Resume,
+        (false, "") => Start::New,
+        (false, prompt) => Start::Task(prompt),
+    };
+    let mcp_config = mcp_config(&cfg, &m, &agent);
     let name = app
         .sessions
-        .create(&m, &path, &ticket, &label_of(&path), &agent, req.resume)
+        .create(
+            &m,
+            Launch {
+                folder_path: &path,
+                ticket: &ticket,
+                folder_label: &label_of(&path),
+                agent: &agent,
+                start,
+                mcp_config: mcp_config.as_deref(),
+            },
+        )
         .await
         .map_err(ApiError::gateway)?;
-    remember(&app, &m.name, &repo);
-    Ok(Json(json!({ "name": name, "path": path })).into_response())
+    remember(app, &m.name, &repo);
+    Ok(json!({ "machine": m.name, "name": name, "path": path }))
+}
+
+fn mcp_config(cfg: &Config, m: &Machine, agent: &crate::agents::Agent) -> Option<String> {
+    if agent.process_name() != "claude" {
+        return None;
+    }
+    cfg.mcp_config_for(&m.name)
 }
 
 fn remember(app: &AppState, machine: &str, path: &str) {
@@ -627,7 +735,17 @@ async fn move_to_tmux(
         .map_err(ApiError::gateway)?;
     let name = app
         .sessions
-        .create(&m, &s.cwd, &s.ticket, &label_of(&s.cwd), &agent, true)
+        .create(
+            &m,
+            Launch {
+                folder_path: &s.cwd,
+                ticket: &s.ticket,
+                folder_label: &label_of(&s.cwd),
+                agent: &agent,
+                start: Start::Resume,
+                mcp_config: mcp_config(&cfg, &m, &agent).as_deref(),
+            },
+        )
         .await
         .map_err(|e| {
             ApiError::gateway(format!(
@@ -639,12 +757,7 @@ async fn move_to_tmux(
 }
 
 async fn refresh_now(AxState(app): AxState<Arc<AppState>>) -> Response {
-    if tokio::time::timeout(Duration::from_secs(20), (app.refresh)())
-        .await
-        .is_err()
-    {
-        tracing::warn!("refresh did not finish within 20 seconds");
-    }
+    app.refresh().await;
     Json(json!({ "ok": true })).into_response()
 }
 

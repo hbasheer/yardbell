@@ -341,6 +341,20 @@ impl Settings {
         Ok(encoded)
     }
 
+    pub fn set_mcp_servers(&self, servers: Vec<crate::config::McpServer>) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.mcp_servers = servers;
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
+    pub fn set_mcp_token(&self, token: Option<String>) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.mcp_token = token;
+        cfg.save(&self.cfg_path).map_err(|e| e.to_string())
+    }
+
     pub fn undo(&self) -> Result<(), String> {
         let undo = self
             .last

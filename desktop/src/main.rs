@@ -2,6 +2,7 @@ mod capability;
 mod client;
 mod creds;
 mod launch;
+mod local;
 mod main_window;
 mod notify;
 mod panel;
@@ -70,6 +71,33 @@ async fn connect(
         window.destroy().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn local_server_status() -> yardbell::local_server::Status {
+    yardbell::local_server::status(&yardbell::cli::default_config_path())
+}
+
+#[tauri::command]
+async fn set_up_local_server(
+    app: AppHandle,
+    session: State<'_, Session>,
+    passcode: String,
+) -> Result<(), String> {
+    use yardbell::local_server::Status;
+    let path = yardbell::cli::default_config_path();
+    let port = match yardbell::local_server::status(&path) {
+        Status::Ready { port } => port,
+        Status::Broken { error } => return Err(error),
+        Status::Missing | Status::NoPasscode { .. } => {
+            yardbell::local_server::set_up(&path, &passcode)?
+        }
+    };
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    local::enable(&dir).map_err(|e| format!("cannot save the setting: {e}"))?;
+    local::start();
+    local::wait_until_up(port).await?;
+    connect(app, session, local::address(port), passcode).await
 }
 
 #[tauri::command]
@@ -432,6 +460,16 @@ async fn end_session(app: &AppHandle, generation: Option<u64>, message: Option<&
 }
 
 async fn start(app: AppHandle) {
+    let runs_server = app
+        .path()
+        .app_config_dir()
+        .is_ok_and(|dir| local::enabled(&dir));
+    if let Some(port) = local::ready_port().filter(|_| runs_server) {
+        local::start();
+        if let Err(e) = local::wait_until_up(port).await {
+            eprintln!("yardbell: {e}");
+        }
+    }
     let session = app.state::<Session>();
     let Some((server, cookie)) = session.store.load() else {
         if let Err(e) = windows::show_connect(&app, None) {
@@ -467,6 +505,8 @@ fn main() {
         )
         .invoke_handler(tauri::generate_handler![
             connect,
+            local_server_status,
+            set_up_local_server,
             connect_message,
             connect_server,
             retry_connect,

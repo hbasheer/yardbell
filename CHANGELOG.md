@@ -5,6 +5,20 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Relay**: a chat page that takes a task, picks the machine that has the repository and the most
+  room, and starts an agent there with the task. It runs Claude Code on the host with only
+  Yardbell's tools.
+- **Agent tools (MCP)**: Yardbell serves MCP at `/mcp`, so Claude Code and other clients can list
+  machines, sessions and folders, and start, read, answer and stop sessions. It is off until turned
+  on in Settings, which shows the `claude mcp add` command.
+- **MCP servers for sessions**: list other MCP servers in Settings and Claude Code sessions get them
+  when they start, without writing anything on the machines.
+- Agents take a starting task through the new `prompt_arg` setting, set for every built-in agent
+  that supports one.
+- The desktop app can set up and run a Yardbell server on its own machine from the connect screen.
+- Add machine reuses an existing `~/.ssh/config` entry with the same name when it points at the same
+  address and user, instead of refusing the name.
+
 ## [0.3.4] - 2026-10-21
 
 - Move to tmux, New session, Resume, Stop and Forget show their result in the session list right
