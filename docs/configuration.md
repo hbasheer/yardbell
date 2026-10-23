@@ -167,7 +167,7 @@ agents:
     prompt_arg: --task            # optional: how it takes a starting task, "" for an argument
 ```
 
-`prompt_arg` lets the relay and the MCP `start_session` tool start the agent with a task. Empty
+`prompt_arg` lets Dispatch and the MCP `start_session` tool start the agent with a task. Empty
 (`""`) passes the task as the last argument (`claude 'fix the login bug'`); a flag passes it after
 that flag (`gemini -i 'fix the login bug'`). Built-in agents already have it, except Crush, Goose
 and Aider, whose interactive modes take no starting task. Without it, starting that agent with a

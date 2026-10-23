@@ -1,4 +1,5 @@
 use crate::config::{expand_tilde, Config, Machine};
+use crate::mesh::Detected;
 use base64::Engine;
 use rand::RngCore;
 use serde::Serialize;
@@ -66,7 +67,7 @@ fn project_root() -> String {
         .map_or("~".into(), |r| r.to_string())
 }
 
-pub fn set_up(path: &Path, passcode: &str) -> Result<u16, String> {
+pub fn set_up(path: &Path, passcode: &str, mesh: Detected) -> Result<u16, String> {
     if passcode.chars().count() < 6 {
         return Err("use at least 6 characters".into());
     }
@@ -78,7 +79,7 @@ pub fn set_up(path: &Path, passcode: &str) -> Result<u16, String> {
             ),
             Status::Broken { error } => return Err(error),
             Status::NoPasscode { .. } => Config::load(path).map_err(|e| e.to_string())?,
-            Status::Missing => new_config(&hostname(), &project_root())?,
+            Status::Missing => new_config(&hostname(), &project_root(), mesh)?,
         };
     let mut key = [0u8; 64];
     rand::thread_rng().fill_bytes(&mut key);
@@ -92,12 +93,13 @@ pub fn set_up(path: &Path, passcode: &str) -> Result<u16, String> {
     Ok(cfg.port)
 }
 
-fn new_config(hostname: &str, root: &str) -> Result<Config, String> {
+fn new_config(hostname: &str, root: &str, mesh: Detected) -> Result<Config, String> {
     let mut cfg: Config = serde_yaml::from_str(TEMPLATE).map_err(|e| e.to_string())?;
+    cfg.mesh = mesh.provider;
     cfg.machines.push(Machine {
         name: machine_name(hostname),
         ssh: None,
-        mesh_ip: None,
+        mesh_ip: mesh.ip,
         port_prefix: None,
         root: root.into(),
         local: true,
@@ -111,6 +113,13 @@ fn new_config(hostname: &str, root: &str) -> Result<Config, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn nordvpn() -> Detected {
+        Detected {
+            provider: crate::config::MeshProvider::Nordvpn,
+            ip: Some("100.64.0.10".into()),
+        }
+    }
 
     #[test]
     fn machine_names_come_from_the_hostname() {
@@ -129,15 +138,18 @@ mod tests {
         let path = dir.path().join("yardbell").join("yardbell.yml");
         assert_eq!(status(&path), Status::Missing);
         assert_eq!(
-            set_up(&path, "short").unwrap_err(),
+            set_up(&path, "short", Detected::default()).unwrap_err(),
             "use at least 6 characters"
         );
-        assert_eq!(set_up(&path, "secret-1").unwrap(), 4000);
+        assert_eq!(set_up(&path, "secret-1", nordvpn()).unwrap(), 4000);
         let cfg = Config::load(&path).unwrap();
         assert_eq!(cfg.machines.len(), 1);
         assert!(cfg.machines[0].local);
         assert_eq!(cfg.forward_services, ["web", "rails", "api", "mailpit"]);
         assert!(cfg.ticket_regex().is_some());
+        assert_eq!(cfg.mesh, crate::config::MeshProvider::Nordvpn);
+        assert_eq!(cfg.machines[0].mesh_ip.as_deref(), Some("100.64.0.10"));
+        assert_eq!(cfg.bind_addresses(), ["127.0.0.1", "100.64.0.10"]);
         assert!(
             crate::auth::Auth::new(
                 cfg.passcode_hash.clone().unwrap(),
@@ -147,7 +159,7 @@ mod tests {
                 == crate::auth::Verdict::Ok
         );
         assert_eq!(status(&path), Status::Ready { port: 4000 });
-        assert!(set_up(&path, "secret-2")
+        assert!(set_up(&path, "secret-2", Detected::default())
             .unwrap_err()
             .contains("already set up"));
     }
@@ -162,9 +174,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(status(&path), Status::NoPasscode { port: 4100 });
-        assert_eq!(set_up(&path, "secret-1").unwrap(), 4100);
+        assert_eq!(set_up(&path, "secret-1", nordvpn()).unwrap(), 4100);
         let cfg = Config::load(&path).unwrap();
         assert_eq!(cfg.machines[0].name, "studio");
+        assert_eq!(
+            cfg.mesh,
+            crate::config::MeshProvider::None,
+            "an existing config keeps its VPN"
+        );
         assert!(cfg.passcode_hash.is_some());
     }
 
@@ -174,7 +191,7 @@ mod tests {
         let path = dir.path().join("yardbell.yml");
         std::fs::write(&path, "port: [").unwrap();
         assert!(matches!(status(&path), Status::Broken { .. }));
-        assert!(set_up(&path, "secret-1").is_err());
+        assert!(set_up(&path, "secret-1", Detected::default()).is_err());
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "port: [");
     }
 }

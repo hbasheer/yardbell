@@ -187,7 +187,7 @@ pub async fn serve(
             Arc::new(chrono::Local::now),
         ),
         phone,
-        relay: Arc::new(crate::relay::Relay::new(runner, dir.join("relay"))),
+        dispatch: Arc::new(crate::dispatch::Dispatch::new(runner, dir.join("dispatch"))),
         refresh: Arc::new(move || {
             let poller = poller.clone();
             Box::pin(async move {
@@ -201,9 +201,19 @@ pub async fn serve(
         let addr: SocketAddr = format!("{ip}:{}", cfg.port)
             .parse()
             .with_context(|| format!("bad listen address {ip}"))?;
-        let listener = tokio::net::TcpListener::bind(addr)
-            .await
-            .with_context(|| format!("cannot listen on {addr}"))?;
+        let listener = match tokio::net::TcpListener::bind(addr).await {
+            Ok(listener) => listener,
+            // The mesh address only exists while the VPN is on; localhost keeps working.
+            Err(e)
+                if e.kind() == std::io::ErrorKind::AddrNotAvailable && !addr.ip().is_loopback() =>
+            {
+                tracing::warn!(
+                    "{addr} is not on this machine right now, is the mesh VPN off? Serving on localhost only until Yardbell restarts"
+                );
+                continue;
+            }
+            Err(e) => return Err(e).with_context(|| format!("cannot listen on {addr}")),
+        };
         tracing::info!("listening on http://{addr}");
         let svc = router(app.clone()).into_make_service_with_connect_info::<SocketAddr>();
         servers.push(tokio::spawn(

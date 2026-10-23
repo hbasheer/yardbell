@@ -1,10 +1,10 @@
 use crate::auth::{Auth, Clock, Verdict};
 use crate::config::{Config, Machine};
+use crate::dispatch::Dispatch;
 use crate::folders::Folders;
 use crate::mesh::HostMesh;
 use crate::onboarding::Onboarding;
 use crate::phone::Phone;
-use crate::relay::Relay;
 use crate::sessions::{Launch, Sessions, Start};
 use crate::settings::Settings;
 use crate::snapshot;
@@ -68,7 +68,7 @@ pub struct AppState {
     pub folders: Folders,
     pub settings: Settings,
     pub phone: Arc<Phone>,
-    pub relay: Arc<Relay>,
+    pub dispatch: Arc<Dispatch>,
     pub auth: Auth,
     pub key: std::sync::RwLock<Key>,
     pub handoff: std::sync::Mutex<Vec<(String, Instant)>>,
@@ -87,7 +87,7 @@ pub struct Services {
     pub folders: Folders,
     pub settings: Settings,
     pub phone: Arc<Phone>,
-    pub relay: Arc<Relay>,
+    pub dispatch: Arc<Dispatch>,
     pub refresh: Refresh,
 }
 
@@ -102,7 +102,7 @@ impl AppState {
             folders,
             settings,
             phone,
-            relay,
+            dispatch,
             refresh,
         } = services;
         AppState {
@@ -115,7 +115,7 @@ impl AppState {
             folders,
             settings,
             phone,
-            relay,
+            dispatch,
             auth: Auth::new(cfg.passcode_hash.clone().unwrap_or_default(), clock.clone()),
             key: std::sync::RwLock::new(cookie_key(cfg)),
             handoff: std::sync::Mutex::new(Vec::new()),
@@ -279,12 +279,14 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
         .route("/nav.js", get(|| async { asset("nav.js") }))
         .route("/state", get(state_json))
-        .route("/relay", get(|| async { asset("relay.html") }))
-        .route("/relay.js", get(|| async { asset("relay.js") }))
-        .route("/relay/history", get(relay_history))
-        .route("/relay/ask", post(relay_ask))
-        .route("/relay/stop", post(relay_stop))
-        .route("/relay/new", post(relay_new))
+        .route("/dispatch", get(|| async { asset("dispatch.html") }))
+        .route("/dispatch.js", get(|| async { asset("dispatch.js") }))
+        .route("/dispatch/conversations", get(dispatch_list))
+        .route("/dispatch/conversations/{id}", get(dispatch_get))
+        .route("/dispatch/conversations/{id}/stop", post(dispatch_stop))
+        .route("/dispatch/conversations/{id}/delete", post(dispatch_delete))
+        .route("/dispatch/clear", post(dispatch_clear))
+        .route("/dispatch/ask", post(dispatch_ask))
         .route(
             "/mcp",
             post(crate::mcp::handle).get(|| async { StatusCode::METHOD_NOT_ALLOWED }),
@@ -420,29 +422,59 @@ async fn state_json(
     Ok(([(BUILD_HEADER, page_build())], Json(view)).into_response())
 }
 
-async fn relay_history(AxState(app): AxState<Arc<AppState>>) -> Response {
-    Json(app.relay.history()).into_response()
+async fn dispatch_list(AxState(app): AxState<Arc<AppState>>) -> Response {
+    Json(app.dispatch.list()).into_response()
+}
+
+fn conversation_id(id: &str) -> Result<&str, ApiError> {
+    if crate::dispatch::valid_id(id) {
+        return Ok(id);
+    }
+    Err(ApiError(
+        StatusCode::NOT_FOUND,
+        "no such conversation".into(),
+    ))
+}
+
+async fn dispatch_get(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Response, ApiError> {
+    app.dispatch
+        .get(conversation_id(&id)?)
+        .map(|c| Json(c).into_response())
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such conversation".into()))
 }
 
 #[derive(Deserialize)]
-struct RelayAsk {
+struct DispatchAsk {
+    #[serde(default)]
+    conversation: Option<String>,
     text: String,
 }
 
-async fn relay_ask(
+async fn dispatch_ask(
     AxState(app): AxState<Arc<AppState>>,
-    Json(req): Json<RelayAsk>,
+    Json(req): Json<DispatchAsk>,
 ) -> Result<Response, ApiError> {
     let port = app.config()?.port;
-    let rx = app
-        .relay
-        .ask(&req.text, port)
+    let conversation = req
+        .conversation
+        .as_deref()
+        .map(conversation_id)
+        .transpose()?;
+    let (id, rx) = app
+        .dispatch
+        .ask(conversation, &req.text, port)
         .await
         .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
-    let lines = futures::stream::unfold(rx, |mut rx| async move {
-        let event = rx.recv().await?;
-        Some((Ok::<_, std::convert::Infallible>(format!("{event}\n")), rx))
-    });
+    let first = json!({ "role": "conversation", "id": id });
+    let lines = futures::stream::once(async move { first })
+        .chain(futures::stream::unfold(rx, |mut rx| async move {
+            let event = rx.recv().await?;
+            Some((event, rx))
+        }))
+        .map(|event| Ok::<_, std::convert::Infallible>(format!("{event}\n")));
     Ok((
         [
             (header::CONTENT_TYPE, "application/x-ndjson"),
@@ -453,16 +485,30 @@ async fn relay_ask(
         .into_response())
 }
 
-async fn relay_stop(AxState(app): AxState<Arc<AppState>>) -> Response {
-    app.relay.stop();
-    Json(json!({ "ok": true })).into_response()
+async fn dispatch_stop(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Response, ApiError> {
+    app.dispatch.stop(conversation_id(&id)?);
+    Ok(Json(json!({ "ok": true })).into_response())
 }
 
-async fn relay_new(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
-    app.relay
-        .reset()
+async fn dispatch_delete(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Response, ApiError> {
+    app.dispatch
+        .delete(conversation_id(&id)?)
         .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+async fn dispatch_clear(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let kept = app
+        .dispatch
+        .clear()
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(json!({ "kept": kept })).into_response())
 }
 
 pub fn find_machine(cfg: &Config, name: &str) -> Result<Machine, ApiError> {

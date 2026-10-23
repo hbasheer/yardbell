@@ -539,7 +539,7 @@ fn menu(
     menu.append(&MenuItem::with_id(
         app,
         DISCONNECT,
-        "Disconnect",
+        "Sign out",
         true,
         None::<&str>,
     )?)?;
@@ -618,7 +618,7 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
         NEW_SESSION => new_session(app),
         DISCONNECT => {
             let app = app.clone();
-            tauri::async_runtime::spawn(async move { crate::sign_out(&app, None).await });
+            tauri::async_runtime::spawn(async move { crate::sign_out_by_user(&app).await });
         }
         QUIT => crate::quit(app),
         SERVER_STATUS => report("show the window", main_window::reveal(app)),

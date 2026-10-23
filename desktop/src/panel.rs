@@ -283,7 +283,7 @@ pub fn panel_quit(app: AppHandle) {
 #[tauri::command]
 pub async fn panel_disconnect(app: AppHandle) {
     hide(&app);
-    crate::sign_out(&app, None).await;
+    crate::sign_out_by_user(&app).await;
 }
 
 #[tauri::command]

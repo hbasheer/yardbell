@@ -125,9 +125,9 @@ fn rig() -> Rig {
             Arc::new(chrono::Local::now),
         ),
         phone: Arc::new(Phone::new(phone_sender.clone())),
-        relay: Arc::new(crate::relay::Relay::new(
+        dispatch: Arc::new(crate::dispatch::Dispatch::new(
             fake.clone(),
-            dir.path().join("relay"),
+            dir.path().join("dispatch"),
         )),
         refresh: {
             let refreshes = refreshes.clone();
@@ -1573,47 +1573,62 @@ async fn mcp_tool_errors_come_back_as_error_results() {
 }
 
 #[tokio::test]
-async fn the_relay_token_works_while_mcp_is_off() {
+async fn the_dispatch_token_works_while_mcp_is_off() {
     let r = rig();
-    let token = r.app.relay.token().to_string();
+    let token = r.app.dispatch.token().to_string();
     let (status, body) = mcp(&r.app, Some(&token), None, rpc("ping", json!({}))).await;
     assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[tokio::test]
-async fn relay_routes_need_login_and_report_conflicts() {
+async fn dispatch_routes_need_login_and_check_conversation_ids() {
     let r = rig();
-    let (status, _, _) = send(
-        &r.app,
-        Request::get("/relay/history")
-            .header(header::ACCEPT, "application/json")
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await;
+    let get = |url: &str, cookie: Option<&str>| {
+        let mut req = Request::get(url).header(header::ACCEPT, "application/json");
+        if let Some(c) = cookie {
+            req = req.header(header::COOKIE, c);
+        }
+        req.body(Body::empty()).unwrap()
+    };
+    let (status, _, _) = send(&r.app, get("/dispatch/conversations", None)).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     let c = cookie(&r.app).await;
-    let (status, _, body) = send(
-        &r.app,
-        Request::post("/relay/ask")
+    let (status, _, body) = send(&r.app, get("/dispatch/conversations", Some(&c))).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body, "[]");
+    for url in [
+        "/dispatch/conversations/..%2F..%2Fetc",
+        "/dispatch/conversations/abcdefghijklmnop",
+    ] {
+        let (status, _, _) = send(&r.app, get(url, Some(&c))).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{url}");
+    }
+    let post = |url: &str, body: &'static str| {
+        Request::post(url)
             .header(header::COOKIE, &c)
             .header(header::CONTENT_TYPE, "application/json")
-            .body(Body::from(r#"{"text":"  "}"#))
-            .unwrap(),
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, post("/dispatch/ask", r#"{"text":"  "}"#)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body.contains("type a task first"), "{body}");
+    let (status, _, _) = send(
+        &r.app,
+        post("/dispatch/ask", r#"{"conversation":"../x","text":"hi"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _, body) = send(
+        &r.app,
+        post("/dispatch/conversations/abcdefghijklmnop/delete", "{}"),
     )
     .await;
     assert_eq!(status, StatusCode::CONFLICT);
-    assert!(body.contains("type a task first"), "{body}");
-    let (status, _, body) = send(
-        &r.app,
-        Request::get("/relay/history")
-            .header(header::COOKIE, &c)
-            .body(Body::empty())
-            .unwrap(),
-    )
-    .await;
+    assert!(body.contains("no such conversation"), "{body}");
+    let (status, _, body) = send(&r.app, post("/dispatch/clear", "{}")).await;
     assert_eq!(status, StatusCode::OK);
-    assert_eq!(body, r#"{"busy":false,"events":[]}"#);
+    assert_eq!(body, r#"{"kept":0}"#);
 }
 
 #[tokio::test]

@@ -5,9 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
-- **Relay**: a chat page that takes a task, picks the machine that has the repository and the most
-  room, and starts an agent there with the task. It runs Claude Code on the host with only
-  Yardbell's tools.
+- **Dispatch**: a chat page that takes a task, picks the machine that has the repository and the
+  most room, and starts an agent there with the task. It runs Claude Code on the host with only
+  Yardbell's tools. Conversations are kept in a list beside the chat, and can be reopened, deleted
+  or cleared.
 - **Agent tools (MCP)**: Yardbell serves MCP at `/mcp`, so Claude Code and other clients can list
   machines, sessions and folders, and start, read, answer and stop sessions. It is off until turned
   on in Settings, which shows the `claude mcp add` command.
@@ -16,6 +17,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Agents take a starting task through the new `prompt_arg` setting, set for every built-in agent
   that supports one.
 - The desktop app can set up and run a Yardbell server on its own machine from the connect screen.
+  It finds the mesh VPN (NordVPN, Tailscale, NetBird or ZeroTier) and this machine's mesh address
+  by itself, so phones and other machines can reach the new server.
+- The desktop app's tab bar has **Sign out**, and **Disconnect** in the tray and panel is now **Sign
+  out**. Signing out also stops a server the app runs itself and stops starting it with the app,
+  so the connect screen can switch to another server or set up this machine again.
+- When the mesh address is missing at startup, for example because the VPN is off, Yardbell serves
+  on localhost and logs a warning instead of refusing to start.
 - Add machine reuses an existing `~/.ssh/config` entry with the same name when it points at the same
   address and user, instead of refusing the name.
 

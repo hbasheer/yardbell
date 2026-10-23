@@ -90,7 +90,9 @@ async fn set_up_local_server(
         Status::Ready { port } => port,
         Status::Broken { error } => return Err(error),
         Status::Missing | Status::NoPasscode { .. } => {
-            yardbell::local_server::set_up(&path, &passcode)?
+            let runner = yardbell::shell::RealRunner::default();
+            let mesh = yardbell::mesh::detect(&runner).await;
+            yardbell::local_server::set_up(&path, &passcode, mesh)?
         }
     };
     let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
@@ -423,6 +425,26 @@ fn on_shortcut(app: &AppHandle, payload: String) {
     }
 }
 
+// Signing out on purpose is a reset: a server this app runs stops and no longer starts with the
+// app, so the connect screen offers both choices again. Its config and passcode stay.
+async fn sign_out_by_user(app: &AppHandle) {
+    local::stop();
+    match app.path().app_config_dir() {
+        Ok(dir) => {
+            if let Err(e) = local::disable(&dir) {
+                eprintln!("yardbell: can't turn off the server on this machine: {e}");
+            }
+        }
+        Err(e) => eprintln!("yardbell: can't find the settings folder: {e}"),
+    }
+    sign_out(app, None).await;
+}
+
+#[tauri::command]
+async fn sign_out_now(app: AppHandle) {
+    sign_out_by_user(&app).await;
+}
+
 async fn sign_out(app: &AppHandle, message: Option<&str>) {
     end_session(app, None, message).await;
 }
@@ -511,6 +533,7 @@ fn main() {
             connect_server,
             retry_connect,
             change_server,
+            sign_out_now,
             select_tab,
             close_tab,
             tab_list,
