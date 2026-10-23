@@ -1776,3 +1776,40 @@ async fn a_pairing_code_logs_a_phone_in_once_within_five_minutes() {
         "codes expire after five minutes"
     );
 }
+
+#[tokio::test]
+async fn stop_process_ends_only_agents_outside_tmux() {
+    let r = rig();
+    r.fake.stub("kill ", Output::ok_with(""));
+    let c = cookie(&r.app).await;
+    let stop = |pid: u32| {
+        Request::post(format!("/sessions/hp/{pid}/stop-process"))
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, stop(77)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let call = r.fake.calls().pop().unwrap().join(" ");
+    assert!(
+        call.contains("kill 77") && call.contains("kill -CONT 77"),
+        "{call}"
+    );
+    let (status, _, body) = send(&r.app, stop(9)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "pid 9 runs in tmux");
+    assert!(body.contains("already runs in tmux"), "{body}");
+    let (status, _, _) = send(&r.app, stop(4242)).await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "an unknown pid is never killed"
+    );
+    assert_eq!(
+        r.fake
+            .calls()
+            .iter()
+            .filter(|c| c.join(" ").contains("kill "))
+            .count(),
+        1
+    );
+}
