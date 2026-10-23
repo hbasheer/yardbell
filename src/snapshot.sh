@@ -23,6 +23,18 @@ esc() {
 
 has() { command -v "$1" >/dev/null 2>&1; }
 
+# A Docker that stopped answering (out of memory, a stuck VM) would hold up the whole check and
+# mark the machine down, so its port list gets 3 seconds: the watchdog ends docker, and read -t
+# below stops waiting even if something else still holds the pipe. macOS has no timeout(1).
+docker_ps() {
+  docker ps --format '{{.Label "com.docker.compose.project.working_dir"}}|{{.Label "com.docker.compose.service"}}|{{.Ports}}' 2>/dev/null &
+  local pid=$!
+  (sleep 3; kill "$pid") >/dev/null 2>&1 &
+  local watchdog=$!
+  wait "$pid" 2>/dev/null
+  kill "$watchdog" 2>/dev/null
+}
+
 panes=""
 if has tmux; then
   panes=$(tmux list-panes -a -F '#{session_name} #{pane_tty}' 2>/dev/null || true)
@@ -129,7 +141,7 @@ fi
 printf '],"ports":['
 first=1
 if has docker; then
-  while IFS='|' read -r workdir service ports; do
+  while IFS='|' read -r -t 3 workdir service ports; do
     case "$services" in *" $service "*) ;; *) continue ;; esac
     for hp in $(printf '%s\n' "$ports" | grep -oE ':[0-9]+->' | tr -d ':>-' | sort -un); do
       [ $first -eq 0 ] && printf ','
@@ -138,7 +150,7 @@ if has docker; then
       (echo >"/dev/tcp/127.0.0.1/$hp") 2>/dev/null && listening=true
       printf '{"workdir":%s,"service":%s,"host_port":%s,"listening":%s}' "$(esc "$workdir")" "$(esc "$service")" "$hp" "$listening"
     done
-  done < <(docker ps --format '{{.Label "com.docker.compose.project.working_dir"}}|{{.Label "com.docker.compose.service"}}|{{.Ports}}' 2>/dev/null)
+  done < <(docker_ps)
 fi
 printf ']'
 
