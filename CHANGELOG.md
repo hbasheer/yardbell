@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Move to tmux works on an agent that was suspended with Ctrl+Z in its terminal. It used to fail
+  with "the agent is still running after 8 seconds", because a suspended process only acts on the
+  stop signal once it is continued.
+
 ## [0.4.1] - 2026-10-23
 
 - **Dispatch settings**: your own instructions for Dispatch, the agent it starts in new sessions,
