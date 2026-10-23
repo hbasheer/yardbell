@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-10-23
+
+- A Docker that stopped answering no longer marks its machine down. Its port list waits at most
+  3 seconds, and the machine stays up without ports until Docker answers again.
+- A local machine whose check takes too long is "machine check timed out", not "ssh timeout",
+  since no ssh is involved.
 - **Dispatch**: a chat page that takes a task, picks the machine that has the repository and the
   most room, and starts an agent there with the task. It runs Claude Code on the host with only
   Yardbell's tools. Conversations are kept in a list beside the chat, and can be reopened, deleted
