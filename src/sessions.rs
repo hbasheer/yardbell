@@ -132,8 +132,9 @@ impl Sessions {
     }
 
     pub async fn stop_pid(&self, m: &Machine, pid: u32) -> Result<(), String> {
+        // An agent suspended with Ctrl+Z only acts on SIGTERM once it is continued.
         let cmd = format!(
-            "kill {pid} 2>/dev/null; i=0; while [ $i -lt 32 ]; do kill -0 {pid} 2>/dev/null || exit 0; sleep 0.25; i=$((i+1)); done; echo 'the agent is still running after 8 seconds' >&2; exit 1"
+            "kill {pid} 2>/dev/null; kill -CONT {pid} 2>/dev/null; i=0; while [ $i -lt 32 ]; do kill -0 {pid} 2>/dev/null || exit 0; sleep 0.25; i=$((i+1)); done; echo 'the agent is still running after 8 seconds' >&2; exit 1"
         );
         self.exec(m, &cmd).await
     }
@@ -415,6 +416,29 @@ mod tests {
         assert!(last_command(&fake).contains(
             r"tmux send-keys -t '=hp-app:' -l 'yes, it'\''s fine' && sleep 0.2 && tmux send-keys -t '=hp-app:' Enter"
         ));
+    }
+
+    #[tokio::test]
+    async fn stop_pid_ends_an_agent_suspended_with_ctrl_z() {
+        // Started through a shell that exits at once, like an agent in its own terminal, so the
+        // test process is not its parent and it does not linger as a zombie.
+        let out = std::process::Command::new("bash")
+            .args(["-c", "sleep 300 >/dev/null 2>&1 & echo $!"])
+            .output()
+            .unwrap();
+        let pid: u32 = String::from_utf8_lossy(&out.stdout).trim().parse().unwrap();
+        let stopped = std::process::Command::new("kill")
+            .args(["-STOP", &pid.to_string()])
+            .status()
+            .unwrap();
+        assert!(stopped.success());
+        let real = Sessions::new(
+            Arc::new(crate::shell::RealRunner::default()),
+            Ssh::new(tempfile::tempdir().unwrap().keep()),
+        );
+        let started = std::time::Instant::now();
+        real.stop_pid(&machine(true), pid).await.unwrap();
+        assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
     }
 
     fn claude() -> Agent {
