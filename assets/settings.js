@@ -103,6 +103,17 @@ function renderMcp(m) {
   $("mcp-command").textContent = `claude mcp add --transport http --scope user yardbell ${url} --header "Authorization: Bearer ${m.token}"`;
 }
 
+function renderDispatch() {
+  const f = $("dispatch-form");
+  const d = data.dispatch || {};
+  const fallback = data.agents.find((a) => a.name === data.default_agent);
+  f.elements.agent.innerHTML = `<option value="">Default agent${fallback ? ` (${esc(fallback.label)})` : ""}</option>`
+    + data.agents.map((a) => `<option value="${esc(a.name)}">${esc(a.label)}</option>`).join("");
+  f.elements.instructions.value = d.instructions || "";
+  f.elements.agent.value = d.agent || "";
+  f.elements.model.value = d.model || "";
+}
+
 let editing = null;
 
 function serverTarget(srv) {
@@ -213,6 +224,7 @@ async function load() {
   renderPhone(data.phone);
   renderMcp(data.mcp);
   renderServers();
+  renderDispatch();
   if (!data.can_undo) $("undo-btn").hidden = true;
 }
 
@@ -384,6 +396,26 @@ $("mcp-rotate").addEventListener("click", async () => {
 $("mcp-turn-off").addEventListener("click", async () => {
   if (!(await Nav.confirm("Turn off the MCP server?", "Agents lose access to Yardbell's tools. Turning it on again makes a new token.", { confirm: "Turn off", danger: true }))) return;
   mcpAction("/api/settings/mcp/off", "The MCP server is off.");
+});
+
+$("dispatch-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const button = f.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("POST", "/api/settings/dispatch", {
+      instructions: f.elements.instructions.value,
+      agent: f.elements.agent.value,
+      model: f.elements.model.value,
+    });
+    saved("Dispatch settings saved. They apply from the next message.");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $("server-add").addEventListener("click", () => openServerForm(null));

@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Dispatch settings**: your own instructions for Dispatch, the agent it starts in new sessions,
+  and the Claude model that runs it (Sonnet, Opus or Haiku), in a new Dispatch section of Settings.
+  The Dispatch page links to it.
+- README screenshots show the current pages, including Dispatch, and example text uses made-up
+  project names.
+
 ## [0.4.0] - 2026-10-23
 
 - A Docker that stopped answering no longer marks its machine down. Its port list waits at most

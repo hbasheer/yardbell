@@ -457,7 +457,7 @@ async fn dispatch_ask(
     AxState(app): AxState<Arc<AppState>>,
     Json(req): Json<DispatchAsk>,
 ) -> Result<Response, ApiError> {
-    let port = app.config()?.port;
+    let cfg = app.config()?;
     let conversation = req
         .conversation
         .as_deref()
@@ -465,7 +465,7 @@ async fn dispatch_ask(
         .transpose()?;
     let (id, rx) = app
         .dispatch
-        .ask(conversation, &req.text, port)
+        .ask(conversation, &req.text, cfg.port, &cfg.dispatch)
         .await
         .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
     let first = json!({ "role": "conversation", "id": id });

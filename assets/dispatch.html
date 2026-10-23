@@ -36,7 +36,7 @@
   </aside>
 
   <main class="main dispatch-main">
-    <header class="main-head"><h1>Dispatch</h1><button class="btn small-link" type="button" id="new-chat">New conversation</button></header>
+    <header class="main-head"><h1>Dispatch</h1><a class="btn quiet small-link" href="/settings#dispatch">Settings</a><button class="btn" type="button" id="new-chat">New conversation</button></header>
     <div class="dispatch">
       <details class="convos" id="convos" open>
         <summary class="convos-head"><span>Conversations</span><button class="btn quiet danger" type="button" id="clear-all" hidden>Clear all</button></summary>
@@ -45,7 +45,7 @@
       <div class="dispatch-chat">
         <div class="dispatch-log" id="dispatch-log" aria-live="polite"></div>
         <form class="dispatch-compose" id="dispatch-form">
-          <textarea name="text" rows="3" placeholder="Fix the flaky webhook test in commslayer on a new branch com-1234-webhook-flake" required></textarea>
+          <textarea name="text" rows="3" placeholder="Fix the flaky checkout test in acme/web on a new branch eng-1234-checkout-flake" required></textarea>
           <div class="dispatch-actions">
             <span class="help" id="dispatch-status" role="status"></span>
             <button class="btn danger" type="button" id="dispatch-stop" hidden>Stop</button>

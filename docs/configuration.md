@@ -238,6 +238,22 @@ Each server needs either `command` or `url`. The values, tokens included, are on
 command line, so other users of that machine can see them in its process list while the session
 runs.
 
+### `dispatch` (optional)
+
+How the Dispatch page works. The **Dispatch** section of the Settings page edits it.
+
+```yaml
+dispatch:
+  instructions: |                 # added to Dispatch's prompt, followed before its defaults
+    acme/web work goes to devbox unless it is down.
+    Branch names look like eng-1234-short-name.
+  agent: codex                    # agent it starts in new sessions; empty uses default_agent
+  model: haiku                    # sonnet, opus or haiku; empty uses Claude Code's default
+```
+
+`instructions` is at most 4000 characters. Dispatch itself always runs Claude Code on the host;
+`agent` only chooses what it starts on the machines.
+
 ### `listen_ip` (optional)
 
 The address Yardbell listens on besides `127.0.0.1`. By default it uses the `mesh_ip` of the
