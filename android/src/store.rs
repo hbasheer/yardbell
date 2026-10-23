@@ -28,7 +28,7 @@ impl Store {
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
-        all.sort_by(|a, b| b.last_used.cmp(&a.last_used));
+        all.sort_by_key(|s| std::cmp::Reverse(s.last_used));
         all
     }
 
@@ -69,7 +69,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let store = Store::new(dir.path());
         assert!(store.all().is_empty());
-        let entry = |server: &str, last_used| Server { server: server.into(), cookie: Some("c".into()), last_used };
+        let entry = |server: &str, last_used| Server {
+            server: server.into(),
+            cookie: Some("c".into()),
+            last_used,
+        };
         store.put(entry("http://a:4000", 1)).unwrap();
         store.put(entry("http://b:4000", 2)).unwrap();
         store.put(entry("http://a:4000", 3)).unwrap();
@@ -77,6 +81,12 @@ mod tests {
         assert_eq!(names, ["http://a:4000", "http://b:4000"]);
         store.forget("http://a:4000").unwrap();
         assert_eq!(store.all().len(), 1);
-        assert_eq!(Store::new(dir.path()).get("http://b:4000").unwrap().last_used, 2);
+        assert_eq!(
+            Store::new(dir.path())
+                .get("http://b:4000")
+                .unwrap()
+                .last_used,
+            2
+        );
     }
 }

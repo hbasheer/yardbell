@@ -139,7 +139,10 @@ impl Client {
         }
     }
 
-    async fn send(&self, request: reqwest::RequestBuilder) -> Result<reqwest::Response, ClientError> {
+    async fn send(
+        &self,
+        request: reqwest::RequestBuilder,
+    ) -> Result<reqwest::Response, ClientError> {
         request
             .send()
             .await
@@ -174,8 +177,12 @@ mod tests {
     #[test]
     fn pairing_links_are_read_and_checked() {
         assert_eq!(
-            parse_pairing("yardbell://pair?server=http%3A%2F%2F100.64.0.10%3A4000&code=Ab12").unwrap(),
-            Pairing { server: "http://100.64.0.10:4000".into(), code: "Ab12".into() }
+            parse_pairing("yardbell://pair?server=http%3A%2F%2F100.64.0.10%3A4000&code=Ab12")
+                .unwrap(),
+            Pairing {
+                server: "http://100.64.0.10:4000".into(),
+                code: "Ab12".into()
+            }
         );
         for bad in [
             "https://example.com/?server=x&code=y",
@@ -190,8 +197,14 @@ mod tests {
 
     #[test]
     fn addresses_are_normalized() {
-        assert_eq!(normalize_address("100.64.0.10:4000").unwrap(), "http://100.64.0.10:4000");
-        assert_eq!(normalize_address(" https://box.ts.net/ ").unwrap(), "https://box.ts.net");
+        assert_eq!(
+            normalize_address("100.64.0.10:4000").unwrap(),
+            "http://100.64.0.10:4000"
+        );
+        assert_eq!(
+            normalize_address(" https://box.ts.net/ ").unwrap(),
+            "https://box.ts.net"
+        );
         assert!(normalize_address("http://x/path").is_err());
         assert!(normalize_address("").is_err());
     }
@@ -205,7 +218,13 @@ mod tests {
             "/app/pair/{code}",
             post(|Path(code): Path<String>| async move {
                 if code == "good" {
-                    ([(header::SET_COOKIE, "yardbell_session=s3cret; Path=/; HttpOnly")], "{}")
+                    (
+                        [(
+                            header::SET_COOKIE,
+                            "yardbell_session=s3cret; Path=/; HttpOnly",
+                        )],
+                        "{}",
+                    )
                         .into_response()
                 } else {
                     StatusCode::UNAUTHORIZED.into_response()
@@ -223,8 +242,14 @@ mod tests {
         let server = fake_server().await;
         let client = Client::new(&server, None);
         assert_eq!(client.pair("good").await.unwrap(), "s3cret");
-        assert_eq!(client.pair("bad").await.unwrap_err(), ClientError::BadPairingCode);
+        assert_eq!(
+            client.pair("bad").await.unwrap_err(),
+            ClientError::BadPairingCode
+        );
         let gone = Client::new("http://127.0.0.1:1", None);
-        assert!(matches!(gone.pair("good").await.unwrap_err(), ClientError::Unreachable(_)));
+        assert!(matches!(
+            gone.pair("good").await.unwrap_err(),
+            ClientError::Unreachable(_)
+        ));
     }
 }

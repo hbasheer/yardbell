@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Android app**: pair a phone by scanning a QR code from **Settings → Connect a phone**, with no
+  passcode to type. Each code works once, for five minutes, and the phone keeps a normal login.
+  The app lists your servers and shows their dashboard, terminals and Dispatch, opening terminals
+  in the same view. Download `Yardbell_<version>_android.apk` from the release.
 - Sessions outside tmux have **Stop** next to **Move to tmux**. It ends the agent, also one
   suspended with Ctrl+Z, and gives its terminal the prompt back; the session then shows under
   ended, where **Resume** continues its conversation.

@@ -70,17 +70,27 @@ async fn connect(app: AppHandle, server: String, passcode: String) -> Result<Str
 #[tauri::command]
 async fn open(app: AppHandle, server: String) -> Result<String, String> {
     let store = store(&app)?;
-    let saved = store.get(&server).ok_or("that server is not saved on this phone")?;
+    let saved = store
+        .get(&server)
+        .ok_or("that server is not saved on this phone")?;
     let Some(cookie) = saved.cookie else {
         return Err(ClientError::SignedOut.to_string());
     };
     match Client::new(&server, Some(&cookie)).handoff().await {
         Ok(url) => {
-            store.put(Server { server, cookie: Some(cookie), last_used: now() })?;
+            store.put(Server {
+                server,
+                cookie: Some(cookie),
+                last_used: now(),
+            })?;
             Ok(url)
         }
         Err(ClientError::SignedOut) => {
-            store.put(Server { server, cookie: None, last_used: saved.last_used })?;
+            store.put(Server {
+                server,
+                cookie: None,
+                last_used: saved.last_used,
+            })?;
             Err(ClientError::SignedOut.to_string())
         }
         Err(e) => Err(e.to_string()),
@@ -98,11 +108,17 @@ pub fn run() {
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
     builder
-        .invoke_handler(tauri::generate_handler![servers, pair, connect, open, forget])
+        .invoke_handler(tauri::generate_handler![
+            servers, pair, connect, open, forget
+        ])
         .setup(|app| {
-            tauri::WebviewWindowBuilder::new(app, "main", tauri::WebviewUrl::App("index.html".into()))
-                .initialization_script(include_str!("single_view.js"))
-                .build()?;
+            tauri::WebviewWindowBuilder::new(
+                app,
+                "main",
+                tauri::WebviewUrl::App("index.html".into()),
+            )
+            .initialization_script(include_str!("single_view.js"))
+            .build()?;
             Ok(())
         })
         .run(tauri::generate_context!())
