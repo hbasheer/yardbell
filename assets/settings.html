@@ -131,6 +131,33 @@
     </div>
   </section>
 
+  <section id="dispatch">
+    <div class="section-head"><h2>Dispatch</h2><a class="btn small-link" href="/dispatch">Open Dispatch</a></div>
+    <form class="panel" id="dispatch-form">
+      <label>Instructions
+        <textarea name="instructions" rows="5" maxlength="4000" placeholder="acme/web work goes to devbox unless it is down.&#10;Start frontend tasks with codex.&#10;Always create a branch named after the ticket, like eng-1234-short-name."></textarea>
+      </label>
+      <p class="help dispatch-help">Added to Dispatch's prompt for every conversation and followed before its own defaults. Use it for where your repositories live, which machine suits which work, branch naming, and anything you find yourself repeating.</p>
+      <div class="grid2">
+        <label>Agent for new sessions
+          <select name="agent"></select>
+        </label>
+        <label>Model that runs Dispatch
+          <select name="model">
+            <option value="">Claude Code's default</option>
+            <option value="sonnet">Sonnet</option>
+            <option value="opus">Opus</option>
+            <option value="haiku">Haiku (fastest)</option>
+          </select>
+        </label>
+      </div>
+      <div class="form-foot">
+        <p class="help">Dispatch runs Claude Code on this machine. The agent it starts can be any of yours.</p>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </section>
+
   <section id="mcp">
     <div class="section-head"><h2>Agent tools (MCP)</h2><button class="btn quiet danger small-link" type="button" id="mcp-turn-off" hidden>Turn off</button></div>
     <div class="panel phone-intro" id="mcp-intro" hidden>

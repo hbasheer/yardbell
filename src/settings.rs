@@ -341,6 +341,14 @@ impl Settings {
         Ok(encoded)
     }
 
+    pub fn set_dispatch(&self, dispatch: crate::config::DispatchSettings) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.dispatch = dispatch;
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
     pub fn set_mcp_servers(&self, servers: Vec<crate::config::McpServer>) -> Result<(), String> {
         let mut cfg = self.load()?;
         cfg.mcp_servers = servers;

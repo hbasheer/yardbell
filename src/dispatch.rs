@@ -1,3 +1,4 @@
+use crate::config::DispatchSettings;
 use crate::shell::{login_shell, Duration, Runner};
 use rand::Rng;
 use serde::{Deserialize, Serialize};
@@ -103,6 +104,24 @@ impl Shared {
         }
         self.save(id);
     }
+}
+
+fn system_prompt(settings: &DispatchSettings) -> String {
+    let mut prompt = PROMPT.to_string();
+    if !settings.agent.is_empty() {
+        prompt.push_str(&format!(
+            "\n\nStart sessions with agent \"{}\" unless the user asks for another.",
+            settings.agent
+        ));
+    }
+    let own = settings.instructions.trim();
+    if !own.is_empty() {
+        prompt.push_str(
+            "\n\nThe user's own instructions follow. They take precedence over the guidance above:\n",
+        );
+        prompt.push_str(own);
+    }
+    prompt
 }
 
 fn now() -> String {
@@ -356,6 +375,7 @@ impl Dispatch {
         conversation: Option<&str>,
         text: &str,
         port: u16,
+        settings: &DispatchSettings,
     ) -> Result<(String, mpsc::Receiver<Value>), String> {
         let text = text.trim();
         if text.is_empty() {
@@ -380,10 +400,13 @@ impl Dispatch {
                 "--allowedTools",
                 &allowed.join(","),
                 "--append-system-prompt",
-                PROMPT,
+                &system_prompt(settings),
             ]
             .map(String::from),
         );
+        if !settings.model.is_empty() {
+            argv.extend(["--model".into(), settings.model.clone()]);
+        }
         if let Some(session) = resume {
             argv.extend(["--resume".into(), session]);
         }
@@ -587,6 +610,20 @@ mod tests {
     }
 
     #[test]
+    fn settings_shape_the_prompt() {
+        assert_eq!(system_prompt(&DispatchSettings::default()), PROMPT);
+        let prompt = system_prompt(&DispatchSettings {
+            instructions: "  acme/web work goes to devbox \n".into(),
+            agent: "codex".into(),
+            model: String::new(),
+        });
+        assert!(prompt.starts_with(PROMPT));
+        assert!(prompt.contains("Start sessions with agent \"codex\""));
+        assert!(prompt
+            .ends_with("take precedence over the guidance above:\nacme/web work goes to devbox"));
+    }
+
+    #[test]
     fn titles_and_ids() {
         assert_eq!(
             title_of("  fix the login bug\nmore detail"),
@@ -630,7 +667,15 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
             args.display()
         );
         let dispatch = fake_claude(dir.path(), &script);
-        let (first, rx) = dispatch.ask(None, "fix the login bug", 4000).await.unwrap();
+        let (first, rx) = dispatch
+            .ask(
+                None,
+                "fix the login bug",
+                4000,
+                &DispatchSettings::default(),
+            )
+            .await
+            .unwrap();
         assert_eq!(
             drain(rx).await,
             [
@@ -644,7 +689,10 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         let config = std::fs::read_to_string(dir.path().join("dispatch/mcp.json")).unwrap();
         assert!(config.contains(&format!("Bearer {}", dispatch.token())));
 
-        let (second, rx) = dispatch.ask(None, "update the docs", 4000).await.unwrap();
+        let (second, rx) = dispatch
+            .ask(None, "update the docs", 4000, &DispatchSettings::default())
+            .await
+            .unwrap();
         drain(rx).await;
         assert_ne!(first, second);
 
@@ -654,7 +702,12 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
             .clone()
             .unwrap();
         let (again, rx) = dispatch
-            .ask(Some(&first), "and logout", 4000)
+            .ask(
+                Some(&first),
+                "and logout",
+                4000,
+                &DispatchSettings::default(),
+            )
             .await
             .unwrap();
         drain(rx).await;
@@ -675,10 +728,32 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
     }
 
     #[tokio::test]
+    async fn the_model_setting_reaches_claude() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = dir.path().join("args");
+        let dispatch = fake_claude(
+            dir.path(),
+            &format!(r#"printf '%s\n' "$@" > {}"#, args.display()),
+        );
+        let settings = DispatchSettings {
+            model: "haiku".into(),
+            ..DispatchSettings::default()
+        };
+        let (_, rx) = dispatch.ask(None, "hi", 4000, &settings).await.unwrap();
+        drain(rx).await;
+        assert!(std::fs::read_to_string(&args)
+            .unwrap()
+            .ends_with("--model\nhaiku\n"));
+    }
+
+    #[tokio::test]
     async fn a_failing_claude_reports_its_error() {
         let dir = tempfile::tempdir().unwrap();
         let dispatch = fake_claude(dir.path(), "echo 'not logged in' >&2; exit 1");
-        let (_, rx) = dispatch.ask(None, "hi", 4000).await.unwrap();
+        let (_, rx) = dispatch
+            .ask(None, "hi", 4000, &DispatchSettings::default())
+            .await
+            .unwrap();
         assert_eq!(
             drain(rx).await,
             [
@@ -692,15 +767,24 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
     async fn busy_conversations_refuse_delete_and_survive_clear() {
         let dir = tempfile::tempdir().unwrap();
         let dispatch = fake_claude(dir.path(), "sleep 30");
-        let (busy, rx) = dispatch.ask(None, "long task", 4000).await.unwrap();
+        let (busy, rx) = dispatch
+            .ask(None, "long task", 4000, &DispatchSettings::default())
+            .await
+            .unwrap();
         assert_eq!(
-            dispatch.ask(Some(&busy), "again", 4000).await.unwrap_err(),
+            dispatch
+                .ask(Some(&busy), "again", 4000, &DispatchSettings::default())
+                .await
+                .unwrap_err(),
             "this conversation is still answering"
         );
         assert!(dispatch.delete(&busy).is_err());
 
         let quick = fake_claude(dir.path(), "true");
-        let (idle, rx2) = quick.ask(None, "short task", 4000).await.unwrap();
+        let (idle, rx2) = quick
+            .ask(None, "short task", 4000, &DispatchSettings::default())
+            .await
+            .unwrap();
         drain(rx2).await;
         assert!(dir
             .path()
@@ -727,7 +811,10 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         let dir = tempfile::tempdir().unwrap();
         let dispatch = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().join("d"));
         assert_eq!(
-            dispatch.ask(None, "hi", 4000).await.unwrap_err(),
+            dispatch
+                .ask(None, "hi", 4000, &DispatchSettings::default())
+                .await
+                .unwrap_err(),
             "Claude Code is not installed on this machine, Dispatch needs it"
         );
         assert_eq!(

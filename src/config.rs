@@ -145,6 +145,25 @@ pub fn new_topic() -> String {
     format!("yardbell-{suffix}")
 }
 
+pub const DISPATCH_MODELS: [&str; 3] = ["sonnet", "opus", "haiku"];
+const DISPATCH_INSTRUCTIONS_MAX: usize = 4000;
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DispatchSettings {
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub instructions: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub agent: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub model: String,
+}
+
+impl DispatchSettings {
+    fn is_default(&self) -> bool {
+        *self == DispatchSettings::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServer {
     pub name: String,
@@ -198,6 +217,8 @@ pub struct Config {
     pub phone_notifications: PhoneNotifications,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<McpServer>,
+    #[serde(default, skip_serializing_if = "DispatchSettings::is_default")]
+    pub dispatch: DispatchSettings,
     pub machines: Vec<Machine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen_ip: Option<String>,
@@ -333,7 +354,30 @@ impl Config {
                 "phone_notifications.token must be at most 200 characters without spaces".into(),
             );
         }
-        self.validate_mcp_servers().map_err(ConfigError::Invalid)
+        self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
+        self.validate_dispatch().map_err(ConfigError::Invalid)
+    }
+
+    fn validate_dispatch(&self) -> Result<(), String> {
+        let d = &self.dispatch;
+        if d.instructions.chars().count() > DISPATCH_INSTRUCTIONS_MAX {
+            return Err(format!(
+                "dispatch.instructions must be at most {DISPATCH_INSTRUCTIONS_MAX} characters"
+            ));
+        }
+        if !d.agent.is_empty() && self.agent(&d.agent).is_none() {
+            return Err(format!(
+                "dispatch.agent {:?} is not a built-in agent or one listed under agents",
+                d.agent
+            ));
+        }
+        if !d.model.is_empty() && !DISPATCH_MODELS.contains(&d.model.as_str()) {
+            return Err(format!(
+                "dispatch.model must be one of {}, or empty for Claude Code's default",
+                DISPATCH_MODELS.join(", ")
+            ));
+        }
+        Ok(())
     }
 
     fn validate_mcp_servers(&self) -> Result<(), String> {
@@ -816,6 +860,31 @@ mod tests {
         );
         let none = load_str("machines:\n  - {name: hp, local: true, root: /r}\n").unwrap();
         assert_eq!(none.mcp_config_for("hp"), None);
+    }
+
+    #[test]
+    fn dispatch_settings_are_validated() {
+        let ok = load_str(&format!(
+            "dispatch:\n  instructions: Frontend work goes to codex.\n  agent: codex\n  model: haiku\n{BASE}"
+        ))
+        .unwrap();
+        assert_eq!(ok.dispatch.agent, "codex");
+        assert_eq!(
+            load_str(BASE).unwrap().dispatch,
+            DispatchSettings::default()
+        );
+        let cases = [
+            ("agent: nope", "dispatch.agent \"nope\" is not a built-in agent or one listed under agents"),
+            ("model: gpt-9", "dispatch.model must be one of sonnet, opus, haiku, or empty for Claude Code's default"),
+        ];
+        for (setting, message) in cases {
+            match load_str(&format!("dispatch:\n  {setting}\n{BASE}")) {
+                Err(ConfigError::Invalid(got)) => assert_eq!(got, message, "{setting}"),
+                other => panic!("{setting}: {other:?}"),
+            }
+        }
+        let long = format!("dispatch:\n  instructions: {}\n{BASE}", "a".repeat(4001));
+        assert!(load_str(&long).is_err());
     }
 
     #[test]

@@ -1668,3 +1668,46 @@ async fn mcp_servers_are_saved_from_settings_and_reach_new_sessions() {
     assert!(call.last().unwrap().contains("--mcp-config"), "{call:?}");
     assert!(call.last().unwrap().contains("gh-mcp"), "{call:?}");
 }
+
+#[tokio::test]
+async fn dispatch_settings_are_saved_and_checked() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let save = |body: &'static str| {
+        Request::post("/api/settings/dispatch")
+            .header(header::COOKIE, &c)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, save(r#"{"agent":"nope"}"#)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("dispatch.agent"), "{body}");
+    let (status, _, body) = send(
+        &r.app,
+        save(r#"{"instructions":"  devbox gets acme/web \n","agent":"codex","model":"haiku"}"#),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = r.app.config().unwrap().dispatch;
+    assert_eq!(saved.instructions, "devbox gets acme/web");
+    assert_eq!(
+        (saved.agent.as_str(), saved.model.as_str()),
+        ("codex", "haiku")
+    );
+    let (_, _, body) = send(
+        &r.app,
+        Request::get("/api/settings")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let shown: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(shown["dispatch"]["agent"], "codex");
+    assert!(shown["agents"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|a| a["name"] == "codex"));
+}

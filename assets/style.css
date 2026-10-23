@@ -670,6 +670,7 @@ pre {
 code { font-family: var(--mono); font-size: 0.92em; }
 
 .main-head .small-link { margin-left: auto; height: 28px; }
+.main-head .small-link + .btn { height: 28px; }
 .dispatch-main { display: flex; flex-direction: column; min-height: 100dvh; }
 .dispatch { flex: 1; display: grid; grid-template-columns: 240px minmax(0, 760px); gap: 24px; align-items: start; min-height: 0; }
 .convos { position: sticky; top: 16px; display: grid; gap: 8px; }
@@ -779,9 +780,11 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .server-machines { border: 0; padding: 0; margin: 0 0 14px; }
 .server-machines legend { padding: 0; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
 .server-machines > div { display: flex; flex-wrap: wrap; gap: 8px 16px; }
-#server-form textarea { font: 13px/1.5 var(--mono); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); width: 100%; resize: vertical; }
+#dispatch-form textarea, #server-form textarea { font: 13px/1.5 var(--mono); padding: 8px 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); width: 100%; resize: vertical; }
 #server-form { margin-top: 12px; }
 #servers > .help { margin: 0 0 12px; }
+#dispatch-form textarea { font-family: var(--sans); font-size: 14px; }
+.dispatch-help { margin: -6px 0 14px; }
 .mcp-on { display: grid; gap: 12px; justify-items: start; }
 .mcp-on p { margin: 0; }
 .mcp-on .phone-field { max-width: 100%; }

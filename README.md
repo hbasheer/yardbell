@@ -9,6 +9,10 @@ local port opens the app each session is working on. It opens a full terminal in
 from your desktop or your phone, creates a git worktree per branch, and adds new machines without
 hand-editing ssh config.
 
+Describe a task on the **Dispatch** page and Yardbell picks the machine that has the repository and
+the most room, then starts an agent there with your task. Agents can drive Yardbell too, through
+its built-in MCP server.
+
 Nothing is installed on the machines it manages. It is one Rust binary with a plain HTML UI, and a
 [desktop app](#apps) for macOS and Linux adds a tray icon and a notification when an agent needs you.
 
@@ -403,13 +407,19 @@ never overwriting an existing `Host`), installed tools, and the project folder.
   a machine.
 - **Phone notifications:** set up, test and adjust notifications to your phone, see
   [Phone notifications](#phone-notifications).
+- **Dispatch:** your own instructions for Dispatch, the agent it starts and the model it runs on,
+  see [Dispatch](#dispatch).
+- **Agent tools (MCP)** and **MCP servers for sessions:** turn on Yardbell's MCP server and list
+  other MCP servers for the sessions it starts, see [Agent tools (MCP)](#agent-tools-mcp).
 - **Security:** change the passcode (takes effect immediately) and log out every other device.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
 ### Dispatch
 
-The **Dispatch** page takes a task in plain words, like "fix the flaky webhook test in commslayer on a
-new branch com-1234-webhook-flake". It runs Claude Code on the host (`claude -p`) with only
+![Dispatch page with a conversation](docs/screenshots/dispatch.png)
+
+The **Dispatch** page takes a task in plain words, like "fix the flaky checkout test in acme/web on a
+new branch eng-1234-checkout-flake". It runs Claude Code on the host (`claude -p`) with only
 Yardbell's own tools, so it can look at machines, folders and sessions and start, read and answer
 sessions, but cannot change files itself. It picks a machine that is up and has the repository,
 preferring the most free memory, the lowest load and the fewest running agents, then starts the
@@ -419,6 +429,11 @@ Every conversation is kept in a list beside the chat, also after a restart, so y
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
 conversation never stops the sessions it started. Claude Code must be installed and signed in on
 the host.
+
+The **Dispatch** section of Settings adds your own instructions to its prompt (where your
+repositories live, which machine suits which work, how you name branches), picks the agent it
+starts in new sessions, and picks the Claude model that runs Dispatch itself; Haiku is the
+fastest.
 
 ## Agent tools (MCP)
 

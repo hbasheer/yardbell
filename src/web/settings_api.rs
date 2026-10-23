@@ -27,6 +27,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/mcp/on", post(mcp_on))
         .route("/api/settings/mcp/off", post(mcp_off))
         .route("/api/settings/mcp/servers", post(mcp_servers))
+        .route("/api/settings/dispatch", post(dispatch))
         .route("/api/settings/passcode", post(passcode))
         .route("/api/settings/logout-all", post(logout_all))
         .route("/api/settings/undo", post(undo))
@@ -75,6 +76,13 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             "last_error_at": status.last_error_at,
         },
         "mcp_servers": cfg.mcp_servers,
+        "dispatch": cfg.dispatch,
+        "agents": cfg
+            .agents()
+            .iter()
+            .map(|a| json!({ "name": a.name, "label": a.display() }))
+            .collect::<Vec<_>>(),
+        "default_agent": cfg.default_agent(),
         "mcp": {
             "token": cfg.mcp_token,
             "urls": cfg
@@ -185,6 +193,18 @@ async fn mcp_on(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiErr
         .set_mcp_token(Some(token.clone()))
         .map_err(bad)?;
     Ok(Json(json!({ "token": token })).into_response())
+}
+
+async fn dispatch(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<crate::config::DispatchSettings>,
+) -> Result<Response, ApiError> {
+    let settings = crate::config::DispatchSettings {
+        instructions: req.instructions.trim().to_string(),
+        ..req
+    };
+    app.settings.set_dispatch(settings).map_err(bad)?;
+    Ok(Json(json!({ "ok": true })).into_response())
 }
 
 #[derive(Deserialize)]
