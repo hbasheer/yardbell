@@ -3643,6 +3643,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d55d956fa96f5ec02be2e13af0e20391a5aa83d6a074e3ad368959d0fab299ea"
 
 [[package]]
+name = "qrcode"
+version = "0.14.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d68782463e408eb1e668cf6152704bd856c78c5b6417adaee3203d8f4c1fc9ec"
+
+[[package]]
 name = "quick-error"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6583,7 +6589,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6595,6 +6601,7 @@ dependencies = [
  "futures",
  "libc",
  "portable-pty",
+ "qrcode",
  "rand 0.8.8",
  "regex",
  "reqwest 0.12.28",
@@ -6612,7 +6619,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell-desktop"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "axum",
  "gtk",
