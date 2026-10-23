@@ -438,7 +438,11 @@ mod tests {
         );
         let started = std::time::Instant::now();
         real.stop_pid(&machine(true), pid).await.unwrap();
-        assert!(started.elapsed() < std::time::Duration::from_secs(3), "{:?}", started.elapsed());
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(3),
+            "{:?}",
+            started.elapsed()
+        );
     }
 
     fn claude() -> Agent {

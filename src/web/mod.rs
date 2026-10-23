@@ -296,6 +296,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/refresh", post(refresh_now))
         .route("/machines/{machine}/shell", post(open_shell))
         .route("/sessions/{machine}/{pid}/move-to-tmux", post(move_to_tmux))
+        .route("/sessions/{machine}/{pid}/stop-process", post(stop_process))
         .route(
             "/sessions/{machine}/{name}/host-terminal",
             post(host_terminal),
@@ -744,12 +745,14 @@ async fn stop_session(
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
-async fn move_to_tmux(
-    AxState(app): AxState<Arc<AppState>>,
-    UrlPath((machine, pid)): UrlPath<(String, u32)>,
-) -> Result<Response, ApiError> {
-    let cfg = app.config()?;
-    let m = find_machine(&cfg, &machine)?;
+// Only a process the last machine check listed as an agent outside tmux can be stopped by pid.
+fn loose_session(
+    app: &AppState,
+    cfg: &Config,
+    machine: &str,
+    pid: u32,
+) -> Result<(Machine, crate::snapshot::Session), ApiError> {
+    let m = find_machine(cfg, machine)?;
     let s = app
         .state
         .snapshot(&m.name)
@@ -769,6 +772,28 @@ async fn move_to_tmux(
             "that session already runs in tmux".into(),
         ));
     }
+    Ok((m, s))
+}
+
+async fn stop_process(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((machine, pid)): UrlPath<(String, u32)>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let (m, _) = loose_session(&app, &cfg, &machine, pid)?;
+    app.sessions
+        .stop_pid(&m, pid)
+        .await
+        .map_err(ApiError::gateway)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+async fn move_to_tmux(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((machine, pid)): UrlPath<(String, u32)>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let (m, s) = loose_session(&app, &cfg, &machine, pid)?;
     let agent = cfg.agent(&s.agent).ok_or_else(|| {
         ApiError(
             StatusCode::BAD_REQUEST,
