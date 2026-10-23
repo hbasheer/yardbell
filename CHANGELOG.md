@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.4.2] - 2026-10-24
+
 - **Android app**: pair a phone by scanning a QR code from **Settings → Connect a phone**, with no
   passcode to type. Each code works once, for five minutes, and the phone keeps a normal login.
   The app lists your servers and shows their dashboard, terminals and Dispatch, opening terminals
