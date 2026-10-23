@@ -16,6 +16,13 @@ val keystoreProperties = Properties().apply {
     }
 }
 
+// The app's version comes from android/Cargo.toml, like the server's and the desktop app's.
+val cargoVersion = rootProject.file("../../Cargo.toml").readLines()
+    .first { it.startsWith("version = ") }
+    .substringAfter('"').substringBefore('"')
+val versionParts = cargoVersion.split(".").map { it.toInt() }
+val cargoVersionCode = versionParts[0] * 1_000_000 + versionParts[1] * 1_000 + versionParts[2]
+
 val tauriProperties = Properties().apply {
     val propFile = file("tauri.properties")
     if (propFile.exists()) {
@@ -33,8 +40,8 @@ android {
         applicationId = "dev.yardbell.android"
         minSdk = 24
         targetSdk = 37
-        versionCode = tauriProperties.getProperty("tauri.android.versionCode", "1").toInt()
-        versionName = tauriProperties.getProperty("tauri.android.versionName", "1.0")
+        versionCode = tauriProperties.getProperty("tauri.android.versionCode", cargoVersionCode.toString()).toInt()
+        versionName = tauriProperties.getProperty("tauri.android.versionName", cargoVersion)
     }
     if (!keystoreProperties.isEmpty) {
         signingConfigs {

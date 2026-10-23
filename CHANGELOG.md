@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- The Android app reports its real version (0.4.2 showed as 1.0 in Android's app settings). Its
+  version now comes from `android/Cargo.toml`, with version code major × 1,000,000 + minor × 1,000
+  + patch.
+
 ## [0.4.2] - 2026-10-24
 
 - **Android app**: pair a phone by scanning a QR code from **Settings → Connect a phone**, with no
