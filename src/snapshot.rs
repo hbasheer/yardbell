@@ -516,4 +516,39 @@ mod tests {
             cwd
         );
     }
+
+    #[test]
+    fn a_hung_docker_only_costs_three_seconds() {
+        let dir = tempfile::tempdir().unwrap();
+        let docker = dir.path().join("docker");
+        std::fs::write(&docker, "#!/bin/sh\nsleep 60\n").unwrap();
+        std::fs::set_permissions(&docker, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = format!(
+            "{}:{}",
+            dir.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let started = std::time::Instant::now();
+        let mut script = std::process::Command::new("bash")
+            .args(["-s", "--", "/tmp", "--", "web", "--"])
+            .env("PATH", path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        script
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(SCRIPT.as_bytes())
+            .unwrap();
+        let out = script.wait_with_output().unwrap();
+        let took = started.elapsed();
+        assert!(took < std::time::Duration::from_secs(6), "took {took:?}");
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        assert_eq!(json["ports"], serde_json::json!([]));
+        assert!(json["health"].is_object(), "{json}");
+    }
 }

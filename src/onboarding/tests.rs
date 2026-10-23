@@ -181,11 +181,57 @@ async fn ssh_config_preview_and_write() {
         .contains("HostName 100.1.1.1"));
     let write = r.ob.write_ssh_config("air", "alex", "100.1.1.1").await;
     assert!(write.ok, "{}", write.message);
-    let again = r.ob.ssh_config_preview("air", "alex", "100.1.1.1").await;
-    assert!(!again.ok);
+}
+
+#[tokio::test]
+async fn matching_ssh_entry_is_reused() {
+    let r = rig();
+    let ssh_path = r.dir.path().join("ssh_config");
+    let existing = "Host air\n  HostName 100.1.1.1\n  User alex\n";
+    std::fs::write(&ssh_path, existing).unwrap();
+    r.fake.stub(
+        "ssh -G -F",
+        Output::ok_with("user alex\nhostname 100.1.1.1\nport 22\n"),
+    );
+    let preview = r.ob.ssh_config_preview("air", "alex", "100.1.1.1").await;
+    assert!(preview.ok, "{}", preview.message);
+    assert_eq!(preview.data["reuse"], true);
+    let write = r.ob.write_ssh_config("air", "alex", "100.1.1.1").await;
+    assert!(write.ok, "{}", write.message);
+    assert_eq!(write.message, "already in ~/.ssh/config, left unchanged");
+    assert_eq!(std::fs::read_to_string(&ssh_path).unwrap(), existing);
+    let call = r.fake.calls().pop().unwrap();
+    assert_eq!(call[..4], ["ssh", "-G", "-F", ssh_path.to_str().unwrap()]);
+    assert_eq!(call[4], "air");
+}
+
+#[tokio::test]
+async fn different_ssh_entry_is_refused() {
+    let r = rig();
+    let ssh_path = r.dir.path().join("ssh_config");
+    std::fs::write(&ssh_path, "Host air\n  HostName 100.9.9.9\n  User sam\n").unwrap();
+    r.fake.stub(
+        "ssh -G -F",
+        Output::ok_with("user sam\nhostname 100.9.9.9\n"),
+    );
+    for step in [
+        r.ob.ssh_config_preview("air", "alex", "100.1.1.1").await,
+        r.ob.write_ssh_config("air", "alex", "100.1.1.1").await,
+    ] {
+        assert!(!step.ok);
+        assert_eq!(
+            step.message,
+            "name already used in ~/.ssh/config for sam@100.9.9.9, pick another"
+        );
+    }
+}
+
+#[test]
+fn resolved_target_reads_ssh_g_output() {
+    let out = "host air\nuser alex\nhostname Air.Local\nhostkeyalias x\n";
     assert_eq!(
-        again.message,
-        "name already used in ~/.ssh/config, pick another"
+        resolved_target(out),
+        ("Air.Local".to_string(), "alex".to_string())
     );
 }
 

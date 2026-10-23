@@ -54,6 +54,12 @@ Yardbell answers all of these on one page.
   backup, and checks that tmux, git and docker are installed and which agents are.
 - **Mesh VPN aware.** NordVPN Meshnet, Tailscale, Headscale, NetBird and ZeroTier: status, peer
   lists, a Turn on button, and clear reasons when the VPN is the problem.
+- **Dispatch picks the machine.** Describe a task on the Dispatch page. It finds the machines that
+  have the repository, picks the one with the most free memory and the least load, and starts an
+  agent there with your task.
+- **An MCP server for agents.** Claude Code and other MCP clients can list machines and sessions,
+  start sessions, read them and answer them. Sessions can also get your other MCP servers (GitHub,
+  Linear and so on) when they start.
 - **Settings without YAML.** Switch VPN provider with an address mapping step, edit machines, change
   the passcode, log out every other device, and undo the last change.
 - **Small and boring to run.** About 9 MB of memory, a launchd or systemd service in one command, a
@@ -124,8 +130,9 @@ host's mesh address. Docker on macOS is unverified, see
 
 The desktop app for macOS and Linux opens the dashboard in a window of its own, shows the state of
 every machine in the tray, and sends system notifications, so Yardbell does not need a browser
-tab. It connects to a Yardbell that is already running (see [Quick start](#quick-start)) and does
-not run the server itself. The app needs a server from
+tab. It connects to a Yardbell that is already running (see [Quick start](#quick-start)), or, on a
+machine with no server yet, **Run one on this machine** sets one up and runs it inside the app for as
+long as the app runs. It finds the mesh VPN and this machine's mesh address by itself. The app needs a server from
 the same release: an older server answers the app's sign-in with a 404, and the app then reports
 that it can't reach the server. To build that release, run `git checkout v<version>` in your clone
 before `cargo build --release`.
@@ -179,7 +186,7 @@ reached. On macOS the menu bar shows
 the logo's mark in the menu bar's color, with a dot when a machine is down or memory is high,
 faded when not connected. A left click there opens a panel with every machine's memory and CPU
 (the 1-minute load per core) and the sessions you can open; its gear holds the notification
-switches, Start at login, Disconnect and Quit. A right click opens the
+switches, Start at login, Sign out and Quit. A right click opens the
 menu. On Linux the panel draws the menu, so it opens however that panel opens tray menus
 (a right click on Waybar, any click with GNOME's AppIndicator extension). The menu lists each machine
 under **Machines** with a state dot, a memory bar and its memory and CPU use (click one to see it in
@@ -187,7 +194,10 @@ the dashboard), then every
 session you can open under **Sessions**, named like its tab, with **working** after the ones whose
 agent is busy. Click a session to bring the window forward on its tab. Past 15 sessions,
 **All sessions…** opens the dashboard. After that come **Open Yardbell**, **New session**, **Notifications**, **Start at
-login**, **Disconnect** (forgets the session and shows the sign-in again) and **Quit**. Closing the
+login**, **Sign out** and **Quit**. **Sign out**, also at the right end of the window's tab bar
+(click it twice), forgets the login and shows the connect screen, where you can connect to another
+server or run one on this machine. A server the app runs itself stops and no longer starts with the
+app; its config and passcode stay, so running it again only asks for the passcode. Closing the
 window only hides it: the app keeps running in the tray until you choose **Quit**. On Linux the
 tray needs a desktop with tray support; GNOME needs the AppIndicator extension, which Ubuntu turns
 on by default.
@@ -396,6 +406,45 @@ never overwriting an existing `Host`), installed tools, and the project folder.
 - **Security:** change the passcode (takes effect immediately) and log out every other device.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
+### Dispatch
+
+The **Dispatch** page takes a task in plain words, like "fix the flaky webhook test in commslayer on a
+new branch com-1234-webhook-flake". It runs Claude Code on the host (`claude -p`) with only
+Yardbell's own tools, so it can look at machines, folders and sessions and start, read and answer
+sessions, but cannot change files itself. It picks a machine that is up and has the repository,
+preferring the most free memory, the lowest load and the fewest running agents, then starts the
+default agent there with your task and links to the new session's terminal. Follow-up messages
+continue the same conversation, for example "what is that session doing now?" or "tell it yes".
+Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
+one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
+conversation never stops the sessions it started. Claude Code must be installed and signed in on
+the host.
+
+## Agent tools (MCP)
+
+Turn on **Agent tools (MCP)** in Settings to let any MCP client use Yardbell. Settings shows the
+command for Claude Code, for example:
+
+```sh
+claude mcp add --transport http --scope user yardbell http://100.64.0.10:4000/mcp \
+  --header "Authorization: Bearer yb_..."
+```
+
+| Tool | What it does |
+|---|---|
+| `list_machines` | up or down and why, memory total and free, agents' share, load, CPUs, session count |
+| `list_sessions` | agent, folder, ticket, branch, working or idle, tmux name |
+| `list_folders` | git checkouts per machine with their branch, and recent folders |
+| `start_session` | start an agent in a folder, on a branch (new ones get a worktree), with a task |
+| `read_session` | what the session's terminal shows, with scrollback |
+| `send_to_session` | type a reply and press Enter |
+| `stop_session` | end the session |
+
+**MCP servers for sessions** in Settings lists other MCP servers (a command such as
+`npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code
+sessions that Yardbell starts get them through `--mcp-config`, so nothing is written on the
+machines. Other agents configure MCP their own way and do not get them.
+
 ## Mesh VPN support
 
 Set `mesh` in `yardbell.yml` or on the Settings page. A machine can override it with its own `mesh:`.
@@ -476,7 +525,12 @@ ssh key.
 - Every page, API call and terminal websocket requires the login cookie (signed, `HttpOnly`,
   `SameSite=Strict`, 30 days). Five wrong passcodes in a minute lock that address out for five
   minutes.
-- Requests that change anything must come from Yardbell's own page (Origin check).
+- Requests that change anything must come from Yardbell's own page (Origin check). The one
+  exception is `/mcp`, which takes a bearer token instead of the cookie and still turns away any
+  request whose Origin is another site.
+- The MCP token can start and type into sessions on every machine, like a login. It is off until
+  you turn it on in Settings, and making a new one stops the old one at once. Dispatch uses its own
+  token, made fresh each time Yardbell starts and never written to disk.
 - The desktop app signs its window in with a one-time code. Making a code needs a login, and the code
   works once, within 30 seconds. The window's login ends when the app quits; the app keeps its own
   login in the system keychain.

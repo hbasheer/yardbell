@@ -14,6 +14,7 @@ pub enum Reason {
     NoMesh,
     SshRefused,
     SshTimeout,
+    CheckTimeout,
     BadSnapshot,
 }
 
@@ -23,6 +24,7 @@ impl std::fmt::Display for Reason {
             Reason::NoMesh => "no mesh",
             Reason::SshRefused => "ssh refused",
             Reason::SshTimeout => "ssh timeout",
+            Reason::CheckTimeout => "machine check timed out",
             Reason::BadSnapshot => "bad snapshot",
         })
     }
@@ -97,7 +99,12 @@ impl Probe {
             )
             .await;
         if out.timed_out {
-            return MachineStatus::down(&m.name, Reason::SshTimeout);
+            let reason = if m.is_local() {
+                Reason::CheckTimeout
+            } else {
+                Reason::SshTimeout
+            };
+            return MachineStatus::down(&m.name, reason);
         }
         let parsed = snapshot::parse(
             &out.stdout,
@@ -185,6 +192,17 @@ mod tests {
         let calls = fake.calls();
         assert_eq!(calls.len(), 1);
         assert!(calls.iter().all(|c| c[0] != "ping" && c[0] != "ssh"));
+    }
+
+    #[tokio::test]
+    async fn a_slow_local_check_does_not_blame_ssh() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub("bash -s", Output::timeout());
+        let cfg = cfg();
+        let st = probe(fake).check(&cfg, cfg.machine("mini").unwrap()).await;
+        assert!(!st.up);
+        assert_eq!(st.reason, Some(Reason::CheckTimeout));
+        assert_eq!(st.reason.unwrap().to_string(), "machine check timed out");
     }
 
     #[tokio::test]

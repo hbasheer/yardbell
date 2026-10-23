@@ -116,3 +116,34 @@ async function init() {
 }
 
 init();
+
+const signOut = document.getElementById("sign-out");
+let confirmTimer = 0;
+
+function resetSignOut() {
+  clearTimeout(confirmTimer);
+  signOut.classList.remove("confirming");
+  signOut.textContent = "Sign out";
+}
+
+invoke("connect_server")
+  .then((server) => {
+    if (server) signOut.title = `Signed in to ${server}. Sign out to connect to another server or run one on this machine.`;
+  })
+  .catch(() => {});
+
+signOut.addEventListener("click", () => {
+  if (!signOut.classList.contains("confirming")) {
+    signOut.classList.add("confirming");
+    signOut.textContent = "Sign out?";
+    confirmTimer = setTimeout(resetSignOut, 4000);
+    return;
+  }
+  resetSignOut();
+  signOut.disabled = true;
+  invoke("sign_out_now")
+    .catch((error) => console.error("sign out failed:", error))
+    .finally(() => { signOut.disabled = false; });
+});
+
+signOut.addEventListener("blur", resetSignOut);

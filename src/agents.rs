@@ -9,6 +9,8 @@ pub struct Agent {
     pub resume: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub process: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub prompt_arg: Option<String>,
 }
 
 impl Agent {
@@ -23,35 +25,89 @@ impl Agent {
     pub fn display(&self) -> String {
         self.label.clone().unwrap_or_else(|| self.name.clone())
     }
+
+    pub fn with_prompt(&self, prompt: &str) -> Result<String, String> {
+        let Some(arg) = &self.prompt_arg else {
+            return Err(format!(
+                "{} cannot start with a task, set prompt_arg for it in the config",
+                self.display()
+            ));
+        };
+        let quoted = crate::shell::quote(prompt);
+        Ok(match arg.as_str() {
+            "" => format!("{} {quoted}", self.command),
+            flag => format!("{} {flag} {quoted}", self.command),
+        })
+    }
 }
 
-const BUILTIN: [(&str, &str, &str, &str); 10] = [
-    ("claude", "Claude Code", "claude", "claude --continue"),
-    ("codex", "Codex", "codex", "codex resume --last"),
-    ("gemini", "Gemini CLI", "gemini", "gemini --resume"),
-    ("qwen", "Qwen Code", "qwen", "qwen --continue"),
-    ("opencode", "opencode", "opencode", "opencode --continue"),
-    ("copilot", "Copilot CLI", "copilot", "copilot --continue"),
+// The last field is how each agent takes a task when it starts: "" as a positional argument,
+// a flag before it, or None when its interactive mode has no way to take one.
+const BUILTIN: [(&str, &str, &str, &str, Option<&str>); 10] = [
+    (
+        "claude",
+        "Claude Code",
+        "claude",
+        "claude --continue",
+        Some(""),
+    ),
+    ("codex", "Codex", "codex", "codex resume --last", Some("")),
+    (
+        "gemini",
+        "Gemini CLI",
+        "gemini",
+        "gemini --resume",
+        Some("-i"),
+    ),
+    ("qwen", "Qwen Code", "qwen", "qwen --continue", Some("-i")),
+    (
+        "opencode",
+        "opencode",
+        "opencode",
+        "opencode --continue",
+        Some("--prompt"),
+    ),
+    (
+        "copilot",
+        "Copilot CLI",
+        "copilot",
+        "copilot --continue",
+        Some("-i"),
+    ),
     (
         "cursor",
         "Cursor Agent",
         "cursor-agent",
         "cursor-agent resume",
+        Some(""),
     ),
-    ("crush", "Crush", "crush", "crush --continue"),
-    ("goose", "Goose", "goose session", "goose session --resume"),
-    ("aider", "Aider", "aider", "aider --restore-chat-history"),
+    ("crush", "Crush", "crush", "crush --continue", None),
+    (
+        "goose",
+        "Goose",
+        "goose session",
+        "goose session --resume",
+        None,
+    ),
+    (
+        "aider",
+        "Aider",
+        "aider",
+        "aider --restore-chat-history",
+        None,
+    ),
 ];
 
 pub fn builtin() -> Vec<Agent> {
     BUILTIN
         .iter()
-        .map(|(name, label, command, resume)| Agent {
+        .map(|(name, label, command, resume, prompt_arg)| Agent {
             name: name.to_string(),
             label: Some(label.to_string()),
             command: command.to_string(),
             resume: resume.to_string(),
             process: None,
+            prompt_arg: prompt_arg.map(str::to_string),
         })
         .collect()
 }
@@ -62,8 +118,10 @@ pub fn merged(custom: &[Agent]) -> Vec<Agent> {
         match all.iter_mut().find(|a| a.name == agent.name) {
             Some(slot) => {
                 let label = slot.label.take();
+                let prompt_arg = slot.prompt_arg.take();
                 *slot = agent.clone();
                 slot.label = agent.label.clone().or(label);
+                slot.prompt_arg = agent.prompt_arg.clone().or(prompt_arg);
             }
             None => all.push(agent.clone()),
         }
@@ -82,7 +140,30 @@ mod tests {
             command: command.into(),
             resume: resume.into(),
             process: None,
+            prompt_arg: None,
         }
+    }
+
+    #[test]
+    fn with_prompt_quotes_the_task_as_an_argument_or_after_a_flag() {
+        let all = builtin();
+        let by = |n: &str| all.iter().find(|a| a.name == n).unwrap();
+        assert_eq!(
+            by("claude").with_prompt("fix the 'login' bug").unwrap(),
+            r"claude 'fix the '\''login'\'' bug'"
+        );
+        assert_eq!(by("gemini").with_prompt("hi").unwrap(), "gemini -i 'hi'");
+        assert_eq!(
+            by("aider").with_prompt("hi").unwrap_err(),
+            "Aider cannot start with a task, set prompt_arg for it in the config"
+        );
+    }
+
+    #[test]
+    fn overriding_a_builtin_keeps_its_prompt_arg_unless_set() {
+        let all = merged(&[agent("codex", "codex --full-auto", "codex resume --last")]);
+        let codex = all.iter().find(|a| a.name == "codex").unwrap();
+        assert_eq!(codex.prompt_arg.as_deref(), Some(""));
     }
 
     #[test]

@@ -21,6 +21,22 @@ pub fn session_name(machine: &str, ticket: &str, folder: &str) -> String {
         .collect()
 }
 
+#[derive(Clone, Copy)]
+pub enum Start<'a> {
+    New,
+    Resume,
+    Task(&'a str),
+}
+
+pub struct Launch<'a> {
+    pub folder_path: &'a str,
+    pub ticket: &'a str,
+    pub folder_label: &'a str,
+    pub agent: &'a Agent,
+    pub start: Start<'a>,
+    pub mcp_config: Option<&'a str>,
+}
+
 fn exact(name: &str) -> String {
     format!("={name}")
 }
@@ -76,22 +92,26 @@ impl Sessions {
         Sessions { runner, ssh }
     }
 
-    pub async fn create(
-        &self,
-        m: &Machine,
-        folder_path: &str,
-        ticket: &str,
-        folder_label: &str,
-        agent: &Agent,
-        resume: bool,
-    ) -> Result<String, String> {
+    pub async fn create(&self, m: &Machine, launch: Launch<'_>) -> Result<String, String> {
+        let Launch {
+            folder_path,
+            ticket,
+            folder_label,
+            agent,
+            start,
+            mcp_config,
+        } = launch;
         let name = session_name(&m.name, ticket, folder_label);
-        let run = if resume {
-            &agent.resume
-        } else {
-            &agent.command
+        let mut run = match start {
+            Start::New => agent.command.clone(),
+            Start::Resume => agent.resume.clone(),
+            Start::Task(prompt) => agent.with_prompt(prompt)?,
         };
-        let script = start_script(m, &name, folder_path, run, agent);
+        // --mcp-config takes several values, so it goes last or it would swallow the task.
+        if let Some(config) = mcp_config {
+            run = format!("{run} --mcp-config {}", quote(config));
+        }
+        let script = start_script(m, &name, folder_path, &run, agent);
         self.exec(m, &login_shell(&script)).await.map(|_| name)
     }
 
@@ -118,13 +138,37 @@ impl Sessions {
         self.exec(m, &cmd).await
     }
 
+    pub async fn read(&self, m: &Machine, name: &str, lines: u32) -> Result<String, String> {
+        self.output(
+            m,
+            &format!(
+                "tmux capture-pane -p -J -t {} -S -{lines}",
+                quote(&format!("{}:", exact(name)))
+            ),
+        )
+        .await
+    }
+
+    pub async fn send(&self, m: &Machine, name: &str, text: &str) -> Result<(), String> {
+        let target = quote(&format!("{}:", exact(name)));
+        let cmd = format!(
+            "tmux send-keys -t {target} -l {} && sleep 0.2 && tmux send-keys -t {target} Enter",
+            quote(text)
+        );
+        self.exec(m, &cmd).await
+    }
+
     async fn exec(&self, m: &Machine, cmd: &str) -> Result<(), String> {
+        self.output(m, cmd).await.map(|_| ())
+    }
+
+    async fn output(&self, m: &Machine, cmd: &str) -> Result<String, String> {
         let out = self
             .runner
             .run(self.ssh.command(m, cmd), None, ACTION_TIMEOUT)
             .await;
         if out.ok() {
-            return Ok(());
+            return Ok(out.stdout);
         }
         if out.timed_out {
             return Err(format!("{} did not answer in time", m.name));
@@ -221,11 +265,14 @@ mod tests {
         let name = sessions(fake.clone())
             .create(
                 &machine(false),
-                "/r/my slots/slot2",
-                "ENG-1301",
-                "slot2",
-                &claude(),
-                false,
+                Launch {
+                    folder_path: "/r/my slots/slot2",
+                    ticket: "ENG-1301",
+                    folder_label: "slot2",
+                    agent: &claude(),
+                    start: Start::New,
+                    mcp_config: None,
+                },
             )
             .await
             .unwrap();
@@ -274,10 +321,100 @@ mod tests {
             Output::failed(127, "Claude Code is not installed on hp\n"),
         );
         let err = sessions(fake)
-            .create(&machine(false), "/r/app", "-", "app", &claude(), false)
+            .create(
+                &machine(false),
+                Launch {
+                    folder_path: "/r/app",
+                    ticket: "-",
+                    folder_label: "app",
+                    agent: &claude(),
+                    start: Start::New,
+                    mcp_config: None,
+                },
+            )
             .await
             .unwrap_err();
         assert_eq!(err, "Claude Code is not installed on hp");
+    }
+
+    #[tokio::test]
+    async fn a_task_is_passed_to_the_agent_when_it_starts() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub("tmux new", Output::ok_with(""));
+        sessions(fake.clone())
+            .create(
+                &machine(false),
+                Launch {
+                    folder_path: "/r/app",
+                    ticket: "-",
+                    folder_label: "app",
+                    agent: &claude(),
+                    start: Start::Task("fix login"),
+                    mcp_config: None,
+                },
+            )
+            .await
+            .unwrap();
+        let script = start_script(
+            &machine(false),
+            "hp-app",
+            "/r/app",
+            "claude 'fix login'",
+            &claude(),
+        );
+        assert_eq!(
+            last_command(&fake),
+            format!(
+                "{}{}",
+                crate::ssh::REMOTE_PATH,
+                crate::shell::login_shell(&script)
+            )
+        );
+    }
+
+    #[tokio::test]
+    async fn mcp_config_goes_after_the_task() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub("tmux new", Output::ok_with(""));
+        sessions(fake.clone())
+            .create(
+                &machine(false),
+                Launch {
+                    folder_path: "/r/app",
+                    ticket: "-",
+                    folder_label: "app",
+                    agent: &claude(),
+                    start: Start::Task("fix login"),
+                    mcp_config: Some(r#"{"mcpServers":{}}"#),
+                },
+            )
+            .await
+            .unwrap();
+        let script = start_script(
+            &machine(false),
+            "hp-app",
+            "/r/app",
+            r#"claude 'fix login' --mcp-config '{"mcpServers":{}}'"#,
+            &claude(),
+        );
+        assert!(last_command(&fake).ends_with(&crate::shell::login_shell(&script)));
+    }
+
+    #[tokio::test]
+    async fn read_captures_the_pane_and_send_types_then_presses_enter() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub("capture-pane", Output::ok_with("line 1\nline 2\n"));
+        fake.stub("send-keys", Output::ok_with(""));
+        let s = sessions(fake.clone());
+        let text = s.read(&machine(false), "hp-app", 50).await.unwrap();
+        assert_eq!(text, "line 1\nline 2\n");
+        assert!(last_command(&fake).contains("tmux capture-pane -p -J -t '=hp-app:' -S -50"));
+        s.send(&machine(false), "hp-app", "yes, it's fine")
+            .await
+            .unwrap();
+        assert!(last_command(&fake).contains(
+            r"tmux send-keys -t '=hp-app:' -l 'yes, it'\''s fine' && sleep 0.2 && tmux send-keys -t '=hp-app:' Enter"
+        ));
     }
 
     fn claude() -> Agent {
@@ -293,7 +430,17 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         fake.stub("tmux new", Output::ok_with(""));
         sessions(fake.clone())
-            .create(&machine(false), "/r/app", "-", "app", &claude(), true)
+            .create(
+                &machine(false),
+                Launch {
+                    folder_path: "/r/app",
+                    ticket: "-",
+                    folder_label: "app",
+                    agent: &claude(),
+                    start: Start::Resume,
+                    mcp_config: None,
+                },
+            )
             .await
             .unwrap();
         assert!(last_command(&fake).contains(r"'\''claude --continue'\'' || exit $?"));
@@ -308,13 +455,33 @@ mod tests {
             .find(|a| a.name == "codex")
             .unwrap();
         let s = sessions(fake.clone());
-        s.create(&machine(false), "/r/app", "-", "app", &codex, false)
-            .await
-            .unwrap();
+        s.create(
+            &machine(false),
+            Launch {
+                folder_path: "/r/app",
+                ticket: "-",
+                folder_label: "app",
+                agent: &codex,
+                start: Start::New,
+                mcp_config: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(last_command(&fake).contains(r"'\''codex'\'' || exit $?"));
-        s.create(&machine(false), "/r/app", "-", "app", &codex, true)
-            .await
-            .unwrap();
+        s.create(
+            &machine(false),
+            Launch {
+                folder_path: "/r/app",
+                ticket: "-",
+                folder_label: "app",
+                agent: &codex,
+                start: Start::Resume,
+                mcp_config: None,
+            },
+        )
+        .await
+        .unwrap();
         assert!(last_command(&fake).contains(r"'\''codex resume --last'\'' || exit $?"));
     }
 
@@ -353,7 +520,17 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         fake.stub("tmux new", Output::failed(1, "duplicate session: hp-app"));
         let err = sessions(fake)
-            .create(&machine(false), "/r/app", "-", "app", &claude(), false)
+            .create(
+                &machine(false),
+                Launch {
+                    folder_path: "/r/app",
+                    ticket: "-",
+                    folder_label: "app",
+                    agent: &claude(),
+                    start: Start::New,
+                    mcp_config: None,
+                },
+            )
             .await
             .unwrap_err();
         assert_eq!(err, "duplicate session: hp-app");

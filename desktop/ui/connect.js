@@ -61,4 +61,65 @@ $("form").addEventListener("submit", async (e) => {
   }
 });
 
+const LEDES = {
+  missing: "Yardbell runs inside this app and watches this machine's agent sessions. Choose a passcode for signing in from other devices. Add more machines later from Add machine.",
+  no_passcode: "Yardbell is set up on this machine but has no passcode yet. Choose one for signing in from other devices.",
+  ready: "Yardbell is already set up on this machine. Enter its passcode to start it here and sign in.",
+};
+let localState = null;
+
+async function showLocal() {
+  $("form").hidden = true;
+  $("local-form").hidden = false;
+  $("local-err").textContent = "";
+  localState = await invoke("local_server_status").catch((err) => ({ state: "broken", error: String(err) }));
+  const broken = localState.state === "broken";
+  $("local-lede").textContent = broken
+    ? "The Yardbell config on this machine can't be read. Fix it, or connect to another server."
+    : LEDES[localState.state];
+  $("local-err").textContent = broken ? sentence(localState.error) : "";
+  $("local-repeat-label").hidden = localState.state === "ready";
+  $("local-submit").disabled = broken;
+  $("local-passcode").focus();
+}
+
+$("to-local").addEventListener("click", showLocal);
+$("to-connect").addEventListener("click", () => {
+  $("local-form").hidden = true;
+  $("form").hidden = false;
+  focusFirstEmpty();
+});
+
+$("local-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const passcode = $("local-passcode").value;
+  const button = $("local-submit");
+  $("local-err").textContent = "";
+  const creating = localState?.state !== "ready";
+  if (creating && passcode.length < 6) {
+    $("local-err").textContent = "Use at least 6 characters";
+    $("local-passcode").focus();
+    return;
+  }
+  if (creating && passcode !== $("local-repeat").value) {
+    $("local-err").textContent = "The two passcodes don't match";
+    $("local-repeat").select();
+    return;
+  }
+  button.disabled = true;
+  button.textContent = "Starting…";
+  try {
+    await invoke("set_up_local_server", { passcode });
+  } catch (err) {
+    localState = await invoke("local_server_status").catch(() => localState);
+    $("local-repeat-label").hidden = localState?.state === "ready";
+    if (localState?.state === "ready") $("local-lede").textContent = LEDES.ready;
+    $("local-err").textContent = sentence(err);
+    $("local-passcode").select();
+  } finally {
+    button.disabled = false;
+    button.textContent = "Start and sign in";
+  }
+});
+
 init();

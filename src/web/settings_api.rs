@@ -24,6 +24,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/phone", post(phone_save))
         .route("/api/settings/phone/test", post(phone_test))
         .route("/api/settings/phone/off", post(phone_off))
+        .route("/api/settings/mcp/on", post(mcp_on))
+        .route("/api/settings/mcp/off", post(mcp_off))
+        .route("/api/settings/mcp/servers", post(mcp_servers))
         .route("/api/settings/passcode", post(passcode))
         .route("/api/settings/logout-all", post(logout_all))
         .route("/api/settings/undo", post(undo))
@@ -70,6 +73,15 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             "last_sent": status.last_sent,
             "last_error": status.last_error,
             "last_error_at": status.last_error_at,
+        },
+        "mcp_servers": cfg.mcp_servers,
+        "mcp": {
+            "token": cfg.mcp_token,
+            "urls": cfg
+                .bind_addresses()
+                .iter()
+                .map(|ip| format!("http://{ip}:{}/mcp", cfg.port))
+                .collect::<Vec<_>>(),
         },
         "can_undo": app.settings.can_undo(),
         "service_installed": crate::service::installed(),
@@ -164,6 +176,32 @@ async fn phone_test(AxState(app): AxState<Arc<AppState>>) -> Result<Response, Ap
 
 async fn phone_off(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
     app.settings.phone_off().map_err(bad)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+async fn mcp_on(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let token = crate::mcp::new_token();
+    app.settings
+        .set_mcp_token(Some(token.clone()))
+        .map_err(bad)?;
+    Ok(Json(json!({ "token": token })).into_response())
+}
+
+#[derive(Deserialize)]
+struct McpServersReq {
+    servers: Vec<crate::config::McpServer>,
+}
+
+async fn mcp_servers(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<McpServersReq>,
+) -> Result<Response, ApiError> {
+    app.settings.set_mcp_servers(req.servers).map_err(bad)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+async fn mcp_off(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    app.settings.set_mcp_token(None).map_err(bad)?;
     Ok(Json(json!({ "ok": true })).into_response())
 }
 

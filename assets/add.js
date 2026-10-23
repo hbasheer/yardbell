@@ -81,10 +81,12 @@ async function run() {
   if (!(await keyAuth())) return;
   const preview = await step("ssh_config_preview", "SSH config entry");
   if (!preview.result.ok) return;
-  const extra = preview.row.extra(`<pre>${esc(preview.result.data.block)}</pre><button class="btn primary" type="button" data-write>Add this to ~/.ssh/config</button>`);
-  await waitClick(extra, "[data-write]");
-  extra.querySelector("[data-write]").remove();
-  if (!(await step("write_ssh_config", "Write SSH config")).result.ok) return;
+  if (!preview.result.data.reuse) {
+    const extra = preview.row.extra(`<pre>${esc(preview.result.data.block)}</pre><button class="btn primary" type="button" data-write>Add this to ~/.ssh/config</button>`);
+    await waitClick(extra, "[data-write]");
+    extra.querySelector("[data-write]").remove();
+    if (!(await step("write_ssh_config", "Write SSH config")).result.ok) return;
+  }
   const detect = await step("detect", "Check the machine");
   if (!detect.result.ok) return;
   const d = detect.result.data;

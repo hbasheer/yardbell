@@ -2,6 +2,7 @@ mod capability;
 mod client;
 mod creds;
 mod launch;
+mod local;
 mod main_window;
 mod notify;
 mod panel;
@@ -70,6 +71,35 @@ async fn connect(
         window.destroy().map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+#[tauri::command]
+fn local_server_status() -> yardbell::local_server::Status {
+    yardbell::local_server::status(&yardbell::cli::default_config_path())
+}
+
+#[tauri::command]
+async fn set_up_local_server(
+    app: AppHandle,
+    session: State<'_, Session>,
+    passcode: String,
+) -> Result<(), String> {
+    use yardbell::local_server::Status;
+    let path = yardbell::cli::default_config_path();
+    let port = match yardbell::local_server::status(&path) {
+        Status::Ready { port } => port,
+        Status::Broken { error } => return Err(error),
+        Status::Missing | Status::NoPasscode { .. } => {
+            let runner = yardbell::shell::RealRunner::default();
+            let mesh = yardbell::mesh::detect(&runner).await;
+            yardbell::local_server::set_up(&path, &passcode, mesh)?
+        }
+    };
+    let dir = app.path().app_config_dir().map_err(|e| e.to_string())?;
+    local::enable(&dir).map_err(|e| format!("cannot save the setting: {e}"))?;
+    local::start();
+    local::wait_until_up(port).await?;
+    connect(app, session, local::address(port), passcode).await
 }
 
 #[tauri::command]
@@ -395,6 +425,26 @@ fn on_shortcut(app: &AppHandle, payload: String) {
     }
 }
 
+// Signing out on purpose is a reset: a server this app runs stops and no longer starts with the
+// app, so the connect screen offers both choices again. Its config and passcode stay.
+async fn sign_out_by_user(app: &AppHandle) {
+    local::stop();
+    match app.path().app_config_dir() {
+        Ok(dir) => {
+            if let Err(e) = local::disable(&dir) {
+                eprintln!("yardbell: can't turn off the server on this machine: {e}");
+            }
+        }
+        Err(e) => eprintln!("yardbell: can't find the settings folder: {e}"),
+    }
+    sign_out(app, None).await;
+}
+
+#[tauri::command]
+async fn sign_out_now(app: AppHandle) {
+    sign_out_by_user(&app).await;
+}
+
 async fn sign_out(app: &AppHandle, message: Option<&str>) {
     end_session(app, None, message).await;
 }
@@ -432,6 +482,16 @@ async fn end_session(app: &AppHandle, generation: Option<u64>, message: Option<&
 }
 
 async fn start(app: AppHandle) {
+    let runs_server = app
+        .path()
+        .app_config_dir()
+        .is_ok_and(|dir| local::enabled(&dir));
+    if let Some(port) = local::ready_port().filter(|_| runs_server) {
+        local::start();
+        if let Err(e) = local::wait_until_up(port).await {
+            eprintln!("yardbell: {e}");
+        }
+    }
     let session = app.state::<Session>();
     let Some((server, cookie)) = session.store.load() else {
         if let Err(e) = windows::show_connect(&app, None) {
@@ -467,10 +527,13 @@ fn main() {
         )
         .invoke_handler(tauri::generate_handler![
             connect,
+            local_server_status,
+            set_up_local_server,
             connect_message,
             connect_server,
             retry_connect,
             change_server,
+            sign_out_now,
             select_tab,
             close_tab,
             tab_list,

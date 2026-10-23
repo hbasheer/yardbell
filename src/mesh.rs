@@ -126,6 +126,76 @@ pub fn addresses(out: &str) -> Vec<String> {
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct Detected {
+    pub provider: MeshProvider,
+    pub ip: Option<String>,
+}
+
+const DETECT_ORDER: [MeshProvider; 4] = [
+    MeshProvider::Nordvpn,
+    MeshProvider::Tailscale,
+    MeshProvider::Netbird,
+    MeshProvider::Zerotier,
+];
+
+fn provider_of_interface(name: &str) -> Option<MeshProvider> {
+    match name {
+        "nordlynx" => Some(MeshProvider::Nordvpn),
+        "tailscale0" => Some(MeshProvider::Tailscale),
+        "wt0" => Some(MeshProvider::Netbird),
+        n if n.starts_with("zt") => Some(MeshProvider::Zerotier),
+        _ => None,
+    }
+}
+
+// `ip -o` prints "4: nordlynx    inet 100.96.1.16/10 ..."; ifconfig prints the address on a line
+// of its own, so there the interface is unknown.
+fn mesh_address(out: &str) -> Option<(String, Option<MeshProvider>)> {
+    out.lines().find_map(|line| {
+        let ip = addresses(line).into_iter().find(|ip| is_mesh_ip(ip))?;
+        let interface = line
+            .split_whitespace()
+            .nth(1)
+            .and_then(provider_of_interface);
+        Some((ip, interface))
+    })
+}
+
+pub async fn detect(runner: &dyn Runner) -> Detected {
+    let mut address = None;
+    for cmd in [
+        argv(&["ip", "-o", "-4", "addr", "show"]),
+        argv(&["ifconfig"]),
+    ] {
+        let out = runner.run(cmd, None, CHECK_TIMEOUT).await;
+        if out.ok() {
+            address = mesh_address(&out.stdout);
+            break;
+        }
+    }
+    let mut installed = None;
+    for p in DETECT_ORDER {
+        let Some(cmd) = status_argv(p) else { continue };
+        let out = runner.run(cmd, None, CHECK_TIMEOUT).await;
+        if out.status == Some(127) {
+            continue;
+        }
+        if parse_status(p, &out.stdout) == Some(true) {
+            installed = Some(p);
+            break;
+        }
+        installed.get_or_insert(p);
+    }
+    let (ip, by_interface) = address.unzip();
+    Detected {
+        provider: installed
+            .or(by_interface.flatten())
+            .unwrap_or(MeshProvider::None),
+        ip,
+    }
+}
+
 pub fn off_hint(p: MeshProvider, has_cli: bool) -> String {
     match (p, has_cli) {
         (MeshProvider::Nordvpn, false) => "Open the NordVPN app and turn on Meshnet.".into(),
@@ -490,6 +560,73 @@ mod tests {
         let ifconfig =
             "utun4: flags=8051<UP>\n\tinet 100.80.12.34 --> 100.80.12.34 netmask 0xffc00000\n";
         assert_eq!(addresses(ifconfig), vec!["100.80.12.34"]);
+    }
+
+    #[tokio::test]
+    async fn detect_prefers_a_running_vpn_and_reads_the_mesh_address() {
+        let fake = FakeRunner::default();
+        fake.stub(
+            "ip -o -4 addr show",
+            Output::ok_with("1: lo    inet 127.0.0.1/8 scope host lo\n4: nordlynx    inet 100.96.1.16/10 scope global nordlynx\n"),
+        );
+        fake.stub("nordvpn settings", Output::ok_with("Meshnet: disabled\n"));
+        fake.stub(
+            "tailscale status",
+            Output::ok_with(r#"{"BackendState":"Running"}"#),
+        );
+        assert_eq!(
+            detect(&fake).await,
+            Detected {
+                provider: P::Tailscale,
+                ip: Some("100.96.1.16".into())
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn detect_falls_back_to_an_installed_cli_then_the_interface() {
+        let fake = FakeRunner::default();
+        fake.stub(
+            "ip -o -4 addr show",
+            Output::ok_with("2: eth0    inet 10.0.0.5/24\n"),
+        );
+        fake.stub("netbird status", Output::failed(1, "daemon not running"));
+        assert_eq!(
+            detect(&fake).await,
+            Detected {
+                provider: P::Netbird,
+                ip: None
+            }
+        );
+
+        let fake = FakeRunner::default();
+        fake.stub(
+            "ip -o -4 addr show",
+            Output::ok_with("4: nordlynx    inet 100.64.0.10/10 scope global nordlynx\n"),
+        );
+        assert_eq!(
+            detect(&fake).await,
+            Detected {
+                provider: P::Nordvpn,
+                ip: Some("100.64.0.10".into())
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn detect_on_macos_reads_ifconfig_and_finds_no_provider_without_a_cli() {
+        let fake = FakeRunner::default();
+        fake.stub(
+            "ifconfig",
+            Output::ok_with("utun4: flags=8051<UP> mtu 1420\n\tinet 100.80.98.108 --> 100.80.98.108 netmask 0xffc00000\n"),
+        );
+        assert_eq!(
+            detect(&fake).await,
+            Detected {
+                provider: P::None,
+                ip: Some("100.80.98.108".into())
+            }
+        );
     }
 
     #[test]

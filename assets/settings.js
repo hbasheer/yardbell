@@ -93,6 +93,83 @@ function renderPhone(p) {
   renderPhoneStatus(p);
 }
 
+function renderMcp(m) {
+  const on = Boolean(m.token);
+  $("mcp-intro").hidden = on;
+  $("mcp-panel").hidden = !on;
+  $("mcp-turn-off").hidden = !on;
+  if (!on) return;
+  const url = m.urls.find((u) => !u.includes("//127.0.0.1:")) || m.urls[0];
+  $("mcp-command").textContent = `claude mcp add --transport http --scope user yardbell ${url} --header "Authorization: Bearer ${m.token}"`;
+}
+
+let editing = null;
+
+function serverTarget(srv) {
+  return srv.url || srv.command;
+}
+
+function renderServers() {
+  const servers = data.mcp_servers || [];
+  $("server-rows").hidden = !servers.length;
+  $("server-rows").innerHTML = servers.map((srv, i) => `<li class="row">
+    <div class="row-main"><div class="row-title"><span class="folder">${esc(srv.name)}</span></div>
+      <p class="help">${esc(serverTarget(srv))} · ${srv.machines?.length ? esc(srv.machines.join(", ")) : "every machine"}</p></div>
+    <div class="row-actions"><button class="btn" type="button" data-edit="${i}">Edit</button><button class="btn quiet danger" type="button" data-remove="${i}">Remove</button></div></li>`).join("");
+}
+
+function showKind(kind) {
+  $("server-form").querySelectorAll("[data-kind]").forEach((el) => { el.hidden = el.dataset.kind !== kind; });
+  $("server-pairs-label").textContent = kind === "url" ? "Headers" : "Environment variables";
+  $("server-form").elements.pairs.placeholder = kind === "url" ? "Authorization=Bearer ..." : "GITHUB_TOKEN=ghp_...";
+}
+
+function openServerForm(index) {
+  editing = index;
+  const srv = index === null ? { name: "", command: "", url: "", env: {}, headers: {}, machines: [] } : data.mcp_servers[index];
+  const f = $("server-form");
+  const kind = srv.url ? "url" : "command";
+  f.elements.name.value = srv.name;
+  f.elements.kind.value = kind;
+  f.elements.command.value = srv.command || "";
+  f.elements.url.value = srv.url || "";
+  f.elements.pairs.value = Object.entries((kind === "url" ? srv.headers : srv.env) || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+  $("server-machines").innerHTML = data.machines.map((m) => `<label class="choice"><input type="checkbox" value="${esc(m.name)}"${srv.machines?.includes(m.name) ? " checked" : ""}>${esc(m.name)}</label>`).join("");
+  showKind(kind);
+  f.hidden = false;
+  f.elements.name.focus();
+}
+
+function readPairs(text) {
+  const pairs = {};
+  for (const line of text.split("\n")) {
+    if (!line.trim()) continue;
+    const at = line.indexOf("=");
+    if (at < 1) throw new Error(`"${line.trim()}" needs to look like NAME=value`);
+    pairs[line.slice(0, at).trim()] = line.slice(at + 1).trim();
+  }
+  return pairs;
+}
+
+async function saveServers(servers, message) {
+  await api("POST", "/api/settings/mcp/servers", { servers });
+  saved(message);
+  await load();
+}
+
+async function mcpAction(url, message) {
+  $("mcp").querySelectorAll("button").forEach((b) => { b.disabled = true; });
+  try {
+    await api("POST", url, {});
+    toast(message, "ok");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    $("mcp").querySelectorAll("button").forEach((b) => { b.disabled = false; });
+  }
+}
+
 function renderPhoneStatus(p) {
   const failed = Boolean(p.last_error_at) && (!p.last_sent || Date.parse(p.last_error_at) > Date.parse(p.last_sent));
   const status = $("phone-status");
@@ -134,6 +211,8 @@ async function load() {
   $("mesh-current").textContent = `currently ${LABELS[data.mesh] || data.mesh}`;
   $("machine-forms").innerHTML = data.machines.map(machineForm).join("");
   renderPhone(data.phone);
+  renderMcp(data.mcp);
+  renderServers();
   if (!data.can_undo) $("undo-btn").hidden = true;
 }
 
@@ -293,6 +372,64 @@ $("phone-turn-off").addEventListener("click", async () => {
     phoneBusy(false);
   }
   if (!$("phone-intro").hidden) $("phone-setup").focus();
+});
+
+$("mcp-on").addEventListener("click", () => mcpAction("/api/settings/mcp/on", "The MCP server is on."));
+
+$("mcp-rotate").addEventListener("click", async () => {
+  if (!(await Nav.confirm("Make a new MCP token?", "Agents set up with the current token lose access until you add Yardbell again with the new command.", { confirm: "Make new token" }))) return;
+  mcpAction("/api/settings/mcp/on", "New token made. Add Yardbell to your agents again.");
+});
+
+$("mcp-turn-off").addEventListener("click", async () => {
+  if (!(await Nav.confirm("Turn off the MCP server?", "Agents lose access to Yardbell's tools. Turning it on again makes a new token.", { confirm: "Turn off", danger: true }))) return;
+  mcpAction("/api/settings/mcp/off", "The MCP server is off.");
+});
+
+$("server-add").addEventListener("click", () => openServerForm(null));
+$("server-cancel").addEventListener("click", () => { $("server-form").hidden = true; });
+$("server-form").elements.kind.addEventListener("change", (e) => showKind(e.target.value));
+
+$("server-rows").addEventListener("click", async (e) => {
+  const edit = e.target.closest("[data-edit]");
+  if (edit) { openServerForm(Number(edit.dataset.edit)); return; }
+  const remove = e.target.closest("[data-remove]");
+  if (!remove) return;
+  const srv = data.mcp_servers[Number(remove.dataset.remove)];
+  if (!(await Nav.confirm(`Remove ${srv.name}?`, "New sessions stop getting this server. Running sessions keep it until they end.", { confirm: "Remove", danger: true }))) return;
+  try {
+    await saveServers(data.mcp_servers.filter((s) => s !== srv), `${srv.name} removed.`);
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("server-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const url = f.elements.kind.value === "url";
+  try {
+    const pairs = readPairs(f.elements.pairs.value);
+    const srv = {
+      name: f.elements.name.value.trim(),
+      command: url ? "" : f.elements.command.value.trim(),
+      url: url ? f.elements.url.value.trim() : "",
+      env: url ? {} : pairs,
+      headers: url ? pairs : {},
+      machines: [...$("server-machines").querySelectorAll("input:checked")].map((c) => c.value),
+    };
+    const servers = [...(data.mcp_servers || [])];
+    if (editing === null) servers.push(srv); else servers[editing] = srv;
+    await saveServers(servers, `${srv.name} saved. New Claude Code sessions get it.`);
+    f.hidden = true;
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("mcp-copy").addEventListener("click", () => {
+  if (copyText($("mcp-command").textContent)) toast("Command copied", "ok");
+  else toast("Couldn't copy. Select the command and copy it.");
 });
 
 $("pass-form").addEventListener("submit", async (e) => {
