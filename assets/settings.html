@@ -83,6 +83,19 @@
     <div id="machine-forms" class="machine-forms"></div>
   </section>
 
+  <section id="pair">
+    <div class="section-head"><h2>Connect a phone</h2></div>
+    <div class="panel pair-panel">
+      <div class="pair-text">
+        <p>Open the Yardbell app on your Android phone, tap <strong>Scan a pairing code</strong> and point it at the code. The phone signs in without the passcode. It must be on the same mesh VPN as this server.</p>
+        <p class="help">Each code works once, for five minutes. Get the app from the <a href="https://github.com/hbasheer/yardbell/releases/latest" target="_blank" rel="noopener">latest release</a>.</p>
+        <p class="help" id="pair-status" role="status"></p>
+        <button class="btn primary" type="button" id="pair-show">Show pairing code</button>
+      </div>
+      <div class="pair-code" id="pair-code" hidden></div>
+    </div>
+  </section>
+
   <section id="phone">
     <div class="section-head"><h2>Phone notifications</h2><button class="btn quiet danger small-link" type="button" id="phone-turn-off" hidden>Turn off</button></div>
     <div class="panel phone-intro" id="phone-intro" hidden>

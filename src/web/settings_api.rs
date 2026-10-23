@@ -28,6 +28,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/mcp/off", post(mcp_off))
         .route("/api/settings/mcp/servers", post(mcp_servers))
         .route("/api/settings/dispatch", post(dispatch))
+        .route("/api/settings/pair", post(pair))
         .route("/api/settings/passcode", post(passcode))
         .route("/api/settings/logout-all", post(logout_all))
         .route("/api/settings/undo", post(undo))
@@ -223,6 +224,49 @@ async fn mcp_servers(
 async fn mcp_off(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
     app.settings.set_mcp_token(None).map_err(bad)?;
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+pub fn pairing_link(server: &str, code: &str) -> String {
+    let enc: String = server
+        .bytes()
+        .map(|b| match b {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => {
+                (b as char).to_string()
+            }
+            _ => format!("%{b:02X}"),
+        })
+        .collect();
+    format!("yardbell://pair?server={enc}&code={code}")
+}
+
+async fn pair(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let Some(ip) = cfg
+        .bind_addresses()
+        .into_iter()
+        .find(|ip| ip != "127.0.0.1")
+    else {
+        return Err(bad(
+            "this server has no mesh address yet, so a phone cannot reach it. Set this machine's mesh address under Machines first".into(),
+        ));
+    };
+    let server = format!("http://{ip}:{}", cfg.port);
+    let link = pairing_link(&server, &super::new_pairing(&app));
+    let qr = qrcode::QrCode::new(link.as_bytes())
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+        .render::<qrcode::render::svg::Color>()
+        .min_dimensions(240, 240)
+        .quiet_zone(true)
+        .dark_color(qrcode::render::svg::Color("#000000"))
+        .light_color(qrcode::render::svg::Color("#ffffff"))
+        .build();
+    Ok(Json(json!({
+        "server": server,
+        "link": link,
+        "qr_svg": qr,
+        "expires_in": super::PAIRING_TTL.as_secs(),
+    }))
+    .into_response())
 }
 
 #[derive(Deserialize)]

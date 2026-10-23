@@ -149,6 +149,7 @@ Download the file for your system from the
 | macOS, Apple silicon and Intel | `Yardbell_<version>_universal.dmg` |
 | Linux | `Yardbell_<version>_amd64.AppImage` |
 | Debian and Ubuntu | `Yardbell_<version>_amd64.deb` |
+| Android 7 and later | `Yardbell_<version>_android.apk` |
 
 - **macOS.** Open the `.dmg` and drag Yardbell to Applications. The app is not notarized by
   Apple, so macOS blocks the first launch. On macOS 14 and earlier, right-click Yardbell in
@@ -158,8 +159,15 @@ Download the file for your system from the
 - **Linux.** Run `chmod +x Yardbell_*.AppImage` and start the file, or on Debian and Ubuntu
   install the `.deb` with `sudo apt install ./Yardbell_<version>_amd64.deb`. Arch and Omarchy
   need `webkit2gtk-4.1` (`sudo pacman -S webkit2gtk-4.1`).
-- **Phones and Windows.** There is no app for Android, iPhone or Windows yet. On a phone, open the
-  dashboard in the browser, see [Terminal and phone](#terminal-and-phone).
+- **Android.** Open the `.apk` on the phone and allow installing from your browser or file app
+  when Android asks. Then, on a computer, open Yardbell's **Settings → Connect a phone** and press
+  **Show pairing code**; in the app tap **Scan a pairing code** and point the camera at it. The
+  phone signs in without the passcode (each code works once, for five minutes) and remembers the
+  server. The phone must be on the same mesh VPN. The app shows the server's own pages, so the
+  dashboard, terminals and Dispatch work as in a browser; the back gesture returns to the server
+  list.
+- **iPhone and Windows.** There is no app yet. On an iPhone, open the dashboard in the browser, see
+  [Terminal and phone](#terminal-and-phone).
 
 There is no auto-update. To upgrade, install the newer release over the old one.
 

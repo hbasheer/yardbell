@@ -418,6 +418,41 @@ $("dispatch-form").addEventListener("submit", async (e) => {
   }
 });
 
+let pairTimer = 0;
+
+function stopPairing(message) {
+  clearInterval(pairTimer);
+  $("pair-code").hidden = true;
+  $("pair-code").innerHTML = "";
+  $("pair-show").textContent = "Show pairing code";
+  $("pair-status").textContent = message || "";
+}
+
+$("pair-show").addEventListener("click", async () => {
+  const button = $("pair-show");
+  button.disabled = true;
+  try {
+    const pair = await api("POST", "/api/settings/pair", {});
+    clearInterval(pairTimer);
+    $("pair-code").innerHTML = pair.qr_svg;
+    $("pair-code").hidden = false;
+    button.textContent = "Show a new code";
+    const ends = Date.now() + pair.expires_in * 1000;
+    const tick = () => {
+      const left = Math.round((ends - Date.now()) / 1000);
+      if (left <= 0) { stopPairing("That code expired. Show a new one to pair."); return; }
+      $("pair-status").textContent = `Pairs with ${pair.server}. Expires in ${Math.floor(left / 60)}:${String(left % 60).padStart(2, "0")}.`;
+    };
+    tick();
+    pairTimer = setInterval(tick, 1000);
+  } catch (err) {
+    stopPairing();
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
 $("server-add").addEventListener("click", () => openServerForm(null));
 $("server-cancel").addEventListener("click", () => { $("server-form").hidden = true; });
 $("server-form").elements.kind.addEventListener("change", (e) => showKind(e.target.value));
