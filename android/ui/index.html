@@ -1,0 +1,139 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="light dark">
+<title>Yardbell</title>
+<style>
+  :root {
+    --bg: #ffffff;
+    --side: #f8fafc;
+    --surface: #ffffff;
+    --hover: #f1f5f9;
+    --ink: #0f172a;
+    --ink-2: #334155;
+    --muted: #64748b;
+    --line: #e2e8f0;
+    --line-strong: #cbd5e1;
+    --accent: #2563eb;
+    --accent-ink: #ffffff;
+    --accent-text: #1d4ed8;
+    --ok: #16a34a;
+    --bad-text: #b91c1c;
+    --sans: "Inter Variable", Inter, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #0a0a0b;
+      --side: #0f1012;
+      --surface: #0a0a0b;
+      --hover: #17181b;
+      --ink: #ededef;
+      --ink-2: #c4c6cc;
+      --muted: #8b8f98;
+      --line: #1f2125;
+      --line-strong: #2e3137;
+      --accent-text: #93c5fd;
+      --bad-text: #f87171;
+      color-scheme: dark;
+    }
+  }
+  * { box-sizing: border-box; }
+  [hidden] { display: none !important; }
+  body {
+    margin: 0;
+    min-height: 100dvh;
+    background: var(--side);
+    color: var(--ink);
+    font: 15px/1.5 var(--sans);
+    -webkit-font-smoothing: antialiased;
+    -webkit-tap-highlight-color: transparent;
+  }
+  main {
+    max-width: 480px;
+    margin: 0 auto;
+    padding: calc(24px + env(safe-area-inset-top)) 16px calc(24px + env(safe-area-inset-bottom));
+    display: grid;
+    gap: 20px;
+  }
+  header { display: flex; align-items: center; gap: 12px; }
+  header img { width: 40px; height: 40px; }
+  h1 { margin: 0; font-size: 20px; font-weight: 650; letter-spacing: -0.01em; }
+  h2 { margin: 0 0 8px; font-size: 13px; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
+  p { margin: 0; }
+  .lede { color: var(--muted); font-size: 14px; }
+  .servers { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); overflow: hidden; }
+  .servers li { display: flex; align-items: center; }
+  .servers li + li { border-top: 1px solid var(--line); }
+  .open { flex: 1; min-width: 0; display: grid; gap: 2px; padding: 14px 16px; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+  .open:active { background: var(--hover); }
+  .addr { font: 500 15px var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .note { font-size: 13px; color: var(--muted); }
+  .note.out { color: var(--bad-text); }
+  .forget { width: 48px; height: 48px; border: 0; background: none; color: var(--muted); font-size: 20px; }
+  .btn {
+    font: 600 15px/1 var(--sans);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    width: 100%;
+    min-height: 48px;
+    padding: 0 16px;
+    border: 1px solid var(--line-strong);
+    border-radius: 10px;
+    background: var(--surface);
+    color: var(--ink);
+  }
+  .btn.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+  .btn:disabled { opacity: 0.55; }
+  .btn svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 1.8; stroke-linecap: round; stroke-linejoin: round; }
+  .panel { display: grid; gap: 14px; padding: 16px; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); }
+  label { display: grid; gap: 6px; font-size: 14px; font-weight: 500; color: var(--ink-2); }
+  input { font: 16px var(--sans); height: 46px; padding: 0 12px; border: 1px solid var(--line-strong); border-radius: 8px; background: var(--surface); color: var(--ink); width: 100%; }
+  input:focus { outline: none; border-color: var(--accent); }
+  .link { border: 0; background: none; color: var(--accent-text); font: 500 15px var(--sans); padding: 8px 0; }
+  .err { color: var(--bad-text); font-size: 14px; min-height: 1.5em; }
+  .busy { color: var(--muted); font-size: 14px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <img src="icon.png" width="40" height="40" alt="">
+    <h1>Yardbell</h1>
+  </header>
+
+  <section id="saved" hidden>
+    <h2>Your servers</h2>
+    <ul class="servers" id="servers"></ul>
+  </section>
+
+  <section class="panel">
+    <p class="lede" id="intro">Pair this phone with a Yardbell server. On a computer, open Yardbell's <strong>Settings → Connect a phone</strong> and scan the code shown there. This phone must be on the same mesh VPN.</p>
+    <button class="btn primary" id="scan" type="button">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 8V5a1 1 0 0 1 1-1h3M16 4h3a1 1 0 0 1 1 1v3M20 16v3a1 1 0 0 1-1 1h-3M8 20H5a1 1 0 0 1-1-1v-3M7 12h10"/></svg>
+      Scan a pairing code
+    </button>
+    <button class="link" id="show-manual" type="button">Enter an address and passcode instead</button>
+    <form id="manual" hidden>
+      <div class="panel" style="padding:0;border:0">
+        <label>Server address
+          <input name="server" placeholder="100.64.0.10:4000" autocapitalize="off" autocomplete="url" spellcheck="false" inputmode="url">
+        </label>
+        <label>Passcode
+          <input name="passcode" type="password" autocomplete="current-password">
+        </label>
+        <button class="btn" type="submit">Sign in</button>
+      </div>
+    </form>
+    <p class="busy" id="busy" role="status" hidden></p>
+    <p class="err" id="err" role="alert"></p>
+  </section>
+</main>
+<script src="app.js"></script>
+</body>
+</html>

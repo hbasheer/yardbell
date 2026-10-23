@@ -785,6 +785,12 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 #servers > .help { margin: 0 0 12px; }
 #dispatch-form textarea { font-family: var(--sans); font-size: 14px; }
 .dispatch-help { margin: -6px 0 14px; }
+.pair-panel { display: flex; gap: 24px; align-items: center; }
+.pair-text { flex: 1; display: grid; gap: 10px; justify-items: start; }
+.pair-text p { margin: 0; }
+.pair-code { flex: none; width: 240px; padding: 8px; border-radius: 8px; background: #ffffff; line-height: 0; }
+.pair-code svg { width: 100%; height: auto; }
+@media (max-width: 760px) { .pair-panel { flex-direction: column; align-items: stretch; } .pair-code { align-self: center; } }
 .mcp-on { display: grid; gap: 12px; justify-items: start; }
 .mcp-on p { margin: 0; }
 .mcp-on .phone-field { max-width: 100%; }

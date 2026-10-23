@@ -1,6 +1,8 @@
 /target/
 /desktop/target
 /desktop/gen
+/android/target
+/android/gen/schemas
 /yardbell.yml
 *.bak-*
 

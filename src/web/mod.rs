@@ -32,6 +32,8 @@ pub const COOKIE: &str = "yardbell_session";
 pub const COOKIE_TTL_SECS: u64 = 2_592_000;
 const HANDOFF_TTL: Duration = Duration::from_secs(30);
 const HANDOFF_MAX: usize = 16;
+pub const PAIRING_TTL: Duration = Duration::from_secs(300);
+const PAIRING_MAX: usize = 4;
 
 #[derive(rust_embed::RustEmbed)]
 #[folder = "assets/"]
@@ -72,6 +74,7 @@ pub struct AppState {
     pub auth: Auth,
     pub key: std::sync::RwLock<Key>,
     pub handoff: std::sync::Mutex<Vec<(String, Instant)>>,
+    pub pairing: std::sync::Mutex<Vec<(String, Instant)>>,
     refresh: Refresh,
     clock: Clock,
 }
@@ -119,6 +122,7 @@ impl AppState {
             auth: Auth::new(cfg.passcode_hash.clone().unwrap_or_default(), clock.clone()),
             key: std::sync::RwLock::new(cookie_key(cfg)),
             handoff: std::sync::Mutex::new(Vec::new()),
+            pairing: std::sync::Mutex::new(Vec::new()),
             refresh,
             clock,
         }
@@ -234,7 +238,8 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
         );
     }
     let path = req.uri().path();
-    let public_handoff = req.method() == Method::GET && path.starts_with("/app/handoff/");
+    let public_handoff = (req.method() == Method::GET && path.starts_with("/app/handoff/"))
+        || (req.method() == Method::POST && path.starts_with("/app/pair/"));
     if path == "/login"
         || path == "/style.css"
         || public_handoff
@@ -275,6 +280,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/logout", post(logout))
         .route("/app/handoff", post(handoff_new))
         .route("/app/handoff/{code}", get(handoff_redeem))
+        .route("/app/pair/{code}", post(pair_redeem))
         .route("/style.css", get(|| async { asset("style.css") }))
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
         .route("/nav.js", get(|| async { asset("nav.js") }))
@@ -362,12 +368,53 @@ fn login_cookie() -> Cookie<'static> {
     cookie
 }
 
-async fn handoff_new(AxState(app): AxState<Arc<AppState>>) -> Response {
-    let code: String = rand::thread_rng()
+fn random_code(len: usize) -> String {
+    rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
-        .take(32)
+        .take(len)
         .map(char::from)
-        .collect();
+        .collect()
+}
+
+pub fn new_pairing(app: &AppState) -> String {
+    let code = random_code(32);
+    let mut codes = app.pairing.lock().expect("pairing lock");
+    codes.push((code.clone(), (app.clock)()));
+    if codes.len() > PAIRING_MAX {
+        codes.remove(0);
+    }
+    code
+}
+
+// A paired phone gets the same login a passcode gives. The code works once, for five minutes.
+async fn pair_redeem(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(code): UrlPath<String>,
+    headers: HeaderMap,
+) -> Response {
+    let now = (app.clock)();
+    let issued = {
+        let mut codes = app.pairing.lock().expect("pairing lock");
+        codes
+            .iter()
+            .position(|(c, _)| *c == code)
+            .map(|i| codes.remove(i).1)
+    };
+    if !issued.is_some_and(|at| now.saturating_duration_since(at) <= PAIRING_TTL) {
+        return error(
+            StatusCode::UNAUTHORIZED,
+            "this pairing code is used or expired, show a new one in Settings",
+        );
+    }
+    (
+        app.jar(&headers).add(login_cookie()),
+        Json(json!({ "ok": true })),
+    )
+        .into_response()
+}
+
+async fn handoff_new(AxState(app): AxState<Arc<AppState>>) -> Response {
+    let code = random_code(32);
     let mut codes = app.handoff.lock().expect("handoff lock");
     codes.push((code.clone(), (app.clock)()));
     if codes.len() > HANDOFF_MAX {

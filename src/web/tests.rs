@@ -1711,3 +1711,68 @@ async fn dispatch_settings_are_saved_and_checked() {
         .iter()
         .any(|a| a["name"] == "codex"));
 }
+
+#[tokio::test]
+async fn a_pairing_code_logs_a_phone_in_once_within_five_minutes() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let new_code = || {
+        Request::post("/api/settings/pair")
+            .header(header::COOKIE, &c)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from("{}"))
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, new_code()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let pair: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(pair["server"], "http://100.64.0.10:4000");
+    assert_eq!(pair["expires_in"], 300);
+    assert!(pair["qr_svg"].as_str().unwrap().starts_with("<?xml"));
+    let link = pair["link"].as_str().unwrap();
+    let prefix = "yardbell://pair?server=http%3A%2F%2F100.64.0.10%3A4000&code=";
+    assert!(link.starts_with(prefix), "{link}");
+    let code = &link[prefix.len()..];
+    assert_eq!(code.len(), 32);
+
+    let redeem = |code: &str| {
+        Request::post(format!("/app/pair/{code}"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, headers, _) = send(&r.app, redeem(code)).await;
+    assert_eq!(status, StatusCode::OK);
+    let phone = headers[header::SET_COOKIE]
+        .to_str()
+        .unwrap()
+        .split(';')
+        .next()
+        .unwrap()
+        .to_string();
+    let (status, _, _) = send(
+        &r.app,
+        Request::get("/state")
+            .header(header::COOKIE, &phone)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "the phone is logged in");
+
+    let (status, _, body) = send(&r.app, redeem(code)).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "a code works once");
+    assert!(body.contains("used or expired"), "{body}");
+    let (status, _, _) = send(&r.app, redeem("not-a-real-code")).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED);
+
+    let (_, _, body) = send(&r.app, new_code()).await;
+    let pair: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let late = pair["link"].as_str().unwrap()[prefix.len()..].to_string();
+    r.advance(301);
+    let (status, _, _) = send(&r.app, redeem(&late)).await;
+    assert_eq!(
+        status,
+        StatusCode::UNAUTHORIZED,
+        "codes expire after five minutes"
+    );
+}
