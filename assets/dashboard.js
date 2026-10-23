@@ -214,7 +214,10 @@ function looseRow(s) {
   const busy = s.activity === "active" ? `<span class="badge busy" title="Estimated from CPU use">Working</span>` : "";
   return `<li class="sub-row">
     <div class="s-main">${identity(s, busy)}</div>
-    <button class="btn" type="button" data-act="move" data-machine="${esc(s.machine)}" data-pid="${s.pid}" data-folder="${esc(short(s.folder))}" data-agent="${esc(s.agent)}" data-busy="${s.activity === "active"}">Move to tmux</button>
+    <div class="row-actions">
+      <button class="btn" type="button" data-act="move" data-machine="${esc(s.machine)}" data-pid="${s.pid}" data-folder="${esc(short(s.folder))}" data-agent="${esc(s.agent)}" data-busy="${s.activity === "active"}">Move to tmux</button>
+      <button class="btn quiet danger" type="button" data-act="stop-pid" data-machine="${esc(s.machine)}" data-pid="${s.pid}" data-folder="${esc(short(s.folder))}" data-agent="${esc(s.agent)}" data-busy="${s.activity === "active"}">Stop</button>
+    </div>
   </li>`;
 }
 
@@ -817,6 +820,10 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (act === "stop" && !(await ask(`Stop ${name} on ${machine}?`, "The agent in that session closes.", { confirm: "Stop", danger: true }))) return;
+  if (act === "stop-pid") {
+    const warn = busy === "true" ? "It is working right now and will be interrupted. " : "";
+    if (!(await ask(`Stop ${agentLabel(agent)} in ${folder} on ${machine}?`, `${warn}The agent ends and the terminal it runs in gets its prompt back. Its conversation is kept, so Resume can continue it.`, { confirm: "Stop", danger: true }))) return;
+  }
   if (act === "move") {
     const warn = busy === "true" ? "It is working right now and will be interrupted. " : "";
     if (!(await ask(`Move ${folder} on ${machine} into tmux?`, `${warn}Yardbell stops ${agentLabel(agent)} and starts it again in tmux with its last conversation. The terminal it runs in now gets its prompt back.`, { confirm: "Move to tmux" }))) return;
@@ -842,6 +849,9 @@ document.addEventListener("click", async (e) => {
     if (act === "stop") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}/stop`);
       toast(`Stopped ${name}`, "ok");
+    } else if (act === "stop-pid") {
+      await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(pid)}/stop-process`);
+      toast(`Stopped ${agentLabel(agent)} in ${folder}`, "ok");
     } else if (act === "host") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}/host-terminal`);
     } else if (act === "resume") {
