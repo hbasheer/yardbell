@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.4.1] - 2026-10-23
+
 - **Dispatch settings**: your own instructions for Dispatch, the agent it starts in new sessions,
   and the Claude model that runs it (Sonnet, Opus or Haiku), in a new Dispatch section of Settings.
   The Dispatch page links to it.
