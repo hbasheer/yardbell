@@ -13,6 +13,8 @@ if (setup) {
   nameEl.append(strong, span);
   document.title = `${parts[2]} on ${parts[1]} · Yardbell`;
 }
+const embedded = new URLSearchParams(location.search).has("embed");
+document.body.classList.toggle("embedded", embedded);
 
 const FONT = '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace';
 const term = new Terminal({
@@ -159,10 +161,11 @@ function screenText() {
 }
 
 const textView = document.getElementById("text-view");
-document.getElementById("text-btn").addEventListener("click", () => {
+function showText() {
   document.getElementById("text-body").textContent = screenText();
   textView.classList.add("show");
-});
+}
+document.getElementById("text-btn").addEventListener("click", showText);
 document.getElementById("text-close").addEventListener("click", () => {
   textView.classList.remove("show");
   term.focus();
@@ -224,6 +227,104 @@ if (app) {
 
 term.onData(sendInput);
 window.addEventListener("resize", resize);
+
+const termEl = document.getElementById("term");
+let scrollQueued = 0;
+let scrollTimer = 0;
+
+function scrollLines(lines) {
+  if (!lines) return;
+  scrollQueued += lines;
+  if (scrollTimer) return;
+  scrollTimer = setTimeout(() => {
+    scrollTimer = 0;
+    if (scrollQueued) send({ t: "scroll", lines: scrollQueued });
+    scrollQueued = 0;
+  }, 40);
+}
+
+function lineHeight() {
+  const screen = term.element?.querySelector(".xterm-screen");
+  return screen && term.rows ? screen.clientHeight / term.rows : 16;
+}
+
+// tmux draws on the alternate screen, where xterm.js has no scrollback: a swipe would do
+// nothing and the wheel would send arrow keys to the agent. Both scroll tmux's history instead.
+const touch = { y: 0, t: 0, v: 0, rest: 0, glide: 0 };
+
+function drag(px) {
+  touch.rest += px;
+  const h = lineHeight();
+  const lines = Math.trunc(touch.rest / h);
+  if (!lines) return;
+  touch.rest -= lines * h;
+  scrollLines(-lines);
+}
+
+// xterm.js replaces row elements as the screen redraws, and touch events keep going to the
+// element the finger first landed on even once it is detached, so they never bubble up here.
+function touchMove(e) {
+  if (e.touches.length !== 1) return;
+  e.preventDefault();
+  e.stopPropagation();
+  const y = e.touches[0].clientY;
+  const dy = y - touch.y;
+  touch.v = dy / Math.max(1, e.timeStamp - touch.t);
+  touch.y = y;
+  touch.t = e.timeStamp;
+  drag(dy);
+}
+
+function touchEnd(e) {
+  e.currentTarget.removeEventListener("touchmove", touchMove);
+  if (e.timeStamp - touch.t > 80 || Math.abs(touch.v) < 0.3) return;
+  let v = touch.v;
+  let last = performance.now();
+  const step = (now) => {
+    const dt = now - last;
+    last = now;
+    drag(v * dt);
+    v *= Math.pow(0.95, dt / 16);
+    if (Math.abs(v) > 0.05) touch.glide = requestAnimationFrame(step);
+  };
+  touch.glide = requestAnimationFrame(step);
+}
+
+termEl.addEventListener("touchstart", (e) => {
+  if (setup || e.touches.length !== 1) return;
+  cancelAnimationFrame(touch.glide);
+  Object.assign(touch, { y: e.touches[0].clientY, t: e.timeStamp, v: 0, rest: 0 });
+  e.target.addEventListener("touchmove", touchMove, { passive: false });
+  e.target.addEventListener("touchend", touchEnd, { once: true });
+  e.target.addEventListener("touchcancel", touchEnd, { once: true });
+}, { capture: true, passive: true });
+
+let wheelRest = 0;
+termEl.addEventListener("wheel", (e) => {
+  if (setup || term.modes.mouseTrackingMode !== "none") return;
+  e.preventDefault();
+  e.stopPropagation();
+  const h = lineHeight();
+  wheelRest += e.deltaMode === 1 ? e.deltaY * h : e.deltaMode === 2 ? e.deltaY * h * term.rows : e.deltaY;
+  const lines = Math.trunc(wheelRest / h);
+  wheelRest -= lines * h;
+  scrollLines(lines);
+}, { capture: true, passive: false });
+
+if (embedded) {
+  window.addEventListener("message", (e) => {
+    if (e.origin !== location.origin) return;
+    if (e.data?.yardbell === "text") showText();
+    if (e.data?.yardbell === "focus") term.focus();
+  });
+  const WORKSPACE_KEYS = /^(Digit[1-9]|Backslash|Minus|KeyX|KeyT|BracketLeft|BracketRight|ArrowUp|ArrowDown)$/;
+  document.addEventListener("keydown", (e) => {
+    if (!e.altKey || e.ctrlKey || e.metaKey || !WORKSPACE_KEYS.test(e.code)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    parent.postMessage({ yardbell: "key", code: e.code }, location.origin);
+  }, true);
+}
 function pressKey(b) {
   if (b.dataset.key === "ctrl") {
     ctrl = !ctrl;
@@ -251,8 +352,12 @@ Promise.all([
   document.fonts.load('14px "JetBrains Mono"'),
   document.fonts.load('bold 14px "JetBrains Mono"'),
 ]).catch(() => {}).finally(() => {
-  term.open(document.getElementById("term"));
+  term.open(termEl);
   fit.fit();
   connect();
-  term.focus();
+  if (embedded) {
+    term.textarea?.addEventListener("focus", () => parent.postMessage({ yardbell: "focused" }, location.origin));
+  } else {
+    term.focus();
+  }
 });

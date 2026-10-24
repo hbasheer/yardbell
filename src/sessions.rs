@@ -41,6 +41,20 @@ fn exact(name: &str) -> String {
     format!("={name}")
 }
 
+// Agents draw on tmux's alternate screen, so the browser terminal has no scrollback of its own.
+// Scrolling goes through copy mode instead, and -e leaves it once scrolled back to the bottom.
+fn scroll_command(name: &str, lines: i32) -> String {
+    let target = quote(&format!("{}:", exact(name)));
+    if lines < 0 {
+        format!(
+            r"tmux copy-mode -e -t {target} \; send-keys -X -t {target} -N {} scroll-up",
+            lines.unsigned_abs()
+        )
+    } else {
+        format!("tmux send-keys -X -t {target} -N {lines} scroll-down")
+    }
+}
+
 pub fn applescript(term: HostTerminal, argv: &[String]) -> Option<String> {
     let cmd: Vec<String> = argv.iter().map(|a| quote(a)).collect();
     let cmd = cmd.join(" ").replace('\\', "\\\\").replace('"', "\\\"");
@@ -156,6 +170,16 @@ impl Sessions {
             "tmux send-keys -t {target} -l {} && sleep 0.2 && tmux send-keys -t {target} Enter",
             quote(text)
         );
+        self.exec(m, &cmd).await
+    }
+
+    pub async fn scroll(&self, m: &Machine, name: &str, lines: i32) -> Result<(), String> {
+        self.exec(m, &scroll_command(name, lines)).await
+    }
+
+    pub async fn leave_copy_mode(&self, m: &Machine, name: &str) -> Result<(), String> {
+        let target = quote(&format!("{}:", exact(name)));
+        let cmd = format!("tmux send-keys -X -t {target} cancel 2>/dev/null || true");
         self.exec(m, &cmd).await
     }
 
@@ -575,6 +599,18 @@ mod tests {
         assert_eq!(
             fake.calls().pop().unwrap().last().unwrap(),
             r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"; export PATH; tmux kill-session -t '=hp-app'"#
+        );
+    }
+
+    #[test]
+    fn scroll_enters_copy_mode_only_going_up() {
+        assert_eq!(
+            scroll_command("hp-app", -3),
+            r"tmux copy-mode -e -t '=hp-app:' \; send-keys -X -t '=hp-app:' -N 3 scroll-up"
+        );
+        assert_eq!(
+            scroll_command("hp-app", 5),
+            "tmux send-keys -X -t '=hp-app:' -N 5 scroll-down"
         );
     }
 

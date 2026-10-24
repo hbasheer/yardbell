@@ -81,6 +81,8 @@ async function loadList() {
 }
 
 function scrollDown() {
+  const main = document.querySelector(".main");
+  main.scrollTo({ top: main.scrollHeight });
   window.scrollTo({ top: document.body.scrollHeight });
 }
 

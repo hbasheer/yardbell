@@ -5,6 +5,23 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Workspace**, modelled on herdr: a workspace per project with the state of its agents rolled
+  up, tabs inside each workspace, and panes you split right or down and resize by dragging the
+  border. Agents show as blocked (waiting for your answer or approval), working, done (finished
+  while you were looking elsewhere) or idle. Keyboard: Alt+1 to Alt+9 to go to a pane, Alt+\ and
+  Alt+- to split, Alt+X to close, Alt+T for a new tab, Alt+[ and Alt+] between tabs, Alt+↑ and
+  Alt+↓ between workspaces, also from inside a terminal. On a phone it shows the list, then one
+  terminal at a time.
+- Agent state comes from what the agent shows on screen, using herdr's detection rules, instead of
+  being guessed from CPU use. A permission prompt or question shows as **Needs you** on the
+  dashboard and sends the waiting notification at once, without the 20 second wait. Claude Code,
+  Codex, Gemini CLI, Qwen Code, opencode, Copilot CLI, Cursor Agent and the other agents herdr
+  knows are covered; for the rest, CPU use is still the estimate.
+- On a phone, only the page content scrolls and the header stays put.
+- Swiping a terminal on a phone scrolls back through its history. It did nothing before, because
+  agents draw on tmux's alternate screen where the browser terminal keeps no scrollback. The mouse
+  wheel does the same on the desktop instead of sending arrow keys to the agent. Typing anything
+  returns to the live screen first.
 - The Android app reports its real version (0.4.2 showed as 1.0 in Android's app settings). Its
   version now comes from `android/Cargo.toml`, with version code major × 1,000,000 + minor × 1,000
   + patch.

@@ -23,6 +23,13 @@ esc() {
 
 has() { command -v "$1" >/dev/null 2>&1; }
 
+# Screen text as a JSON string body: tabs become spaces, other control characters go, and lines
+# are joined with a literal \n.
+json_text() {
+  tr '\t' ' ' | tr -d '\000-\010\013-\037\177' | sed -e 's/\\/\\\\/g' -e 's/"/\\"/g' |
+    awk 'BEGIN { ORS = "" } { if (NR > 1) print "\\n"; print }'
+}
+
 # A Docker that stopped answering (out of memory, a stuck VM) would hold up the whole check and
 # mark the machine down, so its port list gets 3 seconds: the watchdog ends docker, and read -t
 # below stops waiting even if something else still holds the pipe. macOS has no timeout(1).
@@ -37,7 +44,7 @@ docker_ps() {
 
 panes=""
 if has tmux; then
-  panes=$(tmux list-panes -a -F '#{session_name} #{pane_tty}' 2>/dev/null || true)
+  panes=$(tmux list-panes -a -F '#{session_name} #{pane_tty} #{pane_id}' 2>/dev/null || true)
 fi
 
 candidates=""
@@ -87,13 +94,21 @@ $cwd"
   cpu=$(ps -o %cpu= -p "$pid" 2>/dev/null | tr -d ' ')
   tty=$(ps -o tty= -p "$pid" 2>/dev/null | tr -d ' ')
   session=""
+  pane=""
   if [ -n "$tty" ] && [ "$tty" != "?" ] && [ -n "$panes" ]; then
-    session=$(printf '%s\n' "$panes" | awk -v t="$tty" '{ n = split($2, p, "/"); if (p[n] == t || $2 == t || $2 == "/dev/" t) { print $1; exit } }')
+    read -r session pane <<EOF_PANE
+$(printf '%s\n' "$panes" | awk -v t="$tty" '{ n = split($2, p, "/"); if (p[n] == t || $2 == t || $2 == "/dev/" t) { print $1, $3; exit } }')
+EOF_PANE
   fi
   [ $first -eq 0 ] && printf ','
   first=0
   printf '{"agent":%s,"pid":%s,"cwd":%s,"cpu":%s,"tmux":' "$(esc "$agent")" "$pid" "$(esc "$cwd")" "${cpu:-0}"
   if [ -n "$session" ]; then esc "$session"; else printf 'null'; fi
+  if [ -n "$pane" ]; then
+    printf ',"title":"%s","screen":"%s"' \
+      "$(tmux display -p -t "$pane" '#{pane_title}' 2>/dev/null | json_text)" \
+      "$(tmux capture-pane -p -t "$pane" 2>/dev/null | json_text)"
+  fi
   printf '}'
 done <<EOF_AGENTS
 $candidates

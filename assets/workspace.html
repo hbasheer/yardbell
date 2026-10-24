@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
+<title>Workspace · Yardbell</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.0.20/index.css" integrity="sha384-6QsiPFEuz7gYJPDZq103sCr5aKoBCbqAXJq1fEUzeUHeJmXFTMGzGuUmfP4j5w5b" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body data-page="workspace">
+<div class="ws" id="ws">
+  <aside class="ws-side" aria-label="Workspaces and agents">
+    <div class="ws-side-head">
+      <a class="wordmark" href="/">Yardbell</a>
+      <a class="btn quiet ws-home" href="/">Dashboard</a>
+      <span class="ws-summary" id="summary" aria-live="polite"></span>
+    </div>
+    <nav class="ws-spaces" aria-label="Workspaces">
+      <p class="ws-label">Workspaces</p>
+      <ul id="spaces"></ul>
+    </nav>
+    <div class="ws-agents">
+      <p class="ws-label" id="agents-label">Agents</p>
+      <ul id="agents"></ul>
+    </div>
+    <button class="ws-hint" id="keys-btn" type="button">Keyboard shortcuts</button>
+  </aside>
+
+  <main class="ws-main">
+    <header class="ws-head">
+      <button class="btn quiet ws-back" id="back" type="button">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 4 6 8l4 4"/></svg>Agents
+      </button>
+      <div class="ws-tabs" id="tabs" role="tablist" aria-label="Tabs"></div>
+      <button class="btn quiet icon-btn ws-new-tab" id="new-tab" type="button" aria-label="New tab" title="New tab (Alt+T)">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+      </button>
+    </header>
+    <div class="ws-panes" id="panes"></div>
+  </main>
+</div>
+
+<dialog class="confirm ws-keys" id="keys">
+  <h2>Keyboard shortcuts</h2>
+  <p>They work from inside a terminal too.</p>
+  <dl>
+    <dt>Alt+1 to Alt+9</dt><dd>Go to pane</dd>
+    <dt>Alt+\</dt><dd>Split the pane to the right</dd>
+    <dt>Alt+-</dt><dd>Split the pane down</dd>
+    <dt>Alt+X</dt><dd>Close the pane</dd>
+    <dt>Alt+T</dt><dd>New tab</dd>
+    <dt>Alt+[ and Alt+]</dt><dd>Previous and next tab</dd>
+    <dt>Alt+↑ and Alt+↓</dt><dd>Previous and next workspace</dd>
+  </dl>
+  <div class="dialog-actions"><button class="btn primary" type="button" id="keys-close">Done</button></div>
+</dialog>
+<script src="/workspace.js"></script>
+</body>
+</html>
