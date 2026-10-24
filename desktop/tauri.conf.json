@@ -14,7 +14,7 @@
   },
   "bundle": {
     "active": true,
-    "targets": ["dmg", "appimage", "deb"],
+    "targets": ["dmg", "appimage", "deb", "rpm"],
     "publisher": "Yardbell",
     "homepage": "https://github.com/hbasheer/yardbell",
     "category": "DeveloperTool",

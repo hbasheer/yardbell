@@ -154,6 +154,7 @@ Download the file for your system from the
 | macOS, Apple silicon and Intel | `Yardbell_<version>_universal.dmg` |
 | Linux | `Yardbell_<version>_amd64.AppImage` |
 | Debian and Ubuntu | `Yardbell_<version>_amd64.deb` |
+| Fedora and openSUSE | `Yardbell-<version>-1.x86_64.rpm` |
 | Android 7 and later | `Yardbell_<version>_android.apk` |
 
 - **macOS.** Open the `.dmg` and drag Yardbell to Applications. The app is not notarized by
@@ -162,8 +163,10 @@ Download the file for your system from the
   to System Settings, Privacy & Security, and press **Open Anyway**. If macOS says the app is
   damaged, run `xattr -dr com.apple.quarantine /Applications/Yardbell.app` once.
 - **Linux.** Run `chmod +x Yardbell_*.AppImage` and start the file, or on Debian and Ubuntu
-  install the `.deb` with `sudo apt install ./Yardbell_<version>_amd64.deb`. Arch and Omarchy
-  need `webkit2gtk-4.1` (`sudo pacman -S webkit2gtk-4.1`).
+  install the `.deb` with `sudo apt install ./Yardbell_<version>_amd64.deb`. On Fedora install
+  the `.rpm` with `sudo dnf install ./Yardbell-<version>-1.x86_64.rpm`, on openSUSE with
+  `sudo zypper install ./Yardbell-<version>-1.x86_64.rpm`. Arch and Omarchy need `webkit2gtk-4.1`
+  (`sudo pacman -S webkit2gtk-4.1`).
 - **Android.** Open the `.apk` on the phone and allow installing from your browser or file app
   when Android asks. Then, on a computer, open Yardbell's **Settings → Connect a phone** and press
   **Show pairing code**; in the app tap **Scan a pairing code** and point the camera at it. The
