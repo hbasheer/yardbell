@@ -20,6 +20,8 @@ and the project uses [Semantic Versioning](https://semver.org).
   Codex, Gemini CLI, Qwen Code, opencode, Copilot CLI, Cursor Agent and the other agents herdr
   knows are covered; for the rest, CPU use is still the estimate.
 - On a phone, only the page content scrolls and the header stays put.
+- The desktop app comes as an `.rpm` for Fedora and openSUSE too, next to the `.AppImage` and the
+  `.deb`.
 - Swiping a terminal on a phone scrolls back through its history. It did nothing before, because
   agents draw on tmux's alternate screen where the browser terminal keeps no scrollback. The mouse
   wheel does the same on the desktop instead of sending arrow keys to the agent. Typing anything
