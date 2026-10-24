@@ -43,7 +43,12 @@ Yardbell answers all of these on one page.
   to the host over ssh (`prefix * 10000 + port`), with live status: tunnel up, app not running,
   tunnel down.
 - **A real terminal anywhere.** Open any tmux session in the browser with xterm.js, from the desktop
-  or a phone (with an Esc, Tab, Ctrl and arrow key row). Closing the tab only detaches.
+  or a phone (with an Esc, Tab, Ctrl and arrow key row). Swipe or scroll to read back through the
+  session's history. Closing the tab only detaches.
+- **A workspace like herdr's.** A workspace per project, tabs, and terminals you split and resize,
+  with every agent marked blocked, working, done or idle. The state is read from the agent's own
+  screen with [herdr](https://github.com/herdrdev/herdr)'s detection rules, so a permission prompt
+  shows as blocked the moment it appears.
 - **A desktop app.** For macOS and Linux: the dashboard and every terminal as tabs in a window of
   their own, with the system clipboard, every machine's state in the tray, and a notification when
   an agent is waiting, a session ends, a machine goes down or memory runs out.
@@ -299,7 +304,7 @@ below. The sidebar lists the machines, problems first, with a session count; cli
 that machine.
 
 - **Top bar:** search sessions by folder, branch, ticket or agent (press `/`), show All, Working or
-  Idle sessions, **Refresh** to check every machine right away, Add machine and New session.
+  Idle sessions (an agent waiting for you shows **Needs you** and counts as idle), **Refresh** to check every machine right away, Add machine and New session.
 - **Machine header:** fold the section away, **+** starts a new session on that machine, the terminal
   button opens a plain shell there (no agent, in its own tmux session), and the **⋯** menu has
   Machine settings, Copy ssh command and Remove machine.
@@ -645,7 +650,8 @@ machines. See [CONTRIBUTING.md](CONTRIBUTING.md).
 ## Limitations
 
 - Only sessions inside tmux can be opened from Yardbell.
-- Activity (working or idle) is estimated from CPU use.
+- Agent state is read from the screen only for agents herdr has rules for, and only inside tmux.
+  Other agents' working or idle is estimated from CPU use.
 - Docker on macOS hosts is unverified; the native binary is recommended there.
 - One host at a time: two Yardbell hosts would fight over the same local tunnel ports.
 

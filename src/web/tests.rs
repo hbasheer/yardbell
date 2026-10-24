@@ -237,6 +237,40 @@ async fn shared_nav_script_is_served_to_logged_in_pages() {
     }
 }
 
+#[tokio::test]
+async fn workspace_is_served_and_linked_from_every_sidebar() {
+    let r = rig();
+    let (status, headers, _) = send(
+        &r.app,
+        Request::get("/workspace").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FOUND);
+    assert_eq!(headers[header::LOCATION], "/login");
+    let c = cookie(&r.app).await;
+    for (path, needle) in [
+        ("/workspace", r#"<script src="/workspace.js"></script>"#),
+        ("/workspace.js", "ws-picking"),
+    ] {
+        let req = Request::get(path)
+            .header(header::COOKIE, c.clone())
+            .body(Body::empty())
+            .unwrap();
+        let (status, _, body) = send(&r.app, req).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert!(body.contains(needle), "{path}");
+    }
+    for page in [
+        "dashboard.html",
+        "dispatch.html",
+        "settings.html",
+        "add.html",
+    ] {
+        let html = String::from_utf8(Assets::get(page).unwrap().data.into_owned()).unwrap();
+        assert!(html.contains(r#"href="/workspace""#), "{page}");
+    }
+}
+
 #[test]
 fn cdn_files_are_pinned() {
     let pages: Vec<_> = Assets::iter().filter(|n| n.ends_with(".html")).collect();

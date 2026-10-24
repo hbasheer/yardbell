@@ -137,9 +137,10 @@ function memory(m) {
 
 function statusBadge(s) {
   if (s.stale) return `<span class="badge">Last known</span>`;
+  if (s.activity === "blocked") return `<span class="badge blocked" title="Waiting for your answer or approval">Needs you</span>`;
   return s.activity === "active"
-    ? `<span class="badge busy" title="Estimated from CPU use">Working</span>`
-    : `<span class="badge" title="Estimated from CPU use">Idle</span>`;
+    ? `<span class="badge busy">Working</span>`
+    : `<span class="badge">Idle</span>`;
 }
 
 function ports(s) {
@@ -176,8 +177,12 @@ function matchesText(fields) {
   return !filters.q || fields.join(" ").toLowerCase().includes(filters.q);
 }
 
+function shownAs(s) {
+  return s.activity === "blocked" ? "idle" : s.activity;
+}
+
 function matches(s) {
-  if (filters.status !== "all" && (s.stale || s.activity !== filters.status)) return false;
+  if (filters.status !== "all" && (s.stale || shownAs(s) !== filters.status)) return false;
   return matchesText([s.folder, s.branch, s.ticket === "-" ? "" : s.ticket, agentLabel(s.agent), s.machine]);
 }
 
@@ -296,7 +301,7 @@ function renderCounts(state) {
   const live = state.sessions.filter((s) => !s.stale && (!selected || s.machine === selected));
   $("count-all").textContent = live.length;
   $("count-active").textContent = live.filter((s) => s.activity === "active").length;
-  $("count-idle").textContent = live.filter((s) => s.activity === "idle").length;
+  $("count-idle").textContent = live.filter((s) => shownAs(s) === "idle").length;
   document.querySelectorAll(".segmented [data-status]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.status === filters.status)));
 }
 

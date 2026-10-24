@@ -2,6 +2,7 @@ pub mod agents;
 pub mod auth;
 pub mod cli;
 pub mod config;
+pub mod detect;
 pub mod dispatch;
 pub mod doctor;
 pub mod events;

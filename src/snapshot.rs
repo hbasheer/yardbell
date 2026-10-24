@@ -1,5 +1,6 @@
 use crate::agents::Agent;
 use crate::config::Machine;
+use crate::detect::ScreenState;
 use crate::shell::quote;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
@@ -24,6 +25,7 @@ pub struct Port {
 pub enum Activity {
     Active,
     Idle,
+    Blocked,
 }
 
 impl Activity {
@@ -91,6 +93,24 @@ struct RawAgent {
     cwd: String,
     cpu: f64,
     tmux: Option<String>,
+    #[serde(default)]
+    screen: Option<String>,
+    #[serde(default)]
+    title: Option<String>,
+}
+
+// The screen is the agent's own word on what it is doing, so it wins. CPU use stays the estimate
+// for agents without screen rules and for screens that say nothing either way.
+fn activity(c: &RawAgent) -> Activity {
+    let screen = c.screen.as_deref().map(|screen| {
+        crate::detect::detect(&c.agent, screen, c.title.as_deref().unwrap_or("").trim())
+    });
+    match screen.flatten() {
+        Some(ScreenState::Working) => Activity::Active,
+        Some(ScreenState::Blocked) => Activity::Blocked,
+        Some(ScreenState::Idle) => Activity::Idle,
+        None => Activity::from_cpu(c.cpu),
+    }
 }
 
 #[derive(Deserialize)]
@@ -198,6 +218,7 @@ pub fn parse(
         }
     }
     for c in raw.agents {
+        let activity = activity(&c);
         let folder = label(&c.cwd);
         let branch = snap.folders.get(&folder).cloned().unwrap_or_default();
         snap.sessions.push(Session {
@@ -209,7 +230,7 @@ pub fn parse(
             folder,
             branch,
             tmux: c.tmux,
-            activity: Activity::from_cpu(c.cpu),
+            activity,
         });
     }
     Ok(snap)
@@ -440,6 +461,34 @@ mod tests {
             args,
             "bash -s -- '/home/u/My Projects' 'slots/slot*' -- 'rails' -- 'claude=claude' 'aider=aider'"
         );
+    }
+
+    #[test]
+    fn screen_decides_activity_before_cpu() {
+        let json = |agent: &str, cpu: f64, screen: &str| {
+            serde_json::json!({
+                "agents": [{"agent": agent, "pid": 1, "cwd": "/w", "cpu": cpu, "tmux": "t", "title": "", "screen": screen}],
+                "tmux": [], "folders": [], "ports": []
+            })
+            .to_string()
+        };
+        let activity = |agent: &str, cpu: f64, screen: &str| {
+            parse(
+                &json(agent, cpu, screen),
+                &machine("hp", "/w"),
+                Path::new("/w"),
+                None,
+            )
+            .unwrap()
+            .sessions[0]
+                .activity
+        };
+        let prompt =
+            " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend";
+        assert_eq!(activity("claude", 0.0, prompt), Activity::Blocked);
+        assert_eq!(activity("claude", 40.0, "❯ \n"), Activity::Idle);
+        assert_eq!(activity("aider", 40.0, prompt), Activity::Active);
+        assert_eq!(activity("aider", 0.0, prompt), Activity::Idle);
     }
 
     #[test]

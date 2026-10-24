@@ -223,6 +223,19 @@ impl Tracker {
                 });
 
             match s.activity {
+                Activity::Blocked => {
+                    state.idle_since = None;
+                    if !state.notified {
+                        state.notified = true;
+                        events.push(Event::AgentIdle {
+                            machine: s.machine.clone(),
+                            session_id: s.id.clone(),
+                            tmux: s.tmux.clone(),
+                            folder: s.folder.clone(),
+                            agent: s.agent.clone(),
+                        });
+                    }
+                }
                 Activity::Active => {
                     state.was_active = true;
                     state.idle_since = None;
@@ -427,6 +440,19 @@ mod tests {
         assert_eq!(t.observe(&idle(), secs(t0, 5)), vec![]);
         assert_eq!(t.observe(&idle(), secs(t0, 26)), vec![idle_event()]);
         assert_eq!(t.observe(&idle(), secs(t0, 40)), vec![]);
+    }
+
+    #[test]
+    fn blocked_fires_at_once_and_again_only_after_working() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let active = || one_machine(vec![session("s1", "hp", Activity::Active)]);
+        let blocked = || one_machine(vec![session("s1", "hp", Activity::Blocked)]);
+        assert_eq!(t.observe(&active(), t0), vec![]);
+        assert_eq!(t.observe(&blocked(), secs(t0, 2)), vec![idle_event()]);
+        assert_eq!(t.observe(&blocked(), secs(t0, 40)), vec![]);
+        assert_eq!(t.observe(&active(), secs(t0, 41)), vec![]);
+        assert_eq!(t.observe(&blocked(), secs(t0, 43)), vec![idle_event()]);
     }
 
     #[test]

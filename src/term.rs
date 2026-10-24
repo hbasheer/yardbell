@@ -122,10 +122,37 @@ enum ClientFrame {
     Input { d: String },
     #[serde(rename = "resize")]
     Resize { rows: u16, cols: u16 },
+    #[serde(rename = "scroll")]
+    Scroll { lines: i32 },
 }
 
-pub async fn bridge<Tx, Rx>(mut tx: Tx, mut rx: Rx, pty: Pty, exit_message: &str)
-where
+pub enum ScrollJob {
+    Lines(i32),
+    Bottom(tokio::sync::oneshot::Sender<()>),
+}
+
+pub type Scroller = tokio::sync::mpsc::UnboundedSender<ScrollJob>;
+
+// Copy mode takes every key for itself, so typing after a scroll would go nowhere. The pane is
+// put back on the live screen first, and the input waits for that.
+async fn leave_scrollback(scroller: &Option<Scroller>, scrolled_back: &mut bool) {
+    if !std::mem::take(scrolled_back) {
+        return;
+    }
+    let Some(scroller) = scroller else { return };
+    let (done, wait) = tokio::sync::oneshot::channel();
+    if scroller.send(ScrollJob::Bottom(done)).is_ok() {
+        let _ = tokio::time::timeout(std::time::Duration::from_secs(2), wait).await;
+    }
+}
+
+pub async fn bridge<Tx, Rx>(
+    mut tx: Tx,
+    mut rx: Rx,
+    pty: Pty,
+    exit_message: &str,
+    scroller: Option<Scroller>,
+) where
     Tx: Sink<Message> + Unpin,
     Rx: Stream<Item = Message> + Unpin,
 {
@@ -161,6 +188,7 @@ where
         }
     });
 
+    let mut scrolled_back = false;
     loop {
         tokio::select! {
             chunk = out_rx.recv() => match chunk {
@@ -180,14 +208,22 @@ where
             msg = rx.next() => match msg {
                 Some(Message::Text(text)) => match serde_json::from_str::<ClientFrame>(&text) {
                     Ok(ClientFrame::Input { d }) => {
+                        leave_scrollback(&scroller, &mut scrolled_back).await;
                         let _ = in_tx.send(d.into_bytes());
                     }
                     Ok(ClientFrame::Resize { rows, cols }) => {
                         let _ = pty.resize(rows.max(1), cols.max(1));
                     }
+                    Ok(ClientFrame::Scroll { lines }) => {
+                        if let Some(scroller) = &scroller {
+                            scrolled_back |= lines < 0;
+                            let _ = scroller.send(ScrollJob::Lines(lines));
+                        }
+                    }
                     Err(e) => tracing::debug!(error = %e, "ignored terminal frame"),
                 },
                 Some(Message::Binary(bytes)) => {
+                    leave_scrollback(&scroller, &mut scrolled_back).await;
                     let _ = in_tx.send(bytes.to_vec());
                 }
                 Some(Message::Close(_)) | None => break,
@@ -294,7 +330,7 @@ mod tests {
             80,
         )
         .unwrap();
-        let task = tokio::spawn(bridge(server_tx, server_rx, pty, EXIT_MESSAGE));
+        let task = tokio::spawn(bridge(server_tx, server_rx, pty, EXIT_MESSAGE, None));
         client_tx
             .send(Message::Text(
                 r#"{"t":"resize","rows":30,"cols":90}"#.into(),
@@ -329,12 +365,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bridge_scrolls_and_returns_to_live_screen_before_input() {
+        let (mut client_tx, server_rx) = futures::channel::mpsc::unbounded::<Message>();
+        let (server_tx, mut client_rx) = futures::channel::mpsc::unbounded::<Message>();
+        let (scroll_tx, mut scroll_rx) = tokio::sync::mpsc::unbounded_channel();
+        let pty = spawn(
+            &argv(&["bash", "-c", "read line; printf 'got:%s' \"$line\""]),
+            24,
+            80,
+        )
+        .unwrap();
+        let task = tokio::spawn(bridge(
+            server_tx,
+            server_rx,
+            pty,
+            EXIT_MESSAGE,
+            Some(scroll_tx),
+        ));
+        client_tx
+            .send(Message::Text(r#"{"t":"scroll","lines":-4}"#.into()))
+            .await
+            .unwrap();
+        client_tx
+            .send(Message::Text(r#"{"t":"in","d":"abc\r"}"#.into()))
+            .await
+            .unwrap();
+        let wait = Duration::from_secs(2);
+        let Ok(Some(ScrollJob::Lines(-4))) = tokio::time::timeout(wait, scroll_rx.recv()).await
+        else {
+            panic!("scroll frame was not forwarded");
+        };
+        let Ok(Some(ScrollJob::Bottom(done))) = tokio::time::timeout(wait, scroll_rx.recv()).await
+        else {
+            panic!("input did not leave scrollback first");
+        };
+        done.send(()).unwrap();
+        let mut output = String::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while let Ok(Some(msg)) = tokio::time::timeout_at(deadline, client_rx.next()).await {
+            match msg {
+                Message::Binary(b) => output.push_str(&String::from_utf8_lossy(&b)),
+                Message::Close(_) => break,
+                _ => {}
+            }
+        }
+        assert!(output.contains("got:abc"), "{output:?}");
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn bridge_client_close_kills_pty() {
         let (client_tx, server_rx) = futures::channel::mpsc::unbounded::<Message>();
         let (server_tx, _client_rx) = futures::channel::mpsc::unbounded::<Message>();
         let pty = spawn(&argv(&["sleep", "30"]), 24, 80).unwrap();
         let pid = pty.pid().unwrap();
-        let task = tokio::spawn(bridge(server_tx, server_rx, pty, EXIT_MESSAGE));
+        let task = tokio::spawn(bridge(server_tx, server_rx, pty, EXIT_MESSAGE, None));
         drop(client_tx);
         tokio::time::timeout(Duration::from_secs(3), task)
             .await

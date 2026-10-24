@@ -285,6 +285,8 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
         .route("/nav.js", get(|| async { asset("nav.js") }))
         .route("/state", get(state_json))
+        .route("/workspace", get(|| async { asset("workspace.html") }))
+        .route("/workspace.js", get(|| async { asset("workspace.js") }))
         .route("/dispatch", get(|| async { asset("dispatch.html") }))
         .route("/dispatch.js", get(|| async { asset("dispatch.js") }))
         .route("/dispatch/conversations", get(dispatch_list))
@@ -942,31 +944,70 @@ async fn term_ws(
             "origin does not match host".into(),
         ));
     }
-    let argv = if machine == "_onboarding" {
-        app.onboarding.take_terminal(&name).ok_or_else(|| {
+    let (argv, scroller) = if machine == "_onboarding" {
+        let argv = app.onboarding.take_terminal(&name).ok_or_else(|| {
             ApiError(
                 StatusCode::NOT_FOUND,
                 "this setup terminal has expired, retry the step".into(),
             )
-        })?
+        })?;
+        (argv, None)
     } else {
         let cfg = app.config()?;
         let m = find_machine(&cfg, &machine)?;
-        app.sessions.attach_argv(&m, &name)
+        let argv = app.sessions.attach_argv(&m, &name);
+        (argv, Some(scroller(app.clone(), m, name)))
     };
     let exit_message = if machine == "_onboarding" {
         "done, go back to the Add machine tab and press Check again"
     } else {
         term::EXIT_MESSAGE
     };
-    Ok(ws.on_upgrade(move |socket| run_terminal(socket, argv, exit_message)))
+    Ok(ws.on_upgrade(move |socket| run_terminal(socket, argv, exit_message, scroller)))
 }
 
-pub async fn run_terminal(socket: WebSocket, argv: Vec<String>, exit_message: &'static str) {
+// A swipe arrives as many small scroll frames, and each one is an ssh round trip, so whatever
+// piles up while one runs is sent as a single scroll.
+fn scroller(app: Arc<AppState>, m: Machine, name: String) -> term::Scroller {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<term::ScrollJob>();
+    tokio::spawn(async move {
+        while let Some(first) = rx.recv().await {
+            let mut lines = 0;
+            let mut bottom = Vec::new();
+            for job in std::iter::once(first).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
+                match job {
+                    term::ScrollJob::Lines(n) => lines += n,
+                    term::ScrollJob::Bottom(done) => bottom.push(done),
+                }
+            }
+            let result = if !bottom.is_empty() {
+                app.sessions.leave_copy_mode(&m, &name).await
+            } else if lines != 0 {
+                app.sessions.scroll(&m, &name, lines).await
+            } else {
+                Ok(())
+            };
+            if let Err(e) = result {
+                tracing::debug!(error = %e, session = %name, "scroll failed");
+            }
+            for done in bottom {
+                let _ = done.send(());
+            }
+        }
+    });
+    tx
+}
+
+pub async fn run_terminal(
+    socket: WebSocket,
+    argv: Vec<String>,
+    exit_message: &'static str,
+    scroller: Option<term::Scroller>,
+) {
     let (tx, rx) = socket.split();
     let rx = rx.filter_map(|msg| std::future::ready(msg.ok()));
     match term::spawn(&argv, 24, 80) {
-        Ok(pty) => term::bridge(tx, rx, pty, exit_message).await,
+        Ok(pty) => term::bridge(tx, rx, pty, exit_message, scroller).await,
         Err(e) => tracing::error!(error = %e, "terminal spawn failed"),
     }
 }

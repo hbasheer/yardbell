@@ -261,7 +261,7 @@ fn still_waiting(view: &StateView, session_id: &str) -> bool {
     view.sessions.iter().any(|s| {
         s.id == session_id
             && !s.stale
-            && s.activity == Activity::Idle
+            && matches!(s.activity, Activity::Idle | Activity::Blocked)
             && view.machines.iter().any(|m| m.name == s.machine && m.up)
     })
 }
