@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-10-24
+
 - **Workspace**, modelled on herdr: a workspace per project with the state of its agents rolled
   up, tabs inside each workspace, and panes you split right or down and resize by dragging the
   border. Agents show as blocked (waiting for your answer or approval), working, done (finished
