@@ -40,10 +40,78 @@ function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
-function markdown(text) {
+function inline(text) {
   return esc(text)
+    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
     .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/`([^`\n]+)`/g, "<code>$1</code>");
+    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+}
+
+function cells(line) {
+  return line.trim().replace(/^\||\|$/g, "").split("|").map((c) => c.trim());
+}
+
+// The replies are Markdown; this covers what Dispatch writes: paragraphs, headings, lists, tables
+// and code blocks. Everything is escaped before any tag is added.
+function markdown(text) {
+  const lines = String(text).replace(/\r/g, "").split("\n");
+  const out = [];
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    if (line.trim().startsWith("```")) {
+      const code = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith("```")) code.push(lines[i++]);
+      i++;
+      out.push(`<pre class="md-code">${esc(code.join("\n"))}</pre>`);
+      continue;
+    }
+    const heading = line.match(/^(#{1,4})\s+(.*)$/);
+    if (heading) {
+      out.push(`<h4 class="md-h">${inline(heading[2])}</h4>`);
+      i++;
+      continue;
+    }
+    if (line.trim().startsWith("|") && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1] || "")) {
+      const head = cells(line);
+      i += 2;
+      const rows = [];
+      while (i < lines.length && lines[i].trim().startsWith("|")) rows.push(cells(lines[i++]));
+      out.push(`<div class="md-table"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      continue;
+    }
+    const bullet = /^\s*[-*]\s+/;
+    const number = /^\s*\d+[.)]\s+/;
+    if (bullet.test(line) || number.test(line)) {
+      const ordered = number.test(line);
+      const marker = ordered ? number : bullet;
+      const items = [];
+      while (i < lines.length && lines[i].trim()) {
+        if (marker.test(lines[i])) items.push(lines[i].replace(marker, ""));
+        else if (items.length && /^\s+/.test(lines[i])) items[items.length - 1] += ` ${lines[i].trim()}`;
+        else break;
+        i++;
+      }
+      const tag = ordered ? "ol" : "ul";
+      out.push(`<${tag} class="md-list">${items.map((it) => `<li>${inline(it)}</li>`).join("")}</${tag}>`);
+      continue;
+    }
+    const para = [];
+    while (i < lines.length && lines[i].trim() && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i]) && !lines[i].trim().startsWith("|") && !lines[i].trim().startsWith("```") && !/^#{1,4}\s/.test(lines[i])) {
+      para.push(lines[i++].trim());
+    }
+    if (!para.length) { out.push(`<p>${inline(lines[i++])}</p>`); continue; }
+    out.push(`<p>${para.map(inline).join("<br>")}</p>`);
+  }
+  return out.join("");
+}
+
+// Steps in a row share one line of small chips, like an agent's tool calls in a terminal.
+function toolGroup() {
+  const last = log.lastElementChild;
+  return last?.classList.contains("tool-group") ? last : add(`<div class="tool-group"></div>`);
 }
 
 function toast(message, kind = "error") {
@@ -150,23 +218,25 @@ function show(event) {
       add(`<p class="msg user">${esc(event.text)}</p>`);
       break;
     case "assistant":
-      add(`<p class="msg">${markdown(event.text)}</p>`);
+      add(`<div class="msg md">${markdown(event.text)}</div>`);
       break;
     case "error":
       add(`<p class="msg error">${esc(event.text)}</p>`);
       break;
     case "tool":
-      add(`<details class="tool running" data-tool="${esc(event.name)}"><summary><span class="mark"></span>${esc(LABELS[event.name] || event.name)}${target(event.input)}</summary></details>`);
+      toolGroup().insertAdjacentHTML("beforeend", `<details class="tool running" data-tool="${esc(event.name)}"><summary><span class="mark"></span>${esc(LABELS[event.name] || event.name)}${target(event.input)}</summary></details>`);
+      scrollDown();
       break;
     case "tool_result": {
       const open = [...log.querySelectorAll(".tool.running")].find((t) => t.dataset.tool === event.name);
-      const box = open || add(`<details class="tool"><summary><span class="mark"></span>${esc(LABELS[event.name] || event.name)}</summary></details>`);
+      if (!open) toolGroup().insertAdjacentHTML("beforeend", `<details class="tool"><summary><span class="mark"></span>${esc(LABELS[event.name] || event.name)}</summary></details>`);
+      const box = open || log.lastElementChild.lastElementChild;
       box.classList.remove("running");
       box.classList.add(event.is_error ? "bad" : "ok");
       box.insertAdjacentHTML("beforeend", `<pre>${esc(event.text)}</pre>`);
       if (event.name === "start_session" && !event.is_error) {
         const link = terminalLink(event.text);
-        if (link) box.insertAdjacentHTML("afterend", `<div class="tool ok">${link}</div>`);
+        if (link) add(`<div class="started">${link}</div>`);
       }
       scrollDown();
       break;
