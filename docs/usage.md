@@ -48,10 +48,11 @@ one, named like the first with `-2` after it.
 
 The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
 machine, then folder (a workspace), then the sessions in it, each with its state. Click a workspace
-to switch to it and a session to open it in the focused pane. Hover a session for the buttons that
-open it to the right of or below the focused pane. Each workspace has tabs: **+** opens the New
+to switch to it and a session to open it in the focused pane. Hover a session for its **⋯** menu,
+which opens it to the right of or below the focused pane, or in a new tab. Each workspace has tabs: **+** opens the New
 session dialog in that folder and the new session in a tab of its own, and closing a tab with
-sessions in it asks whether to stop them or keep them running. An empty pane offers to start an
+sessions in it asks whether to stop them or keep them running. Double-click a tab to rename it, or
+right-click it for Rename tab and Close tab. An empty pane offers to start an
 agent there or to open one of the workspace's sessions. Panes split right or down and resize by
 dragging the border between them; **Keyboard shortcuts** in the sidebar lists the keys. On a phone
 the sidebar comes first and a session opens full screen.

@@ -170,16 +170,13 @@ function renderSide() {
     .filter((k) => counts[k]).map((k) => `${counts[k]} ${WORD[k]}`).join(" · ") || "No agents running";
 
   const inPane = project() ? new Map(leaves(tab().root).map((l, i) => [l.key, i + 1])) : new Map();
-  const split = (key, dir, label, icon) =>
-    `<button type="button" class="btn quiet icon-btn" data-split-key="${esc(key)}" data-dir="${dir}" aria-label="${label}" title="${label}">${icon}</button>`;
   const row = (s) => {
     const key = keyOf(s);
     const st = stateOf(s);
     const n = inPane.get(key);
     const where = n && !phone.matches ? `<span class="ws-pane-no" title="In pane ${n}">${n}</span>` : "";
     const acts = s.stale || phone.matches || !project() ? "" : `<span class="ws-row-acts">
-      ${split(key, "row", `Open ${title(s)} to the right`, '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10"/></svg>')}
-      ${split(key, "col", `Open ${title(s)} below`, '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 8h11"/></svg>')}
+      <button type="button" class="btn quiet icon-btn" data-more="${esc(key)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(title(s))}" title="More"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg></button>
     </span>`;
     return `<li class="ws-row"><button type="button" class="ws-item${n && key === focusedLeaf()?.key ? " current" : ""}${s.stale ? " stale" : ""}" data-key="${esc(key)}"${s.stale ? " disabled" : ""}>
       ${dot(st)}
@@ -200,12 +197,15 @@ function renderSide() {
   }).join("") || `<li class="ws-empty">No sessions running. Start one with New session.</li>`;
 }
 
+let renaming = null;
+
 function renderTabs() {
+  if (renaming !== null) return;
   const sp = space();
   $("tabs").innerHTML = sp.tabs.map((t, i) => {
     const st = worst(leaves(t.root).map((l) => sessionFor(l.key)).filter(Boolean));
     const close = sp.tabs.length > 1 || leaves(t.root).some((l) => l.key) ? `<span class="ws-tab-close" data-close-tab="${i}" role="button" aria-label="Close tab ${esc(t.name)}" title="Close tab">×</span>` : "";
-    return `<div class="ws-tab${i === sp.tab ? " current" : ""}" role="tab" aria-selected="${i === sp.tab}" tabindex="0" data-tab="${i}" title="Double-click to rename">${st ? dot(st) : ""}<span>${esc(t.name)}</span>${close}</div>`;
+    return `<div class="ws-tab${i === sp.tab ? " current" : ""}" role="tab" aria-selected="${i === sp.tab}" tabindex="0" data-tab="${i}" title="Double-click to rename, right-click for more">${st ? dot(st) : ""}<span class="ws-tab-name">${esc(t.name)}</span>${close}</div>`;
   }).join("");
 }
 
@@ -488,6 +488,95 @@ function toast(message) {
   toast.timer = setTimeout(() => el.classList.remove("show"), 5000);
 }
 
+function showMenu(rect, items) {
+  let el = $("ws-menu");
+  if (!el) {
+    el = document.createElement("div");
+    el.id = "ws-menu";
+    el.className = "menu";
+    el.setAttribute("role", "menu");
+    el.addEventListener("click", (e) => {
+      const item = e.target.closest("[data-i]");
+      if (!item) return;
+      const run = el.actions[Number(item.dataset.i)];
+      closeMenu();
+      run();
+    });
+    document.body.append(el);
+  }
+  el.actions = items.map((it) => it.run);
+  el.innerHTML = items.map((it, i) => `<button type="button" role="menuitem" data-i="${i}"${it.danger ? ' class="danger"' : ""}>${esc(it.label)}</button>`).join("");
+  el.hidden = false;
+  const width = el.offsetWidth;
+  el.style.left = `${Math.max(8, Math.min(rect.right - width, innerWidth - width - 8))}px`;
+  el.style.top = `${Math.min(rect.bottom + 4, innerHeight - el.offsetHeight - 8)}px`;
+  el.querySelector("[role=menuitem]").focus();
+}
+
+function openMenu(button) {
+  const el = $("ws-menu");
+  const key = button.dataset.more;
+  if (el && !el.hidden && el.dataset.key === key) {
+    closeMenu();
+    return;
+  }
+  showMenu(button.getBoundingClientRect(), [
+    { label: "Open to the right", run: () => split("row", key) },
+    { label: "Open below", run: () => split("col", key) },
+    { label: "Open in a new tab", run: () => {
+      const s = sessionFor(key);
+      done.delete(key);
+      addTab(s ? title(s) : key.split("/").pop(), key);
+    } },
+  ]);
+  $("ws-menu").dataset.key = key;
+}
+
+function renameTab(i) {
+  const t = space().tabs[i];
+  const label = $("tabs").querySelector(`[data-tab="${i}"] .ws-tab-name`);
+  if (!t || !label) return;
+  renaming = i;
+  const input = document.createElement("input");
+  input.className = "ws-tab-input";
+  input.value = t.name;
+  input.setAttribute("aria-label", "Tab name");
+  label.replaceWith(input);
+  input.focus();
+  input.select();
+  let finished = false;
+  const finish = (keep) => {
+    if (finished) return;
+    finished = true;
+    const name = input.value.trim();
+    if (keep && name) t.name = name;
+    renaming = null;
+    save();
+    render();
+  };
+  input.addEventListener("keydown", (e) => {
+    e.stopPropagation();
+    if (e.key === "Enter") finish(true);
+    if (e.key === "Escape") finish(false);
+  });
+  input.addEventListener("blur", () => finish(true));
+  input.addEventListener("click", (e) => e.stopPropagation());
+  input.addEventListener("dblclick", (e) => e.stopPropagation());
+}
+
+function closeMenu() {
+  const el = $("ws-menu");
+  if (el) el.hidden = true;
+}
+
+document.addEventListener("pointerdown", (e) => {
+  if (!e.target.closest("#ws-menu, [data-more]")) closeMenu();
+}, true);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape") closeMenu();
+});
+window.addEventListener("resize", closeMenu);
+
 function addTab(name, key) {
   const sp = space();
   const pane = { pane: newId(), key };
@@ -629,9 +718,9 @@ $("tree").addEventListener("click", (e) => {
     render();
     return;
   }
-  const splitting = e.target.closest("[data-split-key]");
-  if (splitting) {
-    split(splitting.dataset.dir, splitting.dataset.splitKey);
+  const more = e.target.closest("[data-more]");
+  if (more) {
+    openMenu(more);
     return;
   }
   const item = e.target.closest(".ws-item");
@@ -645,18 +734,31 @@ $("tabs").addEventListener("click", (e) => {
     return;
   }
   const t = e.target.closest("[data-tab]");
-  if (t) switchTab(Number(t.dataset.tab));
+  if (!t) return;
+  // Switching tabs redraws the bar, so the browser never sees a double-click on the same element.
+  const i = Number(t.dataset.tab);
+  const now = Date.now();
+  if (lastTabClick.i === i && now - lastTabClick.at < 400) {
+    lastTabClick.at = 0;
+    renameTab(i);
+    return;
+  }
+  lastTabClick.i = i;
+  lastTabClick.at = now;
+  if (i !== space().tab) switchTab(i);
 });
 
-$("tabs").addEventListener("dblclick", (e) => {
+const lastTabClick = { i: -1, at: 0 };
+
+$("tabs").addEventListener("contextmenu", (e) => {
   const t = e.target.closest("[data-tab]");
   if (!t) return;
-  const current = space().tabs[Number(t.dataset.tab)];
-  const name = prompt("Tab name", current.name)?.trim();
-  if (!name) return;
-  current.name = name;
-  save();
-  render();
+  e.preventDefault();
+  const i = Number(t.dataset.tab);
+  showMenu({ right: e.clientX + 200, bottom: e.clientY }, [
+    { label: "Rename tab", run: () => renameTab(i) },
+    { label: "Close tab", danger: true, run: () => closeTab(i) },
+  ]);
 });
 
 $("new-tab").addEventListener("click", newTab);

@@ -919,6 +919,7 @@ body[data-page="workspace"] { height: 100dvh; overflow: hidden; overscroll-behav
 .ws-tab.current { background: var(--selected); color: var(--ink); font-weight: 550; }
 .ws-tab-close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); }
 .ws-tab-close:hover { background: var(--line); color: var(--ink); }
+.ws-tab-input { width: 12ch; height: 22px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
 .ws-new-tab { flex: none; }
 .ws-panes { position: relative; flex: 1; min-height: 0; background: var(--side); }
 .ws-panes.dragging { cursor: col-resize; user-select: none; }
