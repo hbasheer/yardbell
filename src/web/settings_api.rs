@@ -1,7 +1,6 @@
 use super::{error, find_machine, now_secs, ApiError, AppState, COOKIE, COOKIE_TTL_SECS};
 use crate::config::MeshProvider;
-use crate::phone::ntfy::Target;
-use crate::settings::{propose, MachineEdit, PhoneEdit};
+use crate::settings::{propose, AgentEdit, MachineEdit, PhoneEdit};
 use axum::extract::{Path as UrlPath, State as AxState};
 use axum::http::{HeaderMap, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -20,10 +19,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/mesh/preview", post(mesh_preview))
         .route("/api/settings/mesh/apply", post(mesh_apply))
         .route("/api/settings/machines/{name}", post(machine))
-        .route("/api/settings/phone/setup", post(phone_setup))
         .route("/api/settings/phone", post(phone_save))
-        .route("/api/settings/phone/test", post(phone_test))
-        .route("/api/settings/phone/off", post(phone_off))
+        .route("/api/settings/agents", post(add_agent))
         .route("/api/settings/mcp/on", post(mcp_on))
         .route("/api/settings/mcp/off", post(mcp_off))
         .route("/api/settings/mcp/servers", post(mcp_servers))
@@ -57,24 +54,17 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         })
         .collect();
     let phone = &cfg.phone_notifications;
-    let status = app.phone.status();
     Ok(Json(json!({
         "mesh": cfg.mesh,
         "port": cfg.port,
         "machines": machines,
         "phone": {
-            "on": phone.on(),
-            "server": phone.server,
-            "topic": phone.topic,
+            "app_connected": app.phone.inbox.listening(std::time::Instant::now()),
             "wait_minutes": phone.wait_minutes,
             "agent_waiting": phone.agent_waiting,
             "session_ended": phone.session_ended,
             "machines": phone.machines,
             "memory": phone.memory,
-            "token_set": !phone.token.is_empty(),
-            "last_sent": status.last_sent,
-            "last_error": status.last_error,
-            "last_error_at": status.last_error_at,
         },
         "mcp_servers": cfg.mcp_servers,
         "dispatch": cfg.dispatch,
@@ -156,35 +146,11 @@ async fn machine(
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
-async fn phone_setup(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
-    app.settings.phone_setup().map_err(bad)?;
-    Ok(Json(json!({ "ok": true })).into_response())
-}
-
 async fn phone_save(
     AxState(app): AxState<Arc<AppState>>,
     Json(edit): Json<PhoneEdit>,
 ) -> Result<Response, ApiError> {
     app.settings.update_phone(&edit).map_err(bad)?;
-    Ok(Json(json!({ "ok": true })).into_response())
-}
-
-async fn phone_test(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
-    let cfg = app.config()?;
-    let phone = &cfg.phone_notifications;
-    if !phone.on() {
-        return Err(bad("Set up phone notifications first".into()));
-    }
-    let host = cfg.host().map_or("Yardbell", |m| m.name.as_str());
-    app.phone
-        .test(&Target::from_settings(phone), host)
-        .await
-        .map_err(ApiError::gateway)?;
-    Ok(Json(json!({ "ok": true })).into_response())
-}
-
-async fn phone_off(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
-    app.settings.phone_off().map_err(bad)?;
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -194,6 +160,15 @@ async fn mcp_on(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiErr
         .set_mcp_token(Some(token.clone()))
         .map_err(bad)?;
     Ok(Json(json!({ "token": token })).into_response())
+}
+
+async fn add_agent(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(edit): Json<AgentEdit>,
+) -> Result<Response, ApiError> {
+    let agent = app.settings.add_agent(&edit).map_err(bad)?;
+    app.forget_installed();
+    Ok(Json(json!({ "name": agent.name, "label": agent.display() })).into_response())
 }
 
 async fn dispatch(

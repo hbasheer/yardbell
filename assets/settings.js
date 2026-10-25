@@ -43,6 +43,15 @@ function providerOptions(selected, withDefault) {
   return opts.join("");
 }
 
+// Another machine's app ports are forwarded to the host, and the prefix keeps two machines'
+// port 3000 apart.
+function prefixHelp(m) {
+  const host = (data?.machines || []).find((x) => x.local)?.name || "the host";
+  if (!m.port_prefix) return `Apps on ${esc(m.name)} open on ${esc(host)} once it has a port prefix.`;
+  const example = m.port_prefix * 10000 + 3000;
+  return `Port prefix: apps on ${esc(m.name)} open on ${esc(host)} at the prefix times 10000 plus their port, so port 3000 opens at ${example}. Each machine needs its own prefix.`;
+}
+
 function machineForm(m) {
   const prefixes = [1, 2, 3, 4, 5, 6].map((p) => `<option${m.port_prefix === p ? " selected" : ""}>${p}</option>`).join("");
   return `<form class="panel machine-form" id="machine-${esc(m.name)}" data-name="${esc(m.name)}">
@@ -59,7 +68,7 @@ function machineForm(m) {
       <label>VPN <select name="mesh">${providerOptions(m.mesh || "", true)}</select></label>
     </div>
     <div class="form-foot">
-      <p class="help">${m.local ? "Yardbell runs here. Its mesh address is where your phone reaches Yardbell." : `Ports open on the host as ${m.port_prefix || "?"}xxxx.`}</p>
+      <p class="help">${m.local ? "Yardbell runs here. Its mesh address is where your phone reaches Yardbell. Apps on this machine keep their own port numbers." : prefixHelp(m)}</p>
       <button class="btn" type="submit">Save ${esc(m.name)}</button>
     </div>
   </form>`;
@@ -70,27 +79,14 @@ function clock(stamp) {
 }
 
 function renderPhone(p) {
-  $("phone-intro").hidden = p.on;
-  $("phone-on").hidden = !p.on;
-  $("phone-turn-off").hidden = !p.on;
-  if (!p.on) {
-    testResult("");
-    return;
-  }
-  const host = p.server.split("/")[2];
-  $("phone-subscribe").href = `ntfy://${host}/${p.topic}?display=Yardbell${p.server.startsWith("http://") ? "&secure=false" : ""}`;
-  $("phone-topic").textContent = p.topic;
-  $("phone-server").textContent = p.server;
-  $("phone-server-line").hidden = p.server.replace(/\/+$/, "") === "https://ntfy.sh";
   const f = $("phone-form");
   for (const name of ["agent_waiting", "session_ended", "machines", "memory"]) f.elements[name].checked = p[name];
   f.elements.wait_minutes.value = p.wait_minutes;
-  f.elements.server.value = p.server;
-  f.elements.token.value = "";
-  f.elements.token.placeholder = p.token_set ? "Saved" : "";
-  f.elements.clear_token.checked = false;
-  $("phone-clear-token").hidden = !p.token_set;
-  renderPhoneStatus(p);
+  const status = $("phone-status");
+  status.textContent = p.app_connected
+    ? "The Yardbell app is connected and gets these."
+    : "No phone has the Yardbell app connected right now. Pair one under Connect a phone.";
+  status.classList.toggle("ok", p.app_connected);
 }
 
 function renderMcp(m) {
@@ -103,15 +99,44 @@ function renderMcp(m) {
   $("mcp-command").textContent = `claude mcp add --transport http --scope user yardbell ${url} --header "Authorization: Bearer ${m.token}"`;
 }
 
+// Dispatch can start a session on any machine, so it offers the agents installed on at least one,
+// with where they are. Until the machines answer, every agent is listed.
+let installedOn = null;
+
+function dispatchAgents() {
+  const f = $("dispatch-form");
+  const current = f.elements.agent.value || (data.dispatch || {}).agent || "";
+  const fallback = data.agents.find((a) => a.name === data.default_agent);
+  const where = (a) => installedOn ? Object.keys(installedOn).filter((m) => installedOn[m].includes(a.name)) : [];
+  const shown = data.agents.filter((a) => !installedOn || where(a).length || a.name === current);
+  f.elements.agent.innerHTML = `<option value="">Default agent${fallback ? ` (${esc(fallback.label)})` : ""}</option>`
+    + shown.map((a) => {
+      const on = where(a);
+      const note = !installedOn ? "" : on.length ? ` · ${on.join(", ")}` : " · not installed anywhere";
+      return `<option value="${esc(a.name)}">${esc(a.label)}${esc(note)}</option>`;
+    }).join("");
+  f.elements.agent.value = current;
+}
+
+async function loadInstalled() {
+  const names = (data.machines || []).map((m) => m.name);
+  const answers = await Promise.all(names.map((name) =>
+    api("GET", `/machines/${encodeURIComponent(name)}/agents`).then((r) => [name, r.installed]).catch(() => null)));
+  const found = answers.filter(Boolean);
+  if (!found.length) return;
+  installedOn = Object.fromEntries(found);
+  dispatchAgents();
+}
+
 function renderDispatch() {
   const f = $("dispatch-form");
   const d = data.dispatch || {};
-  const fallback = data.agents.find((a) => a.name === data.default_agent);
-  f.elements.agent.innerHTML = `<option value="">Default agent${fallback ? ` (${esc(fallback.label)})` : ""}</option>`
-    + data.agents.map((a) => `<option value="${esc(a.name)}">${esc(a.label)}</option>`).join("");
+  f.elements.agent.value = "";
+  dispatchAgents();
   f.elements.instructions.value = d.instructions || "";
   f.elements.agent.value = d.agent || "";
   f.elements.model.value = d.model || "";
+  loadInstalled();
 }
 
 let editing = null;
@@ -179,22 +204,6 @@ async function mcpAction(url, message) {
   } finally {
     $("mcp").querySelectorAll("button").forEach((b) => { b.disabled = false; });
   }
-}
-
-function renderPhoneStatus(p) {
-  const failed = Boolean(p.last_error_at) && (!p.last_sent || Date.parse(p.last_error_at) > Date.parse(p.last_sent));
-  const status = $("phone-status");
-  status.textContent = failed
-    ? `Last attempt failed at ${clock(p.last_error_at)}: ${p.last_error}`
-    : p.last_sent ? `Last sent at ${clock(p.last_sent)}` : "Nothing sent yet.";
-  status.classList.toggle("bad", failed);
-}
-
-function testResult(text, state) {
-  const el = $("phone-test-result");
-  el.textContent = text;
-  el.classList.toggle("ok", state === "ok");
-  el.classList.toggle("bad", state === "bad");
 }
 
 function phoneBusy(busy) {
@@ -310,55 +319,21 @@ $("machine-forms").addEventListener("click", async (e) => {
   }
 });
 
-$("phone-setup").addEventListener("click", async () => {
-  phoneBusy(true);
-  try {
-    await api("POST", "/api/settings/phone/setup", {});
-    saved("Phone notifications are on.");
-    await load();
-    $("phone-subscribe").focus();
-  } catch (err) {
-    toast(err.message);
-  } finally {
-    phoneBusy(false);
-  }
-});
-
-$("phone-copy").addEventListener("click", () => {
-  if (copyText($("phone-topic").textContent)) toast("Topic copied", "ok");
-  else toast("Couldn't copy. Select the topic and copy it.");
-});
-
-$("phone-test").addEventListener("click", async () => {
-  testResult("Sending…");
-  phoneBusy(true);
-  try {
-    await api("POST", "/api/settings/phone/test", {});
-    testResult("Sent", "ok");
-  } catch (err) {
-    testResult(err.message, "bad");
-  } finally {
-    await api("GET", "/api/settings")
-      .then((fresh) => renderPhoneStatus(fresh.phone))
-      .catch((err) => toast(err.message));
-    phoneBusy(false);
-  }
+document.querySelectorAll('input[name="theme"]').forEach((input) => {
+  input.checked = input.value === window.YardbellTheme.chosen();
+  input.addEventListener("change", () => window.YardbellTheme.set(input.value));
 });
 
 $("phone-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
   const body = {
-    server: f.elements.server.value.trim(),
     wait_minutes: Number(f.elements.wait_minutes.value.trim()),
     agent_waiting: f.elements.agent_waiting.checked,
     session_ended: f.elements.session_ended.checked,
     machines: f.elements.machines.checked,
     memory: f.elements.memory.checked,
   };
-  const token = f.elements.token.value.trim();
-  if (token) body.token = token;
-  if (f.elements.clear_token.checked) body.clear_token = true;
   phoneBusy(true);
   try {
     await api("POST", "/api/settings/phone", body);
@@ -369,21 +344,6 @@ $("phone-form").addEventListener("submit", async (e) => {
   } finally {
     phoneBusy(false);
   }
-});
-
-$("phone-turn-off").addEventListener("click", async () => {
-  if (!(await Nav.confirm("Turn off phone notifications?", "Your phone stops getting notifications. Setting up again makes a new topic.", { confirm: "Turn off", danger: true }))) return;
-  phoneBusy(true);
-  try {
-    await api("POST", "/api/settings/phone/off", {});
-    saved("Phone notifications are off.");
-    await load();
-  } catch (err) {
-    toast(err.message);
-  } finally {
-    phoneBusy(false);
-  }
-  if (!$("phone-intro").hidden) $("phone-setup").focus();
 });
 
 $("mcp-on").addEventListener("click", () => mcpAction("/api/settings/mcp/on", "The MCP server is on."));
@@ -550,3 +510,24 @@ load()
     if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
   })
   .catch((err) => toast(err.message));
+
+// One section at a time, picked in the section list, so each part of Settings stands on its own.
+function showSection() {
+  const sections = [...document.querySelectorAll(".page-body > section")];
+  const wanted = location.hash.slice(1);
+  const order = [...document.querySelectorAll(".settings-nav a")].map((a) => a.hash.slice(1));
+  const pick = sections.find((sec) => sec.id === wanted) || sections.find((sec) => sec.id === order[0]);
+  sections.forEach((sec) => { sec.hidden = sec !== pick; });
+  document.querySelectorAll(".settings-nav a").forEach((a) => {
+    if (a.hash === `#${pick.id}`) a.setAttribute("aria-current", "page");
+    else a.removeAttribute("aria-current");
+  });
+  document.querySelector(".settings-nav [aria-current]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
+}
+
+window.addEventListener("hashchange", () => {
+  showSection();
+  document.querySelector(".main")?.scrollTo({ top: 0 });
+  window.scrollTo({ top: 0 });
+});
+showSection();

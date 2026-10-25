@@ -1,6 +1,6 @@
 [package]
 name = "yardbell-android"
-version = "0.5.0"
+version = "0.6.0"
 edition = "2021"
 publish = false
 
@@ -26,3 +26,10 @@ tauri-plugin-barcode-scanner = "2"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 axum = "0.8"
+
+# Most of the APK is this library, built once per phone architecture.
+[profile.release]
+opt-level = "s"
+lto = true
+codegen-units = 1
+strip = true

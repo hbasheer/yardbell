@@ -2,6 +2,7 @@ pub mod peers;
 pub mod ssh_config;
 
 use crate::config::{Config, Machine, MeshProvider};
+use crate::folders::{Folders, Listing};
 use crate::probe::ping_argv;
 use crate::shell::{login_shell, quote, Duration, Runner};
 use crate::ssh::Ssh;
@@ -80,6 +81,21 @@ fn valid_name(name: &str) -> bool {
             .chars()
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
         && !name.starts_with('-')
+}
+
+// A machine being added has an ssh config entry under its name before it is saved to Yardbell.
+fn candidate(name: &str) -> Machine {
+    Machine {
+        name: name.into(),
+        ssh: Some(name.into()),
+        mesh_ip: None,
+        port_prefix: None,
+        root: String::new(),
+        local: false,
+        workspaces: None,
+        mesh: None,
+        recent: Vec::new(),
+    }
 }
 
 fn check_inputs(name: Option<&str>, user: Option<&str>, host: Option<&str>) -> Result<(), Step> {
@@ -415,17 +431,7 @@ impl Onboarding {
             ));
         }
         script.push_str("; true");
-        let target = Machine {
-            name: name.into(),
-            ssh: Some(name.into()),
-            mesh_ip: None,
-            port_prefix: None,
-            root: String::new(),
-            local: false,
-            workspaces: None,
-            mesh: None,
-            recent: Vec::new(),
-        };
+        let target = candidate(name);
         let out = self
             .run(self.ssh.command(&target, &login_shell(&script)))
             .await;
@@ -465,6 +471,19 @@ impl Onboarding {
             message,
             json!({ "os": os, "root": root, "missing": missing, "agents": found }),
         )
+    }
+
+    pub async fn browse(
+        &self,
+        folders: &Folders,
+        name: &str,
+        path: &str,
+    ) -> Result<Listing, String> {
+        if !valid_name(name) {
+            return Err("name must use only a-z, 0-9 and -".into());
+        }
+        let path = if path.trim().is_empty() { "~" } else { path };
+        folders.browse(&candidate(name), path).await
     }
 
     fn candidate_roots(&self) -> Vec<String> {
@@ -515,7 +534,10 @@ impl Onboarding {
         });
         match cfg.save(&self.cfg_path) {
             Ok(()) => Step::ok(
-                format!("{name} added, its ports open as {prefix}xxxx on this machine"),
+                format!(
+                    "{name} added. Its port prefix is {prefix}: an app it runs on port 3000 opens on this machine at {}",
+                    u32::from(prefix) * 10000 + 3000
+                ),
                 json!({ "port_prefix": prefix }),
             ),
             Err(e) => Step::fail(e.to_string()),

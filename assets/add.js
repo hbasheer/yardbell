@@ -75,6 +75,36 @@ async function keyAuth() {
   }
 }
 
+async function pickFolder(box, start) {
+  const crumbs = box.querySelector("[data-crumbs]");
+  const list = box.querySelector("[data-dirs]");
+  const save = box.querySelector("[data-save]");
+  const show = async (path) => {
+    save.disabled = true;
+    list.innerHTML = `<li class="dir-empty">Loading…</li>`;
+    try {
+      const l = await call("GET", `/onboarding/browse?name=${encodeURIComponent(form.name.value)}&path=${encodeURIComponent(path)}`);
+      form.root.value = l.path;
+      const parts = l.path.split("/").filter(Boolean);
+      crumbs.innerHTML = [`<button type="button" class="crumb home" data-path="~">Home</button><span class="crumb-divider"></span>`, `<button type="button" class="crumb" data-path="/">/</button>`]
+        .concat(parts.map((p, i) => `${i ? `<span class="sep">/</span>` : ""}<button type="button" class="crumb${i === parts.length - 1 ? " here" : ""}" data-path="/${esc(parts.slice(0, i + 1).join("/"))}">${esc(p)}</button>`)).join("");
+      const up = parts.length ? `<li><button type="button" class="dir" data-path="/${esc(parts.slice(0, -1).join("/"))}"><span class="dir-name">..</span></button></li>` : "";
+      list.innerHTML = up + (l.entries.length
+        ? l.entries.map((e) => `<li><button type="button" class="dir" data-path="${esc(`${l.path.replace(/\/$/, "")}/${e.name}`)}"><span class="dir-name">${esc(e.name)}</span></button></li>`).join("")
+        : `<li class="dir-empty">No subfolders</li>`);
+      save.disabled = false;
+    } catch (err) {
+      list.innerHTML = `<li class="dir-empty error">${esc(err.message)}</li>`;
+    }
+  };
+  box.addEventListener("click", (e) => {
+    const target = e.target.closest("[data-path]");
+    if (target && !target.classList.contains("here")) show(target.dataset.path);
+  });
+  await show(start);
+  await waitClick(box, "[data-save]");
+}
+
 async function run() {
   $("checklist").innerHTML = "";
   if (!(await step("reachable", "Reachable on the mesh")).result.ok) return;
@@ -90,11 +120,15 @@ async function run() {
   const detect = await step("detect", "Check the machine");
   if (!detect.result.ok) return;
   const d = detect.result.data;
-  if (d.root && !form.root.value) form.root.value = d.root;
   const tips = (d.missing || []).map((m) => `<li><code>${esc(m.tool)}</code> missing: <code>${esc(m.hint)}</code></li>`).join("");
-  const saveBox = detect.row.extra(`${tips ? `<ul>${tips}</ul>` : ""}<p>Check the project folder above, then save.</p><button class="btn primary" type="button" data-save>Save machine</button>`);
-  await waitClick(saveBox, "[data-save]");
-  saveBox.querySelector("[data-save]").remove();
+  const saveBox = detect.row.extra(`${tips ? `<ul>${tips}</ul>` : ""}
+    <p>Pick the folder that holds your projects on ${esc(form.name.value)}. Sessions start in its subfolders.</p>
+    <nav class="crumbs" data-crumbs aria-label="Folder path"></nav>
+    <ul class="dir-list" data-dirs aria-label="Folders"></ul>
+    <div class="row-actions"><button class="btn primary" type="button" data-save disabled>Use this folder and save</button></div>`);
+  await pickFolder(saveBox, d.root || "~");
+  saveBox.querySelector(".row-actions").remove();
+  saveBox.querySelectorAll("[data-crumbs], [data-dirs]").forEach((el) => el.remove());
   const saved = await step("save", "Save to Yardbell");
   if (saved.result.ok) {
     saved.row.extra(`<a class="btn" href="/">Back to the dashboard</a>`);

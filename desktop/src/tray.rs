@@ -701,6 +701,8 @@ mod tests {
             agent_kb: 0,
             load1: 0.0,
             cpus: 4,
+            disk_total_kb: 0,
+            disk_used_kb: 0,
         }
     }
 
@@ -726,6 +728,7 @@ mod tests {
             ended: vec![],
             host_terminal: HostTerminal::None,
             mesh: None,
+            server: None,
         }
     }
 

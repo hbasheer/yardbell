@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.0.20/index.css" integrity="sha384-6QsiPFEuz7gYJPDZq103sCr5aKoBCbqAXJq1fEUzeUHeJmXFTMGzGuUmfP4j5w5b" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
 </head>
 <body data-page="workspace">
 <div class="ws" id="ws">
@@ -15,17 +16,17 @@
     <div class="ws-side-head">
       <a class="wordmark" href="/">Yardbell</a>
       <a class="btn quiet ws-home" href="/">Dashboard</a>
+      <button class="btn primary ws-side-new" id="side-new" type="button">New session</button>
       <span class="ws-summary" id="summary" aria-live="polite"></span>
+      <span class="server-line ws-server" id="server"></span>
     </div>
-    <nav class="ws-spaces" aria-label="Workspaces">
-      <p class="ws-label">Workspaces</p>
-      <ul id="spaces"></ul>
+    <nav class="ws-agents" aria-label="Workspaces and terminals">
+      <ul id="tree"></ul>
     </nav>
-    <div class="ws-agents">
-      <p class="ws-label" id="agents-label">Agents</p>
-      <ul id="agents"></ul>
+    <div class="ws-foot">
+      <button class="ws-hint" id="keys-btn" type="button">Keyboard shortcuts</button>
+      <button class="ws-hint theme-toggle" type="button" data-theme-toggle></button>
     </div>
-    <button class="ws-hint" id="keys-btn" type="button">Keyboard shortcuts</button>
   </aside>
 
   <main class="ws-main">
@@ -56,6 +57,17 @@
   </dl>
   <div class="dialog-actions"><button class="btn primary" type="button" id="keys-close">Done</button></div>
 </dialog>
+<dialog class="confirm" id="close-tab">
+  <h2 id="close-tab-title">Close tab?</h2>
+  <p id="close-tab-text"></p>
+  <div class="dialog-actions">
+    <button class="btn" type="button" value="cancel">Cancel</button>
+    <button class="btn" type="button" value="keep">Keep them running</button>
+    <button class="btn danger" type="button" value="stop">Stop them</button>
+  </div>
+</dialog>
+<div id="toast" role="status"></div>
+<script src="/newsession.js"></script>
 <script src="/workspace.js"></script>
 </body>
 </html>

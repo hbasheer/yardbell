@@ -2,6 +2,7 @@ use crate::agents::Agent;
 use crate::config::{HostTerminal, Machine};
 use crate::shell::{expand_home, login_shell, quote, without_shell_noise, Duration, Runner};
 use crate::ssh::Ssh;
+use crate::viewers::Plan;
 use std::sync::Arc;
 
 const ACTION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -41,18 +42,64 @@ fn exact(name: &str) -> String {
     format!("={name}")
 }
 
+const MAX_WHEELS: u32 = 200;
+
 // Agents draw on tmux's alternate screen, so the browser terminal has no scrollback of its own.
-// Scrolling goes through copy mode instead, and -e leaves it once scrolled back to the bottom.
+// A program that keeps its own screen and takes the mouse, like Claude Code's full-screen mode,
+// leaves tmux no history to scroll, so it gets wheel events instead. Anything else scrolls tmux's
+// history in copy mode, and -e leaves copy mode once scrolled back to the bottom.
 fn scroll_command(name: &str, lines: i32) -> String {
     let target = quote(&format!("{}:", exact(name)));
-    if lines < 0 {
+    let copy_mode = if lines < 0 {
         format!(
             r"tmux copy-mode -e -t {target} \; send-keys -X -t {target} -N {} scroll-up",
             lines.unsigned_abs()
         )
     } else {
         format!("tmux send-keys -X -t {target} -N {lines} scroll-down")
+    };
+    let button = if lines < 0 { 64 } else { 65 };
+    let wheels = lines.unsigned_abs().min(MAX_WHEELS);
+    format!(
+        "set -- $(tmux display -p -t {target} '#{{alternate_on}}#{{mouse_any_flag}}#{{mouse_sgr_flag}} #{{pane_height}}'); \
+         if [ \"$1\" = 111 ]; then \
+         r=$(( ${{2:-2}} / 2 )); w=''; i=0; \
+         while [ $i -lt {wheels} ]; do w=\"$w$(printf '\\033[<{button};1;%sM' \"$r\")\"; i=$((i+1)); done; \
+         tmux send-keys -t {target} -l \"$w\"; \
+         else {copy_mode}; fi"
+    )
+}
+
+fn installed_script(agents: &[Agent]) -> String {
+    let mut script = String::new();
+    for agent in agents {
+        let program = agent.command.split_whitespace().next().unwrap_or_default();
+        script.push_str(&format!(
+            "command -v {} >/dev/null 2>&1 && echo {}; ",
+            quote(program),
+            quote(&format!("agent {}", agent.name))
+        ));
     }
+    script.push_str("true");
+    script
+}
+
+fn size_command(name: &str, plan: &Plan) -> String {
+    let session = quote(&format!("{}:", exact(name)));
+    let flags = plan
+        .owner
+        .iter()
+        .map(|id| (id, "!ignore-size"))
+        .chain(plan.ignored.iter().map(|id| (id, "ignore-size")));
+    let mut script = String::new();
+    for (id, flag) in flags {
+        script.push_str(&format!(
+            "c=$(tmux list-clients -F '#{{client_pid}} #{{client_name}}' | awk -v p=\"$(tmux show -qv -t {session} @yb_{id})\" '$1 == p {{print $2}}'); \
+             [ -n \"$c\" ] && tmux refresh-client -t \"$c\" -f '{flag}'; "
+        ));
+    }
+    script.push_str("true");
+    script
 }
 
 pub fn applescript(term: HostTerminal, argv: &[String]) -> Option<String> {
@@ -83,16 +130,18 @@ fn start_script(m: &Machine, name: &str, folder_path: &str, run: &str, agent: &A
         agent.display(),
         m.name
     ));
+    let name = quote(name);
     format!(
         "command -v {} >/dev/null 2>&1 || {{ echo {missing} >&2; exit 127; }}; \
-         tmux new -d -s {} -c {} {} || exit $?; \
+         n={name}; i=2; \
+         while tmux has-session -t \"=$n\" 2>/dev/null; do n={name}-$i; i=$((i+1)); done; \
+         tmux new -d -s \"$n\" -c {} {} || exit $?; \
          sleep 1; \
-         tmux has-session -t {} 2>/dev/null || {{ echo {stopped} >&2; exit 1; }}",
+         tmux has-session -t \"=$n\" 2>/dev/null || {{ echo {stopped} >&2; exit 1; }}; \
+         echo \"$n\"",
         quote(program),
-        quote(name),
         quote(folder_path),
         quote(run),
-        quote(&exact(name)),
     )
 }
 
@@ -126,7 +175,9 @@ impl Sessions {
             run = format!("{run} --mcp-config {}", quote(config));
         }
         let script = start_script(m, &name, folder_path, &run, agent);
-        self.exec(m, &login_shell(&script)).await.map(|_| name)
+        let out = self.output(m, &login_shell(&script)).await?;
+        let started = out.lines().map(str::trim).rfind(|line| !line.is_empty());
+        Ok(started.map_or(name, str::to_string))
     }
 
     pub async fn stop(&self, m: &Machine, name: &str) -> Result<(), String> {
@@ -228,6 +279,44 @@ impl Sessions {
             quote(&exact(name))
         );
         self.ssh.tty_command(m, &remote)
+    }
+
+    // The client records its own process id first: exec keeps it, so the server can later find
+    // this viewer among the session's tmux clients, also through ssh.
+    pub fn viewer_argv(&self, m: &Machine, name: &str, viewer: &str) -> Vec<String> {
+        let session = quote(&format!("{}:", exact(name)));
+        let script = format!(
+            r#"tmux set -q -t {session} @yb_{viewer} "$$"; exec tmux -u -T clipboard attach -t {session} \; set-option -w window-size latest"#
+        );
+        self.ssh.tty_command(m, &script)
+    }
+
+    pub async fn installed_agents(
+        &self,
+        m: &Machine,
+        agents: &[Agent],
+    ) -> Result<Vec<String>, String> {
+        let out = self
+            .output(m, &login_shell(&installed_script(agents)))
+            .await?;
+        Ok(out
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("agent "))
+            .map(str::to_string)
+            .collect())
+    }
+
+    pub async fn size_viewers(&self, m: &Machine, name: &str, plan: &Plan) -> Result<(), String> {
+        self.exec(m, &size_command(name, plan)).await
+    }
+
+    pub async fn forget_viewer(&self, m: &Machine, name: &str, viewer: &str) -> Result<(), String> {
+        let session = quote(&format!("{}:", exact(name)));
+        self.exec(
+            m,
+            &format!("tmux set -qu -t {session} @yb_{viewer} 2>/dev/null || true"),
+        )
+        .await
     }
 
     pub async fn open_on_host(&self, term: HostTerminal, argv: &[String]) -> Result<(), String> {
@@ -332,9 +421,12 @@ mod tests {
                 &claude()
             ),
             "command -v 'claude' >/dev/null 2>&1 || { echo 'Claude Code is not installed on hp' >&2; exit 127; }; \
-             tmux new -d -s 'hp-app' -c '/r/my app' 'claude --continue' || exit $?; \
+             n='hp-app'; i=2; \
+             while tmux has-session -t \"=$n\" 2>/dev/null; do n='hp-app'-$i; i=$((i+1)); done; \
+             tmux new -d -s \"$n\" -c '/r/my app' 'claude --continue' || exit $?; \
              sleep 1; \
-             tmux has-session -t '=hp-app' 2>/dev/null || { echo 'Claude Code stopped as soon as it started on hp' >&2; exit 1; }"
+             tmux has-session -t \"=$n\" 2>/dev/null || { echo 'Claude Code stopped as soon as it started on hp' >&2; exit 1; }; \
+             echo \"$n\""
         );
     }
 
@@ -568,7 +660,30 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn create_duplicate_returns_stderr() {
+    async fn create_takes_the_next_free_name_when_the_folder_has_a_session() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub("tmux new", Output::ok_with("motd line\nhp-app-2\n"));
+        let name = sessions(fake.clone())
+            .create(
+                &machine(false),
+                Launch {
+                    folder_path: "/r/app",
+                    ticket: "-",
+                    folder_label: "app",
+                    agent: &claude(),
+                    start: Start::New,
+                    mcp_config: None,
+                },
+            )
+            .await
+            .unwrap();
+        assert_eq!(name, "hp-app-2");
+        let cmd = last_command(&fake);
+        assert!(cmd.contains("while tmux has-session"), "{cmd}");
+    }
+
+    #[tokio::test]
+    async fn create_failure_returns_stderr() {
         let fake = Arc::new(FakeRunner::default());
         fake.stub("tmux new", Output::failed(1, "duplicate session: hp-app"));
         let err = sessions(fake)
@@ -603,15 +718,65 @@ mod tests {
     }
 
     #[test]
-    fn scroll_enters_copy_mode_only_going_up() {
-        assert_eq!(
-            scroll_command("hp-app", -3),
-            r"tmux copy-mode -e -t '=hp-app:' \; send-keys -X -t '=hp-app:' -N 3 scroll-up"
+    fn scroll_sends_wheels_to_mouse_programs_and_copy_mode_otherwise() {
+        let up = scroll_command("hp-app", -3);
+        assert!(
+            up.contains("'#{alternate_on}#{mouse_any_flag}#{mouse_sgr_flag} #{pane_height}'"),
+            "{up}"
         );
-        assert_eq!(
-            scroll_command("hp-app", 5),
-            "tmux send-keys -X -t '=hp-app:' -N 5 scroll-down"
+        assert!(up.contains("while [ $i -lt 3 ]"), "{up}");
+        assert!(up.contains(r"\033[<64;1;%sM"), "{up}");
+        assert!(
+            up.ends_with(r"else tmux copy-mode -e -t '=hp-app:' \; send-keys -X -t '=hp-app:' -N 3 scroll-up; fi"),
+            "{up}"
         );
+        let down = scroll_command("hp-app", 5);
+        assert!(down.contains(r"\033[<65;1;%sM"), "{down}");
+        assert!(
+            down.ends_with("else tmux send-keys -X -t '=hp-app:' -N 5 scroll-down; fi"),
+            "{down}"
+        );
+        assert!(scroll_command("hp-app", -900).contains("while [ $i -lt 200 ]"));
+    }
+
+    #[test]
+    fn installed_script_checks_each_agent_program() {
+        let script = installed_script(&[claude()]);
+        assert_eq!(
+            script,
+            "command -v 'claude' >/dev/null 2>&1 && echo 'agent claude'; true"
+        );
+    }
+
+    #[test]
+    fn size_command_frees_the_owner_and_ignores_the_rest() {
+        let plan = Plan {
+            owner: Some("aa".into()),
+            ignored: vec!["bb".into()],
+        };
+        let cmd = size_command("hp-app", &plan);
+        let owner = cmd.find("@yb_aa").unwrap();
+        let other = cmd.find("@yb_bb").unwrap();
+        assert!(owner < other, "{cmd}");
+        assert!(cmd.contains("tmux show -qv -t '=hp-app:' @yb_aa"), "{cmd}");
+        assert!(cmd.contains("-f '!ignore-size'; c=$("), "{cmd}");
+        assert!(cmd.ends_with("-f 'ignore-size'; true"), "{cmd}");
+        assert_eq!(size_command("hp-app", &Plan::default()), "true");
+    }
+
+    #[test]
+    fn a_viewer_records_its_client_pid_before_attaching() {
+        let s = sessions(Arc::new(FakeRunner::default()));
+        let local = s.viewer_argv(&machine(true), "hp-app", "ab12");
+        assert_eq!(local[..2], ["bash", "-c"]);
+        assert!(
+            local[2].starts_with(r#"tmux set -q -t '=hp-app:' @yb_ab12 "$$"; exec tmux -u -T clipboard attach -t '=hp-app:'"#),
+            "{}",
+            local[2]
+        );
+        let remote = s.viewer_argv(&machine(false), "hp-app", "ab12");
+        assert_eq!(remote[1], "-t");
+        assert!(remote.last().unwrap().contains("@yb_ab12"));
     }
 
     #[test]

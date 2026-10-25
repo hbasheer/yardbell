@@ -52,9 +52,8 @@ Yardbell answers all of these on one page.
 - **A desktop app.** For macOS and Linux: the dashboard and every terminal as tabs in a window of
   their own, with the system clipboard, every machine's state in the tray, and a notification when
   an agent is waiting, a session ends, a machine goes down or memory runs out.
-- **Phone notifications.** Through the free ntfy app, the server itself tells your phone when an
-  agent is waiting for you, a session ends, a machine goes down or memory runs low, with no browser
-  tab or desktop app open.
+- **Phone notifications.** The Android app tells you when an agent is waiting for you, a session
+  ends, a machine goes down or memory runs low, with no browser tab or desktop app open.
 - **New sessions where you want them.** Pick the agent, browse any folder on any machine, pick the current branch,
   another branch or a new one. Other branches get their own git worktree, so several sessions can
   work on one repo at once.
@@ -254,48 +253,23 @@ window and `Ctrl+Q` quits.
 ## Phone notifications
 
 Yardbell can tell your phone when an agent is waiting for you, a session ends, a machine goes down
-or comes back, or a machine's memory reaches 95%. The server sends them itself through
-[ntfy](https://ntfy.sh), a free app that shows whatever is posted to a topic, so no browser tab or
-desktop app has to be open. Tap a waiting agent's notification to open that session's terminal in
-the phone's browser, or any other one to open the dashboard, behind the usual login.
+or comes back, or a machine's memory reaches 95%. No browser tab or desktop app has to be open.
 
-1. On the Settings page, press **Set up** under **Phone notifications**. Yardbell makes a topic
-   named `yardbell-` and 24 random letters and digits.
-2. Install ntfy on your phone from Google Play, F-Droid or the App Store.
-3. On Android, open the Settings page on your phone and tap **Subscribe in ntfy**. On an iPhone, or
-   to do it by hand, press **Copy** next to the topic and subscribe to that topic in the ntfy app.
-   With your own ntfy server, enter its address in the app too. The page shows it under the topic.
-4. Press **Send a test notification**. The page says **Sent**, or shows the error.
+The Android app does it with nothing to set up. While it is signed in to a server, it keeps a
+connection to it in the background and shows its notifications. Android asks once whether Yardbell
+may send notifications, and shows a quiet "Watching your agents" notification while the connection
+is open, which you can hide in the app's notification settings. The connection goes over your mesh
+VPN like everything else, so nothing passes through Google or any other service. It starts again
+after the phone restarts. Tapping a notification opens the app. Notifications that came while the
+phone could not reach the server, the last 50 of them, arrive when it is back, unless the server
+restarted in between. The **Phone notifications** section of the Settings page says whether the app
+is connected.
 
-**The wait.** An agent counts as waiting once it has been idle for 20 seconds after working.
-Yardbell then holds the notification for 2 minutes and only sends it if the agent is still
-waiting, so nothing arrives when you answer it in time. Change the minutes next to
-**Agent waiting**, or set 0 to be told right away. The other kinds are sent at once. Each kind has
-its own switch, and a saved change applies on the next check.
-
-The section also shows when the last notification went out, or why the last attempt failed. A
-notification that fails is tried once more after 5 seconds and then dropped. Nothing is queued for
-later. **Turn off** forgets the topic, so setting up again makes a new one that the phone has to
-subscribe to again (**Undo** right after Turn off brings the old topic back).
-
-**What the ntfy server sees.** Notifications carry machine, folder and agent names, memory figures,
-and the link a tap opens, which holds Yardbell's mesh address and tmux session names. They never
-carry passcodes, cookies or terminal content. Anyone who knows the topic can read the
-notifications, so treat it like a password. Yardbell shows it only on the Settings page.
-
-**Limits.** The free tier of ntfy.sh has a daily message limit. Past it, ntfy.sh refuses new
-messages, and the Settings page shows its answer as the last error.
-
-**Your own ntfy server.** Open **Advanced**, enter its address as **ntfy server**, add an
-**Access token** if your topic needs one, and press **Save** before you subscribe on the phone:
-the Subscribe link and the server address the page shows come from the saved setting. An `https`
-server needs a certificate from a public authority, because Yardbell trusts only the public root
-certificates it ships with. On the mesh, an `http://` address works too. For the iPhone app, the
-ntfy server also needs `upstream-base-url: "https://ntfy.sh"` in its own config, or notifications
-can take hours to arrive.
-
-The settings live under `phone_notifications` in `yardbell.yml`, see the
-[configuration guide](docs/configuration.md#phone_notifications-optional).
+**The wait.** An agent counts as waiting once it has been idle for 20 seconds after working, or at
+once when it shows a question or a permission prompt. Yardbell then holds the notification for 2
+minutes and only sends it if the agent is still waiting, so nothing arrives when you answer it in
+time. Change the minutes next to **Agent waiting**, or set 0 to be told right away. The other kinds
+are sent at once. Each kind has its own switch, and a saved change applies on the next check.
 
 ## Using Yardbell
 
@@ -524,7 +498,7 @@ Quick reference:
 | `workspaces` | Folder globs under each machine's root that hold git checkouts |
 | `default_agent` | Agent preselected in New session (default `claude`) |
 | `agents` | Extra agents, or changed commands for built-in ones, see [AI agents](#ai-agents) |
-| `phone_notifications` | Notifications to your phone through ntfy, see [Phone notifications](#phone-notifications); keys in the [configuration guide](docs/configuration.md#phone_notifications-optional) |
+| `phone_notifications` | Which notifications the Android app shows, see [Phone notifications](#phone-notifications); keys in the [configuration guide](docs/configuration.md#phone_notifications-optional) |
 | `listen_ip` | Address to listen on besides 127.0.0.1; defaults to the local machine's `mesh_ip` |
 | `machines[].name` | Short name, `[a-z0-9-]+` |
 | `machines[].local` | `true` for the machine Yardbell runs on (native mode only) |

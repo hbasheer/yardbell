@@ -180,19 +180,13 @@ machine lists which ones it finds.
 
 ### `phone_notifications` (optional)
 
-Sends notifications to your phone through [ntfy](https://ntfy.sh), a free app that shows what is
-posted to a topic name. Yardbell posts when an agent is waiting for you, a session ends, a machine
-goes down or comes back, or a machine's memory reaches 95%. No browser tab or desktop app has to be
-open. Nothing is sent until `topic` is set. The **Phone notifications** section of the Settings page
-creates a topic for you and walks you through subscribing on the phone, so you rarely need to edit
-this by hand. The steps, and what the ntfy server gets to see, are in
-[README: Phone notifications](../README.md#phone-notifications).
+Which notifications the Yardbell app for Android shows: an agent waiting for you, a session ended,
+a machine down or back, or a machine's memory at 95%. The app gets them over its own connection
+to the server, so there is nothing to set up. The **Phone notifications** section of the Settings
+page edits these switches.
 
 ```yaml
 phone_notifications:
-  server: https://ntfy.sh   # any ntfy server
-  topic: ""                 # empty or missing: off; "Set up" on the Settings page writes it
-  token: ""                 # optional, for protected topics
   wait_minutes: 2           # agent waiting; 0 = right away
   agent_waiting: true
   session_ended: true
@@ -200,22 +194,16 @@ phone_notifications:
   memory: true
 ```
 
-Every key is optional. The values above are the defaults.
+Every key is optional. The values above are the defaults. Older configs may still have `server`,
+`topic` and `token` from when notifications went through ntfy; they are ignored.
 
 | Key | Default | Meaning |
 |---|---|---|
-| `server` | `https://ntfy.sh` | The ntfy server to post to. Must start with `http://` or `https://`. Use your own address for a self-hosted ntfy. |
-| `topic` | empty | The topic your phone subscribes to. Empty turns phone notifications off. Letters, digits, `-` and `_`, at most 64. Anyone who knows the topic can read your notifications, so treat it like a password. |
-| `token` | empty | An access token, for a topic your ntfy server protects. Sent as a bearer token. Printable ASCII with no spaces, at most 200 characters. |
 | `wait_minutes` | `2` | How long an agent must stay waiting before the phone is told. If you answer it sooner, nothing is sent. `0` sends right away. From 0 to 60. |
 | `agent_waiting` | `true` | Notify when an agent is waiting for you. |
 | `session_ended` | `true` | Notify when a session ends. |
 | `machines` | `true` | Notify when a machine has been down for a minute and when it comes back. |
 | `memory` | `true` | Notify when a machine's memory reaches 95%. |
-
-Tapping a notification opens Yardbell on the phone, at the address from `listen_ip` or, by default,
-the `mesh_ip` of the `local: true` machine. A waiting agent's notification opens that session's
-terminal, the others open the dashboard. With no such address, notifications carry no link.
 
 ### `mcp_servers` (optional)
 
@@ -339,7 +327,6 @@ Yardbell refuses to start or save an invalid file and says why:
 | `agent "x" needs a command and a resume` | give every entry under `agents` both commands |
 | `agent "x" process "a b" must be a plain program name` | set `process` to the program name only |
 | `default_agent "x" is not a known agent` | use a built-in name or add the agent under `agents` |
-| `phone_notifications.server must be an http:// or https:// address` | start the address with `http://` or `https://`, for example `https://ntfy.sh` |
 | `phone_notifications.topic may only use letters, digits, - and _ (at most 64)` | rename the topic, or leave it empty to turn notifications off |
 | `phone_notifications.wait_minutes must be from 0 to 60` | use a whole number of minutes from 0 to 60 |
 | `phone_notifications.token must be at most 200 characters without spaces` | paste the token again, with no spaces or line breaks |

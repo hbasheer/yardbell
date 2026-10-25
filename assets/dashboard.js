@@ -1,6 +1,7 @@
 const $ = (id) => document.getElementById(id);
 const onHost = ["localhost", "127.0.0.1"].includes(location.hostname);
 const Nav = window.YardbellNav;
+const NewSession = window.YardbellNewSession;
 let current = null;
 let lastJson = "";
 let lastRender = 0;
@@ -122,7 +123,7 @@ function memory(m) {
   const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
   const label = `Memory ${pct}% used of ${gb(h.mem_total_kb)} GB: agents ${gb(h.agent_kb)} GB, other ${gb(otherKb)} GB, free ${gb(freeKb)} GB`;
   return `<div class="mem${level}">
-    <div class="mem-head"><span><span class="mem-pct">${pct}% used</span> of ${gb(h.mem_total_kb)} GB</span></div>
+    <div class="mem-head"><span>Memory <span class="mem-pct">${pct}% used</span> of ${gb(h.mem_total_kb)} GB</span></div>
     <div class="mem-bar" role="img" aria-label="${esc(label)}">
       <span class="mem-agents" style="width:${(agents * 100).toFixed(1)}%"></span>
       <span class="mem-other" style="width:${((used - agents) * 100).toFixed(1)}%"></span>
@@ -131,6 +132,21 @@ function memory(m) {
       <span><i class="key agents"></i>Agents ${gb(h.agent_kb)} GB</span>
       <span><i class="key other"></i>Other ${gb(otherKb)} GB</span>
       <span><i class="key free"></i>Free ${gb(freeKb)} GB</span>
+    </div>
+  </div>`;
+}
+
+function disk(m) {
+  const h = m.health;
+  if (!m.up || !h || !h.disk_total_kb) return "";
+  const pct = Math.round((h.disk_used_kb / h.disk_total_kb) * 100);
+  const freeKb = Math.max(h.disk_total_kb - h.disk_used_kb, 0);
+  const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
+  const label = `Disk ${pct}% used of ${gb(h.disk_total_kb)} GB, ${gb(freeKb)} GB free`;
+  return `<div class="mem disk${level}">
+    <div class="mem-head"><span>Disk <span class="mem-pct">${pct}% used</span> of ${gb(h.disk_total_kb)} GB</span><span>${gb(freeKb)} GB free</span></div>
+    <div class="mem-bar" role="img" aria-label="${esc(label)}">
+      <span class="mem-other" style="width:${Math.min(pct, 100)}%"></span>
     </div>
   </div>`;
 }
@@ -290,7 +306,7 @@ function group(state, m) {
         <div class="mg-title">${fold}<span class="dot ${dot}"></span><h2 id="mg-${esc(m.name)}">${esc(m.name)}</h2>${m.up ? `<span class="mg-count">${plural(live, "session")}</span>` : ""}</div>
         <p class="mg-conn">${esc(connection(m))}</p>
       </div>
-      ${memory(m) || `<div class="mem" aria-hidden="true"></div>`}
+      <div class="health">${memory(m)}${disk(m)}</div>
       ${machineActions(m)}
     </header>
     ${body}
@@ -377,6 +393,8 @@ function tick() {
   el.classList.toggle("late", secs > 15);
 }
 
+const touch = matchMedia("(pointer: coarse)");
+
 function openRow(row) {
   if (row?.dataset.href) window.open(row.dataset.href, "_blank", "noopener");
 }
@@ -409,6 +427,9 @@ $("groups").addEventListener("click", (e) => {
     return;
   }
   if (e.target.closest("a, button")) return;
+  // On a touch screen the whole card as one target swallowed taps meant for Stop and the other
+  // buttons beside Open, so there only Open opens it.
+  if (touch.matches) return;
   openRow(e.target.closest(".s-row.openable"));
 });
 
@@ -598,177 +619,20 @@ async function startAndOpen(body) {
   }
 }
 
-const nm = { machine: "", listing: null, branches: null, picked: "" };
-
-function folderIcon(git) {
-  return git
-    ? '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="5" cy="4" r="1.5"/><circle cx="5" cy="12" r="1.5"/><circle cx="11" cy="6" r="1.5"/><path d="M5 5.5v5M11 7.5c0 2-3 2-5.5 3"/></svg>'
-    : '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z"/></svg>';
-}
-
-async function browseTo(path) {
-  $("dir-list").innerHTML = `<li class="dir-empty">Loading…</li>`;
-  try {
-    const q = path ? `?path=${encodeURIComponent(path)}` : "";
-    const l = await api("GET", `/machines/${encodeURIComponent(nm.machine)}/browse${q}`);
-    nm.listing = l;
-    renderBrowser(l);
-    await loadBranches();
-  } catch (err) {
-    $("dir-list").innerHTML = `<li class="dir-empty error">${esc(err.message)}</li>`;
-  }
-}
-
-function tail(path) {
-  const parts = short(path).split("/").filter((p) => p && p !== "~");
-  return parts.length ? parts.slice(-2).join("/") : short(path);
-}
-
-function renderRecent(recent) {
-  $("recent").innerHTML = recent.length
-    ? `<span class="recent-label">Recent</span>` + recent.map((p) => `<span class="recent-chip">
-        <button type="button" class="recent-go" data-path="${esc(p)}" title="${esc(short(p))}">${esc(tail(p))}</button>
-        <button type="button" class="recent-x" data-forget="${esc(p)}" aria-label="Remove ${esc(tail(p))} from Recent" title="Remove from Recent">
-          <svg viewBox="0 0 12 12" aria-hidden="true"><path d="M3.5 3.5l5 5M8.5 3.5l-5 5"/></svg>
-        </button>
-      </span>`).join("")
-    : "";
-}
-
-async function forgetRecent(path) {
-  try {
-    const res = await api("POST", `/machines/${encodeURIComponent(nm.machine)}/recent/forget`, { path });
-    if (nm.listing) nm.listing.recent = res.recent;
-    renderRecent(res.recent);
-  } catch (err) {
-    toast(err.message);
-  }
-}
-
-function renderBrowser(l) {
-  renderRecent(l.recent);
-  const parts = l.path.split("/").filter(Boolean);
-  const crumbs = [`<button type="button" class="crumb home" data-path="~">Home</button><span class="crumb-divider"></span>`, `<button type="button" class="crumb" data-path="/">/</button>`];
-  parts.forEach((p, i) => crumbs.push(`${i ? `<span class="sep">/</span>` : ""}<button type="button" class="crumb${i === parts.length - 1 ? " here" : ""}" data-path="/${esc(parts.slice(0, i + 1).join("/"))}">${esc(p)}</button>`));
-  $("crumbs").innerHTML = crumbs.join("");
-  const up = parts.length ? `<li><button type="button" class="dir" data-path="/${esc(parts.slice(0, -1).join("/"))}"><span class="dir-name">..</span></button></li>` : "";
-  $("dir-list").innerHTML = up + (l.entries.length
-    ? l.entries.map((e) => `<li><button type="button" class="dir${e.git ? " git" : ""}" data-path="${esc(`${l.path.replace(/\/$/, "")}/${e.name}`)}">
-        ${folderIcon(e.git)}<span class="dir-name">${esc(e.name)}</span>${e.git && e.branch ? `<span class="dir-branch">${esc(e.branch)}</span>` : ""}
-      </button></li>`).join("")
-    : `<li class="dir-empty">No subfolders</li>`);
-  updateWhere();
-}
-
-async function loadBranches() {
-  const l = nm.listing;
-  nm.branches = null;
-  nm.picked = "";
-  $("branch-step").hidden = !l?.git;
-  if (!l?.git) { updateWhere(); return; }
-  $("current-branch").textContent = l.branch || "detached HEAD";
-  setMode("stay");
-  try {
-    nm.branches = await api("GET", `/machines/${encodeURIComponent(nm.machine)}/branches?path=${encodeURIComponent(l.path)}`);
-    const bases = [nm.branches.default_base, ...nm.branches.local, ...nm.branches.remote.map((r) => `origin/${r}`)].filter((v, i, a) => v && a.indexOf(v) === i);
-    $("new-base").innerHTML = bases.map((b) => `<option>${esc(b)}</option>`).join("");
-    renderBranchList();
-  } catch (err) {
-    toast(`Could not read branches: ${err.message}`);
-  }
-}
-
-function renderBranchList() {
-  const b = nm.branches;
-  if (!b) return;
-  const f = $("branch-filter").value.trim().toLowerCase();
-  const names = [...b.local, ...b.remote].filter((n) => n !== b.current && (!f || n.toLowerCase().includes(f)));
-  $("branch-list").innerHTML = names.length
-    ? names.slice(0, 40).map((n) => {
-        const wt = b.worktrees[n];
-        const note = wt ? "has a worktree" : b.local.includes(n) ? "local" : "origin";
-        return `<li><button type="button" class="branch-opt${nm.picked === n ? " picked" : ""}" role="option" aria-selected="${nm.picked === n}" data-branch="${esc(n)}">
-          <span class="dir-name">${esc(n)}</span><span class="dir-branch">${note}</span></button></li>`;
-      }).join("")
-    : `<li class="dir-empty">No matching branches</li>`;
-}
-
-function mode() {
-  return document.querySelector('input[name="mode"]:checked')?.value || "stay";
-}
-
-function setMode(m) {
-  document.querySelector(`input[name="mode"][value="${m}"]`).checked = true;
-  $("existing-body").hidden = m !== "existing";
-  $("new-body").hidden = m !== "new";
-  updateWhere();
-}
-
-function worktreePath(repo, branch) {
-  const slug = branch.toLowerCase().replace(/[^a-z0-9_-]/g, "-");
-  return `${repo.replace(/\/$/, "")}-worktrees/${slug}`;
-}
-
-function updateWhere() {
-  const l = nm.listing;
-  const start = $("start-btn");
-  if (!l) { $("where").textContent = ""; start.disabled = true; return; }
-  let text = `Starts in ${short(l.path)}`;
-  let ok = true;
-  if (l.git && !$("branch-step").hidden) {
-    const m = mode();
-    if (m === "existing") {
-      ok = Boolean(nm.picked);
-      text = nm.picked
-        ? `Starts on ${nm.picked} in ${short(nm.branches?.worktrees[nm.picked] || worktreePath(l.path, nm.picked))}`
-        : "Pick a branch";
-    } else if (m === "new") {
-      const name = $("new-branch").value.trim();
-      ok = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(name) && !name.includes("..");
-      text = ok ? `Creates ${name} from ${$("new-base").value} in ${short(worktreePath(l.path, name))}` : "Enter a branch name";
-    } else {
-      text = `Starts on ${l.branch || "the current branch"} in ${short(l.path)}`;
-    }
-  }
-  $("where").textContent = text;
-  start.disabled = !ok;
-}
-
 function openNew(machine) {
   const up = (current?.machines || []).filter((m) => m.up);
   if (!up.length) { toast("No machine is connected right now"); return; }
-  const pick = up.some((m) => m.name === (machine || selected)) ? (machine || selected) : up[0].name;
-  $("new-machine").innerHTML = up.map((m) => `<option${m.name === pick ? " selected" : ""}>${esc(m.name)}</option>`).join("");
-  const agents = current?.agents || [];
-  const lastAgent = remembered("agent");
-  const agentPick = agents.some((a) => a.name === lastAgent) ? lastAgent : current?.default_agent;
-  $("new-agent").innerHTML = agents.map((a) => `<option value="${esc(a.name)}"${a.name === agentPick ? " selected" : ""}>${esc(a.label)}</option>`).join("");
-  nm.machine = pick;
-  nm.listing = null;
-  $("branch-filter").value = "";
-  $("new-branch").value = "";
-  $("new-form").querySelector('input[name="resume"]').checked = false;
-  $("new-dialog").showModal();
-  browseTo("");
+  NewSession.open({
+    machines: up.map((m) => m.name),
+    machine: machine || selected,
+    agents: current?.agents || [],
+    defaultAgent: current?.default_agent,
+    onError: toast,
+    onStart: (body) => startAndOpen(body)
+      .then(() => checkNow().catch(() => refresh()))
+      .catch((err) => toast(err.message)),
+  });
 }
-
-$("new-dialog").addEventListener("click", (e) => {
-  const forget = e.target.closest("[data-forget]");
-  if (forget) { forgetRecent(forget.dataset.forget); return; }
-  const target = e.target.closest("[data-path]");
-  if (target) { browseTo(target.dataset.path); return; }
-  const opt = e.target.closest("[data-branch]");
-  if (opt) {
-    nm.picked = opt.dataset.branch;
-    renderBranchList();
-    updateWhere();
-  }
-});
-
-document.querySelectorAll('input[name="mode"]').forEach((r) => r.addEventListener("change", () => setMode(mode())));
-$("branch-filter").addEventListener("input", renderBranchList);
-$("new-branch").addEventListener("input", updateWhere);
-$("new-base").addEventListener("change", updateWhere);
 
 document.addEventListener("click", async (e) => {
   const b = e.target.closest("[data-act]");
@@ -875,7 +739,7 @@ document.addEventListener("click", async (e) => {
 $("new-btn").addEventListener("click", () => openNew());
 
 function openNewIfClosed() {
-  if (!$("new-dialog").open) openNew();
+  if (!NewSession.isOpen()) openNew();
 }
 
 if (window.__TAURI__) {
@@ -886,30 +750,6 @@ if (window.__TAURI__) {
     openNewIfClosed();
   });
 }
-
-$("new-machine").addEventListener("change", (e) => {
-  nm.machine = e.target.value;
-  browseTo("");
-});
-
-$("new-form").addEventListener("submit", async (e) => {
-  if (e.submitter?.value !== "start") return;
-  e.preventDefault();
-  const l = nm.listing;
-  if (!l) return;
-  const agent = $("new-agent").value;
-  remember("agent", agent);
-  const body = { machine: nm.machine, path: l.path, agent, resume: $("new-form").querySelector('input[name="resume"]').checked };
-  if (l.git && mode() === "existing") body.branch = nm.picked;
-  if (l.git && mode() === "new") Object.assign(body, { branch: $("new-branch").value.trim(), new_branch: true, base: $("new-base").value });
-  $("new-dialog").close();
-  try {
-    await startAndOpen(body);
-    checkNow().catch(() => refresh());
-  } catch (err) {
-    toast(err.message);
-  }
-});
 
 refresh();
 setInterval(refresh, 5000);

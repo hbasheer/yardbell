@@ -248,6 +248,8 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
                     "mem_agents_gb": m.health.as_ref().map(|h| gb(h.agent_kb)),
                     "load1": m.health.as_ref().map(|h| h.load1),
                     "cpus": m.health.as_ref().map(|h| h.cpus),
+                    "disk_total_gb": m.health.as_ref().map(|h| gb(h.disk_total_kb)),
+                    "disk_free_gb": m.health.as_ref().map(|h| gb(h.disk_total_kb.saturating_sub(h.disk_used_kb))),
                     "agent_sessions": sessions,
                 })
             })

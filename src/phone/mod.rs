@@ -1,24 +1,23 @@
-pub mod ntfy;
+pub mod inbox;
 
 use crate::config::{Config, PhoneNotifications};
 use crate::events::{self, Event, Message, Tracker};
 use crate::snapshot::Activity;
 use crate::state::StateView;
-use chrono::Local;
-use ntfy::{Push, Sender, Target};
-use serde::Serialize;
+use inbox::Inbox;
 use std::net::IpAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 pub const HOLD_CAP: usize = 100;
-pub const RETRY_AFTER: Duration = Duration::from_secs(5);
 
-#[derive(Debug, Clone, Default, Serialize)]
-pub struct Status {
-    pub last_sent: Option<String>,
-    pub last_error: Option<String>,
-    pub last_error_at: Option<String>,
+#[derive(Debug, Clone, PartialEq)]
+pub struct Push {
+    pub title: String,
+    pub message: String,
+    pub tags: Vec<String>,
+    pub priority: u8,
+    pub click: Option<String>,
 }
 
 struct Held {
@@ -81,20 +80,20 @@ impl Watch {
 }
 
 pub struct Phone {
-    sender: Arc<dyn Sender>,
+    pub inbox: Inbox,
     watch: Mutex<Watch>,
-    status: Mutex<Status>,
+}
+
+impl Default for Phone {
+    fn default() -> Phone {
+        Phone {
+            inbox: Inbox::default(),
+            watch: Mutex::new(Watch::default()),
+        }
+    }
 }
 
 impl Phone {
-    pub fn new(sender: Arc<dyn Sender>) -> Phone {
-        Phone {
-            sender,
-            watch: Mutex::new(Watch::default()),
-            status: Mutex::new(Status::default()),
-        }
-    }
-
     pub fn observe(
         &self,
         settings: &PhoneNotifications,
@@ -104,7 +103,7 @@ impl Phone {
     ) -> Vec<Push> {
         let mut watch = self.watch.lock().expect("phone lock");
         let events = watch.tracker.observe(view, now);
-        if !settings.on() {
+        if !self.inbox.listening(now) {
             watch.held.clear();
             return Vec::new();
         }
@@ -123,67 +122,10 @@ impl Phone {
         pushes.extend(watch.release(settings, view, base, now));
         pushes
     }
-
-    pub async fn deliver(&self, to: &Target, push: &Push) {
-        let mut result = self.attempt(to, push).await;
-        if result.is_err() {
-            tokio::time::sleep(RETRY_AFTER).await;
-            result = self.attempt(to, push).await;
-        }
-        if let Err(error) = &result {
-            tracing::warn!(error = %error, "phone notification not sent");
-        }
-        self.record(&result);
-    }
-
-    pub fn dispatch(self: &Arc<Self>, to: Target, pushes: Vec<Push>) {
-        for push in pushes {
-            let phone = Arc::clone(self);
-            let to = to.clone();
-            tokio::spawn(async move { phone.deliver(&to, &push).await });
-        }
-    }
-
-    pub async fn test(&self, to: &Target, host: &str) -> Result<(), String> {
-        let push = Push {
-            title: "Yardbell".into(),
-            message: format!("Notifications from {host} work."),
-            tags: Vec::new(),
-            priority: 3,
-            click: None,
-        };
-        let result = self.attempt(to, &push).await;
-        self.record(&result);
-        result
-    }
-
-    pub fn status(&self) -> Status {
-        self.status.lock().expect("phone lock").clone()
-    }
-
-    async fn attempt(&self, to: &Target, push: &Push) -> Result<(), String> {
-        self.sender
-            .send(to, push)
-            .await
-            .map_err(|error| to.redact(&error))
-    }
-
-    fn record(&self, result: &Result<(), String>) {
-        let now = Local::now().to_rfc3339();
-        let mut status = self.status.lock().expect("phone lock");
-        match result {
-            Ok(()) => status.last_sent = Some(now),
-            Err(error) => {
-                status.last_error = Some(error.clone());
-                status.last_error_at = Some(now);
-            }
-        }
-    }
 }
 
 pub fn push_for(event: &Event, view: &StateView, base: Option<&str>, waited_minutes: u64) -> Push {
     let Message { title, body } = events::message(event, view, waited_minutes);
-    // ntfy replaces an empty message with the word "triggered".
     let (title, message) = if body.is_empty() {
         ("Yardbell".to_string(), title)
     } else {
@@ -272,7 +214,6 @@ mod tests {
     use crate::config::HostTerminal;
     use crate::snapshot::Health;
     use crate::state::{AgentView, MachineView, SessionView};
-    use crate::testing::FakeSender;
     use std::path::Path;
 
     const BASE: &str = "http://100.64.0.10:4000";
@@ -297,6 +238,8 @@ mod tests {
                 agent_kb: 0,
                 load1: 0.0,
                 cpus: 4,
+                disk_total_kb: 0,
+                disk_used_kb: 0,
             }),
             ..machine(name, true)
         }
@@ -332,6 +275,7 @@ mod tests {
             ended: vec![],
             host_terminal: HostTerminal::None,
             mesh: None,
+            server: None,
         }
     }
 
@@ -414,14 +358,14 @@ mod tests {
 
     impl Rig {
         fn new() -> Rig {
+            let t0 = Instant::now();
+            let phone = Phone::default();
+            phone.inbox.page(None, 0, t0);
             Rig {
-                phone: Phone::new(Arc::new(FakeSender::default())),
-                settings: PhoneNotifications {
-                    topic: "t".into(),
-                    ..PhoneNotifications::default()
-                },
+                phone,
+                settings: PhoneNotifications::default(),
                 base: Some(BASE),
-                t0: Instant::now(),
+                t0,
             }
         }
 
@@ -487,33 +431,6 @@ mod tests {
             "/tests/fixtures/yardbell.yml"
         )))
         .unwrap()
-    }
-
-    fn target() -> Target {
-        Target {
-            server: "http://127.0.0.1:1".into(),
-            topic: "t".into(),
-            token: None,
-        }
-    }
-
-    fn push(title: &str) -> Push {
-        Push {
-            title: title.into(),
-            message: "m".into(),
-            tags: vec![],
-            priority: 3,
-            click: None,
-        }
-    }
-
-    fn fake_phone() -> (Arc<Phone>, Arc<FakeSender>) {
-        let sender = Arc::new(FakeSender::default());
-        (Arc::new(Phone::new(sender.clone())), sender)
-    }
-
-    fn is_rfc3339(stamp: Option<&str>) -> bool {
-        stamp.is_some_and(|text| chrono::DateTime::parse_from_rfc3339(text).is_ok())
     }
 
     #[test]
@@ -652,7 +569,6 @@ mod tests {
     fn switches_silence_each_kind() {
         for wait_minutes in [1, 0] {
             let on = || PhoneNotifications {
-                topic: "t".into(),
                 wait_minutes,
                 ..PhoneNotifications::default()
             };
@@ -717,20 +633,17 @@ mod tests {
     }
 
     #[test]
-    fn off_sends_nothing_and_forgets_held() {
-        let mut rig = holding();
-        rig.settings.topic.clear();
-        assert_eq!(rig.observe(&idle(), 30), vec![]);
-        rig.settings.topic = "t".into();
-        assert_eq!(rig.observe(&idle(), 141), vec![]);
-
-        let mut rig = Rig::new();
-        rig.settings.topic.clear();
-        rig.settings.wait_minutes = 0;
-        assert_eq!(rig.observe(&active(), 0), vec![]);
-        assert_eq!(rig.observe(&idle(), 1), vec![]);
+    fn nothing_is_kept_while_no_app_listens() {
+        let rig = Rig {
+            phone: Phone::default(),
+            ..Rig::new()
+        };
+        rig.observe(&active(), 0);
+        rig.observe(&idle(), 1);
         assert_eq!(rig.observe(&idle(), 21), vec![]);
-        rig.settings.topic = "t".into();
+        rig.phone
+            .inbox
+            .page(None, 0, rig.t0 + Duration::from_secs(30));
         assert_eq!(rig.observe(&idle(), 141), vec![]);
     }
 
@@ -916,142 +829,5 @@ mod tests {
         cfg.listen_ip = None;
         cfg.machines[0].mesh_ip = None;
         assert_eq!(base_url(&cfg), None);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn deliver_records_last_sent() {
-        let (phone, sender) = fake_phone();
-
-        phone.deliver(&target(), &push("a")).await;
-
-        assert_eq!(sender.calls(), vec![(target(), push("a"))]);
-        let status = phone.status();
-        assert!(is_rfc3339(status.last_sent.as_deref()));
-        assert_eq!(status.last_error, None);
-        assert_eq!(status.last_error_at, None);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn deliver_retries_once_then_records_the_error() {
-        let (phone, sender) = fake_phone();
-        sender.fail_all("ntfy answered 500");
-        let started = tokio::time::Instant::now();
-
-        phone.deliver(&target(), &push("a")).await;
-
-        assert_eq!(sender.calls().len(), 2);
-        assert_eq!(started.elapsed(), Duration::from_secs(5));
-        let status = phone.status();
-        assert_eq!(status.last_error.as_deref(), Some("ntfy answered 500"));
-        assert!(is_rfc3339(status.last_error_at.as_deref()));
-        assert_eq!(status.last_sent, None);
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn deliver_succeeds_on_the_retry() {
-        let (phone, sender) = fake_phone();
-        sender.fail_next(1, "ntfy answered 503");
-
-        phone.deliver(&target(), &push("a")).await;
-
-        assert_eq!(sender.calls().len(), 2);
-        let status = phone.status();
-        assert!(is_rfc3339(status.last_sent.as_deref()));
-        assert_eq!(status.last_error, None);
-        assert_eq!(status.last_error_at, None);
-    }
-
-    #[tokio::test]
-    async fn test_sends_exactly_one_request() {
-        let (phone, sender) = fake_phone();
-        assert_eq!(phone.test(&target(), "mini").await, Ok(()));
-        assert_eq!(
-            sender.calls(),
-            vec![(
-                target(),
-                Push {
-                    title: "Yardbell".into(),
-                    message: "Notifications from mini work.".into(),
-                    tags: vec![],
-                    priority: 3,
-                    click: None,
-                }
-            )]
-        );
-        assert!(is_rfc3339(phone.status().last_sent.as_deref()));
-
-        let (phone, sender) = fake_phone();
-        sender.fail_all("no route");
-        assert_eq!(
-            phone.test(&target(), "mini").await,
-            Err("no route".to_string())
-        );
-        assert_eq!(sender.calls().len(), 1);
-        let status = phone.status();
-        assert_eq!(status.last_error.as_deref(), Some("no route"));
-        assert!(is_rfc3339(status.last_error_at.as_deref()));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn dispatch_sends_every_push_even_when_one_fails() {
-        let (phone, sender) = fake_phone();
-        sender.fail_title("push 2", "ntfy answered 500");
-        let pushes: Vec<Push> = (1..=5).map(|n| push(&format!("push {n}"))).collect();
-
-        phone.dispatch(target(), pushes);
-        tokio::time::sleep(Duration::from_secs(60)).await;
-
-        let titles: Vec<String> = sender
-            .calls()
-            .into_iter()
-            .map(|(_, push)| push.title)
-            .collect();
-        assert_eq!(
-            titles,
-            ["push 1", "push 2", "push 3", "push 4", "push 5", "push 2"]
-        );
-        let status = phone.status();
-        assert!(is_rfc3339(status.last_sent.as_deref()));
-        assert_eq!(status.last_error.as_deref(), Some("ntfy answered 500"));
-    }
-
-    #[tokio::test(start_paused = true)]
-    async fn errors_never_keep_the_token() {
-        let to = Target {
-            token: Some("tk_secret".into()),
-            ..target()
-        };
-
-        let (phone, sender) = fake_phone();
-        sender.fail_all("denied tk_secret");
-        phone.deliver(&to, &push("a")).await;
-        assert_eq!(phone.status().last_error.as_deref(), Some("denied [token]"));
-        assert_eq!(
-            phone.test(&to, "mini").await,
-            Err("denied [token]".to_string())
-        );
-        assert_eq!(phone.status().last_error.as_deref(), Some("denied [token]"));
-
-        let (phone, sender) = fake_phone();
-        sender.fail_all("tk_secret then tk_secret");
-        assert_eq!(
-            phone.test(&to, "mini").await,
-            Err("[token] then [token]".to_string())
-        );
-    }
-
-    #[tokio::test]
-    async fn errors_are_unchanged_without_a_token() {
-        let (phone, sender) = fake_phone();
-        sender.fail_all("denied");
-        assert_eq!(
-            phone.test(&target(), "mini").await,
-            Err("denied".to_string())
-        );
-        let empty = Target {
-            token: Some(String::new()),
-            ..target()
-        };
-        assert_eq!(phone.test(&empty, "mini").await, Err("denied".to_string()));
     }
 }

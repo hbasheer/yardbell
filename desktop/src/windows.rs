@@ -269,6 +269,8 @@ pub fn on_navigation(
         Link::Terminal { machine, tmux } if session == Some((machine.as_str(), tmux.as_str())) => {
             Action::Allow
         }
+        // WebKit asks about iframe loads too, and the Workspace page shows terminals in iframes.
+        Link::Terminal { .. } if label == DASHBOARD && embedded(url) => Action::Allow,
         Link::Terminal { machine, tmux } => Action::Terminal { machine, tmux },
         Link::Page | Link::Bundled if label == DASHBOARD => Action::Allow,
         Link::Page => Action::Main,
@@ -276,6 +278,10 @@ pub fn on_navigation(
         Link::Other if url.scheme() == "about" => Action::Allow,
         Link::Bundled | Link::Other => Action::Deny,
     }
+}
+
+fn embedded(url: &Url) -> bool {
+    url.query_pairs().any(|(key, _)| key == "embed")
 }
 
 pub fn on_new_window(server: &str, url: &Url) -> Action {
@@ -457,6 +463,27 @@ mod tests {
             Action::Browser
         );
         assert_eq!(dashboard(&url("file:///etc/passwd")), Action::Deny);
+    }
+
+    #[test]
+    fn workspace_terminals_load_inside_the_dashboard() {
+        let embedded = url(&format!("{SERVER}/term/mini/s1?embed=1"));
+        assert_eq!(
+            on_navigation(SERVER, &embedded, DASHBOARD, None),
+            Action::Allow
+        );
+        assert_eq!(
+            on_navigation(
+                SERVER,
+                &embedded,
+                &terminal_label("mini", "s2"),
+                Some(("mini", "s2"))
+            ),
+            Action::Terminal {
+                machine: "mini".into(),
+                tmux: "s1".into()
+            }
+        );
     }
 
     #[test]

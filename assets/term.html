@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-fixed-theme="dark">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/700.css" integrity="sha384-HqT7jGkVQOXOJ37tiVsHvCU/RCd8jyWr/gC4WgpIgRn5B8LiIqK8eJRiZOI/DGFQ" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
 <style>
   html, body { height: 100%; }
   body { display: flex; flex-direction: column; background: #0a0a0b; color: #ededef; color-scheme: dark; }
@@ -20,6 +21,7 @@
   body.embedded > .bar { display: none; }
   #banner { display: none; color: #fbbf24; font-size: 13px; }
   #term { flex: 1; min-height: 0; padding: 6px 4px 4px 8px; }
+  body.embedded #term { padding-top: 2px; }
   #keys { display: none; gap: 6px; padding: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); background: #0f1012; border-top: 1px solid #1f2125; overflow-x: auto; }
   #keys .btn { min-width: 52px; min-height: 40px; background: #17181b; color: #ededef; border-color: #2e3137; flex: none; }
   #keys { touch-action: manipulation; user-select: none; -webkit-user-select: none; }

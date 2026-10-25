@@ -3,6 +3,7 @@ pub mod auth;
 pub mod cli;
 pub mod config;
 pub mod detect;
+pub mod discover;
 pub mod dispatch;
 pub mod doctor;
 pub mod events;
@@ -25,4 +26,5 @@ pub mod term;
 #[cfg(test)]
 pub mod testing;
 pub mod tunnels;
+pub mod viewers;
 pub mod web;

@@ -51,6 +51,7 @@
       `<span class="dot ${tone(m)}" title="${esc(word(m))}"></span><span class="sr">${esc(word(m))}</span>`,
     ));
     document.getElementById("nav-machines").innerHTML = all + machines.join("");
+    renderServer(state.server);
     const vpn = document.getElementById("nav-vpn");
     const mesh = state.mesh;
     if (!mesh) {
@@ -59,6 +60,20 @@
     }
     const on = mesh.on === true ? "on" : mesh.on === false ? "off" : "status unknown";
     vpn.innerHTML = `<span class="dot ${mesh.on === true ? "ok" : mesh.on === false ? "bad" : ""}"></span>${esc(mesh.label)} ${on}`;
+  }
+
+  function renderServer(server) {
+    const nav = document.querySelector(".machine-nav");
+    if (!nav || !server) return;
+    let line = document.getElementById("nav-server");
+    if (!line) {
+      line = document.createElement("p");
+      line.id = "nav-server";
+      line.className = "server-line";
+      nav.after(line);
+    }
+    line.title = `Yardbell runs on ${server.machine}. Phones and other machines reach it at ${server.address}.`;
+    line.innerHTML = `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>`;
   }
 
   let build = "";

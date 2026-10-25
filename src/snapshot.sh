@@ -188,6 +188,13 @@ elif command -v vm_stat >/dev/null 2>&1; then
   load1=$(sysctl -n vm.loadavg 2>/dev/null | awk '{print $2}')
   cpus=$(sysctl -n hw.ncpu 2>/dev/null || echo 0)
 fi
+disk_total=0
+disk_used=0
+disk=$(df -Pk "$root" 2>/dev/null || df -Pk "$HOME" 2>/dev/null)
+if [ -n "$disk" ]; then
+  disk_total=$(printf '%s\n' "$disk" | awk 'NR == 2 {print $2 + 0}')
+  disk_used=$(printf '%s\n' "$disk" | awk 'NR == 2 {print $2 - $4}')
+fi
 if command -v ip >/dev/null 2>&1; then
   addrs=$(ip -o -4 addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1)
 else
@@ -202,7 +209,7 @@ for a in $(printf '%s\n' "$addrs" | awk -F. '$1 == 100 && $2 >= 64 && $2 <= 127'
 done
 printf ']'
 if [ -n "$mem_total" ] && [ -n "$mem_used" ]; then
-  printf ',"health":{"mem_total_kb":%s,"mem_used_kb":%s,"agent_kb":%s,"load1":%s,"cpus":%s}' \
-    "$mem_total" "$mem_used" "$agent_kb" "${load1:-0}" "${cpus:-0}"
+  printf ',"health":{"mem_total_kb":%s,"mem_used_kb":%s,"agent_kb":%s,"load1":%s,"cpus":%s,"disk_total_kb":%s,"disk_used_kb":%s}' \
+    "$mem_total" "$mem_used" "$agent_kb" "${load1:-0}" "${cpus:-0}" "${disk_total:-0}" "${disk_used:-0}"
 fi
 printf '}\n'

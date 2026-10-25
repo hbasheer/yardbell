@@ -1,3 +1,4 @@
+try { window.YardbellApp?.theme(matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"); } catch {}
 const { invoke } = window.__TAURI__.core;
 const scanner = window.__TAURI__.barcodeScanner;
 const $ = (id) => document.getElementById(id);
@@ -45,6 +46,35 @@ async function render() {
   </li>`).join("");
 }
 
+async function renderFound() {
+  const found = await invoke("discover").catch(() => []);
+  $("found-section").hidden = !found.length;
+  $("found").innerHTML = found.map((f) => `<li class="found-item">
+    <button class="open" type="button" data-found="${esc(f.address)}">
+      <span class="addr">${esc(f.machine)}</span>
+      <span class="note">${esc(f.address)} · tap and enter the passcode</span>
+    </button>
+  </li>`).join("");
+}
+
+$("found").addEventListener("click", (e) => {
+  const pick = e.target.closest("[data-found]");
+  if (!pick) return;
+  const item = pick.closest("li");
+  if (item.querySelector("form")) return;
+  $("found").querySelectorAll("form").forEach((f) => f.remove());
+  item.insertAdjacentHTML("beforeend", `<form class="found-login">
+    <input name="passcode" type="password" placeholder="Passcode" autocomplete="current-password" aria-label="Passcode for ${esc(pick.dataset.found)}">
+    <button class="btn primary" type="submit">Sign in</button>
+  </form>`);
+  const form = item.querySelector("form");
+  form.elements.passcode.focus();
+  form.addEventListener("submit", (ev) => {
+    ev.preventDefault();
+    go("connect", { server: pick.dataset.found, passcode: form.elements.passcode.value }, "Signing in…");
+  });
+});
+
 $("servers").addEventListener("click", async (e) => {
   const open = e.target.closest("[data-open]");
   if (open) { go("open", { server: open.dataset.open }, "Opening…"); return; }
@@ -82,3 +112,4 @@ $("manual").addEventListener("submit", (e) => {
 });
 
 render();
+renderFound();

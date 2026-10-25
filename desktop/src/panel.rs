@@ -40,6 +40,14 @@ pub struct PanelMachine {
     reason: Option<String>,
     memory: Option<Memory>,
     cpu: Option<Cpu>,
+    disk: Option<Disk>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Disk {
+    percent: u64,
+    used_kb: u64,
+    total_kb: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -115,6 +123,15 @@ fn view(state: Option<&StateView>) -> PanelView {
                         cpus: health.cpus,
                     },
                 ),
+                disk: m
+                    .health
+                    .filter(|health| m.up && health.disk_total_kb > 0)
+                    .map(|health| Disk {
+                        percent: (health.disk_used_kb * 100 + health.disk_total_kb / 2)
+                            / health.disk_total_kb,
+                        used_kb: health.disk_used_kb,
+                        total_kb: health.disk_total_kb,
+                    }),
             })
             .collect();
     PanelView::Ready {
@@ -360,6 +377,8 @@ mod tests {
             agent_kb,
             load1: 0.0,
             cpus: 4,
+            disk_total_kb: 0,
+            disk_used_kb: 0,
         }
     }
 
@@ -390,6 +409,7 @@ mod tests {
             ended: vec![],
             host_terminal: HostTerminal::None,
             mesh: None,
+            server: None,
         }
     }
 
@@ -424,6 +444,7 @@ mod tests {
                         load1: 0.0,
                         cpus: 4,
                     }),
+                    disk: None,
                 },
                 PanelMachine {
                     name: "laptop".into(),
@@ -431,6 +452,7 @@ mod tests {
                     reason: Some("ssh timeout".into()),
                     memory: None,
                     cpu: None,
+                    disk: None,
                 },
                 PanelMachine {
                     name: "studio".into(),
@@ -442,6 +464,7 @@ mod tests {
                         load1: 0.0,
                         cpus: 4,
                     }),
+                    disk: None,
                 },
             ]
         );
@@ -481,6 +504,33 @@ mod tests {
         );
         assert_eq!(cpu_of(12.0, 8).map(|cpu| cpu.percent), Some(100));
         assert_eq!(cpu_of(1.2, 0), None);
+    }
+
+    #[test]
+    fn the_panel_shows_disk_use() {
+        let disk_of = |used_kb: u64, total_kb: u64| {
+            let health = Health {
+                disk_total_kb: total_kb,
+                disk_used_kb: used_kb,
+                ..health(400, 1000, 0)
+            };
+            let PanelView::Ready { machines, .. } = view(Some(&state(
+                vec![machine("devbox", true, Some(health))],
+                vec![],
+            ))) else {
+                panic!("expected a ready panel");
+            };
+            machines[0].disk.clone()
+        };
+        assert_eq!(
+            disk_of(625, 1000),
+            Some(Disk {
+                percent: 63,
+                used_kb: 625,
+                total_kb: 1000,
+            })
+        );
+        assert_eq!(disk_of(0, 0), None);
     }
 
     #[test]

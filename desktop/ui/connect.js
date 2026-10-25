@@ -19,7 +19,28 @@ function focusFirstEmpty() {
   ($("server").value ? $("passcode") : $("server")).focus();
 }
 
+function esc(value) {
+  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+}
+
+async function showFound() {
+  const found = await invoke("discover_servers").catch(() => []);
+  $("found").hidden = !found.length;
+  $("found-list").innerHTML = found.map((f) => `<button class="found-server" type="button" data-address="http://${esc(f.address)}">
+    <span class="found-name">${esc(f.machine)}</span><span class="found-addr">${esc(f.address)}</span>
+  </button>`).join("");
+}
+
+$("found-list").addEventListener("click", (e) => {
+  const pick = e.target.closest("[data-address]");
+  if (!pick) return;
+  $("server").value = pick.dataset.address;
+  $("found-list").querySelectorAll(".found-server").forEach((b) => b.classList.toggle("picked", b === pick));
+  $("passcode").focus();
+});
+
 async function init() {
+  showFound();
   $("server").value = remembered();
   focusFirstEmpty();
   const [server, message] = await Promise.all([

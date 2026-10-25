@@ -176,6 +176,7 @@ mod tests {
             ended: vec![],
             host_terminal: HostTerminal::None,
             mesh: None,
+            server: None,
         }
     }
 

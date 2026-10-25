@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.0.20/index.css" integrity="sha384-6QsiPFEuz7gYJPDZq103sCr5aKoBCbqAXJq1fEUzeUHeJmXFTMGzGuUmfP4j5w5b" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
 </head>
 <body data-page="dashboard">
 <div class="app">
@@ -30,8 +31,9 @@
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z"/></svg>Dispatch
       </a>
       <a class="side-link" href="/settings">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M3.6 12.4l1.3-1.3M11.1 4.9l1.3-1.3"/></svg>Settings
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:2.3"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings
       </a>
+      <button class="side-link theme-toggle" type="button" data-theme-toggle></button>
       <button class="side-link" id="logout" type="button">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 3H3.5v10h3M10 5l3 3-3 3M13 8H6.5"/></svg>Log out
       </button>
@@ -75,62 +77,10 @@
   </main>
 </div>
 
-<dialog id="new-dialog" class="wide" aria-labelledby="new-title">
-  <form method="dialog" id="new-form">
-    <div class="dialog-head">
-      <h2 id="new-title">New session</h2>
-      <button class="btn quiet" value="cancel" formnovalidate aria-label="Close">Close</button>
-    </div>
-
-    <section class="step grid2">
-      <label>Machine <select name="machine" id="new-machine"></select></label>
-      <label>Agent <select name="agent" id="new-agent"></select></label>
-    </section>
-
-    <section class="step">
-      <h3 class="step-title">Folder</h3>
-      <div id="recent" class="recent"></div>
-      <nav id="crumbs" class="crumbs" aria-label="Folder path"></nav>
-      <ul id="dir-list" class="dir-list" aria-label="Folders"></ul>
-    </section>
-
-    <section class="step" id="branch-step" hidden>
-      <h3 class="step-title">Branch</h3>
-      <div class="choices">
-        <label class="choice"><input type="radio" name="mode" value="stay" checked>
-          <span>Stay on <b id="current-branch"></b> in this folder</span></label>
-        <label class="choice"><input type="radio" name="mode" value="existing">
-          <span>Another branch, in its own worktree</span></label>
-        <div class="choice-body" id="existing-body" hidden>
-          <input type="text" id="branch-filter" placeholder="Filter branches" autocomplete="off" autocapitalize="off">
-          <ul id="branch-list" class="branch-list" role="listbox" aria-label="Branches"></ul>
-        </div>
-        <label class="choice"><input type="radio" name="mode" value="new">
-          <span>New branch, in its own worktree</span></label>
-        <div class="choice-body grid2" id="new-body" hidden>
-          <label>Name <input type="text" id="new-branch" placeholder="eng-1234-short-description" autocomplete="off" autocapitalize="off"></label>
-          <label>From <select id="new-base"></select></label>
-        </div>
-      </div>
-    </section>
-
-    <label class="switch-row">
-      <span class="switch-text">
-        <span class="switch-title">Continue the last conversation</span>
-        <span class="switch-hint">Starts the agent with its resume command in this folder.</span>
-      </span>
-      <input type="checkbox" class="switch" name="resume">
-    </label>
-
-    <div class="dialog-foot">
-      <p class="where" id="where"></p>
-      <button class="btn primary" value="start" id="start-btn">Start and open</button>
-    </div>
-  </form>
-</dialog>
 <div id="menu" class="menu" role="menu" hidden></div>
 <div id="toast" role="status"></div>
 <script src="/nav.js"></script>
+<script src="/newsession.js"></script>
 <script src="/dashboard.js"></script>
 </body>
 </html>
