@@ -15,11 +15,9 @@ and the project uses [Semantic Versioning](https://semver.org).
   such as Linear.
 - Dispatch has a second sidebar with conversations and tasks. Tasks of your own are added,
   edited, renamed and deleted there, next to five defaults: **What's going on?**, **Who needs
-  me?**, **Plan my Linear tickets**, **Review finished branches** and **Tidy up sessions**. A
-  default can be copied into a task of your own, or deleted and brought back with **Restore
-  default tasks**.
-- A new look across the web pages and the desktop and Android apps: graphite neutrals, IBM Plex
-  Sans and Plex Mono, sentence-case section titles, and one colour per agent state everywhere:
+  me?**, **Plan my Linear tickets**, **Review finished branches** and **Tidy up sessions**.
+- A refreshed look across the web pages and the desktop and Android apps: IBM Plex Sans and Plex
+  Mono, sentence-case section titles, and one colour per agent state everywhere:
   green while working, amber when it needs you, grey when idle. Red now only means an error or a
   machine that is down.
 - Every task can be edited and deleted, the defaults included. An edited default keeps its place,
