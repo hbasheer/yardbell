@@ -5,6 +5,16 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-25
+
+- Workspace keeps one row of tabs for every session on every machine. Clicking a session in the
+  sidebar focuses its tab instead of swapping to a separate set of tabs for its folder, and
+  clicking a folder jumps to its first tab. Tabs with the same name are numbered. The session
+  menu in the sidebar is gone; tabs are split from their right-click menu.
+- Claude usage moved from Dispatch to the main sidebar, so it shows on every page.
+- Dispatch: Conversations and Tasks fold with a click on their heading, shown by a chevron, and
+  stay folded. New conversation is a normal sized button however wide the list is.
+
 ## [0.6.2] - 2026-10-25
 
 - Terminals can be light. Settings, Appearance has a Terminal choice: same as the theme, light or

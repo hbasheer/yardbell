@@ -150,7 +150,7 @@ folder, agent and branch for each) and starts nothing until you agree. Dispatch 
 servers listed under **MCP servers** in Settings, so with Linear added there,
 **Plan my Linear tickets** reads your open tickets and plans them.
 
-The **Claude usage** card at the top of Dispatch's sidebar shows how much of your Claude plan's
+The **Claude usage** card at the bottom of the main sidebar shows how much of your Claude plan's
 5-hour and weekly limits is used, and when each resets. Claude Code reports these numbers each time
 Dispatch replies, so the card shows the figures from the last reply, and appears after the first one.
 The limits belong to the Claude account signed in on the machine running Yardbell, and agent

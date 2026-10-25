@@ -340,7 +340,7 @@ async function ask(text) {
   } finally {
     setBusy(false);
     loadList().catch(() => {});
-    loadUsage();
+    window.YardbellNav.loadUsage();
     catchUp(false);
   }
 }
@@ -388,31 +388,6 @@ function renderTasks() {
           <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
         </button></li>`).join("")
     : '<li><p class="convo-empty">No tasks yet.</p></li>';
-}
-
-function resetsIn(epoch) {
-  if (!epoch) return "";
-  const mins = Math.max(0, Math.round((epoch * 1000 - Date.now()) / 60000));
-  if (mins < 60) return `resets in ${mins} min`;
-  if (mins < 1440) return `resets in ${Math.floor(mins / 60)} h ${mins % 60} min`;
-  return `resets ${new Date(epoch * 1000).toLocaleDateString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
-}
-
-async function loadUsage() {
-  const usage = await api("GET", "/dispatch/usage").catch(() => null);
-  $("usage").hidden = !usage?.windows?.length;
-  if (!usage?.windows?.length) return;
-  $("usage-seen").textContent = ago(usage.seen);
-  $("usage-seen").title = "Claude Code reports this each time Dispatch replies";
-  $("usage-bars").innerHTML = usage.windows.map((w) => {
-    const pct = Math.round(w.used * 100);
-    const tone = w.status !== "allowed" || pct >= 90 ? "bad" : pct >= 70 ? "warn" : "ok";
-    return `<div class="usage-row">
-      <div class="usage-line"><span>${esc(w.label)}</span><span class="usage-pct">${pct}%</span></div>
-      <div class="usage-track" role="progressbar" aria-label="${esc(w.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="usage-fill ${tone}" style="width: ${Math.max(pct, 1)}%"></span></div>
-      <div class="usage-reset">${esc(resetsIn(w.resets_at))}</div>
-    </div>`;
-  }).join("");
 }
 
 async function loadTasks() {
@@ -638,13 +613,18 @@ resizer.addEventListener("keydown", (e) => {
 
 setSideWidth(Number(remembered(WIDTH_KEY)) || SIDE_WIDTH.normal, false);
 
-if (narrow.matches) {
-  $("convos").open = false;
-  $("tasks").open = false;
+const FOLDED_KEY = "yardbell.dispatch.folded";
+const folded = new Set((remembered(FOLDED_KEY) || "").split(",").filter(Boolean));
+for (const id of ["convos", "tasks"]) {
+  $(id).open = !narrow.matches && !folded.has(id);
+  $(id).addEventListener("toggle", () => {
+    if (narrow.matches) return;
+    if ($(id).open) folded.delete(id);
+    else folded.add(id);
+    remember(FOLDED_KEY, folded.size ? [...folded].join(",") : null);
+  });
 }
 loadTasks();
-loadUsage();
-setInterval(loadUsage, 60000);
 loadList()
   .then(() => open(current && conversations.some((c) => c.id === current) ? current : null))
   .catch((err) => toast(err.message));

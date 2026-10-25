@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const STORE = "workspace.v3";
+const STORE = "workspace.v4";
 // A workspace is one folder on one machine: the same folder name on two machines is two places.
 const SEP = "\t";
 const phone = matchMedia("(max-width: 760px)");
@@ -7,7 +7,7 @@ const RANK = { blocked: 0, done: 1, working: 2, idle: 3 };
 const WORD = { blocked: "blocked", done: "done", working: "working", idle: "idle" };
 
 let state = null;
-let saved = { current: "", spaces: {} };
+let saved = { folder: "", tabs: [], tab: 0, focus: "", hidden: [] };
 const lastActivity = new Map();
 const done = new Set();
 const paneEls = new Map();
@@ -32,7 +32,7 @@ function newId() {
 function restore() {
   try {
     const raw = JSON.parse(localStorage.getItem(STORE) || "null");
-    if (raw && typeof raw.spaces === "object") saved = raw;
+    if (raw && Array.isArray(raw.tabs)) saved = { ...saved, ...raw };
   } catch {}
 }
 
@@ -108,16 +108,20 @@ function parentOf(node, target, parent = null) {
   return left !== undefined ? left : parentOf(node.b, target, node);
 }
 
+// The workspace you are in is the folder of the focused session, or the one last picked.
 function project() {
-  return saved.current;
+  const s = saved.tabs.length ? sessionFor(focusedLeaf()?.key) : null;
+  return s ? projectOf(s) : saved.folder;
 }
 
-function space(name = project()) {
-  if (!saved.spaces[name]) {
+function space() {
+  if (!saved.tabs.length) {
     const pane = { pane: newId(), key: null };
-    saved.spaces[name] = { tabs: [{ id: newId(), name: "Agents", root: pane }], tab: 0, focus: pane.pane, hidden: [] };
+    saved.tabs = [{ id: newId(), name: "Agents", root: pane }];
+    saved.tab = 0;
+    saved.focus = pane.pane;
   }
-  return saved.spaces[name];
+  return saved;
 }
 
 function removeLeaf(t, leaf) {
@@ -150,12 +154,20 @@ function detach(sp, key) {
   return null;
 }
 
-// Every running session of a workspace has a place in a tab: its own, unless it was split into
-// another one or its tab was closed with the session kept running.
-function sync(name) {
-  const sp = space(name);
+function tabName(sp, s) {
+  const base = title(s);
+  const taken = new Set(sp.tabs.map((t) => t.name));
+  let name = base;
+  for (let n = 2; taken.has(name); n++) name = `${base} ${n}`;
+  return name;
+}
+
+// Every running session has a place in a tab: its own, unless it was split into another one or
+// its tab was closed with the session kept running.
+function sync() {
+  const sp = space();
   sp.hidden ||= [];
-  const mine = sessions().filter((s) => projectOf(s) === name);
+  const mine = sessions();
   const known = new Set(mine.map(keyOf));
   for (const leaf of sp.tabs.flatMap((t) => leaves(t.root))) {
     if (!leaf.key || known.has(leaf.key)) {
@@ -178,9 +190,9 @@ function sync(name) {
     const blank = sp.tabs.length === 1 && !leaves(sp.tabs[0].root).some((l) => l.key) ? sp.tabs[0] : null;
     if (blank) {
       leaves(blank.root)[0].key = key;
-      blank.name = title(s);
+      blank.name = tabName({ tabs: [] }, s);
     } else {
-      sp.tabs.push({ id: newId(), name: title(s), root: { pane: newId(), key } });
+      sp.tabs.push({ id: newId(), name: tabName(sp, s), root: { pane: newId(), key } });
     }
   }
   sp.tab = Math.min(sp.tab, sp.tabs.length - 1);
@@ -200,7 +212,7 @@ function focusedLeaf() {
 }
 
 function visibleKeys() {
-  if (document.hidden || !project()) return new Set();
+  if (document.hidden || !saved.tabs.length) return new Set();
   const all = phone.matches ? [focusedLeaf()] : leaves(tab().root);
   return new Set(all.map((l) => l.key).filter(Boolean));
 }
@@ -222,7 +234,7 @@ function trackActivity() {
 
 function projects() {
   const names = [...new Set(sessions().map(projectOf))];
-  for (const name of Object.keys(saved.spaces)) if (!names.includes(name)) names.push(name);
+  if (saved.folder && !names.includes(saved.folder)) names.push(saved.folder);
   return names.filter((n) => n.includes(SEP)).sort((a, b) => machineOf(a).localeCompare(machineOf(b)) || folderOf(a).localeCompare(folderOf(b)));
 }
 
@@ -239,20 +251,17 @@ function renderSide() {
   $("summary").textContent = ["blocked", "done", "working", "idle"]
     .filter((k) => counts[k]).map((k) => `${counts[k]} ${WORD[k]}`).join(" · ") || "No agents running";
 
-  const inPane = project() ? new Map(leaves(tab().root).map((l, i) => [l.key, i + 1])) : new Map();
+  const inPane = new Map(leaves(tab().root).map((l, i) => [l.key, i + 1]));
   const row = (s) => {
     const key = keyOf(s);
     const st = stateOf(s);
     const n = inPane.get(key);
     const where = n && !phone.matches ? `<span class="ws-pane-no" title="In pane ${n}">${n}</span>` : "";
-    const acts = s.stale || !project() ? "" : `<span class="ws-row-acts">
-      <button type="button" class="btn quiet icon-btn" data-more="${esc(key)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(title(s))}" title="More"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg></button>
-    </span>`;
-    return `<li class="ws-row"><button type="button" class="ws-item${n && key === focusedLeaf()?.key ? " current" : ""}${s.stale ? " stale" : ""}" data-key="${esc(key)}"${s.stale ? " disabled" : ""}>
+    return `<li><button type="button" class="ws-item${n && key === focusedLeaf()?.key ? " current" : ""}${s.stale ? " stale" : ""}" data-key="${esc(key)}"${s.stale ? " disabled" : ""}>
       ${dot(st)}
       <span class="ws-item-main"><span class="ws-item-title">${esc(title(s))}</span><span class="ws-item-sub">${esc([agentLabel(s.agent), s.branch].filter(Boolean).join(" · "))}</span></span>
       <span class="ws-item-word ${st}">${esc(WORD[st] || "last known")}</span>${where}
-    </button>${acts}</li>`;
+    </button></li>`;
   };
   let lastMachine = "";
   $("tree").innerHTML = projects().map((name) => {
@@ -325,12 +334,15 @@ function paneEl(leaf) {
 
 function home() {
   const name = project();
+  if (!name) return null;
   return (state?.folders || []).find((f) => f.label === folderOf(name) && f.machine === machineOf(name));
 }
 
 function emptyPane(leaf) {
   const shown = new Set(leaves(tab().root).map((l) => l.key));
-  const picks = sessions().filter((s) => projectOf(s) === project() && !s.stale && !shown.has(keyOf(s)));
+  const here = project();
+  const picks = sessions().filter((s) => !s.stale && !shown.has(keyOf(s)))
+    .sort((a, b) => (projectOf(b) === here) - (projectOf(a) === here));
   const where = home();
   const busy = starting.has(leaf.pane) ? " disabled" : "";
   const used = new Set([state.default_agent, ...(state.sessions || []).map((s) => s.agent), ...(state.ended || []).map((e) => e.agent)]);
@@ -467,13 +479,8 @@ function drag(e, node, box) {
 
 function render() {
   if (!state) return;
-  if (!projects().includes(project())) saved.current = projects()[0] || "";
-  if (!project()) {
-    renderSide();
-    $("tabs").innerHTML = "";
-    return;
-  }
-  sync(project());
+  sync();
+  if (!projects().includes(saved.folder)) saved.folder = projects()[0] || "";
   save();
   renderTabs();
   renderPanes();
@@ -491,11 +498,10 @@ function focusPane(id, { into = true } = {}) {
   if (into) paneEls.get(id)?.querySelector("iframe")?.contentWindow?.postMessage({ yardbell: "focus" }, location.origin);
 }
 
-function reveal(name, key) {
-  const sp = space(name);
+function reveal(key) {
+  const sp = space();
   const ti = sp.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === key));
   if (ti < 0) return false;
-  saved.current = name;
   sp.tab = ti;
   document.body.classList.remove("ws-picking");
   focusPane(leaves(sp.tabs[ti].root).find((l) => l.key === key).pane);
@@ -504,12 +510,10 @@ function reveal(name, key) {
 
 function open(key) {
   done.delete(key);
-  const s = sessionFor(key);
-  const name = s ? projectOf(s) : project();
-  const sp = space(name);
+  const sp = space();
   sp.hidden = (sp.hidden || []).filter((k) => k !== key);
-  sync(name);
-  if (reveal(name, key)) return;
+  sync();
+  if (reveal(key)) return;
   const all = leaves(tab().root);
   const target = [focusedLeaf(), ...all].find((l) => !l.key) || focusedLeaf();
   target.key = key;
@@ -517,18 +521,10 @@ function open(key) {
   focusPane(target.pane);
 }
 
-function split(dir, key = null) {
-  if (phone.matches || !project()) return;
+function split(dir) {
+  if (phone.matches) return;
   const leaf = focusedLeaf();
-  if (key && !leaf.key) {
-    leaf.key = key;
-    done.delete(key);
-    focusPane(leaf.pane);
-    return;
-  }
-  if (key === leaf.key) return;
-  const fresh = (key && detach(space(), key)) || { pane: newId(), key };
-  if (key) done.delete(key);
+  const fresh = { pane: newId(), key: null };
   const replacement = { split: dir, ratio: 0.5, a: { ...leaf }, b: fresh };
   const t = tab();
   const parent = parentOf(t.root, leaf);
@@ -617,29 +613,6 @@ function showMenu(rect, items) {
   el.querySelector("[role=menuitem]").focus();
 }
 
-function openMenu(button) {
-  const el = $("ws-menu");
-  const key = button.dataset.more;
-  if (el && !el.hidden && el.dataset.key === key) {
-    closeMenu();
-    return;
-  }
-  const splits = phone.matches ? [] : [
-    { label: "Open to the right", run: () => split("row", key) },
-    { label: "Open below", run: () => split("col", key) },
-  ];
-  showMenu(button.getBoundingClientRect(), [
-    ...splits,
-    { label: "Open in its own tab", run: () => {
-      const s = sessionFor(key);
-      done.delete(key);
-      const leaf = detach(space(), key);
-      addTab(s ? title(s) : key.split("/").pop(), key, leaf);
-    } },
-  ]);
-  $("ws-menu").dataset.key = key;
-}
-
 function renameTab(i) {
   const t = space().tabs[i];
   const label = $("tabs").querySelector(`[data-tab="${i}"] .ws-tab-name`);
@@ -678,22 +651,12 @@ function closeMenu() {
 }
 
 document.addEventListener("pointerdown", (e) => {
-  if (!e.target.closest("#ws-menu, [data-more]")) closeMenu();
+  if (!e.target.closest("#ws-menu")) closeMenu();
 }, true);
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") closeMenu();
 });
 window.addEventListener("resize", closeMenu);
-
-function addTab(name, key, pane = { pane: newId(), key }) {
-  const sp = space();
-  sp.tabs.push({ id: newId(), name, root: pane });
-  sp.tab = sp.tabs.length - 1;
-  sp.focus = pane.pane;
-  document.body.classList.remove("ws-picking");
-  save();
-  render();
-}
 
 function newTab() {
   if (!state) return;
@@ -719,9 +682,7 @@ function newTab() {
         const key = `${body.machine}/${data.name}`;
         await fetch("/refresh", { method: "POST", headers: { Accept: "application/json" } }).catch(() => {});
         await load();
-        const started = sessionFor(key);
-        if (started) saved.current = projectOf(started);
-        if (project()) open(key);
+        open(key);
       } catch (err) {
         toast(err.message);
       }
@@ -791,17 +752,26 @@ function switchTab(i) {
   render();
 }
 
+function openSpace(name) {
+  saved.folder = name;
+  const first = saved.tabs.flatMap((t) => leaves(t.root)).find((l) => {
+    const s = sessionFor(l.key);
+    return s && projectOf(s) === name;
+  });
+  if (!first || !reveal(first.key)) {
+    save();
+    render();
+  }
+}
+
 function switchSpace(step) {
   const names = projects();
   if (!names.length) return;
   const i = names.indexOf(project());
-  saved.current = names[(i + step + names.length) % names.length];
-  save();
-  render();
+  openSpace(names[(i + step + names.length) % names.length]);
 }
 
 function shortcut(code) {
-  if (!project()) return false;
   if (/^Digit[1-9]$/.test(code)) {
     const leaf = leaves(tab().root)[Number(code.slice(5)) - 1];
     if (leaf) focusPane(leaf.pane);
@@ -820,14 +790,7 @@ function shortcut(code) {
 $("tree").addEventListener("click", (e) => {
   const b = e.target.closest("[data-space]");
   if (b) {
-    saved.current = b.dataset.space;
-    save();
-    render();
-    return;
-  }
-  const more = e.target.closest("[data-more]");
-  if (more) {
-    openMenu(more);
+    openSpace(b.dataset.space);
     return;
   }
   const item = e.target.closest(".ws-item");
