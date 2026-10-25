@@ -319,6 +319,8 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(dispatch_tasks).post(dispatch_save_task),
         )
         .route("/dispatch/tasks/delete", post(dispatch_delete_task))
+        .route("/dispatch/tasks/restore", post(dispatch_restore_tasks))
+        .route("/dispatch/usage", get(dispatch_usage))
         .route("/sessions/{machine}/{name}/keys", post(session_keys))
         .route("/dispatch/ask", post(dispatch_ask))
         .route(
@@ -561,6 +563,10 @@ fn hostname() -> String {
         .unwrap_or_else(|| "this machine".into())
 }
 
+async fn dispatch_usage(AxState(app): AxState<Arc<AppState>>) -> Response {
+    Json(app.dispatch.usage()).into_response()
+}
+
 async fn dispatch_tasks(AxState(app): AxState<Arc<AppState>>) -> Response {
     Json(app.dispatch.tasks()).into_response()
 }
@@ -570,6 +576,8 @@ struct TaskInput {
     name: String,
     #[serde(default)]
     text: String,
+    #[serde(default)]
+    replacing: Option<String>,
 }
 
 async fn dispatch_save_task(
@@ -578,8 +586,18 @@ async fn dispatch_save_task(
 ) -> Result<Response, ApiError> {
     let tasks = app
         .dispatch
-        .save_task(&req.name, &req.text)
+        .save_task(&req.name, &req.text, req.replacing.as_deref())
         .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(tasks).into_response())
+}
+
+async fn dispatch_restore_tasks(
+    AxState(app): AxState<Arc<AppState>>,
+) -> Result<Response, ApiError> {
+    let tasks = app
+        .dispatch
+        .restore_default_tasks()
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
     Ok(Json(tasks).into_response())
 }
 
@@ -590,7 +608,7 @@ async fn dispatch_delete_task(
     let tasks = app
         .dispatch
         .delete_task(&req.name)
-        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(tasks).into_response())
 }
 

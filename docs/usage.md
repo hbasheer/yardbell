@@ -149,9 +149,20 @@ folder, agent and branch for each) and starts nothing until you agree. Dispatch 
 servers listed under **MCP servers** in Settings, so with Linear added there,
 **Plan my Linear tickets** reads your open tickets and plans them.
 
-The buttons above the message box send a task in one click: **What's going on?** summarises every
-machine and session, **Plan my Linear tickets** does what it says, and **Save as task** keeps
-whatever you typed under a name of your own.
+The **Claude usage** card at the top of Dispatch's sidebar shows how much of your Claude plan's
+5-hour and weekly limits is used, and when each resets. Claude Code reports these numbers each time
+Dispatch replies, so the card shows the figures from the last reply, and appears after the first one.
+The limits belong to the Claude account signed in on the machine running Yardbell, and agent
+sessions using the same account count towards them too.
+
+The **Tasks** list in Dispatch's sidebar sends a task in one click. Five come with Yardbell:
+**What's going on?** summarises every machine and session, **Who needs me?** lists the sessions
+waiting for an answer, **Plan my Linear tickets** plans your open tickets, **Review finished
+branches** reviews the branches of idle and ended sessions, and **Tidy up sessions** suggests
+which sessions to stop. **New task** adds one of your own, which you can edit, rename or delete;
+the copy button next to a default starts a task of your own from its text. Deleting a default
+only hides it, and **Restore default tasks** brings the defaults back. **Save as task** in the
+message box keeps whatever you typed.
 
 The **Dispatch** section of Settings adds your own instructions to its prompt (where your
 repositories live, which machine suits which work, how you name branches), picks the agent it

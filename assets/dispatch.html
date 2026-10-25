@@ -5,8 +5,11 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Dispatch · Yardbell</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.0.20/index.css" integrity="sha384-6QsiPFEuz7gYJPDZq103sCr5aKoBCbqAXJq1fEUzeUHeJmXFTMGzGuUmfP4j5w5b" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/400.css" integrity="sha384-EfdL97hcnol8T4/i0jMEua2ounMTPBCKaU1QluVPWTv7V8xcTTfxSL1VWdjjpdRl" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/500.css" integrity="sha384-JJ19IMHzOJ2sAC2xNzhH4cnXNAY9idh1hFgmr9ePDd3e68jl+XEPiMVKTwYyGBcc" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/600.css" integrity="sha384-NWCWDXFWH0ixL3DXbRVGmMD8PbUKTQZA1n9RtBQEkxKQdln+Ui814nUpfzeU0ws+" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/400.css" integrity="sha384-kTJy0lu/NAzlcHdqtuJe5q6vDA1M8gHcMp6/umVo4Nqoa7La36UBhvWtM112y0i4" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/500.css" integrity="sha384-Ddvk1ngA7kUJqPAsRbHuZhooNDKcluU0BTRmYku5LWezQzInPKkiH6/z8GGyw5Ow" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
 </head>
@@ -42,22 +45,50 @@
 
   <main class="main dispatch-main">
     <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 4 6 8l4 4"/></svg>Dashboard</a>
-    <header class="main-head"><h1>Dispatch</h1><a class="btn quiet small-link" href="/settings#dispatch">Settings</a><button class="btn" type="button" id="new-chat">New conversation</button></header>
+    <header class="main-head"><h1>Dispatch</h1><a class="btn quiet small-link" href="/settings#dispatch">Settings</a></header>
     <div class="dispatch">
-      <details class="convos" id="convos" open>
-        <summary class="convos-head"><span>Conversations</span><button class="btn quiet danger" type="button" id="clear-all" hidden>Clear all</button></summary>
-        <ul class="convo-list" id="convo-list"></ul>
-      </details>
+      <aside class="dispatch-side" aria-label="Conversations and tasks">
+        <button class="btn primary dispatch-new" type="button" id="new-chat">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>New conversation
+        </button>
+        <section class="usage-card" id="usage" aria-label="Claude usage" hidden>
+          <div class="usage-head"><span>Claude usage</span><span id="usage-seen"></span></div>
+          <div id="usage-bars"></div>
+        </section>
+        <details class="convos" id="convos" open>
+          <summary class="convos-head"><span>Conversations</span><button class="btn quiet danger" type="button" id="clear-all" hidden>Clear all</button></summary>
+          <ul class="convo-list" id="convo-list"></ul>
+        </details>
+        <details class="convos tasks" id="tasks" open>
+          <summary class="convos-head"><span>Tasks</span><button class="btn quiet" type="button" id="task-new">New task</button></summary>
+          <form class="task-form" id="task-form" hidden>
+            <label>Name <input type="text" name="name" maxlength="60" autocomplete="off" required></label>
+            <label>What to ask Dispatch <textarea name="text" rows="4" required></textarea></label>
+            <div class="row-actions"><button class="btn quiet" type="button" id="task-cancel">Cancel</button><button class="btn primary" type="submit">Save task</button></div>
+          </form>
+          <ul class="convo-list task-list" id="task-list"></ul>
+          <button class="link-btn task-restore" type="button" id="task-restore" hidden>Restore default tasks</button>
+        </details>
+      </aside>
       <div class="dispatch-chat">
         <div class="dispatch-sessions" id="dispatch-sessions" hidden></div>
         <div class="dispatch-log" id="dispatch-log" aria-live="polite"></div>
+        <div class="dispatch-thinking" id="dispatch-thinking" role="status" hidden><span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span><span id="thinking-word">Working</span></div>
         <form class="dispatch-compose" id="dispatch-form">
-          <div class="dispatch-tasks" id="dispatch-tasks"></div>
-          <textarea name="text" rows="3" placeholder="Fix the flaky checkout test in acme/web on a new branch eng-1234-checkout-flake" required></textarea>
-          <div class="dispatch-actions">
-            <span class="help" id="dispatch-status" role="status"></span>
-            <button class="btn danger" type="button" id="dispatch-stop" hidden>Stop</button>
-            <button class="btn primary" type="submit" id="dispatch-send">Send</button>
+          <div class="compose-box">
+            <textarea name="text" rows="2" aria-label="Message Dispatch" placeholder="Fix the flaky checkout test in acme/web on a new branch eng-1234-checkout-flake" required></textarea>
+            <div class="dispatch-actions">
+              <button class="compose-tool" type="button" id="save-as-task" title="Keep this message as a task">
+                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h8v11L8 10.6 4 13.5z"/></svg>Save as task
+              </button>
+              <span class="compose-hint">Enter to send, Shift+Enter for a new line</span>
+              <button class="compose-stop" type="button" id="dispatch-stop" hidden title="Stop">
+                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg>Stop
+              </button>
+              <button class="compose-send" type="submit" id="dispatch-send" aria-label="Send" title="Send">
+                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>
+              </button>
+            </div>
           </div>
         </form>
       </div>

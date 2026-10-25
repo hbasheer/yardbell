@@ -1,4 +1,5 @@
 mod follow;
+mod usage;
 
 pub use follow::{Change, SavedTask};
 
@@ -88,6 +89,7 @@ struct Conversation {
 struct Shared {
     dir: PathBuf,
     chats: Mutex<HashMap<String, Conversation>>,
+    usage: Mutex<Option<Value>>,
 }
 
 impl Shared {
@@ -116,6 +118,20 @@ impl Shared {
         ) {
             tracing::warn!(error = %e, "could not save dispatch conversation {id}");
         }
+    }
+
+    fn usage_file(&self) -> PathBuf {
+        self.dir.join("usage.json")
+    }
+
+    fn set_usage(&self, usage: Value) {
+        if let Err(e) = write_private(
+            &self.usage_file(),
+            &serde_json::to_vec(&usage).unwrap_or_default(),
+        ) {
+            tracing::warn!(error = %e, "could not save the Claude usage");
+        }
+        *self.usage.lock().expect("dispatch lock") = Some(usage);
     }
 
     fn finish(&self, id: &str) {
@@ -224,11 +240,18 @@ pub struct Dispatch {
 impl Dispatch {
     pub fn new(runner: Arc<dyn Runner>, dir: PathBuf) -> Dispatch {
         let chats = Mutex::new(load(&dir));
+        let usage = std::fs::read(dir.join("usage.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         Dispatch {
             runner,
             command: Mutex::new(None),
             token: crate::mcp::new_token(),
-            shared: Arc::new(Shared { dir, chats }),
+            shared: Arc::new(Shared {
+                dir,
+                chats,
+                usage: Mutex::new(usage),
+            }),
         }
     }
 
@@ -239,6 +262,15 @@ impl Dispatch {
 
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    pub fn usage(&self) -> Value {
+        self.shared
+            .usage
+            .lock()
+            .expect("dispatch lock")
+            .clone()
+            .unwrap_or(Value::Null)
     }
 
     pub fn list(&self) -> Value {
@@ -297,33 +329,120 @@ impl Dispatch {
         self.shared.dir.join("tasks.json")
     }
 
+    fn hidden_file(&self) -> PathBuf {
+        self.shared.dir.join("tasks-hidden.json")
+    }
+
+    // The defaults always come first. The file holds the user's own tasks and their edits of a
+    // default, kept under the default's name. A deleted default is only hidden, so it can be
+    // restored.
     pub fn tasks(&self) -> Vec<SavedTask> {
+        let hidden = self.hidden_defaults();
+        let saved = self.saved_tasks();
+        let defaults = follow::default_tasks();
+        let mut tasks: Vec<SavedTask> = defaults
+            .iter()
+            .map(|d| SavedTask {
+                text: saved
+                    .iter()
+                    .find(|t| t.name == d.name)
+                    .map_or_else(|| d.text.clone(), |t| t.text.clone()),
+                hidden: hidden.contains(&d.name),
+                ..d.clone()
+            })
+            .collect();
+        tasks.extend(
+            saved
+                .into_iter()
+                .filter(|t| !is_default(&t.name))
+                .map(|t| SavedTask {
+                    builtin: false,
+                    hidden: false,
+                    ..t
+                }),
+        );
+        tasks
+    }
+
+    fn hidden_defaults(&self) -> Vec<String> {
+        std::fs::read(self.hidden_file())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_hidden(&self, hidden: &[String]) -> Result<(), String> {
+        write_private(
+            &self.hidden_file(),
+            &serde_json::to_vec_pretty(hidden).unwrap_or_default(),
+        )
+        .map_err(|e| format!("cannot save the tasks: {e}"))
+    }
+
+    fn hide_default(&self, name: &str) -> Result<(), String> {
+        let mut hidden = self.hidden_defaults();
+        if !hidden.iter().any(|h| h == name) {
+            hidden.push(name.to_string());
+        }
+        self.write_hidden(&hidden)
+    }
+
+    fn saved_tasks(&self) -> Vec<SavedTask> {
         std::fs::read(self.tasks_file())
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default()
     }
 
-    pub fn save_task(&self, name: &str, text: &str) -> Result<Vec<SavedTask>, String> {
+    pub fn restore_default_tasks(&self) -> Result<Vec<SavedTask>, String> {
+        self.write_hidden(&[])?;
+        let mut saved = self.saved_tasks();
+        saved.retain(|t| !is_default(&t.name));
+        self.write_tasks(&saved)?;
+        Ok(self.tasks())
+    }
+
+    pub fn save_task(
+        &self,
+        name: &str,
+        text: &str,
+        replacing: Option<&str>,
+    ) -> Result<Vec<SavedTask>, String> {
         let (name, text) = (name.trim(), text.trim());
         if name.is_empty() || text.is_empty() {
-            return Err("a saved task needs a name and a text".into());
+            return Err("a task needs a name and what to ask".into());
         }
-        let mut tasks = self.tasks();
-        tasks.retain(|t| t.name != name);
-        tasks.push(SavedTask {
+        let replacing = replacing.map(str::trim).filter(|r| !r.is_empty());
+        if replacing != Some(name) && self.tasks().iter().any(|t| t.name == name) {
+            return Err(format!("there is already a task called {name}"));
+        }
+        let mut saved = self.saved_tasks();
+        let task = SavedTask {
             name: name.to_string(),
             text: text.to_string(),
-        });
-        self.write_tasks(&tasks)?;
-        Ok(tasks)
+            builtin: false,
+            hidden: false,
+        };
+        match replacing.and_then(|old| saved.iter().position(|t| t.name == old)) {
+            Some(i) => saved[i] = task,
+            None => saved.push(task),
+        }
+        // Renaming a default makes it a task of the user's own, so the default steps aside.
+        if let Some(old) = replacing.filter(|old| *old != name && is_default(old)) {
+            self.hide_default(old)?;
+        }
+        self.write_tasks(&saved)?;
+        Ok(self.tasks())
     }
 
     pub fn delete_task(&self, name: &str) -> Result<Vec<SavedTask>, String> {
-        let mut tasks = self.tasks();
-        tasks.retain(|t| t.name != name);
-        self.write_tasks(&tasks)?;
-        Ok(tasks)
+        if is_default(name) {
+            self.hide_default(name)?;
+        }
+        let mut saved = self.saved_tasks();
+        saved.retain(|t| t.name != name);
+        self.write_tasks(&saved)?;
+        Ok(self.tasks())
     }
 
     fn write_tasks(&self, tasks: &[SavedTask]) -> Result<(), String> {
@@ -581,6 +700,9 @@ async fn run_turn(
             }
         }
         finished |= message["type"] == "result";
+        if let Some(found) = usage::from_stream(&message) {
+            shared.set_usage(found);
+        }
         for event in events_of(&message, &mut tools) {
             if event["role"] == "tool_result"
                 && event["name"] == "start_session"
@@ -614,6 +736,10 @@ async fn run_turn(
         });
     }
     Ok(())
+}
+
+fn is_default(name: &str) -> bool {
+    follow::default_tasks().iter().any(|d| d.name == name)
 }
 
 fn extra_servers(extra: Option<&str>) -> Vec<String> {
@@ -867,20 +993,66 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
     }
 
     #[test]
-    fn saved_tasks_are_kept_by_name() {
+    fn tasks_can_be_added_edited_renamed_and_deleted() {
         let dir = tempfile::tempdir().unwrap();
         let dispatch = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().to_path_buf());
+        let own = |d: &Dispatch| {
+            d.tasks()
+                .into_iter()
+                .filter(|t| !t.builtin)
+                .map(|t| t.name)
+                .collect::<Vec<_>>()
+        };
+        let defaults = follow::default_tasks().len();
+        assert_eq!(dispatch.tasks().len(), defaults);
         dispatch
-            .save_task("Tests", "run the tests everywhere")
+            .save_task("Tests", "run the tests everywhere", None)
             .unwrap();
-        dispatch.save_task("Tests", "run all tests").unwrap();
-        dispatch.save_task("Deps", "update dependencies").unwrap();
-        let names: Vec<String> = dispatch.tasks().into_iter().map(|t| t.name).collect();
-        assert_eq!(names, ["Tests", "Deps"]);
-        assert_eq!(dispatch.tasks()[0].text, "run all tests");
-        dispatch.delete_task("Tests").unwrap();
-        assert_eq!(dispatch.tasks().len(), 1);
-        assert!(dispatch.save_task(" ", "x").is_err());
+        assert!(
+            dispatch.save_task("Tests", "again", None).is_err(),
+            "names stay unique"
+        );
+        assert!(dispatch.save_task("What's going on?", "x", None).is_err());
+        dispatch
+            .save_task("Tests", "run all tests", Some("Tests"))
+            .unwrap();
+        dispatch
+            .save_task("All tests", "run all tests", Some("Tests"))
+            .unwrap();
+        assert_eq!(own(&dispatch), ["All tests"]);
+        assert_eq!(dispatch.tasks().len(), defaults + 1);
+        let shown = |d: &Dispatch| d.tasks().into_iter().filter(|t| !t.hidden).count();
+        dispatch.delete_task("What's going on?").unwrap();
+        assert_eq!(shown(&dispatch), defaults);
+        assert!(
+            dispatch.save_task("What's going on?", "x", None).is_err(),
+            "a deleted default keeps its name"
+        );
+        dispatch.restore_default_tasks().unwrap();
+        assert_eq!(shown(&dispatch), defaults + 1);
+        dispatch
+            .save_task("What's going on?", "only hp", Some("What's going on?"))
+            .unwrap();
+        let first = &dispatch.tasks()[0];
+        assert_eq!(
+            (first.name.as_str(), first.text.as_str(), first.builtin),
+            ("What's going on?", "only hp", true),
+            "an edited default keeps its place"
+        );
+        dispatch
+            .save_task("Status", "only hp", Some("What's going on?"))
+            .unwrap();
+        assert!(dispatch.tasks()[0].hidden, "a renamed default steps aside");
+        assert!(own(&dispatch).contains(&"Status".to_string()));
+        dispatch.restore_default_tasks().unwrap();
+        let first = &dispatch.tasks()[0];
+        assert!(!first.hidden);
+        assert_eq!(first.text, follow::default_tasks()[0].text);
+        dispatch.delete_task("Status").unwrap();
+        dispatch.delete_task("All tests").unwrap();
+        assert!(own(&dispatch).is_empty());
+        assert_eq!(dispatch.tasks().len(), defaults);
+        assert!(dispatch.save_task(" ", "x", None).is_err());
     }
 
     #[tokio::test]
@@ -890,11 +1062,13 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         let script = format!(
             r#"printf '%s\n' "$@" > {}
 echo '{{"type":"system","subtype":"init","session_id":"s-'$$'"}}'
+echo '{{"type":"rate_limit_event","rate_limit_info":{{"unifiedWindows":{{"five_hour":{{"utilization":0.25,"resetsAt":1}}}}}}}}'
 echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Started on mini."}}]}}}}'
 echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
             args.display()
         );
         let dispatch = fake_claude(dir.path(), &script);
+        assert_eq!(dispatch.usage(), Value::Null);
         let (first, rx) = dispatch
             .ask(
                 None,
@@ -961,6 +1135,11 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         assert_eq!(convo["title"], "fix the login bug");
         assert_eq!(convo["events"].as_array().unwrap().len(), 4);
         assert_eq!(convo["busy"], false);
+        assert_eq!(
+            reopened.usage()["windows"][0]["used"],
+            0.25,
+            "the last usage seen survives a restart"
+        );
     }
 
     #[tokio::test]

@@ -5,14 +5,29 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-25
+
 - Dispatch follows the sessions it starts: a card in the conversation when one finishes, waits for
   an answer or ends, with the agent's choices as buttons and **Review branch** to start a reviewer.
   The conversation lists its sessions and their state.
 - Dispatch splits work with independent parts into several sessions, proposes a plan and waits
   for your go-ahead before working through tickets, and can use the MCP servers from Settings,
   such as Linear.
-- Saved tasks above Dispatch's message box, with **What's going on?** and **Plan my Linear
-  tickets** built in.
+- Dispatch has a second sidebar with conversations and tasks. Tasks of your own are added,
+  edited, renamed and deleted there, next to five defaults: **What's going on?**, **Who needs
+  me?**, **Plan my Linear tickets**, **Review finished branches** and **Tidy up sessions**. A
+  default can be copied into a task of your own, or deleted and brought back with **Restore
+  default tasks**.
+- A new look across the web pages and the desktop and Android apps: graphite neutrals, IBM Plex
+  Sans and Plex Mono, sentence-case section titles, and one colour per agent state everywhere:
+  green while working, amber when it needs you, grey when idle. Red now only means an error or a
+  machine that is down.
+- Every task can be edited and deleted, the defaults included. An edited default keeps its place,
+  and **Restore default tasks** brings the originals back.
+- Dispatch shows your Claude plan usage in its sidebar: the 5-hour and weekly limits as progress
+  bars with the time each one resets. Claude Code reports them each time Dispatch replies.
+- Dispatch shows animated dots under your message until the reply arrives, and the message box
+  is redesigned: it grows as you type and keeps Save as task, Stop and Send inside it.
 - Workspace: a **⋯** menu on each terminal opens it to the right, below or in a new tab, and tabs
   are renamed in place by double-clicking or from their right-click menu.
 

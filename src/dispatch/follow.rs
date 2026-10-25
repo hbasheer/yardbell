@@ -138,6 +138,50 @@ pub fn event(change: &Change, screen: &str) -> Value {
 pub struct SavedTask {
     pub name: String,
     pub text: String,
+    #[serde(default)]
+    pub builtin: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub hidden: bool,
+}
+
+fn builtin(name: &str, text: &str) -> SavedTask {
+    SavedTask {
+        name: name.into(),
+        text: text.into(),
+        builtin: true,
+        hidden: false,
+    }
+}
+
+pub fn default_tasks() -> Vec<SavedTask> {
+    vec![
+        builtin(
+            "What's going on?",
+            "What's going on? Summarise every machine and session.",
+        ),
+        builtin(
+            "Who needs me?",
+            "List every session that is waiting for an answer, show what each one asks, and \
+suggest a reply. Don't answer for me.",
+        ),
+        builtin(
+            "Plan my Linear tickets",
+            "Read my open Linear tickets that are assigned to me. Propose a plan to work through \
+them across my machines, one session per ticket, with the machine, folder, agent and branch for \
+each. Wait for my go-ahead before starting anything.",
+        ),
+        builtin(
+            "Review finished branches",
+            "For every session that is idle or ended on a branch other than main, review the \
+branch's diff against main. List real problems per branch and say which are ready for a pull \
+request.",
+        ),
+        builtin(
+            "Tidy up sessions",
+            "Find sessions that ended or have sat idle for a long time and suggest which to stop. \
+Don't stop anything without my go-ahead.",
+        ),
+    ]
 }
 
 #[cfg(test)]

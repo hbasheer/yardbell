@@ -10,10 +10,7 @@ let shownEvents = 0;
 let tracked = [];
 let savedTasks = [];
 
-const BUILT_IN = [
-  { name: "What's going on?", text: "What's going on? Summarise every machine and session." },
-  { name: "Plan my Linear tickets", text: "Read my open Linear tickets that are assigned to me. Propose a plan to work through them across my machines, one session per ticket, with the machine, folder, agent and branch for each. Wait for my go-ahead before starting anything." },
-];
+let editingTask = null;
 
 const SESSION_WORDS = {
   blocked: "is waiting for you",
@@ -21,9 +18,10 @@ const SESSION_WORDS = {
   ended: "ended",
 };
 
-const INTRO = `<div class="empty dispatch-intro" id="dispatch-intro">
-  <p>Describe a task. Dispatch finds the machines that have the repository, picks the one with the most room, and starts an agent there with your task.</p>
-  <p class="help">Runs Claude Code on this machine with Yardbell's own tools only. It can start, read and answer sessions, but cannot edit files itself.</p>
+const INTRO = `<div class="dispatch-intro" id="dispatch-intro">
+  <h2>What should your agents work on?</h2>
+  <p>Describe a task in plain words. Dispatch finds the machine that has the repository and the most room, and starts an agent there.</p>
+  <p class="help">Dispatch runs Claude Code on this machine with Yardbell's own tools. It can start, read and answer sessions, but never edits files itself.</p>
 </div>`;
 
 const LABELS = {
@@ -203,7 +201,7 @@ function sessionCard(event) {
     ? `<button class="btn" type="button" data-review ${where} data-path="${esc(event.path || "")}">Review branch</button>` : "";
   const open = event.state === "ended" ? "" : `<a class="btn quiet" href="${esc(termUrl(event.machine, event.name))}" target="_blank" rel="noopener">Open</a>`;
   return `<div class="session-card ${esc(event.state)}">
-    <p class="session-card-head"><span class="dot ${event.state === "blocked" ? "bad" : event.state === "ended" ? "" : "ok"}"></span><strong>${esc(event.name)}</strong> on ${esc(event.machine)} ${esc(SESSION_WORDS[event.state] || event.state)}</p>
+    <p class="session-card-head"><span class="dot ${event.state === "blocked" ? "warn" : event.state === "ended" ? "" : "ok"}"></span><strong>${esc(event.name)}</strong> on ${esc(event.machine)} ${esc(SESSION_WORDS[event.state] || event.state)}</p>
     ${event.screen ? `<pre>${esc(event.screen)}</pre>` : ""}
     <div class="session-card-actions">${options}${review}${open}</div>
   </div>`;
@@ -248,7 +246,8 @@ function setBusy(on) {
   busy = on;
   $("dispatch-send").disabled = on;
   $("dispatch-stop").hidden = !on;
-  $("dispatch-status").textContent = on ? "Working…" : "";
+  $("dispatch-thinking").hidden = !on;
+  if (on) scrollDown();
   if (!on) log.querySelectorAll(".tool.running").forEach((t) => t.classList.remove("running"));
 }
 
@@ -341,6 +340,7 @@ async function ask(text) {
   } finally {
     setBusy(false);
     loadList().catch(() => {});
+    loadUsage();
     catchUp(false);
   }
 }
@@ -366,16 +366,53 @@ async function renderTracked() {
   box.innerHTML = `<span class="dispatch-sessions-label">Sessions</span>` + tracked.map((t) => {
     const s = live(t);
     const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : "idle";
-    const tone = !s ? "" : s.activity === "blocked" ? "bad" : s.activity === "active" ? "warn" : "ok";
+    const tone = !s ? "" : s.activity === "blocked" ? "warn" : s.activity === "active" ? "ok" : "";
     const name = s ? `<a href="${esc(termUrl(t.machine, t.name))}" target="_blank" rel="noopener">${esc(t.name)}</a>` : esc(t.name);
     return `<span class="dispatch-session"><span class="dot ${tone}"></span>${name}<span class="muted">${esc(t.machine)} · ${word}</span></span>`;
   }).join("");
 }
 
 function renderTasks() {
-  const chips = [...BUILT_IN.map((t) => ({ ...t, builtIn: true })), ...savedTasks].map((t) =>
-    `<span class="task-chip"><button type="button" class="task-run" data-task="${esc(t.text)}" title="${esc(t.text)}">${esc(t.name)}</button>${t.builtIn ? "" : `<button type="button" class="task-x" data-forget-task="${esc(t.name)}" aria-label="Remove ${esc(t.name)}" title="Remove">×</button>`}</span>`).join("");
-  $("dispatch-tasks").innerHTML = chips + `<span class="task-save" id="task-save"><button type="button" class="btn quiet" id="task-save-btn">Save as task</button></span>`;
+  const shown = savedTasks.filter((t) => !t.hidden);
+  $("task-restore").hidden = !savedTasks.some((t) => t.hidden);
+  $("task-list").innerHTML = shown.length
+    ? shown.map((t) => `<li class="convo task">
+        <button type="button" class="task-run" data-run="${esc(t.name)}" title="${esc(t.text)}">
+          <span class="convo-title">${esc(t.name)}</span>
+          <span class="convo-meta">${esc(t.text)}</span>
+        </button>
+        <button class="btn quiet delete" type="button" data-edit-task="${esc(t.name)}" aria-label="Edit ${esc(t.name)}" title="Edit">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l.6-2.6L10.8 3.2a1.4 1.4 0 0 1 2 2L5.6 12.4z"/></svg>
+        </button>
+        <button class="btn quiet danger delete" type="button" data-forget-task="${esc(t.name)}" aria-label="Delete ${esc(t.name)}" title="Delete">
+          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
+        </button></li>`).join("")
+    : '<li><p class="convo-empty">No tasks yet.</p></li>';
+}
+
+function resetsIn(epoch) {
+  if (!epoch) return "";
+  const mins = Math.max(0, Math.round((epoch * 1000 - Date.now()) / 60000));
+  if (mins < 60) return `resets in ${mins} min`;
+  if (mins < 1440) return `resets in ${Math.floor(mins / 60)} h ${mins % 60} min`;
+  return `resets ${new Date(epoch * 1000).toLocaleDateString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
+}
+
+async function loadUsage() {
+  const usage = await api("GET", "/dispatch/usage").catch(() => null);
+  $("usage").hidden = !usage?.windows?.length;
+  if (!usage?.windows?.length) return;
+  $("usage-seen").textContent = ago(usage.seen);
+  $("usage-seen").title = "Claude Code reports this each time Dispatch replies";
+  $("usage-bars").innerHTML = usage.windows.map((w) => {
+    const pct = Math.round(w.used * 100);
+    const tone = w.status !== "allowed" || pct >= 90 ? "bad" : pct >= 70 ? "warn" : "ok";
+    return `<div class="usage-row">
+      <div class="usage-line"><span>${esc(w.label)}</span><span class="usage-pct">${pct}%</span></div>
+      <div class="usage-track" role="progressbar" aria-label="${esc(w.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="usage-fill ${tone}" style="width: ${Math.max(pct, 1)}%"></span></div>
+      <div class="usage-reset">${esc(resetsIn(w.resets_at))}</div>
+    </div>`;
+  }).join("");
 }
 
 async function loadTasks() {
@@ -383,46 +420,76 @@ async function loadTasks() {
   renderTasks();
 }
 
-$("dispatch-tasks").addEventListener("click", async (e) => {
-  const run = e.target.closest("[data-task]");
+function editTask(task, text = "") {
+  editingTask = task?.name || null;
+  const f = $("task-form");
+  f.hidden = false;
+  f.name.value = task?.name || "";
+  f.text.value = task?.text || text;
+  $("tasks").open = true;
+  f.name.focus();
+}
+
+function closeTaskForm() {
+  editingTask = null;
+  $("task-form").hidden = true;
+}
+
+$("task-new").addEventListener("click", (e) => {
+  e.preventDefault();
+  editTask(null);
+});
+
+$("task-cancel").addEventListener("click", closeTaskForm);
+
+$("task-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  try {
+    savedTasks = await api("POST", "/dispatch/tasks", { name: f.name.value, text: f.text.value, replacing: editingTask });
+    toast(`Saved "${f.name.value.trim()}"`, "ok");
+    closeTaskForm();
+    renderTasks();
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("task-list").addEventListener("click", async (e) => {
+  const run = e.target.closest("[data-run]");
   if (run) {
+    const task = savedTasks.find((t) => t.name === run.dataset.run);
+    if (!task) return;
     if (busy) { toast("Dispatch is still working on the last message."); return; }
-    ask(run.dataset.task);
+    if (narrow.matches) $("tasks").open = false;
+    ask(task.text);
+    return;
+  }
+  const edit = e.target.closest("[data-edit-task]");
+  if (edit) {
+    editTask(savedTasks.find((t) => t.name === edit.dataset.editTask));
     return;
   }
   const forget = e.target.closest("[data-forget-task]");
   if (forget) {
+    const builtin = savedTasks.find((t) => t.name === forget.dataset.forgetTask)?.builtin;
+    const note = builtin ? "It is a default task, so Restore default tasks brings it back." : "Conversations it started are kept.";
+    if (!(await Nav.confirm(`Delete the task "${forget.dataset.forgetTask}"?`, note, { confirm: "Delete", danger: true }))) return;
     savedTasks = await api("POST", "/dispatch/tasks/delete", { name: forget.dataset.forgetTask }).catch((err) => { toast(err.message); return savedTasks; });
     renderTasks();
-    return;
   }
-  if (e.target.closest("#task-save-btn")) {
-    const text = form.text.value.trim();
-    if (!text) { toast("Type the task first, then save it."); form.text.focus(); return; }
-    $("task-save").innerHTML = `<input type="text" id="task-name" placeholder="Name for this task" aria-label="Task name"><button type="button" class="btn" id="task-name-save">Save</button>`;
-    $("task-name").focus();
-    return;
-  }
-  if (e.target.closest("#task-name-save")) saveTask();
 });
 
-$("dispatch-tasks").addEventListener("keydown", (e) => {
-  if (e.target.id !== "task-name") return;
-  if (e.key === "Enter") { e.preventDefault(); saveTask(); }
-  if (e.key === "Escape") renderTasks();
-});
-
-async function saveTask() {
-  const name = $("task-name").value.trim();
-  if (!name) { $("task-name").focus(); return; }
-  try {
-    savedTasks = await api("POST", "/dispatch/tasks", { name, text: form.text.value.trim() });
-    toast(`Saved "${name}"`, "ok");
-  } catch (err) {
-    toast(err.message);
-  }
+$("task-restore").addEventListener("click", async () => {
+  savedTasks = await api("POST", "/dispatch/tasks/restore", {}).catch((err) => { toast(err.message); return savedTasks; });
   renderTasks();
-}
+});
+
+$("save-as-task").addEventListener("click", () => {
+  const text = form.text.value.trim();
+  if (!text) { toast("Type the task first, then save it."); form.text.focus(); return; }
+  editTask(null, text);
+});
 
 log.addEventListener("click", async (e) => {
   const pick = e.target.closest("[data-keys]");
@@ -454,8 +521,16 @@ form.addEventListener("submit", (e) => {
   const text = form.text.value.trim();
   if (!text || busy) return;
   form.text.value = "";
+  fitCompose();
   ask(text);
 });
+
+function fitCompose() {
+  form.text.style.height = "auto";
+  form.text.style.height = `${form.text.scrollHeight}px`;
+}
+
+form.text.addEventListener("input", fitCompose);
 
 form.text.addEventListener("keydown", (e) => {
   if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
@@ -512,8 +587,13 @@ $("clear-all").addEventListener("click", async (e) => {
   }
 });
 
-if (narrow.matches) $("convos").open = false;
+if (narrow.matches) {
+  $("convos").open = false;
+  $("tasks").open = false;
+}
 loadTasks();
+loadUsage();
+setInterval(loadUsage, 60000);
 loadList()
   .then(() => open(current && conversations.some((c) => c.id === current) ? current : null))
   .catch((err) => toast(err.message));

@@ -42,10 +42,9 @@ impl Backdrop {
     // backdrop behind a dark page would flash, so only a known dark theme paints.
     pub fn color(self, theme: Theme) -> Option<Color> {
         match (self, theme) {
-            (Backdrop::Terminal, _) | (Backdrop::Paper, Theme::Dark) => {
-                Some(Color(0x0a, 0x0a, 0x0b, 0xff))
-            }
-            (Backdrop::Rail, Theme::Dark) => Some(Color(0x0f, 0x10, 0x12, 0xff)),
+            (Backdrop::Terminal, _) => Some(Color(0x0a, 0x0a, 0x0b, 0xff)),
+            (Backdrop::Paper, Theme::Dark) => Some(Color(0x11, 0x13, 0x15, 0xff)),
+            (Backdrop::Rail, Theme::Dark) => Some(Color(0x0c, 0x0e, 0x10, 0xff)),
             _ => None,
         }
     }
@@ -404,10 +403,13 @@ mod tests {
     #[test]
     fn backdrops_match_the_page_until_it_paints() {
         let near_black = Some(Color(0x0a, 0x0a, 0x0b, 0xff));
-        assert_eq!(Backdrop::Paper.color(Theme::Dark), near_black);
+        assert_eq!(
+            Backdrop::Paper.color(Theme::Dark),
+            Some(Color(0x11, 0x13, 0x15, 0xff))
+        );
         assert_eq!(
             Backdrop::Rail.color(Theme::Dark),
-            Some(Color(0x0f, 0x10, 0x12, 0xff))
+            Some(Color(0x0c, 0x0e, 0x10, 0xff))
         );
         assert_eq!(Backdrop::Terminal.color(Theme::Dark), near_black);
         assert_eq!(Backdrop::Terminal.color(Theme::Light), near_black);
