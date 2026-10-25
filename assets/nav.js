@@ -79,6 +79,47 @@
     line.innerHTML = `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>`;
   }
 
+  function resetsIn(epoch) {
+    if (!epoch) return "";
+    const mins = Math.max(0, Math.round((epoch * 1000 - Date.now()) / 60000));
+    if (mins < 60) return `resets in ${mins} min`;
+    if (mins < 1440) return `resets in ${Math.floor(mins / 60)} h ${mins % 60} min`;
+    return `resets ${new Date(epoch * 1000).toLocaleDateString(undefined, { weekday: "short", hour: "numeric", minute: "2-digit" })}`;
+  }
+
+  // Claude Code reports its limits with every Dispatch reply, so these are as fresh as the last one.
+  async function loadUsage() {
+    const foot = document.querySelector(".side .side-foot");
+    if (!foot) return;
+    let usage = null;
+    try {
+      const res = await fetch("/dispatch/usage", { headers: { Accept: "application/json" } });
+      if (res.ok) usage = await res.json();
+    } catch {}
+    let card = document.getElementById("nav-usage");
+    if (!usage?.windows?.length) {
+      card?.remove();
+      return;
+    }
+    if (!card) {
+      card = document.createElement("section");
+      card.id = "nav-usage";
+      card.className = "usage-card";
+      card.setAttribute("aria-label", "Claude usage");
+      foot.before(card);
+    }
+    card.title = "Claude Code reports this each time Dispatch replies";
+    card.innerHTML = `<div class="usage-head"><span>Claude usage</span></div>` + usage.windows.map((w) => {
+      const pct = Math.round(w.used * 100);
+      const tone = w.status !== "allowed" || pct >= 90 ? "bad" : pct >= 70 ? "warn" : "ok";
+      return `<div class="usage-row">
+        <div class="usage-line"><span>${esc(w.label)}</span><span class="usage-pct">${pct}%</span></div>
+        <div class="usage-track" role="progressbar" aria-label="${esc(w.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="usage-fill ${tone}" style="width: ${Math.max(pct, 1)}%"></span></div>
+        <div class="usage-reset">${esc(resetsIn(w.resets_at))}</div>
+      </div>`;
+    }).join("");
+  }
+
   let build = "";
 
   function checkBuild(res) {
@@ -167,9 +208,11 @@
     });
   }
 
-  window.YardbellNav = { render, order, memPct, RATED, appKey, tabKey, confirm: ask, checkBuild };
+  window.YardbellNav = { loadUsage, render, order, memPct, RATED, appKey, tabKey, confirm: ask, checkBuild };
   if (page !== "dashboard") {
     load();
     setInterval(load, 10000);
   }
+  loadUsage();
+  setInterval(loadUsage, 60000);
 })();

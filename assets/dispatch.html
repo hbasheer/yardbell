@@ -52,16 +52,12 @@
         <button class="btn primary dispatch-new" type="button" id="new-chat">
           <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>New conversation
         </button>
-        <section class="usage-card" id="usage" aria-label="Claude usage" hidden>
-          <div class="usage-head"><span>Claude usage</span><span id="usage-seen"></span></div>
-          <div id="usage-bars"></div>
-        </section>
         <details class="convos" id="convos" open>
-          <summary class="convos-head"><span>Conversations</span><button class="btn quiet danger" type="button" id="clear-all" hidden>Clear all</button></summary>
+          <summary class="convos-head"><span><svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>Conversations</span><button class="btn quiet danger" type="button" id="clear-all" hidden>Clear all</button></summary>
           <ul class="convo-list" id="convo-list"></ul>
         </details>
         <details class="convos tasks" id="tasks" open>
-          <summary class="convos-head"><span>Tasks</span><button class="btn quiet" type="button" id="task-new">New task</button></summary>
+          <summary class="convos-head"><span><svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>Tasks</span><button class="btn quiet" type="button" id="task-new">New task</button></summary>
           <form class="task-form" id="task-form" hidden>
             <label>Name <input type="text" name="name" maxlength="60" autocomplete="off" required></label>
             <label>What to ask Dispatch <textarea name="text" rows="4" required></textarea></label>
