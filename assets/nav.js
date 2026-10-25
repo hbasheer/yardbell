@@ -30,10 +30,12 @@
     return state.sessions.filter((s) => !s.stale && (!name || s.machine === name)).length;
   }
 
+  const ALL_ICON = '<svg class="icon nav-all" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>';
+
   function item(href, machine, label, count, selected, dot) {
     const current = selected ? ' aria-current="true"' : "";
-    return `<li><a class="nav-item${selected ? " selected" : ""}" href="${href}" data-machine="${esc(machine)}"${current}>
-      ${dot}<span class="nav-name">${esc(label)}</span><span class="nav-count" title="${count} running ${count === 1 ? "session" : "sessions"}">${count}</span>
+    return `<li><a class="nav-item${selected ? " selected" : ""}" href="${href}" data-machine="${esc(machine)}" title="${esc(label)}, ${count} running"${current}>
+      ${dot}${machine ? `<span class="rail-initial" aria-hidden="true">${esc(window.YardbellSide.initials(label))}</span>` : ""}<span class="nav-name">${esc(label)}</span><span class="nav-count" title="${count} running ${count === 1 ? "session" : "sessions"}">${count}</span>
     </a></li>`;
   }
 
@@ -41,7 +43,7 @@
     const up = state.machines.filter((m) => m.up).length;
     document.getElementById("nav-summary").textContent = `${up} of ${state.machines.length} connected`;
     const onDashboard = page === "dashboard";
-    const all = item("/", "", "All machines", running(state), onDashboard && !selected, "");
+    const all = item("/", "", "All machines", running(state), onDashboard && !selected, ALL_ICON);
     const machines = order(state.machines).map((m) => item(
       `/?machine=${encodeURIComponent(m.name)}`,
       m.name,
@@ -59,6 +61,7 @@
       return;
     }
     const on = mesh.on === true ? "on" : mesh.on === false ? "off" : "status unknown";
+    vpn.title = `${mesh.label} ${on}`;
     vpn.innerHTML = `<span class="dot ${mesh.on === true ? "ok" : mesh.on === false ? "bad" : ""}"></span>${esc(mesh.label)} ${on}`;
   }
 

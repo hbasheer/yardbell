@@ -5,6 +5,19 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-25
+
+- Terminals can be light. Settings, Appearance has a Terminal choice: same as the theme, light or
+  dark. A light terminal darkens pale text from agents that assume a dark background.
+- The sidebar collapses to a rail of icons on every page, with the button next to the wordmark.
+  Machines and workspaces show their first letters and state. It is remembered on the device.
+- Dispatch: drag the edge of the conversations list to make it wider.
+- Workspace opens every running session of a folder in its own tab. Right-click a tab to split it
+  into another tab, to the right or below, and use the pane's arrow button to move it back to its
+  own tab. A tab or pane closed with its session kept running stays closed until you open the
+  session again from the sidebar.
+- The desktop app's session tab follows the terminal theme.
+
 ## [0.6.1] - 2026-10-25
 
 - Dispatch follows the sessions it starts: a card in the conversation when one finishes, waits for

@@ -1,5 +1,6 @@
 (function () {
   const KEY = "yardbell.theme";
+  const TERM_KEY = "yardbell.termTheme";
   const root = document.documentElement;
   const systemDark = matchMedia("(prefers-color-scheme: dark)");
 
@@ -12,9 +13,27 @@
     }
   }
 
-  function shown(t) {
-    if (root.dataset.fixedTheme) return root.dataset.fixedTheme;
+  function terminalChosen() {
+    try {
+      const t = localStorage.getItem(TERM_KEY);
+      return t === "light" || t === "dark" ? t : "app";
+    } catch {
+      return "app";
+    }
+  }
+
+  function appShown(t) {
     return t === "system" ? (systemDark.matches ? "dark" : "light") : t;
+  }
+
+  function terminalShown() {
+    const t = terminalChosen();
+    return t === "app" ? appShown(chosen()) : t;
+  }
+
+  // The terminal page is all terminal, so its own buttons and bars follow the terminal's colours.
+  function shown(t) {
+    return root.dataset.termPage !== undefined ? terminalShown() : appShown(t);
   }
 
   // The apps draw their own bars and tab strip, so they are told too. A terminal inside a
@@ -23,11 +42,18 @@
     if (window.top !== window) return;
     try { window.YardbellApp?.theme(shown(t)); } catch {}
     try { window.__TAURI__?.app?.setTheme?.(t === "system" ? null : t)?.catch?.(() => {}); } catch {}
+    try { window.__TAURI__?.event?.emit("term-theme", terminalShown())?.catch?.(() => {}); } catch {}
   }
 
   function apply(t) {
-    if (t === "system") delete root.dataset.theme;
+    if (root.dataset.termPage !== undefined) root.dataset.theme = terminalShown();
+    else if (t === "system") delete root.dataset.theme;
     else root.dataset.theme = t;
+    const term = terminalShown();
+    if (root.dataset.term !== term) {
+      root.dataset.term = term;
+      window.dispatchEvent(new CustomEvent("yardbell-term-theme", { detail: term }));
+    }
     tellApps(t);
   }
 
@@ -37,6 +63,14 @@
       else localStorage.setItem(KEY, t);
     } catch {}
     apply(t);
+  }
+
+  function setTerminal(t) {
+    try {
+      if (t === "app") localStorage.removeItem(TERM_KEY);
+      else localStorage.setItem(TERM_KEY, t);
+    } catch {}
+    apply(chosen());
   }
 
   const NEXT = { system: "light", light: "dark", dark: "system" };
@@ -56,6 +90,8 @@
       b.setAttribute("aria-label", b.title);
     });
     document.querySelectorAll('input[name="theme"]').forEach((input) => { input.checked = input.value === t; });
+    const term = terminalChosen();
+    document.querySelectorAll('input[name="term-theme"]').forEach((input) => { input.checked = input.value === term; });
   }
 
   function cycle() {
@@ -64,10 +100,22 @@
   }
 
   apply(chosen());
-  systemDark.addEventListener("change", () => tellApps(chosen()));
+  systemDark.addEventListener("change", () => apply(chosen()));
+  // Terminals in Workspace panes are separate pages, and hear about a change made elsewhere this way.
+  window.addEventListener("storage", (e) => {
+    if (e.key !== null && e.key !== KEY && e.key !== TERM_KEY) return;
+    apply(chosen());
+    paintButtons();
+  });
   document.addEventListener("DOMContentLoaded", () => {
     paintButtons();
     document.querySelectorAll("[data-theme-toggle]").forEach((b) => b.addEventListener("click", cycle));
   });
-  window.YardbellTheme = { chosen, set: (t) => { set(t); paintButtons(); } };
+  window.YardbellTheme = {
+    chosen,
+    set: (t) => { set(t); paintButtons(); },
+    terminal: terminalShown,
+    terminalChosen,
+    setTerminal: (t) => { setTerminal(t); paintButtons(); },
+  };
 })();

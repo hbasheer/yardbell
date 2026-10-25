@@ -17,6 +17,35 @@ const embedded = new URLSearchParams(location.search).has("embed");
 document.body.classList.toggle("embedded", embedded);
 
 const FONT = '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace';
+const THEMES = {
+  dark: { background: "#0a0a0b", foreground: "#ededef", cursor: "#93c5fd", selectionBackground: "#172554" },
+  light: {
+    background: "#ffffff",
+    foreground: "#1f2328",
+    cursor: "#2563eb",
+    cursorAccent: "#ffffff",
+    selectionBackground: "#bfdbfe",
+    black: "#24292f",
+    red: "#cf222e",
+    green: "#116329",
+    yellow: "#7d4e00",
+    blue: "#0969da",
+    magenta: "#8250df",
+    cyan: "#1b7c83",
+    white: "#6e7781",
+    brightBlack: "#57606a",
+    brightRed: "#a40e26",
+    brightGreen: "#1a7f37",
+    brightYellow: "#633c01",
+    brightBlue: "#218bff",
+    brightMagenta: "#a475f9",
+    brightCyan: "#3192aa",
+    brightWhite: "#8c959f",
+  },
+};
+// Agents that assume a dark terminal paint pale text, which the light theme darkens until it reads.
+const CONTRAST = { dark: 1, light: 4.5 };
+const shade = () => window.YardbellTheme?.terminal() === "light" ? "light" : "dark";
 const term = new Terminal({
   cursorBlink: true,
   fontFamily: FONT,
@@ -24,7 +53,12 @@ const term = new Terminal({
   letterSpacing: 0,
   lineHeight: 1.15,
   scrollback: 5000,
-  theme: { background: "#0a0a0b", foreground: "#ededef", cursor: "#93c5fd", selectionBackground: "#172554" },
+  theme: THEMES[shade()],
+  minimumContrastRatio: CONTRAST[shade()],
+});
+window.addEventListener("yardbell-term-theme", () => {
+  term.options.theme = THEMES[shade()];
+  term.options.minimumContrastRatio = CONTRAST[shade()];
 });
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);

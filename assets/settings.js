@@ -324,6 +324,11 @@ document.querySelectorAll('input[name="theme"]').forEach((input) => {
   input.addEventListener("change", () => window.YardbellTheme.set(input.value));
 });
 
+document.querySelectorAll('input[name="term-theme"]').forEach((input) => {
+  input.checked = input.value === window.YardbellTheme.terminalChosen();
+  input.addEventListener("change", () => window.YardbellTheme.setTerminal(input.value));
+});
+
 $("phone-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;

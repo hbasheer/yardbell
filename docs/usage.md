@@ -117,6 +117,7 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 - **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
   servers for the sessions it starts, see [Agent tools (MCP)](agents.md#agent-tools-mcp).
 - **Appearance:** same as the device, light or dark, like the theme button in the sidebar.
+  **Terminal** picks light or dark for terminals on its own, or follows the theme.
 - **Security:** change the passcode (takes effect immediately) and log out every other device.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
