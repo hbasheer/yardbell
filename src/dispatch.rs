@@ -1,3 +1,8 @@
+mod follow;
+mod usage;
+
+pub use follow::{Change, SavedTask};
+
 use crate::config::DispatchSettings;
 use crate::shell::{login_shell, Duration, Runner};
 use rand::Rng;
@@ -44,7 +49,22 @@ unless the user asks for another.
 
 Reply briefly: which machine and folder you chose and why in one or two sentences, and the session \
 name. When the user asks about a running session, use read_session; to answer an agent that is \
-waiting, use send_to_session.";
+waiting, use send_to_session.
+
+When a task has independent parts, such as changes in two repositories or several tickets, start \
+one session per part, each on the best machine for it, and list them all in your reply.
+
+When the user asks you to work through tickets or several tasks, first read them (the user's \
+other tools, such as Linear, may be available to you), then propose a numbered plan: for each \
+one the machine, folder, agent and branch name, and what the agent will do. Start nothing until \
+the user agrees; then start every session in the plan.
+
+When asked to review a session's branch, start a new session in the same folder with a prompt \
+that asks the agent to review the changes on that branch against its base branch, run the tests, \
+and report problems without changing any files.
+
+When asked what is going on, summarise every machine and session briefly: what is working, what \
+is waiting for an answer, what has finished, and machines that are down or low on memory.";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Stored {
@@ -56,6 +76,8 @@ struct Stored {
     claude_session: Option<String>,
     #[serde(default)]
     events: Vec<Value>,
+    #[serde(default)]
+    sessions: Vec<follow::Tracked>,
 }
 
 struct Conversation {
@@ -67,6 +89,7 @@ struct Conversation {
 struct Shared {
     dir: PathBuf,
     chats: Mutex<HashMap<String, Conversation>>,
+    usage: Mutex<Option<Value>>,
 }
 
 impl Shared {
@@ -95,6 +118,20 @@ impl Shared {
         ) {
             tracing::warn!(error = %e, "could not save dispatch conversation {id}");
         }
+    }
+
+    fn usage_file(&self) -> PathBuf {
+        self.dir.join("usage.json")
+    }
+
+    fn set_usage(&self, usage: Value) {
+        if let Err(e) = write_private(
+            &self.usage_file(),
+            &serde_json::to_vec(&usage).unwrap_or_default(),
+        ) {
+            tracing::warn!(error = %e, "could not save the Claude usage");
+        }
+        *self.usage.lock().expect("dispatch lock") = Some(usage);
     }
 
     fn finish(&self, id: &str) {
@@ -203,11 +240,18 @@ pub struct Dispatch {
 impl Dispatch {
     pub fn new(runner: Arc<dyn Runner>, dir: PathBuf) -> Dispatch {
         let chats = Mutex::new(load(&dir));
+        let usage = std::fs::read(dir.join("usage.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
         Dispatch {
             runner,
             command: Mutex::new(None),
             token: crate::mcp::new_token(),
-            shared: Arc::new(Shared { dir, chats }),
+            shared: Arc::new(Shared {
+                dir,
+                chats,
+                usage: Mutex::new(usage),
+            }),
         }
     }
 
@@ -218,6 +262,15 @@ impl Dispatch {
 
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    pub fn usage(&self) -> Value {
+        self.shared
+            .usage
+            .lock()
+            .expect("dispatch lock")
+            .clone()
+            .unwrap_or(Value::Null)
     }
 
     pub fn list(&self) -> Value {
@@ -242,8 +295,162 @@ impl Dispatch {
             "id": c.stored.id,
             "title": c.stored.title,
             "events": c.stored.events,
+            "sessions": c.stored.sessions,
             "busy": c.busy,
         }))
+    }
+
+    pub fn observe(&self, view: &crate::state::StateView) -> Vec<Change> {
+        let mut found = Vec::new();
+        let mut touched = Vec::new();
+        {
+            let mut chats = self.shared.lock();
+            for c in chats.values_mut() {
+                let before = c.stored.sessions.clone();
+                found.extend(follow::changes(&c.stored.id, &mut c.stored.sessions, view));
+                if c.stored.sessions != before {
+                    touched.push(c.stored.id.clone());
+                }
+            }
+        }
+        for id in touched {
+            self.shared.save(&id);
+        }
+        found
+    }
+
+    pub fn report(&self, change: &Change, screen: &str) {
+        self.shared
+            .push(&change.conversation, follow::event(change, screen));
+        self.shared.save(&change.conversation);
+    }
+
+    fn tasks_file(&self) -> PathBuf {
+        self.shared.dir.join("tasks.json")
+    }
+
+    fn hidden_file(&self) -> PathBuf {
+        self.shared.dir.join("tasks-hidden.json")
+    }
+
+    // The defaults always come first. The file holds the user's own tasks and their edits of a
+    // default, kept under the default's name. A deleted default is only hidden, so it can be
+    // restored.
+    pub fn tasks(&self) -> Vec<SavedTask> {
+        let hidden = self.hidden_defaults();
+        let saved = self.saved_tasks();
+        let defaults = follow::default_tasks();
+        let mut tasks: Vec<SavedTask> = defaults
+            .iter()
+            .map(|d| SavedTask {
+                text: saved
+                    .iter()
+                    .find(|t| t.name == d.name)
+                    .map_or_else(|| d.text.clone(), |t| t.text.clone()),
+                hidden: hidden.contains(&d.name),
+                ..d.clone()
+            })
+            .collect();
+        tasks.extend(
+            saved
+                .into_iter()
+                .filter(|t| !is_default(&t.name))
+                .map(|t| SavedTask {
+                    builtin: false,
+                    hidden: false,
+                    ..t
+                }),
+        );
+        tasks
+    }
+
+    fn hidden_defaults(&self) -> Vec<String> {
+        std::fs::read(self.hidden_file())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    fn write_hidden(&self, hidden: &[String]) -> Result<(), String> {
+        write_private(
+            &self.hidden_file(),
+            &serde_json::to_vec_pretty(hidden).unwrap_or_default(),
+        )
+        .map_err(|e| format!("cannot save the tasks: {e}"))
+    }
+
+    fn hide_default(&self, name: &str) -> Result<(), String> {
+        let mut hidden = self.hidden_defaults();
+        if !hidden.iter().any(|h| h == name) {
+            hidden.push(name.to_string());
+        }
+        self.write_hidden(&hidden)
+    }
+
+    fn saved_tasks(&self) -> Vec<SavedTask> {
+        std::fs::read(self.tasks_file())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn restore_default_tasks(&self) -> Result<Vec<SavedTask>, String> {
+        self.write_hidden(&[])?;
+        let mut saved = self.saved_tasks();
+        saved.retain(|t| !is_default(&t.name));
+        self.write_tasks(&saved)?;
+        Ok(self.tasks())
+    }
+
+    pub fn save_task(
+        &self,
+        name: &str,
+        text: &str,
+        replacing: Option<&str>,
+    ) -> Result<Vec<SavedTask>, String> {
+        let (name, text) = (name.trim(), text.trim());
+        if name.is_empty() || text.is_empty() {
+            return Err("a task needs a name and what to ask".into());
+        }
+        let replacing = replacing.map(str::trim).filter(|r| !r.is_empty());
+        if replacing != Some(name) && self.tasks().iter().any(|t| t.name == name) {
+            return Err(format!("there is already a task called {name}"));
+        }
+        let mut saved = self.saved_tasks();
+        let task = SavedTask {
+            name: name.to_string(),
+            text: text.to_string(),
+            builtin: false,
+            hidden: false,
+        };
+        match replacing.and_then(|old| saved.iter().position(|t| t.name == old)) {
+            Some(i) => saved[i] = task,
+            None => saved.push(task),
+        }
+        // Renaming a default makes it a task of the user's own, so the default steps aside.
+        if let Some(old) = replacing.filter(|old| *old != name && is_default(old)) {
+            self.hide_default(old)?;
+        }
+        self.write_tasks(&saved)?;
+        Ok(self.tasks())
+    }
+
+    pub fn delete_task(&self, name: &str) -> Result<Vec<SavedTask>, String> {
+        if is_default(name) {
+            self.hide_default(name)?;
+        }
+        let mut saved = self.saved_tasks();
+        saved.retain(|t| t.name != name);
+        self.write_tasks(&saved)?;
+        Ok(self.tasks())
+    }
+
+    fn write_tasks(&self, tasks: &[SavedTask]) -> Result<(), String> {
+        write_private(
+            &self.tasks_file(),
+            &serde_json::to_vec_pretty(tasks).unwrap_or_default(),
+        )
+        .map_err(|e| format!("cannot save the tasks: {e}"))
     }
 
     pub fn stop(&self, id: &str) {
@@ -311,14 +518,21 @@ impl Dispatch {
         Ok(vec![path])
     }
 
-    fn write_mcp_config(&self, port: u16) -> Result<PathBuf, String> {
-        let config = json!({
-            "mcpServers": { "yardbell": {
+    // The user's own MCP servers, such as Linear, come along so Dispatch can read tickets.
+    fn write_mcp_config(&self, port: u16, extra: Option<&str>) -> Result<PathBuf, String> {
+        let mut servers = extra
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .and_then(|v| v["mcpServers"].as_object().cloned())
+            .unwrap_or_default();
+        servers.insert(
+            "yardbell".into(),
+            json!({
                 "type": "http",
                 "url": format!("http://127.0.0.1:{port}/mcp"),
                 "headers": { "Authorization": format!("Bearer {}", self.token) },
-            }}
-        });
+            }),
+        );
+        let config = json!({ "mcpServers": servers });
         let path = self.shared.dir.join("mcp.json");
         write_private(&path, config.to_string().as_bytes())
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
@@ -376,17 +590,23 @@ impl Dispatch {
         text: &str,
         port: u16,
         settings: &DispatchSettings,
+        extra: Option<&str>,
     ) -> Result<(String, mpsc::Receiver<Value>), String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("type a task first".into());
         }
         let mut argv = self.claude().await?;
-        let config = self.write_mcp_config(port)?;
+        let config = self.write_mcp_config(port, extra)?;
         let cancel = Arc::new(Notify::new());
         let (id, resume) = self.begin(conversation, text, cancel.clone())?;
         self.shared.save(&id);
-        let allowed: Vec<String> = TOOLS.iter().map(|t| format!("{TOOL_PREFIX}{t}")).collect();
+        let mut allowed: Vec<String> = TOOLS.iter().map(|t| format!("{TOOL_PREFIX}{t}")).collect();
+        allowed.extend(
+            extra_servers(extra)
+                .into_iter()
+                .map(|name| format!("mcp__{name}")),
+        );
         argv.extend(
             [
                 "-p",
@@ -480,7 +700,27 @@ async fn run_turn(
             }
         }
         finished |= message["type"] == "result";
+        if let Some(found) = usage::from_stream(&message) {
+            shared.set_usage(found);
+        }
         for event in events_of(&message, &mut tools) {
+            if event["role"] == "tool_result"
+                && event["name"] == "start_session"
+                && event["is_error"] != true
+            {
+                if let Some(t) = event["text"].as_str().and_then(follow::started) {
+                    if let Some(c) = shared.lock().get_mut(id) {
+                        let known = c
+                            .stored
+                            .sessions
+                            .iter()
+                            .any(|s| s.machine == t.machine && s.name == t.name);
+                        if !known {
+                            c.stored.sessions.push(t);
+                        }
+                    }
+                }
+            }
             shared.push(id, event.clone());
             let _ = tx.send(event).await;
         }
@@ -496,6 +736,21 @@ async fn run_turn(
         });
     }
     Ok(())
+}
+
+fn is_default(name: &str) -> bool {
+    follow::default_tasks().iter().any(|d| d.name == name)
+}
+
+fn extra_servers(extra: Option<&str>) -> Vec<String> {
+    extra
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|v| {
+            v["mcpServers"]
+                .as_object()
+                .map(|m| m.keys().cloned().collect())
+        })
+        .unwrap_or_default()
 }
 
 fn short(text: &str) -> String {
@@ -656,23 +911,171 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sessions_it_starts_are_followed_into_the_conversation() {
+        use crate::config::HostTerminal;
+        use crate::snapshot::Activity;
+        use crate::state::{MachineView, SessionView, StateView};
+        let dir = tempfile::tempdir().unwrap();
+        let args = dir.path().join("args");
+        let script = format!(
+            r#"printf '%s\n' "$@" > {}
+echo '{{"type":"system","subtype":"init","session_id":"s1"}}'
+echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"mcp__yardbell__start_session","input":{{}}}}]}}}}'
+echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","content":"{{\"machine\":\"hp\",\"name\":\"hp-app\",\"path\":\"/r/app\"}}"}}]}}}}'
+echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
+            args.display()
+        );
+        let dispatch = fake_claude(dir.path(), &script);
+        let linear =
+            r#"{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/mcp"}}}"#;
+        let (id, rx) = dispatch
+            .ask(
+                None,
+                "fix it",
+                4000,
+                &DispatchSettings::default(),
+                Some(linear),
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let config = std::fs::read_to_string(dir.path().join("dispatch/mcp.json")).unwrap();
+        assert!(
+            config.contains("mcp.linear.app") && config.contains("yardbell"),
+            "{config}"
+        );
+        assert!(std::fs::read_to_string(&args)
+            .unwrap()
+            .contains("mcp__linear"));
+        assert_eq!(dispatch.get(&id).unwrap()["sessions"][0]["name"], "hp-app");
+
+        let view = |activity: Activity| StateView {
+            agents: vec![],
+            default_agent: "claude".into(),
+            machines: vec![MachineView {
+                name: "hp".into(),
+                up: true,
+                reason: None,
+                last_seen: None,
+                local: true,
+                health: None,
+                mesh_on: None,
+            }],
+            folders: vec![],
+            sessions: vec![SessionView {
+                id: "x".into(),
+                machine: "hp".into(),
+                agent: "claude".into(),
+                pid: 1,
+                folder: "app".into(),
+                ticket: "-".into(),
+                branch: "main".into(),
+                activity,
+                attachable: true,
+                tmux: Some("hp-app".into()),
+                stale: false,
+                ports: vec![],
+            }],
+            ended: vec![],
+            host_terminal: HostTerminal::None,
+            mesh: None,
+            server: None,
+        };
+        assert!(dispatch.observe(&view(Activity::Active)).is_empty());
+        let changes = dispatch.observe(&view(Activity::Blocked));
+        assert_eq!(changes.len(), 1);
+        dispatch.report(&changes[0], "Run the migration?\n ❯ 1. Yes\n   2. No");
+        let events = dispatch.get(&id).unwrap()["events"].clone();
+        let card = events.as_array().unwrap().last().unwrap().clone();
+        assert_eq!(card["role"], "session");
+        assert_eq!(card["state"], "blocked");
+        assert_eq!(card["options"][1]["label"], "No");
+    }
+
+    #[test]
+    fn tasks_can_be_added_edited_renamed_and_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().to_path_buf());
+        let own = |d: &Dispatch| {
+            d.tasks()
+                .into_iter()
+                .filter(|t| !t.builtin)
+                .map(|t| t.name)
+                .collect::<Vec<_>>()
+        };
+        let defaults = follow::default_tasks().len();
+        assert_eq!(dispatch.tasks().len(), defaults);
+        dispatch
+            .save_task("Tests", "run the tests everywhere", None)
+            .unwrap();
+        assert!(
+            dispatch.save_task("Tests", "again", None).is_err(),
+            "names stay unique"
+        );
+        assert!(dispatch.save_task("What's going on?", "x", None).is_err());
+        dispatch
+            .save_task("Tests", "run all tests", Some("Tests"))
+            .unwrap();
+        dispatch
+            .save_task("All tests", "run all tests", Some("Tests"))
+            .unwrap();
+        assert_eq!(own(&dispatch), ["All tests"]);
+        assert_eq!(dispatch.tasks().len(), defaults + 1);
+        let shown = |d: &Dispatch| d.tasks().into_iter().filter(|t| !t.hidden).count();
+        dispatch.delete_task("What's going on?").unwrap();
+        assert_eq!(shown(&dispatch), defaults);
+        assert!(
+            dispatch.save_task("What's going on?", "x", None).is_err(),
+            "a deleted default keeps its name"
+        );
+        dispatch.restore_default_tasks().unwrap();
+        assert_eq!(shown(&dispatch), defaults + 1);
+        dispatch
+            .save_task("What's going on?", "only hp", Some("What's going on?"))
+            .unwrap();
+        let first = &dispatch.tasks()[0];
+        assert_eq!(
+            (first.name.as_str(), first.text.as_str(), first.builtin),
+            ("What's going on?", "only hp", true),
+            "an edited default keeps its place"
+        );
+        dispatch
+            .save_task("Status", "only hp", Some("What's going on?"))
+            .unwrap();
+        assert!(dispatch.tasks()[0].hidden, "a renamed default steps aside");
+        assert!(own(&dispatch).contains(&"Status".to_string()));
+        dispatch.restore_default_tasks().unwrap();
+        let first = &dispatch.tasks()[0];
+        assert!(!first.hidden);
+        assert_eq!(first.text, follow::default_tasks()[0].text);
+        dispatch.delete_task("Status").unwrap();
+        dispatch.delete_task("All tests").unwrap();
+        assert!(own(&dispatch).is_empty());
+        assert_eq!(dispatch.tasks().len(), defaults);
+        assert!(dispatch.save_task(" ", "x", None).is_err());
+    }
+
+    #[tokio::test]
     async fn conversations_resume_their_own_claude_session_and_survive_a_restart() {
         let dir = tempfile::tempdir().unwrap();
         let args = dir.path().join("args");
         let script = format!(
             r#"printf '%s\n' "$@" > {}
 echo '{{"type":"system","subtype":"init","session_id":"s-'$$'"}}'
+echo '{{"type":"rate_limit_event","rate_limit_info":{{"unifiedWindows":{{"five_hour":{{"utilization":0.25,"resetsAt":1}}}}}}}}'
 echo '{{"type":"assistant","message":{{"content":[{{"type":"text","text":"Started on mini."}}]}}}}'
 echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
             args.display()
         );
         let dispatch = fake_claude(dir.path(), &script);
+        assert_eq!(dispatch.usage(), Value::Null);
         let (first, rx) = dispatch
             .ask(
                 None,
                 "fix the login bug",
                 4000,
                 &DispatchSettings::default(),
+                None,
             )
             .await
             .unwrap();
@@ -690,7 +1093,13 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         assert!(config.contains(&format!("Bearer {}", dispatch.token())));
 
         let (second, rx) = dispatch
-            .ask(None, "update the docs", 4000, &DispatchSettings::default())
+            .ask(
+                None,
+                "update the docs",
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
             .await
             .unwrap();
         drain(rx).await;
@@ -707,6 +1116,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
                 "and logout",
                 4000,
                 &DispatchSettings::default(),
+                None,
             )
             .await
             .unwrap();
@@ -725,6 +1135,11 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         assert_eq!(convo["title"], "fix the login bug");
         assert_eq!(convo["events"].as_array().unwrap().len(), 4);
         assert_eq!(convo["busy"], false);
+        assert_eq!(
+            reopened.usage()["windows"][0]["used"],
+            0.25,
+            "the last usage seen survives a restart"
+        );
     }
 
     #[tokio::test]
@@ -739,7 +1154,10 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
             model: "haiku".into(),
             ..DispatchSettings::default()
         };
-        let (_, rx) = dispatch.ask(None, "hi", 4000, &settings).await.unwrap();
+        let (_, rx) = dispatch
+            .ask(None, "hi", 4000, &settings, None)
+            .await
+            .unwrap();
         drain(rx).await;
         assert!(std::fs::read_to_string(&args)
             .unwrap()
@@ -751,7 +1169,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         let dir = tempfile::tempdir().unwrap();
         let dispatch = fake_claude(dir.path(), "echo 'not logged in' >&2; exit 1");
         let (_, rx) = dispatch
-            .ask(None, "hi", 4000, &DispatchSettings::default())
+            .ask(None, "hi", 4000, &DispatchSettings::default(), None)
             .await
             .unwrap();
         assert_eq!(
@@ -768,12 +1186,18 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         let dir = tempfile::tempdir().unwrap();
         let dispatch = fake_claude(dir.path(), "sleep 30");
         let (busy, rx) = dispatch
-            .ask(None, "long task", 4000, &DispatchSettings::default())
+            .ask(None, "long task", 4000, &DispatchSettings::default(), None)
             .await
             .unwrap();
         assert_eq!(
             dispatch
-                .ask(Some(&busy), "again", 4000, &DispatchSettings::default())
+                .ask(
+                    Some(&busy),
+                    "again",
+                    4000,
+                    &DispatchSettings::default(),
+                    None
+                )
                 .await
                 .unwrap_err(),
             "this conversation is still answering"
@@ -782,7 +1206,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
 
         let quick = fake_claude(dir.path(), "true");
         let (idle, rx2) = quick
-            .ask(None, "short task", 4000, &DispatchSettings::default())
+            .ask(None, "short task", 4000, &DispatchSettings::default(), None)
             .await
             .unwrap();
         drain(rx2).await;
@@ -812,7 +1236,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         let dispatch = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().join("d"));
         assert_eq!(
             dispatch
-                .ask(None, "hi", 4000, &DispatchSettings::default())
+                .ask(None, "hi", 4000, &DispatchSettings::default(), None)
                 .await
                 .unwrap_err(),
             "Claude Code is not installed on this machine, Dispatch needs it"

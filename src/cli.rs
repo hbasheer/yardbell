@@ -134,6 +134,12 @@ pub async fn serve(
         }
     });
     let phone = Arc::new(Phone::default());
+    let dispatch = Arc::new(crate::dispatch::Dispatch::new(
+        runner.clone(),
+        dir.join("dispatch"),
+    ));
+    let after_dispatch = dispatch.clone();
+    let after_sessions = Arc::new(Sessions::new(runner.clone(), ssh.clone()));
     let after_state = state.clone();
     let after_tunnels = tunnels.clone();
     let after_phone = phone.clone();
@@ -152,6 +158,19 @@ pub async fn serve(
             Instant::now(),
         );
         after_phone.inbox.add(&pushes);
+        for change in after_dispatch.observe(&view) {
+            let Some(m) = cfg.machine(&change.machine).cloned() else {
+                continue;
+            };
+            let (dispatch, sessions) = (after_dispatch.clone(), after_sessions.clone());
+            tokio::spawn(async move {
+                let screen = sessions
+                    .read(&m, &change.name, 60)
+                    .await
+                    .unwrap_or_default();
+                dispatch.report(&change, &screen);
+            });
+        }
     });
     let poller = Arc::new(Poller::new(
         path.clone(),
@@ -184,7 +203,7 @@ pub async fn serve(
             Arc::new(chrono::Local::now),
         ),
         phone,
-        dispatch: Arc::new(crate::dispatch::Dispatch::new(runner, dir.join("dispatch"))),
+        dispatch,
         refresh: Arc::new(move || {
             let poller = poller.clone();
             Box::pin(async move {

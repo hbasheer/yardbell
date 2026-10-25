@@ -69,7 +69,7 @@ class MainActivity : TauriActivity() {
 
   private fun paintBars(theme: String) {
     val dark = theme == "dark"
-    window.setBackgroundDrawable(ColorDrawable(if (dark) 0xFF0F1012.toInt() else 0xFFF8FAFC.toInt()))
+    window.setBackgroundDrawable(ColorDrawable(if (dark) 0xFF0C0E10.toInt() else 0xFFECEEF0.toInt()))
     WindowCompat.getInsetsController(window, window.decorView).apply {
       isAppearanceLightStatusBars = !dark
       isAppearanceLightNavigationBars = !dark

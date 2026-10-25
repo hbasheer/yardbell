@@ -175,7 +175,7 @@ function renderSide() {
     const st = stateOf(s);
     const n = inPane.get(key);
     const where = n && !phone.matches ? `<span class="ws-pane-no" title="In pane ${n}">${n}</span>` : "";
-    const acts = s.stale || phone.matches || !project() ? "" : `<span class="ws-row-acts">
+    const acts = s.stale || !project() ? "" : `<span class="ws-row-acts">
       <button type="button" class="btn quiet icon-btn" data-more="${esc(key)}" aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(title(s))}" title="More"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.1"/><circle cx="8" cy="8" r="1.1"/><circle cx="12.5" cy="8" r="1.1"/></svg></button>
     </span>`;
     return `<li class="ws-row"><button type="button" class="ws-item${n && key === focusedLeaf()?.key ? " current" : ""}${s.stale ? " stale" : ""}" data-key="${esc(key)}"${s.stale ? " disabled" : ""}>
@@ -520,9 +520,12 @@ function openMenu(button) {
     closeMenu();
     return;
   }
-  showMenu(button.getBoundingClientRect(), [
+  const splits = phone.matches ? [] : [
     { label: "Open to the right", run: () => split("row", key) },
     { label: "Open below", run: () => split("col", key) },
+  ];
+  showMenu(button.getBoundingClientRect(), [
+    ...splits,
     { label: "Open in a new tab", run: () => {
       const s = sessionFor(key);
       done.delete(key);

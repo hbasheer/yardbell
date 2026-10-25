@@ -136,6 +136,34 @@ one or delete it; **Clear all** deletes every conversation that is not still wor
 conversation never stops the sessions it started. Claude Code must be installed and signed in on
 the host.
 
+Dispatch follows the sessions it starts. When one finishes, stops to wait for an answer, or ends,
+the conversation gets a card with the last lines of its screen. A waiting agent's choices, such as
+Yes and No on a permission prompt, become buttons that answer it; a finished one has **Review
+branch**, which asks Dispatch to start a reviewer on the same folder that runs the tests and reports
+problems without changing files. A list at the top of the conversation shows every session it
+started and what each is doing now.
+
+A task with independent parts, such as two repositories or several tickets, gets one session per
+part. Ask it to work through tickets and it reads them first, proposes a numbered plan (machine,
+folder, agent and branch for each) and starts nothing until you agree. Dispatch can use the MCP
+servers listed under **MCP servers** in Settings, so with Linear added there,
+**Plan my Linear tickets** reads your open tickets and plans them.
+
+The **Claude usage** card at the top of Dispatch's sidebar shows how much of your Claude plan's
+5-hour and weekly limits is used, and when each resets. Claude Code reports these numbers each time
+Dispatch replies, so the card shows the figures from the last reply, and appears after the first one.
+The limits belong to the Claude account signed in on the machine running Yardbell, and agent
+sessions using the same account count towards them too.
+
+The **Tasks** list in Dispatch's sidebar sends a task in one click. Five come with Yardbell:
+**What's going on?** summarises every machine and session, **Who needs me?** lists the sessions
+waiting for an answer, **Plan my Linear tickets** plans your open tickets, **Review finished
+branches** reviews the branches of idle and ended sessions, and **Tidy up sessions** suggests
+which sessions to stop. **New task** adds one of your own, which you can edit, rename or delete;
+the copy button next to a default starts a task of your own from its text. Deleting a default
+only hides it, and **Restore default tasks** brings the defaults back. **Save as task** in the
+message box keeps whatever you typed.
+
 The **Dispatch** section of Settings adds your own instructions to its prompt (where your
 repositories live, which machine suits which work, how you name branches), picks the agent it
 starts in new sessions from the ones installed on your machines, and picks the Claude model that
