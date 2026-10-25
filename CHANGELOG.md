@@ -64,7 +64,7 @@ and the project uses [Semantic Versioning](https://semver.org).
   desktop app on its Connect screen, so signing in takes only the passcode. The phone remembers
   every server it has seen, also after you remove one. Servers answer `/app/hello` and list the
   others at `/app/servers`.
-- Every page says where the server runs, for example "Running on hp 100.120.226.174:4000".
+- Every page says where the server runs, for example "Running on devbox 100.64.0.10:4000".
 - Light and dark theme: a button in every sidebar, and Settings → Appearance, saved per device.
   The desktop app's window and tab bar and the Android app's status bar follow it.
 - Workspace: a new tab opens the same New session dialog as the dashboard, closing a tab with
