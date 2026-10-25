@@ -113,6 +113,30 @@ async fn connect_server(session: State<'_, Session>) -> Result<Option<String>, S
     Ok(client.as_ref().map(|client| client.server().to_string()))
 }
 
+// Lists the Yardbell servers this computer can see, so connecting takes only the passcode: the
+// mesh's peers where its command line lists them, and whatever servers already known have found.
+#[tauri::command]
+async fn discover_servers(
+    session: State<'_, Session>,
+) -> Result<Vec<yardbell::discover::Found>, String> {
+    let mut known = vec![local::address(yardbell::discover::DEFAULT_PORT)];
+    if let Some(server) = session.store.server() {
+        known.push(server);
+    }
+    let ips = tauri::async_runtime::spawn_blocking(yardbell::discover::mesh_ips)
+        .await
+        .unwrap_or_default();
+    let mut found = yardbell::discover::probe_all(yardbell::discover::addresses(
+        ips,
+        yardbell::discover::DEFAULT_PORT,
+    ))
+    .await;
+    for server in &known {
+        found.extend(yardbell::discover::ask(server).await);
+    }
+    Ok(yardbell::discover::dedupe(found))
+}
+
 #[tauri::command]
 async fn retry_connect(app: AppHandle) {
     open_dashboard(&app).await;
@@ -531,6 +555,7 @@ fn main() {
             set_up_local_server,
             connect_message,
             connect_server,
+            discover_servers,
             retry_connect,
             change_server,
             sign_out_now,

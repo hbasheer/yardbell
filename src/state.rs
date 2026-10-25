@@ -93,6 +93,14 @@ pub struct StateView {
     pub ended: Vec<EndedView>,
     pub host_terminal: HostTerminal,
     pub mesh: Option<crate::mesh::MeshView>,
+    #[serde(default)]
+    pub server: Option<ServerView>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ServerView {
+    pub machine: String,
+    pub address: String,
 }
 
 impl State {
@@ -209,6 +217,7 @@ impl State {
             ended: Vec::new(),
             host_terminal: cfg.host_terminal,
             mesh: None,
+            server: None,
         };
         for m in &cfg.machines {
             let status = inner.statuses.get(&m.name);
@@ -395,6 +404,8 @@ mod tests {
             agent_kb: 900_000,
             load1: 1.5,
             cpus: 8,
+            disk_total_kb: 0,
+            disk_used_kb: 0,
         });
         state.update(st);
         let view = serde_json::to_value(state.view(&cfg(), &FakePorts, "localhost")).unwrap();

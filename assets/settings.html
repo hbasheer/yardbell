@@ -8,6 +8,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/inter@5.0.20/index.css" integrity="sha384-6QsiPFEuz7gYJPDZq103sCr5aKoBCbqAXJq1fEUzeUHeJmXFTMGzGuUmfP4j5w5b" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
 </head>
 <body data-page="settings">
 <div class="app">
@@ -30,8 +31,9 @@
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z"/></svg>Dispatch
       </a>
       <a class="side-link" href="/settings" aria-current="page">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="2.2"/><path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M3.6 12.4l1.3-1.3M11.1 4.9l1.3-1.3"/></svg>Settings
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:2.3"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings
       </a>
+      <button class="side-link theme-toggle" type="button" data-theme-toggle></button>
       <button class="side-link" id="logout" type="button">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 3H3.5v10h3M10 5l3 3-3 3M13 8H6.5"/></svg>Log out
       </button>
@@ -39,8 +41,25 @@
   </aside>
 
   <main class="main">
+    <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 4 6 8l4 4"/></svg>Dashboard</a>
     <header class="main-head"><h1>Settings</h1></header>
 
+    <div class="settings-layout">
+    <nav class="settings-nav" aria-label="Settings sections">
+      <p class="nav-label">Machines</p>
+      <a href="#machines">Machines</a>
+      <a href="#mesh">Mesh VPN</a>
+      <p class="nav-label">Phone</p>
+      <a href="#pair">Connect a phone</a>
+      <a href="#phone">Notifications</a>
+      <p class="nav-label">Agents</p>
+      <a href="#dispatch">Dispatch</a>
+      <a href="#mcp">Agent tools (MCP)</a>
+      <a href="#servers">MCP servers</a>
+      <p class="nav-label">General</p>
+      <a href="#appearance">Appearance</a>
+      <a href="#security">Security</a>
+    </nav>
     <div class="page-body">
   <div id="undo-bar" class="banner info" hidden>
     <div class="banner-text"><strong id="undo-title">Saved.</strong><span id="undo-text"></span></div>
@@ -48,7 +67,17 @@
     <button class="btn primary" type="button" id="restart-btn" hidden>Restart Yardbell</button>
   </div>
 
-  <section>
+  <section id="appearance">
+    <div class="section-head"><h2>Appearance</h2></div>
+    <div class="panel theme-choices" role="radiogroup" aria-label="Theme">
+      <label class="choice"><input type="radio" name="theme" value="system">Same as this device</label>
+      <label class="choice"><input type="radio" name="theme" value="light">Light</label>
+      <label class="choice"><input type="radio" name="theme" value="dark">Dark</label>
+      <p class="help">Saved on this device, so your phone and computer can differ.</p>
+    </div>
+  </section>
+
+  <section id="mesh">
     <div class="section-head"><h2>Mesh VPN</h2><span class="machine-status-inline" id="mesh-current"></span></div>
     <div class="panel">
       <div class="inline-form">
@@ -81,7 +110,7 @@
     </div>
   </section>
 
-  <section>
+  <section id="machines">
     <div class="section-head"><h2>Machines</h2><a class="btn small-link" href="/add">Add machine</a></div>
     <div id="machine-forms" class="machine-forms"></div>
   </section>
@@ -100,51 +129,23 @@
   </section>
 
   <section id="phone">
-    <div class="section-head"><h2>Phone notifications</h2><button class="btn quiet danger small-link" type="button" id="phone-turn-off" hidden>Turn off</button></div>
-    <div class="panel phone-intro" id="phone-intro" hidden>
-      <p>Get a notification on your phone when an agent is waiting for you, a session ends, a machine goes down or memory runs low. Uses the free ntfy app.</p>
-      <button class="btn primary" type="button" id="phone-setup">Set up</button>
-    </div>
-    <div class="phone-on" id="phone-on" hidden>
-      <ol class="panel phone-steps">
-        <li><span class="mark">1</span>
-          <p>Install ntfy on your phone: <a href="https://play.google.com/store/apps/details?id=io.heckel.ntfy" target="_blank" rel="noopener">Google Play</a>, <a href="https://f-droid.org/en/packages/io.heckel.ntfy/" target="_blank" rel="noopener">F-Droid</a>, <a href="https://apps.apple.com/us/app/ntfy/id1625396347" target="_blank" rel="noopener">App Store</a></p>
-        </li>
-        <li><span class="mark">2</span>
-          <div class="phone-step">
-            <p>On Android, open this page on your phone and tap <a id="phone-subscribe" href="#">Subscribe in ntfy</a>.</p>
-            <p class="phone-line"><span>On iPhone, or by hand, subscribe to this topic in the ntfy app:</span><span class="phone-field"><code id="phone-topic"></code><button class="btn" type="button" id="phone-copy">Copy</button></span></p>
-            <p id="phone-server-line" hidden>Use the server <code id="phone-server"></code>.</p>
-          </div>
-        </li>
-        <li><span class="mark">3</span>
-          <p class="phone-line"><button class="btn" type="button" id="phone-test">Send a test notification</button><span class="phone-result" id="phone-test-result" role="status"></span></p>
-        </li>
-      </ol>
-      <form class="panel" id="phone-form">
-        <div class="phone-switches">
-          <div class="phone-switch">
-            <label class="choice"><input type="checkbox" name="agent_waiting">Agent waiting</label>
-            <label class="choice phone-wait">after <input type="number" name="wait_minutes" min="0" max="60" step="1" inputmode="numeric" required> minutes</label>
-          </div>
-          <label class="choice"><input type="checkbox" name="session_ended">Session ended</label>
-          <label class="choice"><input type="checkbox" name="machines">Machine down or back</label>
-          <label class="choice"><input type="checkbox" name="memory">Memory at 95%</label>
+    <div class="section-head"><h2>Phone notifications</h2></div>
+    <p class="help phone-app">The Yardbell app for Android shows these while it is signed in to this server. Nothing else to install.</p>
+    <form class="panel" id="phone-form">
+      <div class="phone-switches">
+        <div class="phone-switch">
+          <label class="choice"><input type="checkbox" name="agent_waiting">Agent waiting</label>
+          <label class="choice phone-wait">after <input type="number" name="wait_minutes" min="0" max="60" step="1" inputmode="numeric" required> minutes</label>
         </div>
-        <details class="phone-advanced">
-          <summary class="mg-toggle"><svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>Advanced</summary>
-          <div class="grid2">
-            <label>ntfy server <input type="text" name="server" inputmode="url" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
-            <label>Access token <input type="text" name="token" autocapitalize="off" autocomplete="off" spellcheck="false"></label>
-          </div>
-          <label class="choice" id="phone-clear-token"><input type="checkbox" name="clear_token">Remove the token</label>
-        </details>
-        <div class="form-foot">
-          <p class="help" id="phone-status"></p>
-          <button class="btn primary" type="submit">Save</button>
-        </div>
-      </form>
-    </div>
+        <label class="choice"><input type="checkbox" name="session_ended">Session ended</label>
+        <label class="choice"><input type="checkbox" name="machines">Machine down or back</label>
+        <label class="choice"><input type="checkbox" name="memory">Memory at 95%</label>
+      </div>
+      <div class="form-foot">
+        <p class="help" id="phone-status" role="status"></p>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
   </section>
 
   <section id="dispatch">
@@ -212,7 +213,7 @@
     </form>
   </section>
 
-  <section>
+  <section id="security">
     <div class="section-head"><h2>Security</h2></div>
     <form class="panel" id="pass-form">
       <div class="grid3">
@@ -230,6 +231,7 @@
       <button class="btn danger-solid" type="button" id="logout-all">Log out everywhere</button>
     </div>
   </section>
+    </div>
     </div>
   </main>
 </div>

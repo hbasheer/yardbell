@@ -21,7 +21,9 @@ async fn sign_in(app: &AppHandle, server: String, cookie: String) -> Result<Stri
         .handoff()
         .await
         .map_err(|e| e.to_string())?;
-    store(app)?.put(Server {
+    let store = store(app)?;
+    store.remember(std::slice::from_ref(&server))?;
+    store.put(Server {
         server,
         cookie: Some(cookie),
         last_used: now(),
@@ -97,6 +99,53 @@ async fn open(app: AppHandle, server: String) -> Result<String, String> {
     }
 }
 
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+struct Found {
+    machine: String,
+    address: String,
+}
+
+// A phone cannot list the mesh, so it asks the servers it knows which other servers they found.
+#[tauri::command]
+async fn discover(app: AppHandle) -> Result<Vec<Found>, String> {
+    let store = store(&app)?;
+    let saved = store.all();
+    let mut ask: Vec<String> = saved.iter().map(|s| s.server.clone()).collect();
+    for server in store.seen() {
+        if !ask.contains(&server) {
+            ask.push(server);
+        }
+    }
+    let http = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+        .map_err(|e| e.to_string())?;
+    let mut found: Vec<Found> = Vec::new();
+    for server in &ask {
+        let url = format!("{}/app/servers", server.trim_end_matches('/'));
+        let Ok(res) = http.get(url).send().await else {
+            continue;
+        };
+        for f in res.json::<Vec<Found>>().await.unwrap_or_default() {
+            if !found.iter().any(|known| known.address == f.address) {
+                found.push(f);
+            }
+        }
+    }
+    let heard: Vec<String> = found
+        .iter()
+        .map(|f| format!("http://{}", f.address))
+        .collect();
+    store.remember(&heard)?;
+    let signed_in = |f: &Found| {
+        saved
+            .iter()
+            .any(|s| s.cookie.is_some() && s.server.trim_end_matches('/').ends_with(&f.address))
+    };
+    found.retain(|f| !signed_in(f));
+    Ok(found)
+}
+
 #[tauri::command]
 fn forget(app: AppHandle, server: String) -> Result<(), String> {
     store(&app)?.forget(&server)
@@ -109,7 +158,7 @@ pub fn run() {
     let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
     builder
         .invoke_handler(tauri::generate_handler![
-            servers, pair, connect, open, forget
+            servers, pair, connect, open, forget, discover
         ])
         .setup(|app| {
             tauri::WebviewWindowBuilder::new(

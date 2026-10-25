@@ -10,6 +10,7 @@ use crate::settings::Settings;
 use crate::snapshot;
 use crate::state::{PortStatus, State};
 use crate::term;
+use crate::viewers::{Plan, Viewers};
 use axum::extract::ws::{WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path as UrlPath, Request, State as AxState};
 use axum::http::{header, HeaderMap, Method, StatusCode};
@@ -23,6 +24,7 @@ use futures::StreamExt;
 use rand::Rng;
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -30,6 +32,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub const COOKIE: &str = "yardbell_session";
 pub const COOKIE_TTL_SECS: u64 = 2_592_000;
+const APP_POLL: Duration = Duration::from_secs(50);
 const HANDOFF_TTL: Duration = Duration::from_secs(30);
 const HANDOFF_MAX: usize = 16;
 pub const PAIRING_TTL: Duration = Duration::from_secs(300);
@@ -75,6 +78,9 @@ pub struct AppState {
     pub key: std::sync::RwLock<Key>,
     pub handoff: std::sync::Mutex<Vec<(String, Instant)>>,
     pub pairing: std::sync::Mutex<Vec<(String, Instant)>>,
+    pub viewers: Viewers,
+    installed: std::sync::Mutex<HashMap<String, (Instant, Vec<String>)>>,
+    servers: tokio::sync::Mutex<Option<(Instant, Vec<crate::discover::Found>)>>,
     refresh: Refresh,
     clock: Clock,
 }
@@ -123,9 +129,16 @@ impl AppState {
             key: std::sync::RwLock::new(cookie_key(cfg)),
             handoff: std::sync::Mutex::new(Vec::new()),
             pairing: std::sync::Mutex::new(Vec::new()),
+            viewers: Viewers::default(),
+            installed: std::sync::Mutex::new(HashMap::new()),
+            servers: tokio::sync::Mutex::new(None),
             refresh,
             clock,
         }
+    }
+
+    pub fn forget_installed(&self) {
+        self.installed.lock().expect("installed lock").clear();
     }
 
     pub fn config(&self) -> Result<Config, ApiError> {
@@ -238,10 +251,12 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
         );
     }
     let path = req.uri().path();
-    let public_handoff = (req.method() == Method::GET && path.starts_with("/app/handoff/"))
+    let public_handoff = (req.method() == Method::GET
+        && (path.starts_with("/app/handoff/") || path == "/app/hello" || path == "/app/servers"))
         || (req.method() == Method::POST && path.starts_with("/app/pair/"));
     if path == "/login"
         || path == "/style.css"
+        || path == "/theme.js"
         || public_handoff
         || logged_in(&app.jar(req.headers()))
     {
@@ -281,9 +296,14 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/app/handoff", post(handoff_new))
         .route("/app/handoff/{code}", get(handoff_redeem))
         .route("/app/pair/{code}", post(pair_redeem))
+        .route("/app/notifications", get(app_notifications))
+        .route("/app/hello", get(app_hello))
+        .route("/app/servers", get(app_servers))
         .route("/style.css", get(|| async { asset("style.css") }))
+        .route("/theme.js", get(|| async { asset("theme.js") }))
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
         .route("/nav.js", get(|| async { asset("nav.js") }))
+        .route("/newsession.js", get(|| async { asset("newsession.js") }))
         .route("/state", get(state_json))
         .route("/workspace", get(|| async { asset("workspace.html") }))
         .route("/workspace.js", get(|| async { asset("workspace.js") }))
@@ -312,12 +332,14 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/ended/{id}/forget", post(forget))
         .route("/mesh/on", post(mesh_on))
         .route("/machines/{machine}/browse", get(browse))
+        .route("/machines/{machine}/agents", get(installed_agents))
         .route("/machines/{machine}/recent/forget", post(forget_recent))
         .route("/machines/{machine}/branches", get(branches))
         .route("/term.js", get(|| async { asset("term.js") }))
         .route("/add", get(|| async { asset("add.html") }))
         .route("/add.js", get(|| async { asset("add.js") }))
         .route("/onboarding/peers", get(onboarding_peers))
+        .route("/onboarding/browse", get(onboarding_browse))
         .route("/onboarding/{step}", post(onboarding_step))
         .route("/machines/{name}/remove", post(remove_machine))
         .route(
@@ -469,7 +491,68 @@ async fn state_json(
         .state
         .view(&cfg, app.ports.as_ref(), &page_host(&headers));
     view.mesh = Some(app.host_mesh.check(&cfg).await);
+    view.server = Some(server_view(&cfg));
     Ok(([(BUILD_HEADER, page_build())], Json(view)).into_response())
+}
+
+async fn app_hello(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let server = server_view(&app.config()?);
+    Ok(
+        Json(json!({ "app": "yardbell", "machine": server.machine, "address": server.address }))
+            .into_response(),
+    )
+}
+
+const SERVERS_FOR: Duration = Duration::from_secs(60);
+
+// Lets the apps offer the servers on the mesh, so signing in takes only the passcode. Each
+// probe is a request to a mesh peer, so the list is kept a minute and built by one caller at a
+// time.
+async fn app_servers(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let mut cache = app.servers.lock().await;
+    if let Some((_, list)) = cache.as_ref().filter(|(at, _)| at.elapsed() < SERVERS_FOR) {
+        return Ok(Json(list.clone()).into_response());
+    }
+    let mut ips: Vec<String> = cfg
+        .machines
+        .iter()
+        .filter_map(|m| m.mesh_ip.clone())
+        .collect();
+    if let Ok(peers) = app
+        .onboarding
+        .list_peers(crate::mesh::host_provider(&cfg))
+        .await
+    {
+        ips.extend(peers.into_iter().filter(|p| p.online).map(|p| p.ip));
+    }
+    let own = server_view(&cfg);
+    let mut found = crate::discover::probe_all(crate::discover::addresses(ips, cfg.port)).await;
+    found.push(crate::discover::Found {
+        machine: own.machine,
+        address: own.address,
+    });
+    let list = crate::discover::dedupe(found);
+    *cache = Some((Instant::now(), list.clone()));
+    Ok(Json(list).into_response())
+}
+
+// The address other machines and phones use, which is not always the one this page was opened at.
+fn server_view(cfg: &Config) -> crate::state::ServerView {
+    let address = crate::phone::base_url(cfg)
+        .and_then(|url| url.strip_prefix("http://").map(str::to_string))
+        .unwrap_or_else(|| format!("localhost:{}", cfg.port));
+    let machine = cfg.host().map(|m| m.name.clone()).unwrap_or_else(hostname);
+    crate::state::ServerView { machine, address }
+}
+
+fn hostname() -> String {
+    std::fs::read_to_string("/etc/hostname")
+        .ok()
+        .map(|name| name.trim().to_string())
+        .filter(|name| !name.is_empty())
+        .or_else(|| std::env::var("HOSTNAME").ok())
+        .unwrap_or_else(|| "this machine".into())
 }
 
 async fn dispatch_list(AxState(app): AxState<Arc<AppState>>) -> Response {
@@ -742,6 +825,41 @@ struct BrowseResponse {
     recent: Vec<String>,
 }
 
+const INSTALLED_FOR: Duration = Duration::from_secs(5 * 60);
+
+// Checking a machine for agents takes a login shell over ssh, and the New session dialog asks
+// every time it opens, so the answer is kept a few minutes.
+async fn installed_agents(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(machine): UrlPath<String>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &machine)?;
+    let cached = app
+        .installed
+        .lock()
+        .expect("installed lock")
+        .get(&m.name)
+        .filter(|(at, _)| at.elapsed() < INSTALLED_FOR)
+        .map(|(_, names)| names.clone());
+    let names = match cached {
+        Some(names) => names,
+        None => {
+            let names = app
+                .sessions
+                .installed_agents(&m, &cfg.agents())
+                .await
+                .map_err(ApiError::gateway)?;
+            app.installed
+                .lock()
+                .expect("installed lock")
+                .insert(m.name.clone(), (Instant::now(), names.clone()));
+            names
+        }
+    };
+    Ok(Json(json!({ "installed": names })).into_response())
+}
+
 async fn browse(
     AxState(app): AxState<Arc<AppState>>,
     UrlPath(machine): UrlPath<String>,
@@ -881,6 +999,25 @@ async fn refresh_now(AxState(app): AxState<Arc<AppState>>) -> Response {
     Json(json!({ "ok": true })).into_response()
 }
 
+#[derive(Deserialize)]
+struct InboxQuery {
+    boot: Option<String>,
+    #[serde(default)]
+    after: u64,
+}
+
+async fn app_notifications(
+    AxState(app): AxState<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<InboxQuery>,
+) -> Response {
+    let page = app
+        .phone
+        .inbox
+        .wait(q.boot.as_deref(), q.after, APP_POLL)
+        .await;
+    Json(page).into_response()
+}
+
 async fn open_shell(
     AxState(app): AxState<Arc<AppState>>,
     UrlPath(machine): UrlPath<String>,
@@ -944,7 +1081,7 @@ async fn term_ws(
             "origin does not match host".into(),
         ));
     }
-    let (argv, scroller) = if machine == "_onboarding" {
+    let (argv, control) = if machine == "_onboarding" {
         let argv = app.onboarding.take_terminal(&name).ok_or_else(|| {
             ApiError(
                 StatusCode::NOT_FOUND,
@@ -955,30 +1092,44 @@ async fn term_ws(
     } else {
         let cfg = app.config()?;
         let m = find_machine(&cfg, &machine)?;
-        let argv = app.sessions.attach_argv(&m, &name);
-        (argv, Some(scroller(app.clone(), m, name)))
+        let viewer = format!("{:016x}", rand::random::<u64>());
+        let argv = app.sessions.viewer_argv(&m, &name, &viewer);
+        (argv, Some(control(app.clone(), m, name, viewer)))
     };
     let exit_message = if machine == "_onboarding" {
         "done, go back to the Add machine tab and press Check again"
     } else {
         term::EXIT_MESSAGE
     };
-    Ok(ws.on_upgrade(move |socket| run_terminal(socket, argv, exit_message, scroller)))
+    Ok(ws.on_upgrade(move |socket| run_terminal(socket, argv, exit_message, control)))
 }
 
 // A swipe arrives as many small scroll frames, and each one is an ssh round trip, so whatever
-// piles up while one runs is sent as a single scroll.
-fn scroller(app: Arc<AppState>, m: Machine, name: String) -> term::Scroller {
-    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<term::ScrollJob>();
+// piles up while one runs is sent as a single scroll. The same task tells tmux which viewer of the
+// session owns its size, and only when that changes.
+fn control(app: Arc<AppState>, m: Machine, name: String, viewer: String) -> term::Control {
+    let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<term::Job>();
     tokio::spawn(async move {
+        let mut applied: Option<Plan> = None;
         while let Some(first) = rx.recv().await {
             let mut lines = 0;
             let mut bottom = Vec::new();
+            let mut plan = None;
             for job in std::iter::once(first).chain(std::iter::from_fn(|| rx.try_recv().ok())) {
                 match job {
-                    term::ScrollJob::Lines(n) => lines += n,
-                    term::ScrollJob::Bottom(done) => bottom.push(done),
+                    term::Job::Lines(n) => lines += n,
+                    term::Job::Bottom(done) => bottom.push(done),
+                    term::Job::View(on) => {
+                        plan = Some(app.viewers.set(&m.name, &name, &viewer, on))
+                    }
+                    term::Job::Typed => plan = Some(app.viewers.claim(&m.name, &name, &viewer)),
                 }
+            }
+            if let Some(plan) = plan.filter(|plan| applied.as_ref() != Some(plan)) {
+                if let Err(e) = app.sessions.size_viewers(&m, &name, &plan).await {
+                    tracing::debug!(error = %e, session = %name, "sizing viewers failed");
+                }
+                applied = Some(plan);
             }
             let result = if !bottom.is_empty() {
                 app.sessions.leave_copy_mode(&m, &name).await
@@ -994,6 +1145,11 @@ fn scroller(app: Arc<AppState>, m: Machine, name: String) -> term::Scroller {
                 let _ = done.send(());
             }
         }
+        let plan = app.viewers.leave(&m.name, &name, &viewer);
+        if plan.owner.is_some() {
+            let _ = app.sessions.size_viewers(&m, &name, &plan).await;
+        }
+        let _ = app.sessions.forget_viewer(&m, &name, &viewer).await;
     });
     tx
 }
@@ -1002,12 +1158,12 @@ pub async fn run_terminal(
     socket: WebSocket,
     argv: Vec<String>,
     exit_message: &'static str,
-    scroller: Option<term::Scroller>,
+    control: Option<term::Control>,
 ) {
     let (tx, rx) = socket.split();
     let rx = rx.filter_map(|msg| std::future::ready(msg.ok()));
     match term::spawn(&argv, 24, 80) {
-        Ok(pty) => term::bridge(tx, rx, pty, exit_message, scroller).await,
+        Ok(pty) => term::bridge(tx, rx, pty, exit_message, control).await,
         Err(e) => tracing::error!(error = %e, "terminal spawn failed"),
     }
 }
@@ -1055,6 +1211,25 @@ async fn onboarding_step(
         }
     };
     Ok(Json(result).into_response())
+}
+
+#[derive(Deserialize)]
+struct CandidateQuery {
+    name: String,
+    #[serde(default)]
+    path: String,
+}
+
+async fn onboarding_browse(
+    AxState(app): AxState<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<CandidateQuery>,
+) -> Result<Response, ApiError> {
+    let listing = app
+        .onboarding
+        .browse(&app.folders, &q.name, &q.path)
+        .await
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(listing).into_response())
 }
 
 async fn remove_machine(

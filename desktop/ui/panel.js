@@ -45,11 +45,17 @@ function cpu(c) {
   return meter("CPU", c.percent, title, segments, ` · ${c.cpus} cores`);
 }
 
+function disk(d) {
+  const segments = `<span class="mem-other" style="width:${Math.min(d.percent, 100)}%"></span>`;
+  const title = `Disk ${d.percent}% used of ${gb(d.total_kb)} GB, ${gb(d.total_kb - d.used_kb)} GB free`;
+  return meter("Disk", d.percent, title, segments, ` of ${gb(d.total_kb)} GB`);
+}
+
 function machineRow(machine) {
   const state = machine.up
     ? `<span class="state">up</span>`
     : `<span class="state bad">${esc(machine.reason ? `down (${machine.reason})` : "down")}</span>`;
-  const meters = machine.up ? `${machine.memory ? memory(machine.memory) : ""}${machine.cpu ? cpu(machine.cpu) : ""}` : "";
+  const meters = machine.up ? `${machine.memory ? memory(machine.memory) : ""}${machine.cpu ? cpu(machine.cpu) : ""}${machine.disk ? disk(machine.disk) : ""}` : "";
   return `<button class="row machine" type="button" data-machine="${esc(machine.name)}">
     <span class="machine-head"><span class="dot ${level(machine)}"></span><span class="name">${esc(machine.name)}</span>${state}</span>
     ${meters}

@@ -5,6 +5,51 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-25
+
+- The Android app shows Yardbell's phone notifications itself, with no ntfy app or setup: an agent
+  waiting, a session ended, a machine down or back, memory running out. It keeps a connection to
+  the server over the mesh VPN in the background, also after the phone restarts, and asks once to
+  be left out of battery optimization so the connection survives while the phone sleeps.
+- ntfy is gone. Its `server`, `topic` and `token` settings are ignored, and the Settings page only
+  keeps the switches for which notifications the app shows, and whether the app is connected.
+- Servers on the mesh are found for you. The phone app lists them under **On your mesh** and the
+  desktop app on its Connect screen, so signing in takes only the passcode. The phone remembers
+  every server it has seen, also after you remove one. Servers answer `/app/hello` and list the
+  others at `/app/servers`.
+- Every page says where the server runs, for example "Running on hp 100.120.226.174:4000".
+- Light and dark theme: a button in every sidebar, and Settings → Appearance, saved per device.
+  The desktop app's window and tab bar and the Android app's status bar follow it.
+- Workspace: a new tab opens the same New session dialog as the dashboard, closing a tab with
+  running sessions asks whether to stop them, and the sidebar is one tree of machine, workspace and
+  terminals, with buttons to open any terminal to the right of or below the focused pane. A
+  workspace is now a folder on one machine, so the same folder name on two machines no longer
+  shares one. On a phone, New session and a new tab are available too.
+- Only the terminal in use sets a session's size. A hidden tab, a background pane or a phone in a
+  pocket no longer squeezes the agent's screen, which left Claude Code's input box with empty
+  lines and the cursor in the wrong place.
+- Swiping or scrolling scrolls Claude Code's full-screen mode, which keeps no tmux history, by
+  sending it the mouse wheel.
+- New session lists only the agents installed on the chosen machine, with the rest under
+  **Other agent…** and **Add an agent…** to save a new one. Settings → Dispatch lists the agents
+  installed anywhere, with where. Branch choices are clearer option rows.
+- Adding a machine lets you pick its project folder from that machine's folders after the check,
+  instead of typing it before.
+- Settings has its own section list, one section at a time, and explains the port prefix with real
+  numbers. Settings, Dispatch and Add machine have a link back to the dashboard.
+- Each machine shows its disk use next to memory and CPU: on the dashboard, in the desktop tray
+  panel and in the MCP machine list. It is the disk that holds the machine's project folder.
+- An empty Workspace pane offers to start your agents in the workspace's folder or to open one of
+  its running agents.
+- Starting an agent in a folder that already has a session starts a second one (`hp-app-2`) instead
+  of failing with "duplicate session".
+- Workspace panes load their terminals in the desktop app. Before, the app opened each pane's
+  terminal as a tab of its own and left the pane empty.
+- The Android app keeps pages clear of the status bar, navigation bar and keyboard, scanning a
+  pairing code no longer crashes it, and the APK is smaller (18 MB, was 51 MB).
+- On a phone, a dashboard card opens only through its **Open** button, so taps on Stop and the
+  other buttons are not taken as opening the session.
+
 ## [0.5.0] - 2026-10-24
 
 - **Workspace**, modelled on herdr: a workspace per project with the state of its agents rolled

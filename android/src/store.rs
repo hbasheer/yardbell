@@ -14,12 +14,14 @@ pub struct Server {
 // plain file, like the browser keeps its cookies.
 pub struct Store {
     file: PathBuf,
+    seen: PathBuf,
 }
 
 impl Store {
     pub fn new(dir: &Path) -> Store {
         Store {
             file: dir.join("servers.json"),
+            seen: dir.join("seen.json"),
         }
     }
 
@@ -43,6 +45,33 @@ impl Store {
         self.write(&all)
     }
 
+    // Every server the phone has signed in to or heard of, kept after it is forgotten, so it can
+    // still be offered with only a passcode. A phone cannot list the mesh itself.
+    pub fn seen(&self) -> Vec<String> {
+        std::fs::read(&self.seen)
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn remember(&self, servers: &[String]) -> Result<(), String> {
+        let mut seen = self.seen();
+        let before = seen.len();
+        for server in servers {
+            if !seen.contains(server) {
+                seen.push(server.clone());
+            }
+        }
+        if seen.len() == before {
+            return Ok(());
+        }
+        let fail = |e: std::io::Error| format!("can't save the servers seen: {e}");
+        if let Some(dir) = self.seen.parent() {
+            std::fs::create_dir_all(dir).map_err(fail)?;
+        }
+        std::fs::write(&self.seen, serde_json::to_vec(&seen).unwrap_or_default()).map_err(fail)
+    }
+
     pub fn forget(&self, server: &str) -> Result<(), String> {
         let mut all = self.all();
         all.retain(|s| s.server != server);
@@ -63,6 +92,18 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seen_servers_outlive_forgetting() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = Store::new(dir.path());
+        store.remember(&["http://a:4000".into()]).unwrap();
+        store
+            .remember(&["http://a:4000".into(), "http://b:4000".into()])
+            .unwrap();
+        store.forget("http://a:4000").unwrap();
+        assert_eq!(store.seen(), ["http://a:4000", "http://b:4000"]);
+    }
 
     #[test]
     fn servers_are_kept_most_recent_first_and_forgotten() {

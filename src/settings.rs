@@ -1,4 +1,5 @@
-use crate::config::{new_topic, Config, MeshProvider};
+use crate::agents::Agent;
+use crate::config::{Config, MeshProvider};
 use crate::onboarding::peers::Peer;
 use crate::onboarding::valid_host;
 use argon2::{Argon2, PasswordHash, PasswordVerifier};
@@ -30,17 +31,32 @@ pub struct MachineEdit {
 }
 
 #[derive(Debug, Deserialize)]
+pub struct AgentEdit {
+    pub label: String,
+    pub command: String,
+    #[serde(default)]
+    pub resume: String,
+}
+
+fn agent_slug(label: &str) -> String {
+    let slug: String = label
+        .to_lowercase()
+        .chars()
+        .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+        .collect();
+    slug.split('-')
+        .filter(|part| !part.is_empty())
+        .collect::<Vec<_>>()
+        .join("-")
+}
+
+#[derive(Debug, Deserialize)]
 pub struct PhoneEdit {
-    pub server: String,
     pub wait_minutes: u64,
     pub agent_waiting: bool,
     pub session_ended: bool,
     pub machines: bool,
     pub memory: bool,
-    #[serde(default)]
-    pub token: Option<String>,
-    #[serde(default)]
-    pub clear_token: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -267,43 +283,44 @@ impl Settings {
         self.save(&cfg, backup, None)
     }
 
-    pub fn phone_setup(&self) -> Result<(), String> {
-        let mut cfg = self.load()?;
-        if cfg.phone_notifications.on() {
-            return Ok(());
+    pub fn add_agent(&self, edit: &AgentEdit) -> Result<Agent, String> {
+        let label = edit.label.trim();
+        let command = edit.command.trim();
+        if label.is_empty() || command.is_empty() {
+            return Err("enter a name and the command that starts the agent".into());
         }
-        cfg.phone_notifications.topic = new_topic();
+        let name = agent_slug(label);
+        if name.is_empty() {
+            return Err("use letters or digits in the name".into());
+        }
+        let mut cfg = self.load()?;
+        if cfg.agents().iter().any(|a| a.name == name) {
+            return Err(format!("there is already an agent called {name}"));
+        }
+        let resume = edit.resume.trim();
+        let agent = Agent {
+            name,
+            label: Some(label.to_string()),
+            command: command.to_string(),
+            resume: if resume.is_empty() { command } else { resume }.to_string(),
+            process: None,
+            prompt_arg: None,
+        };
+        cfg.agents.push(agent.clone());
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
-        self.save(&cfg, backup, None)
+        self.save(&cfg, backup, None)?;
+        Ok(agent)
     }
 
     pub fn update_phone(&self, edit: &PhoneEdit) -> Result<(), String> {
         let mut cfg = self.load()?;
         let phone = &mut cfg.phone_notifications;
-        phone.server = edit.server.trim().to_string();
         phone.wait_minutes = edit.wait_minutes;
         phone.agent_waiting = edit.agent_waiting;
         phone.session_ended = edit.session_ended;
         phone.machines = edit.machines;
         phone.memory = edit.memory;
-        let token = edit.token.as_deref().map(str::trim).unwrap_or_default();
-        if !token.is_empty() {
-            phone.token = token.to_string();
-        } else if edit.clear_token {
-            phone.token.clear();
-        }
-        cfg.validate().map_err(|e| e.to_string())?;
-        let backup = self.backup_config()?;
-        self.save(&cfg, backup, None)
-    }
-
-    pub fn phone_off(&self) -> Result<(), String> {
-        let mut cfg = self.load()?;
-        if !cfg.phone_notifications.on() {
-            return Ok(());
-        }
-        cfg.phone_notifications.topic.clear();
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
         self.save(&cfg, backup, None)
@@ -383,6 +400,13 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn agent_names_come_from_the_label() {
+        assert_eq!(agent_slug("Amp"), "amp");
+        assert_eq!(agent_slug("  My Agent 2! "), "my-agent-2");
+        assert_eq!(agent_slug("!!"), "");
+    }
     use crate::onboarding::peers::Peer;
     use chrono::TimeZone;
     use std::path::Path;

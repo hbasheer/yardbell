@@ -74,6 +74,10 @@ pub struct Health {
     pub load1: f64,
     #[serde(default)]
     pub cpus: u32,
+    #[serde(default)]
+    pub disk_total_kb: u64,
+    #[serde(default)]
+    pub disk_used_kb: u64,
 }
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -414,13 +418,15 @@ mod tests {
 
     #[test]
     fn parses_machine_health() {
-        let json = r#"{"root":"/r","health":{"mem_total_kb":16252928,"mem_used_kb":10276044,"agent_kb":2293760,"load1":2.41,"cpus":10},"agents":[],"folders":[],"ports":[]}"#;
+        let json = r#"{"root":"/r","health":{"mem_total_kb":16252928,"mem_used_kb":10276044,"agent_kb":2293760,"load1":2.41,"cpus":10,"disk_total_kb":500000000,"disk_used_kb":125000000},"agents":[],"folders":[],"ports":[]}"#;
         let snap = parse(json, &machine("hp", "/r"), Path::new("/r"), None).unwrap();
         let h = snap.health.unwrap();
         assert_eq!(h.mem_total_kb, 16252928);
         assert_eq!(h.mem_used_kb, 10276044);
         assert_eq!(h.agent_kb, 2293760);
         assert_eq!(h.cpus, 10);
+        assert_eq!(h.disk_total_kb, 500000000);
+        assert_eq!(h.disk_used_kb, 125000000);
         assert!((h.load1 - 2.41).abs() < 1e-9);
     }
 

@@ -124,24 +124,30 @@ enum ClientFrame {
     Resize { rows: u16, cols: u16 },
     #[serde(rename = "scroll")]
     Scroll { lines: i32 },
+    #[serde(rename = "view")]
+    View { on: bool },
+    #[serde(rename = "focus")]
+    Focus,
 }
 
-pub enum ScrollJob {
+pub enum Job {
     Lines(i32),
     Bottom(tokio::sync::oneshot::Sender<()>),
+    View(bool),
+    Typed,
 }
 
-pub type Scroller = tokio::sync::mpsc::UnboundedSender<ScrollJob>;
+pub type Control = tokio::sync::mpsc::UnboundedSender<Job>;
 
 // Copy mode takes every key for itself, so typing after a scroll would go nowhere. The pane is
 // put back on the live screen first, and the input waits for that.
-async fn leave_scrollback(scroller: &Option<Scroller>, scrolled_back: &mut bool) {
+async fn leave_scrollback(control: &Option<Control>, scrolled_back: &mut bool) {
     if !std::mem::take(scrolled_back) {
         return;
     }
-    let Some(scroller) = scroller else { return };
+    let Some(control) = control else { return };
     let (done, wait) = tokio::sync::oneshot::channel();
-    if scroller.send(ScrollJob::Bottom(done)).is_ok() {
+    if control.send(Job::Bottom(done)).is_ok() {
         let _ = tokio::time::timeout(std::time::Duration::from_secs(2), wait).await;
     }
 }
@@ -151,7 +157,7 @@ pub async fn bridge<Tx, Rx>(
     mut rx: Rx,
     pty: Pty,
     exit_message: &str,
-    scroller: Option<Scroller>,
+    control: Option<Control>,
 ) where
     Tx: Sink<Message> + Unpin,
     Rx: Stream<Item = Message> + Unpin,
@@ -208,22 +214,35 @@ pub async fn bridge<Tx, Rx>(
             msg = rx.next() => match msg {
                 Some(Message::Text(text)) => match serde_json::from_str::<ClientFrame>(&text) {
                     Ok(ClientFrame::Input { d }) => {
-                        leave_scrollback(&scroller, &mut scrolled_back).await;
+                        leave_scrollback(&control, &mut scrolled_back).await;
+                        if let Some(control) = &control {
+                            let _ = control.send(Job::Typed);
+                        }
                         let _ = in_tx.send(d.into_bytes());
                     }
                     Ok(ClientFrame::Resize { rows, cols }) => {
                         let _ = pty.resize(rows.max(1), cols.max(1));
                     }
                     Ok(ClientFrame::Scroll { lines }) => {
-                        if let Some(scroller) = &scroller {
+                        if let Some(control) = &control {
                             scrolled_back |= lines < 0;
-                            let _ = scroller.send(ScrollJob::Lines(lines));
+                            let _ = control.send(Job::Lines(lines));
+                        }
+                    }
+                    Ok(ClientFrame::View { on }) => {
+                        if let Some(control) = &control {
+                            let _ = control.send(Job::View(on));
+                        }
+                    }
+                    Ok(ClientFrame::Focus) => {
+                        if let Some(control) = &control {
+                            let _ = control.send(Job::Typed);
                         }
                     }
                     Err(e) => tracing::debug!(error = %e, "ignored terminal frame"),
                 },
                 Some(Message::Binary(bytes)) => {
-                    leave_scrollback(&scroller, &mut scrolled_back).await;
+                    leave_scrollback(&control, &mut scrolled_back).await;
                     let _ = in_tx.send(bytes.to_vec());
                 }
                 Some(Message::Close(_)) | None => break,
@@ -391,12 +410,10 @@ mod tests {
             .await
             .unwrap();
         let wait = Duration::from_secs(2);
-        let Ok(Some(ScrollJob::Lines(-4))) = tokio::time::timeout(wait, scroll_rx.recv()).await
-        else {
+        let Ok(Some(Job::Lines(-4))) = tokio::time::timeout(wait, scroll_rx.recv()).await else {
             panic!("scroll frame was not forwarded");
         };
-        let Ok(Some(ScrollJob::Bottom(done))) = tokio::time::timeout(wait, scroll_rx.recv()).await
-        else {
+        let Ok(Some(Job::Bottom(done))) = tokio::time::timeout(wait, scroll_rx.recv()).await else {
             panic!("input did not leave scrollback first");
         };
         done.send(()).unwrap();

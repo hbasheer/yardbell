@@ -49,10 +49,23 @@ function sendInput(data) {
   send({ t: "in", d: data });
 }
 
+// The server lets only the terminal in use set the session's size. A hidden Workspace tab sits
+// in a zero-sized frame, so it must not pull the agent's screen down to its size.
+let shown = null;
+let appAway = false;
+
+function reportView() {
+  const now = !appAway && document.visibilityState === "visible" && window.innerWidth > 0 && window.innerHeight > 0;
+  if (now === shown) return;
+  shown = now;
+  send({ t: "view", on: now });
+}
+
 function resize() {
   if (!term.element) return;
   fit.fit();
   send({ t: "resize", rows: term.rows, cols: term.cols });
+  reportView();
 }
 
 function connect() {
@@ -62,6 +75,7 @@ function connect() {
   socket.onopen = () => {
     attempt = 0;
     document.getElementById("banner").style.display = "none";
+    shown = null;
     resize();
   };
   socket.onmessage = (e) => {
@@ -227,6 +241,20 @@ if (app) {
 
 term.onData(sendInput);
 window.addEventListener("resize", resize);
+document.addEventListener("visibilitychange", reportView);
+window.addEventListener("focus", () => send({ t: "focus" }));
+document.getElementById("term").addEventListener("pointerdown", () => send({ t: "focus" }));
+
+// The phone app says when it goes to the background, which its web view does not report itself.
+function appState(state) {
+  appAway = state === "background";
+  reportView();
+  if (!appAway && shown) send({ t: "focus" });
+}
+window.addEventListener("yardbell-app", (e) => appState(e.detail));
+window.addEventListener("message", (e) => {
+  if (e.origin === location.origin && e.data?.yardbell === "app") appState(e.data.state);
+});
 
 const termEl = document.getElementById("term");
 let scrollQueued = 0;
@@ -355,6 +383,7 @@ Promise.all([
   term.open(termEl);
   fit.fit();
   connect();
+  term.textarea?.addEventListener("focus", () => send({ t: "focus" }));
   if (embedded) {
     term.textarea?.addEventListener("focus", () => parent.postMessage({ yardbell: "focused" }, location.origin));
   } else {

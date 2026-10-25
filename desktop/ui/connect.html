@@ -61,6 +61,14 @@
   .lede { margin: 0 0 20px; color: var(--muted); font-size: 13px; }
   code { font-family: var(--mono); font-size: 0.92em; }
   .info { margin: -8px 0 20px; color: var(--accent-text); font-size: 13px; font-weight: 500; }
+  .found { margin: 0 0 16px; }
+  .found-label { margin: 0 0 6px; color: var(--muted); font-size: 12px; font-weight: 600; }
+  .found-list { display: grid; gap: 6px; }
+  .found-server { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; width: 100%; padding: 8px 12px; border: 1px solid var(--line); border-radius: 8px; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+  .found-server:hover { background: var(--hover, rgba(127,127,127,0.08)); }
+  .found-server.picked { border-color: var(--accent); }
+  .found-name { font-weight: 600; }
+  .found-addr { color: var(--muted); font-size: 12.5px; font-variant-numeric: tabular-nums; }
   label { display: grid; gap: 6px; margin-bottom: 14px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
   input {
     font: 14px var(--sans);
@@ -116,6 +124,10 @@
     <h1>Connect to Yardbell</h1>
     <p class="lede">Enter the address of your Yardbell server and the passcode set with <code>yardbell passcode</code>.</p>
     <p class="info" id="info" role="status" hidden></p>
+    <div class="found" id="found" hidden>
+      <p class="found-label">On your mesh</p>
+      <div class="found-list" id="found-list"></div>
+    </div>
     <label>Server address
       <input type="text" name="server" id="server" placeholder="http://100.64.0.10:4000" autocomplete="url" autocapitalize="off" spellcheck="false" required>
     </label>

@@ -105,6 +105,7 @@ mod tests {
             ended,
             host_terminal: HostTerminal::None,
             mesh: None,
+            server: None,
         }
     }
 

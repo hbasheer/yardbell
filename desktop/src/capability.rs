@@ -9,7 +9,11 @@ use crate::tabs::DASHBOARD;
 use crate::windows;
 
 const IDENTIFIER: &str = "server";
-const PERMISSIONS: [&str; 2] = ["core:event:default", "clipboard-manager:allow-write-text"];
+const PERMISSIONS: [&str; 3] = [
+    "core:event:default",
+    "clipboard-manager:allow-write-text",
+    "core:app:allow-set-app-theme",
+];
 const TERMINAL_PERMISSIONS: [&str; 1] = ["clipboard-manager:allow-read-text"];
 
 #[derive(Default)]
@@ -250,7 +254,8 @@ mod tests {
                     vec!["dashboard", "term-*"],
                     vec![
                         "core:event:default".to_string(),
-                        "clipboard-manager:allow-write-text".to_string()
+                        "clipboard-manager:allow-write-text".to_string(),
+                        "core:app:allow-set-app-theme".to_string()
                     ]
                 ),
                 (
@@ -263,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    fn the_capabilities_resolve_to_events_and_text_clipboard_only() {
+    fn the_capabilities_resolve_to_events_text_clipboard_and_theme_only() {
         let path = concat!(
             env!("CARGO_MANIFEST_DIR"),
             "/gen/schemas/acl-manifests.json"
@@ -290,6 +295,7 @@ mod tests {
         assert_eq!(
             commands,
             [
+                "plugin:app|set_app_theme",
                 "plugin:clipboard-manager|read_text",
                 "plugin:clipboard-manager|write_text",
                 "plugin:event|emit",

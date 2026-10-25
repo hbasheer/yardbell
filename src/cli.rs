@@ -1,7 +1,6 @@
 use crate::config::{expand_tilde, Config};
 use crate::onboarding::ssh_config::SshConfig;
 use crate::onboarding::Onboarding;
-use crate::phone::ntfy::{Ntfy, Target};
 use crate::phone::{base_url, Phone};
 use crate::poller::{AfterTick, Hook, Poller};
 use crate::probe::{MachineStatus, Probe};
@@ -134,7 +133,7 @@ pub async fn serve(
             hook_tunnels.sync(m, &hook_state.ports(&m.name));
         }
     });
-    let phone = Arc::new(Phone::new(Arc::new(Ntfy::new())));
+    let phone = Arc::new(Phone::default());
     let after_state = state.clone();
     let after_tunnels = tunnels.clone();
     let after_phone = phone.clone();
@@ -152,9 +151,7 @@ pub async fn serve(
             base.as_deref(),
             Instant::now(),
         );
-        if !pushes.is_empty() {
-            after_phone.dispatch(Target::from_settings(&cfg.phone_notifications), pushes);
-        }
+        after_phone.inbox.add(&pushes);
     });
     let poller = Arc::new(Poller::new(
         path.clone(),

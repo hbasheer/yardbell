@@ -68,15 +68,12 @@ android {
         }
         getByName("release") {
             signingConfigs.findByName("release")?.let { signingConfig = it }
+            // R8 broke the QR scanner: Tauri plugins and Google ML Kit find their classes by name at
+            // run time, and scanning crashed release builds. Most of the APK is the Rust library,
+            // which R8 does not shrink, so leaving the Java side whole costs little.
             optimization {
-               enable = true
+               enable = false
             }
-            proguardFiles(
-                *fileTree(".") {
-                  include("**/*.pro")
-                  exclude("build/**")
-                }.files.toTypedArray()
-            )
         }
     }
     compileOptions {

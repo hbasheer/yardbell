@@ -98,6 +98,10 @@
   .link { border: 0; background: none; color: var(--accent-text); font: 500 15px var(--sans); padding: 8px 0; }
   .err { color: var(--bad-text); font-size: 14px; min-height: 1.5em; }
   .busy { color: var(--muted); font-size: 14px; }
+  .servers li.found-item { flex-wrap: wrap; }
+  .found-login { flex-basis: 100%; display: flex; gap: 8px; padding: 0 16px 14px; }
+  .found-login input { flex: 1; min-width: 0; height: 48px; }
+  .found-login .btn { width: auto; flex: none; padding: 0 18px; }
 </style>
 </head>
 <body>
@@ -110,6 +114,11 @@
   <section id="saved" hidden>
     <h2>Your servers</h2>
     <ul class="servers" id="servers"></ul>
+  </section>
+
+  <section id="found-section" hidden>
+    <h2>On your mesh</h2>
+    <ul class="servers" id="found"></ul>
   </section>
 
   <section class="panel">
