@@ -95,7 +95,7 @@ What the **Terminal app** button does when you open Yardbell on the host itself:
 
 The mesh VPN your machines share. Yardbell uses it to show VPN status, explain why a machine is
 unreachable, list peers in Add machine, and offer **Turn on**. See
-[README: Mesh VPN support](../README.md#mesh-vpn-support) for what each provider can do. Change it on
+[Mesh VPN support](running.md#mesh-vpn-support) for what each provider can do. Change it on
 the Settings page, which also updates every machine's address for you.
 
 ### `ticket_pattern` (default empty)
@@ -148,7 +148,7 @@ remembers your last pick. Must be a built-in agent or one listed under `agents`.
 
 Yardbell knows Claude Code, Codex, Gemini CLI, Qwen Code, opencode, Copilot CLI, Cursor Agent,
 Crush, Goose and Aider without any config (see
-[README: AI agents](../README.md#ai-agents) for their commands). List agents here to add another
+[AI agents](agents.md#ai-agents) for their commands). List agents here to add another
 one or to change how a built-in one starts:
 
 ```yaml
