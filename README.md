@@ -33,7 +33,7 @@ Yardbell answers all of these on one page.
 ## Features
 
 - **Machine health first.** Connection state (mesh, ssh, snapshot) with the reason when something
-  fails, memory drawn to scale with the agents' own share, CPU load, and mesh VPN status.
+  fails, memory drawn to scale with the agents' own share, CPU load, disk use, and mesh VPN status.
 - **Every agent session.** Claude Code, Codex, Gemini CLI, Qwen Code, opencode, Copilot CLI,
   Cursor Agent, Crush, Goose and Aider out of the box, and any other CLI agent you add in the config.
   Machine, agent, folder, ticket (read from the branch name), branch, working or idle, and whether
@@ -44,22 +44,30 @@ Yardbell answers all of these on one page.
   tunnel down.
 - **A real terminal anywhere.** Open any tmux session in the browser with xterm.js, from the desktop
   or a phone (with an Esc, Tab, Ctrl and arrow key row). Swipe or scroll to read back through the
-  session's history. Closing the tab only detaches.
-- **A workspace like herdr's.** A workspace per project, tabs, and terminals you split and resize,
-  with every agent marked blocked, working, done or idle. The state is read from the agent's own
-  screen with [herdr](https://github.com/herdrdev/herdr)'s detection rules, so a permission prompt
-  shows as blocked the moment it appears.
+  session's history, also in Claude Code's full-screen mode. The screen you are using sets the
+  session's size, so a phone or a hidden tab never squeezes it. Closing the tab only detaches.
+- **A workspace like herdr's.** Every terminal in one sidebar, by machine and folder, with tabs and
+  terminals you split, resize and place side by side, and every agent marked blocked, working,
+  done or idle. The state is read from the agent's own screen with
+  [herdr](https://github.com/herdrdev/herdr)'s detection rules, so a permission prompt shows as
+  blocked the moment it appears.
 - **A desktop app.** For macOS and Linux: the dashboard and every terminal as tabs in a window of
   their own, with the system clipboard, every machine's state in the tray, and a notification when
   an agent is waiting, a session ends, a machine goes down or memory runs out.
 - **Phone notifications.** The Android app tells you when an agent is waiting for you, a session
-  ends, a machine goes down or memory runs low, with no browser tab or desktop app open.
-- **New sessions where you want them.** Pick the agent, browse any folder on any machine, pick the current branch,
-  another branch or a new one. Other branches get their own git worktree, so several sessions can
+  ends, a machine goes down or memory runs low, with no browser tab or desktop app open and no
+  other app to install.
+- **Sign in with only the passcode.** The apps find the Yardbell servers on your mesh and list
+  them, and every page says where its server runs.
+- **Light or dark.** A theme button in every sidebar, saved per device, that the apps' own bars
+  follow too.
+- **New sessions where you want them.** Pick the machine and one of the agents installed there,
+  browse any folder, pick the current branch, another branch or a new one. Other branches get their own git worktree, so several sessions can
   work on one repo at once.
 - **Add machines from the UI.** Lists peers from your mesh VPN, checks reachability, sets up ssh key
   login (you type the password once in a browser terminal), writes the `~/.ssh/config` entry with a
-  backup, and checks that tmux, git and docker are installed and which agents are.
+  backup, checks that tmux, git and docker are installed and which agents are, then lets you pick the
+  project folder from that machine's folders.
 - **Mesh VPN aware.** NordVPN Meshnet, Tailscale, Headscale, NetBird and ZeroTier: status, peer
   lists, a Turn on button, and clear reasons when the VPN is the problem.
 - **Dispatch picks the machine.** Describe a task on the Dispatch page. It finds the machines that
@@ -68,8 +76,9 @@ Yardbell answers all of these on one page.
 - **An MCP server for agents.** Claude Code and other MCP clients can list machines and sessions,
   start sessions, read them and answer them. Sessions can also get your other MCP servers (GitHub,
   Linear and so on) when they start.
-- **Settings without YAML.** Switch VPN provider with an address mapping step, edit machines, change
-  the passcode, log out every other device, and undo the last change.
+- **Settings without YAML.** One section at a time from a section list: switch VPN provider with an
+  address mapping step, edit machines, pair a phone, change the passcode, log out every other
+  device, and undo the last change.
 - **Small and boring to run.** About 9 MB of memory, a launchd or systemd service in one command, a
   `doctor` command that checks everything, and a Docker image for Linux hosts.
 
@@ -170,17 +179,21 @@ Download the file for your system from the
   when Android asks. Then, on a computer, open Yardbell's **Settings → Connect a phone** and press
   **Show pairing code**; in the app tap **Scan a pairing code** and point the camera at it. The
   phone signs in without the passcode (each code works once, for five minutes) and remembers the
-  server. The phone must be on the same mesh VPN. The app shows the server's own pages, so the
-  dashboard, terminals and Dispatch work as in a browser; the back gesture returns to the server
-  list.
+  server. The phone must be on the same mesh VPN. Once it knows one server, the start screen lists
+  the others it finds under **On your mesh**, where signing in takes only the passcode; it keeps
+  offering a server you removed. The app shows the server's own pages, so the dashboard, terminals,
+  Workspace and Dispatch work as in a browser, kept clear of the status bar and the keyboard; the
+  back gesture returns to the server list. It also shows the notifications, see
+  [Phone notifications](#phone-notifications).
 - **iPhone and Windows.** There is no app yet. On an iPhone, open the dashboard in the browser, see
   [Terminal and phone](#terminal-and-phone).
 
 There is no auto-update. To upgrade, install the newer release over the old one.
 
 **First run.** The app asks for the server address and the passcode you set with
-`yardbell passcode`. Type the address you use in a browser, for example `100.64.0.12:4000`;
-`http://` is added when you leave it out. The app signs in and keeps the session in the system
+`yardbell passcode`. The servers it finds on your mesh are listed above the form; click one and
+only the passcode is left. Or type the address you use in a browser, for example
+`100.64.0.12:4000`; `http://` is added when you leave it out. The app signs in and keeps the session in the system
 keychain (the macOS Keychain, or the Secret Service on Linux, such as GNOME Keyring or KWallet).
 The passcode itself is not stored. Later launches go straight to the dashboard, and when the server
 ends the session the app asks for the passcode again.
@@ -286,7 +299,8 @@ that machine.
   button opens a plain shell there (no agent, in its own tmux session), and the **⋯** menu has
   Machine settings, Copy ssh command and Remove machine.
 - **Sessions** show folder, ticket, branch, agent, status and ports. Click a row (or press `Enter`) to
-  open its terminal, use `j` and `k` to move, and `n` to start a new session.
+  open its terminal, use `j` and `k` to move, and `n` to start a new session. On a phone, a card
+  opens only with its **Open** button, so Stop and the other buttons are easy to hit.
 
 Sessions started outside tmux, and sessions that ended, fold into the footer of their machine's
 section, since Yardbell can see them but cannot attach to them. Open the list and press **Move to
@@ -298,7 +312,9 @@ its prompt back.
 
 ![New session dialog with branch picker](docs/screenshots/new-session.png)
 
-1. Pick a machine and an agent. The agent you used last is preselected.
+1. Pick a machine and an agent. The list holds the agents installed on that machine, and the one you
+   used last is preselected. **Other agent…** shows the rest, marked as not found there, and
+   **Add an agent…** saves a new one by its name and command.
 2. Pick a folder from **Recent** or browse the machine. Git repositories show their branch.
 3. For a git repository, stay on the current branch, pick another branch, or create a new one from
    a base. Any branch other than the current one opens in its own worktree at
@@ -307,7 +323,20 @@ its prompt back.
 The footer always says where the session will start. Yardbell starts the agent inside a new tmux
 session through your login shell, so your PATH and environment apply, then opens its terminal.
 **Continue the last conversation** and **Resume** on an ended session use the agent's own resume
-command, listed below.
+command, listed below. Starting an agent in a folder that already has a session starts a second
+one, named like the first with `-2` after it.
+
+### Workspace
+
+The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
+machine, then folder (a workspace), then the sessions in it, each with its state. Click a workspace
+to switch to it and a session to open it in the focused pane. Hover a session for the buttons that
+open it to the right of or below the focused pane. Each workspace has tabs: **+** opens the New
+session dialog in that folder and the new session in a tab of its own, and closing a tab with
+sessions in it asks whether to stop them or keep them running. An empty pane offers to start an
+agent there or to open one of the workspace's sessions. Panes split right or down and resize by
+dragging the border between them; **Keyboard shortcuts** in the sidebar lists the keys. On a phone
+the sidebar comes first and a session opens full screen.
 
 ## AI agents
 
@@ -356,11 +385,13 @@ blue share of the memory bar.
 <img src="docs/screenshots/phone.png" alt="Yardbell on a phone" width="320" align="right">
 
 Turn on the mesh VPN on your phone and open `http://<host-mesh-ip>:4000`. Everything works the same,
-including the terminal. Several devices can attach to one session; the window follows whichever
-device typed last.
+including the terminal. Several devices can attach to one session. The one you are using sets the
+session's size: opening it, clicking in it or typing takes over, and a tab you cannot see or a
+phone in the background never does.
 
 On a phone the machines stay on top, sessions become cards, and the terminal gets a key row for Esc,
-Tab, Ctrl, the arrows and Ctrl-C. Yardbell follows the system light or dark setting on every device.
+Tab, Ctrl, the arrows and Ctrl-C. Yardbell follows the system light or dark setting, or the theme
+you pick with the button in the sidebar, on each device.
 
 <br clear="right">
 
@@ -383,24 +414,32 @@ Browsers only allow automatic clipboard access on `https` pages or `localhost`. 
 Pick a peer from your mesh (phones and tablets are hidden) or type an IP or hostname, then enter the
 username and a short name. Yardbell checks each step and stops with the reason when one fails:
 reachable, ssh key login, the `~/.ssh/config` entry (shown before it is written, backed up first,
-never overwriting an existing `Host`), installed tools, and the project folder.
+never overwriting an existing `Host`) and installed tools. Then it lists that machine's folders,
+starting from the usual project folder when it finds one: click through to the folder that holds
+your projects and press **Use this folder and save**. The new machine gets a port prefix, and the
+last step says which port its apps open at on the host.
 
 ### Settings
 
 ![Settings page](docs/screenshots/settings.png)
 
+Settings shows one section at a time; pick it from the section list (a row of buttons on a phone).
+
+- **Machines:** edit ssh host, mesh address, port prefix, project folder and VPN override, or remove
+  a machine. Each remote machine says what its port prefix means in real ports, for example port
+  3000 opening on the host at 13000, see [Ports](#ports).
 - **Mesh VPN:** choose a provider and press **Check addresses**. Yardbell reads the new VPN's peer list
   and proposes each machine's new address. **Switch VPN** saves `yardbell.yml` and updates the matching
   `HostName` lines in `~/.ssh/config`, with backups of both. If the host's own address changes,
   restart Yardbell (a button does it when Yardbell runs as a service).
-- **Machines:** edit ssh host, mesh address, port prefix, project folder and VPN override, or remove
-  a machine.
-- **Phone notifications:** set up, test and adjust notifications to your phone, see
+- **Connect a phone:** shows a pairing code for the Android app.
+- **Notifications:** which notifications the Android app shows, and whether it is connected, see
   [Phone notifications](#phone-notifications).
 - **Dispatch:** your own instructions for Dispatch, the agent it starts and the model it runs on,
   see [Dispatch](#dispatch).
-- **Agent tools (MCP)** and **MCP servers for sessions:** turn on Yardbell's MCP server and list
-  other MCP servers for the sessions it starts, see [Agent tools (MCP)](#agent-tools-mcp).
+- **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
+  servers for the sessions it starts, see [Agent tools (MCP)](#agent-tools-mcp).
+- **Appearance:** same as the device, light or dark, like the theme button in the sidebar.
 - **Security:** change the passcode (takes effect immediately) and log out every other device.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
@@ -422,8 +461,8 @@ the host.
 
 The **Dispatch** section of Settings adds your own instructions to its prompt (where your
 repositories live, which machine suits which work, how you name branches), picks the agent it
-starts in new sessions, and picks the Claude model that runs Dispatch itself; Haiku is the
-fastest.
+starts in new sessions from the ones installed on your machines, and picks the Claude model that
+runs Dispatch itself; Haiku is the fastest.
 
 ## Agent tools (MCP)
 
