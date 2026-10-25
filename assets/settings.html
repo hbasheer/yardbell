@@ -12,6 +12,7 @@
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/500.css" integrity="sha384-Ddvk1ngA7kUJqPAsRbHuZhooNDKcluU0BTRmYku5LWezQzInPKkiH6/z8GGyw5Ow" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
+<script src="/side.js"></script>
 </head>
 <body data-page="settings">
 <div class="app">
@@ -77,6 +78,13 @@
       <label class="choice"><input type="radio" name="theme" value="light">Light</label>
       <label class="choice"><input type="radio" name="theme" value="dark">Dark</label>
       <p class="help">Saved on this device, so your phone and computer can differ.</p>
+    </div>
+    <div class="panel theme-choices" role="radiogroup" aria-labelledby="term-theme-title">
+      <h3 id="term-theme-title">Terminal</h3>
+      <label class="choice"><input type="radio" name="term-theme" value="app">Same as the theme</label>
+      <label class="choice"><input type="radio" name="term-theme" value="light">Light</label>
+      <label class="choice"><input type="radio" name="term-theme" value="dark">Dark</label>
+      <p class="help">For terminals in Workspace and session tabs. Colours that an agent or tmux sets itself stay as they are, but pale text is darkened on a light terminal so it stays readable.</p>
     </div>
   </section>
 

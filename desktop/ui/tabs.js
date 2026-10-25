@@ -96,6 +96,7 @@ async function init() {
   if (!listening) {
     try {
       await listen("tabs", (event) => render(event.payload));
+      await listen("term-theme", (event) => { document.documentElement.dataset.term = event.payload; });
       listening = true;
     } catch (error) {
       errors.push(error);

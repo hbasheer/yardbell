@@ -587,6 +587,57 @@ $("clear-all").addEventListener("click", async (e) => {
   }
 });
 
+const WIDTH_KEY = "yardbell.dispatch.width";
+const SIDE_WIDTH = { min: 220, normal: 260, max: 560 };
+
+function remembered(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function remember(key, value) {
+  try {
+    if (value === null) localStorage.removeItem(key);
+    else localStorage.setItem(key, value);
+  } catch {}
+}
+
+function setSideWidth(px, save) {
+  const width = Math.round(Math.min(SIDE_WIDTH.max, Math.max(SIDE_WIDTH.min, px)));
+  document.querySelector(".dispatch").style.setProperty("--dispatch-side", `${width}px`);
+  $("dispatch-resize").setAttribute("aria-valuenow", width);
+  if (save) remember(WIDTH_KEY, width === SIDE_WIDTH.normal ? null : String(width));
+}
+
+const resizer = $("dispatch-resize");
+resizer.setAttribute("aria-valuemin", SIDE_WIDTH.min);
+resizer.setAttribute("aria-valuemax", SIDE_WIDTH.max);
+resizer.addEventListener("pointerdown", (e) => {
+  if (e.button !== 0) return;
+  e.preventDefault();
+  const start = e.clientX;
+  const from = $("dispatch-side").getBoundingClientRect().width;
+  resizer.setPointerCapture(e.pointerId);
+  document.body.classList.add("resizing");
+  const move = (ev) => setSideWidth(from + ev.clientX - start, false);
+  const done = () => {
+    resizer.removeEventListener("pointermove", move);
+    document.body.classList.remove("resizing");
+    setSideWidth($("dispatch-side").getBoundingClientRect().width, true);
+  };
+  resizer.addEventListener("pointermove", move);
+  resizer.addEventListener("pointerup", done, { once: true });
+  resizer.addEventListener("pointercancel", done, { once: true });
+});
+resizer.addEventListener("dblclick", () => setSideWidth(SIDE_WIDTH.normal, true));
+resizer.addEventListener("keydown", (e) => {
+  const step = { ArrowLeft: -20, ArrowRight: 20 }[e.key];
+  if (!step) return;
+  e.preventDefault();
+  setSideWidth($("dispatch-side").getBoundingClientRect().width + step, true);
+});
+
+setSideWidth(Number(remembered(WIDTH_KEY)) || SIDE_WIDTH.normal, false);
+
 if (narrow.matches) {
   $("convos").open = false;
   $("tasks").open = false;

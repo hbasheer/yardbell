@@ -301,6 +301,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/app/servers", get(app_servers))
         .route("/style.css", get(|| async { asset("style.css") }))
         .route("/theme.js", get(|| async { asset("theme.js") }))
+        .route("/side.js", get(|| async { asset("side.js") }))
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
         .route("/nav.js", get(|| async { asset("nav.js") }))
         .route("/newsession.js", get(|| async { asset("newsession.js") }))
