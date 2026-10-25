@@ -314,6 +314,12 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/dispatch/conversations/{id}/stop", post(dispatch_stop))
         .route("/dispatch/conversations/{id}/delete", post(dispatch_delete))
         .route("/dispatch/clear", post(dispatch_clear))
+        .route(
+            "/dispatch/tasks",
+            get(dispatch_tasks).post(dispatch_save_task),
+        )
+        .route("/dispatch/tasks/delete", post(dispatch_delete_task))
+        .route("/sessions/{machine}/{name}/keys", post(session_keys))
         .route("/dispatch/ask", post(dispatch_ask))
         .route(
             "/mcp",
@@ -555,6 +561,65 @@ fn hostname() -> String {
         .unwrap_or_else(|| "this machine".into())
 }
 
+async fn dispatch_tasks(AxState(app): AxState<Arc<AppState>>) -> Response {
+    Json(app.dispatch.tasks()).into_response()
+}
+
+#[derive(Deserialize)]
+struct TaskInput {
+    name: String,
+    #[serde(default)]
+    text: String,
+}
+
+async fn dispatch_save_task(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<TaskInput>,
+) -> Result<Response, ApiError> {
+    let tasks = app
+        .dispatch
+        .save_task(&req.name, &req.text)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(tasks).into_response())
+}
+
+async fn dispatch_delete_task(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<TaskInput>,
+) -> Result<Response, ApiError> {
+    let tasks = app
+        .dispatch
+        .delete_task(&req.name)
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(tasks).into_response())
+}
+
+#[derive(Deserialize)]
+struct KeysInput {
+    keys: String,
+}
+
+async fn session_keys(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((machine, name)): UrlPath<(String, String)>,
+    Json(req): Json<KeysInput>,
+) -> Result<Response, ApiError> {
+    if req.keys.is_empty() || req.keys.chars().count() > 8 || req.keys.chars().any(char::is_control)
+    {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "keys must be up to 8 plain characters".into(),
+        ));
+    }
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &machine)?;
+    app.sessions
+        .send_keys(&m, &name, &req.keys)
+        .await
+        .map_err(ApiError::gateway)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
 async fn dispatch_list(AxState(app): AxState<Arc<AppState>>) -> Response {
     Json(app.dispatch.list()).into_response()
 }
@@ -598,7 +663,15 @@ async fn dispatch_ask(
         .transpose()?;
     let (id, rx) = app
         .dispatch
-        .ask(conversation, &req.text, cfg.port, &cfg.dispatch)
+        .ask(
+            conversation,
+            &req.text,
+            cfg.port,
+            &cfg.dispatch,
+            cfg.host()
+                .and_then(|m| cfg.mcp_config_for(&m.name))
+                .as_deref(),
+        )
         .await
         .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
     let first = json!({ "role": "conversation", "id": id });

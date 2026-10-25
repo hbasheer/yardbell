@@ -49,8 +49,10 @@
         <ul class="convo-list" id="convo-list"></ul>
       </details>
       <div class="dispatch-chat">
+        <div class="dispatch-sessions" id="dispatch-sessions" hidden></div>
         <div class="dispatch-log" id="dispatch-log" aria-live="polite"></div>
         <form class="dispatch-compose" id="dispatch-form">
+          <div class="dispatch-tasks" id="dispatch-tasks"></div>
           <textarea name="text" rows="3" placeholder="Fix the flaky checkout test in acme/web on a new branch eng-1234-checkout-flake" required></textarea>
           <div class="dispatch-actions">
             <span class="help" id="dispatch-status" role="status"></span>

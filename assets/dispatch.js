@@ -6,6 +6,20 @@ const narrow = window.matchMedia("(max-width: 900px)");
 let current = new URLSearchParams(location.search).get("c");
 let conversations = [];
 let busy = false;
+let shownEvents = 0;
+let tracked = [];
+let savedTasks = [];
+
+const BUILT_IN = [
+  { name: "What's going on?", text: "What's going on? Summarise every machine and session." },
+  { name: "Plan my Linear tickets", text: "Read my open Linear tickets that are assigned to me. Propose a plan to work through them across my machines, one session per ticket, with the machine, folder, agent and branch for each. Wait for my go-ahead before starting anything." },
+];
+
+const SESSION_WORDS = {
+  blocked: "is waiting for you",
+  idle: "stopped: finished, or waiting for the next step",
+  ended: "ended",
+};
 
 const INTRO = `<div class="empty dispatch-intro" id="dispatch-intro">
   <p>Describe a task. Dispatch finds the machines that have the repository, picks the one with the most room, and starts an agent there with your task.</p>
@@ -109,8 +123,29 @@ function terminalLink(text) {
   }
 }
 
+function termUrl(machine, name) {
+  return `/term/${encodeURIComponent(machine)}/${encodeURIComponent(name)}`;
+}
+
+function sessionCard(event) {
+  const where = `data-machine="${esc(event.machine)}" data-name="${esc(event.name)}"`;
+  const options = (event.options || []).map((o) =>
+    `<button class="btn${o.key === "1" ? " primary" : ""}" type="button" data-keys="${esc(o.key)}" ${where}>${esc(o.label)}</button>`).join("");
+  const review = event.state === "idle"
+    ? `<button class="btn" type="button" data-review ${where} data-path="${esc(event.path || "")}">Review branch</button>` : "";
+  const open = event.state === "ended" ? "" : `<a class="btn quiet" href="${esc(termUrl(event.machine, event.name))}" target="_blank" rel="noopener">Open</a>`;
+  return `<div class="session-card ${esc(event.state)}">
+    <p class="session-card-head"><span class="dot ${event.state === "blocked" ? "bad" : event.state === "ended" ? "" : "ok"}"></span><strong>${esc(event.name)}</strong> on ${esc(event.machine)} ${esc(SESSION_WORDS[event.state] || event.state)}</p>
+    ${event.screen ? `<pre>${esc(event.screen)}</pre>` : ""}
+    <div class="session-card-actions">${options}${review}${open}</div>
+  </div>`;
+}
+
 function show(event) {
   switch (event.role) {
+    case "session":
+      add(sessionCard(event));
+      break;
     case "user":
       add(`<p class="msg user">${esc(event.text)}</p>`);
       break;
@@ -158,6 +193,9 @@ async function open(id) {
   setBusy(false);
   renderList();
   if (narrow.matches) $("convos").open = false;
+  tracked = [];
+  shownEvents = 0;
+  renderTracked();
   if (!id) {
     log.innerHTML = INTRO;
     form.text.focus();
@@ -167,6 +205,9 @@ async function open(id) {
     const convo = await api("GET", `/dispatch/conversations/${encodeURIComponent(id)}`);
     if (current !== id) return;
     convo.events.forEach(show);
+    shownEvents = convo.events.length;
+    tracked = convo.sessions || [];
+    renderTracked();
     setBusy(convo.busy);
     if (convo.busy) watch(id);
   } catch (err) {
@@ -230,8 +271,113 @@ async function ask(text) {
   } finally {
     setBusy(false);
     loadList().catch(() => {});
+    catchUp(false);
   }
 }
+
+// Session cards arrive between turns, as the sessions Dispatch started change.
+async function catchUp(showNew = true) {
+  if (!current || busy) return;
+  const id = current;
+  const convo = await api("GET", `/dispatch/conversations/${encodeURIComponent(id)}`).catch(() => null);
+  if (!convo || current !== id || busy) return;
+  if (showNew) convo.events.slice(shownEvents).forEach(show);
+  shownEvents = convo.events.length;
+  tracked = convo.sessions || [];
+  renderTracked();
+}
+
+async function renderTracked() {
+  const box = $("dispatch-sessions");
+  box.hidden = !tracked.length;
+  if (!tracked.length) { box.innerHTML = ""; return; }
+  const state = await api("GET", "/state").catch(() => null);
+  const live = (t) => state?.sessions.find((s) => s.machine === t.machine && s.tmux === t.name && !s.stale);
+  box.innerHTML = `<span class="dispatch-sessions-label">Sessions</span>` + tracked.map((t) => {
+    const s = live(t);
+    const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : "idle";
+    const tone = !s ? "" : s.activity === "blocked" ? "bad" : s.activity === "active" ? "warn" : "ok";
+    const name = s ? `<a href="${esc(termUrl(t.machine, t.name))}" target="_blank" rel="noopener">${esc(t.name)}</a>` : esc(t.name);
+    return `<span class="dispatch-session"><span class="dot ${tone}"></span>${name}<span class="muted">${esc(t.machine)} · ${word}</span></span>`;
+  }).join("");
+}
+
+function renderTasks() {
+  const chips = [...BUILT_IN.map((t) => ({ ...t, builtIn: true })), ...savedTasks].map((t) =>
+    `<span class="task-chip"><button type="button" class="task-run" data-task="${esc(t.text)}" title="${esc(t.text)}">${esc(t.name)}</button>${t.builtIn ? "" : `<button type="button" class="task-x" data-forget-task="${esc(t.name)}" aria-label="Remove ${esc(t.name)}" title="Remove">×</button>`}</span>`).join("");
+  $("dispatch-tasks").innerHTML = chips + `<span class="task-save" id="task-save"><button type="button" class="btn quiet" id="task-save-btn">Save as task</button></span>`;
+}
+
+async function loadTasks() {
+  savedTasks = await api("GET", "/dispatch/tasks").catch(() => []);
+  renderTasks();
+}
+
+$("dispatch-tasks").addEventListener("click", async (e) => {
+  const run = e.target.closest("[data-task]");
+  if (run) {
+    if (busy) { toast("Dispatch is still working on the last message."); return; }
+    ask(run.dataset.task);
+    return;
+  }
+  const forget = e.target.closest("[data-forget-task]");
+  if (forget) {
+    savedTasks = await api("POST", "/dispatch/tasks/delete", { name: forget.dataset.forgetTask }).catch((err) => { toast(err.message); return savedTasks; });
+    renderTasks();
+    return;
+  }
+  if (e.target.closest("#task-save-btn")) {
+    const text = form.text.value.trim();
+    if (!text) { toast("Type the task first, then save it."); form.text.focus(); return; }
+    $("task-save").innerHTML = `<input type="text" id="task-name" placeholder="Name for this task" aria-label="Task name"><button type="button" class="btn" id="task-name-save">Save</button>`;
+    $("task-name").focus();
+    return;
+  }
+  if (e.target.closest("#task-name-save")) saveTask();
+});
+
+$("dispatch-tasks").addEventListener("keydown", (e) => {
+  if (e.target.id !== "task-name") return;
+  if (e.key === "Enter") { e.preventDefault(); saveTask(); }
+  if (e.key === "Escape") renderTasks();
+});
+
+async function saveTask() {
+  const name = $("task-name").value.trim();
+  if (!name) { $("task-name").focus(); return; }
+  try {
+    savedTasks = await api("POST", "/dispatch/tasks", { name, text: form.text.value.trim() });
+    toast(`Saved "${name}"`, "ok");
+  } catch (err) {
+    toast(err.message);
+  }
+  renderTasks();
+}
+
+log.addEventListener("click", async (e) => {
+  const pick = e.target.closest("[data-keys]");
+  if (pick) {
+    const card = pick.closest(".session-card");
+    card.querySelectorAll("[data-keys]").forEach((b) => { b.disabled = true; });
+    try {
+      await api("POST", `/sessions/${encodeURIComponent(pick.dataset.machine)}/${encodeURIComponent(pick.dataset.name)}/keys`, { keys: pick.dataset.keys });
+      pick.classList.add("picked");
+      toast(`Answered "${pick.textContent}"`, "ok");
+    } catch (err) {
+      card.querySelectorAll("[data-keys]").forEach((b) => { b.disabled = false; });
+      toast(err.message);
+    }
+    return;
+  }
+  const review = e.target.closest("[data-review]");
+  if (review) {
+    if (busy) { toast("Dispatch is still working on the last message."); return; }
+    const { machine, name, path } = review.dataset;
+    ask(`Review the branch that session ${name} on ${machine} worked on${path ? `, in ${path}` : ""}: start a review session as instructed and tell me what it finds.`);
+  }
+});
+
+setInterval(() => catchUp(true), 5000);
 
 form.addEventListener("submit", (e) => {
   e.preventDefault();
@@ -297,6 +443,7 @@ $("clear-all").addEventListener("click", async (e) => {
 });
 
 if (narrow.matches) $("convos").open = false;
+loadTasks();
 loadList()
   .then(() => open(current && conversations.some((c) => c.id === current) ? current : null))
   .catch((err) => toast(err.message));

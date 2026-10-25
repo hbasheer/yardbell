@@ -5,6 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Dispatch follows the sessions it starts: a card in the conversation when one finishes, waits for
+  an answer or ends, with the agent's choices as buttons and **Review branch** to start a reviewer.
+  The conversation lists its sessions and their state.
+- Dispatch splits work with independent parts into several sessions, proposes a plan and waits
+  for your go-ahead before working through tickets, and can use the MCP servers from Settings,
+  such as Linear.
+- Saved tasks above Dispatch's message box, with **What's going on?** and **Plan my Linear
+  tickets** built in.
+- Workspace: a **⋯** menu on each terminal opens it to the right, below or in a new tab, and tabs
+  are renamed in place by double-clicking or from their right-click menu.
+
 ## [0.6.0] - 2026-10-25
 
 - The Android app shows Yardbell's phone notifications itself, with no ntfy app or setup: an agent

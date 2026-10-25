@@ -1,3 +1,7 @@
+mod follow;
+
+pub use follow::{Change, SavedTask};
+
 use crate::config::DispatchSettings;
 use crate::shell::{login_shell, Duration, Runner};
 use rand::Rng;
@@ -44,7 +48,22 @@ unless the user asks for another.
 
 Reply briefly: which machine and folder you chose and why in one or two sentences, and the session \
 name. When the user asks about a running session, use read_session; to answer an agent that is \
-waiting, use send_to_session.";
+waiting, use send_to_session.
+
+When a task has independent parts, such as changes in two repositories or several tickets, start \
+one session per part, each on the best machine for it, and list them all in your reply.
+
+When the user asks you to work through tickets or several tasks, first read them (the user's \
+other tools, such as Linear, may be available to you), then propose a numbered plan: for each \
+one the machine, folder, agent and branch name, and what the agent will do. Start nothing until \
+the user agrees; then start every session in the plan.
+
+When asked to review a session's branch, start a new session in the same folder with a prompt \
+that asks the agent to review the changes on that branch against its base branch, run the tests, \
+and report problems without changing any files.
+
+When asked what is going on, summarise every machine and session briefly: what is working, what \
+is waiting for an answer, what has finished, and machines that are down or low on memory.";
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct Stored {
@@ -56,6 +75,8 @@ struct Stored {
     claude_session: Option<String>,
     #[serde(default)]
     events: Vec<Value>,
+    #[serde(default)]
+    sessions: Vec<follow::Tracked>,
 }
 
 struct Conversation {
@@ -242,8 +263,75 @@ impl Dispatch {
             "id": c.stored.id,
             "title": c.stored.title,
             "events": c.stored.events,
+            "sessions": c.stored.sessions,
             "busy": c.busy,
         }))
+    }
+
+    pub fn observe(&self, view: &crate::state::StateView) -> Vec<Change> {
+        let mut found = Vec::new();
+        let mut touched = Vec::new();
+        {
+            let mut chats = self.shared.lock();
+            for c in chats.values_mut() {
+                let before = c.stored.sessions.clone();
+                found.extend(follow::changes(&c.stored.id, &mut c.stored.sessions, view));
+                if c.stored.sessions != before {
+                    touched.push(c.stored.id.clone());
+                }
+            }
+        }
+        for id in touched {
+            self.shared.save(&id);
+        }
+        found
+    }
+
+    pub fn report(&self, change: &Change, screen: &str) {
+        self.shared
+            .push(&change.conversation, follow::event(change, screen));
+        self.shared.save(&change.conversation);
+    }
+
+    fn tasks_file(&self) -> PathBuf {
+        self.shared.dir.join("tasks.json")
+    }
+
+    pub fn tasks(&self) -> Vec<SavedTask> {
+        std::fs::read(self.tasks_file())
+            .ok()
+            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+            .unwrap_or_default()
+    }
+
+    pub fn save_task(&self, name: &str, text: &str) -> Result<Vec<SavedTask>, String> {
+        let (name, text) = (name.trim(), text.trim());
+        if name.is_empty() || text.is_empty() {
+            return Err("a saved task needs a name and a text".into());
+        }
+        let mut tasks = self.tasks();
+        tasks.retain(|t| t.name != name);
+        tasks.push(SavedTask {
+            name: name.to_string(),
+            text: text.to_string(),
+        });
+        self.write_tasks(&tasks)?;
+        Ok(tasks)
+    }
+
+    pub fn delete_task(&self, name: &str) -> Result<Vec<SavedTask>, String> {
+        let mut tasks = self.tasks();
+        tasks.retain(|t| t.name != name);
+        self.write_tasks(&tasks)?;
+        Ok(tasks)
+    }
+
+    fn write_tasks(&self, tasks: &[SavedTask]) -> Result<(), String> {
+        write_private(
+            &self.tasks_file(),
+            &serde_json::to_vec_pretty(tasks).unwrap_or_default(),
+        )
+        .map_err(|e| format!("cannot save the tasks: {e}"))
     }
 
     pub fn stop(&self, id: &str) {
@@ -311,14 +399,21 @@ impl Dispatch {
         Ok(vec![path])
     }
 
-    fn write_mcp_config(&self, port: u16) -> Result<PathBuf, String> {
-        let config = json!({
-            "mcpServers": { "yardbell": {
+    // The user's own MCP servers, such as Linear, come along so Dispatch can read tickets.
+    fn write_mcp_config(&self, port: u16, extra: Option<&str>) -> Result<PathBuf, String> {
+        let mut servers = extra
+            .and_then(|text| serde_json::from_str::<Value>(text).ok())
+            .and_then(|v| v["mcpServers"].as_object().cloned())
+            .unwrap_or_default();
+        servers.insert(
+            "yardbell".into(),
+            json!({
                 "type": "http",
                 "url": format!("http://127.0.0.1:{port}/mcp"),
                 "headers": { "Authorization": format!("Bearer {}", self.token) },
-            }}
-        });
+            }),
+        );
+        let config = json!({ "mcpServers": servers });
         let path = self.shared.dir.join("mcp.json");
         write_private(&path, config.to_string().as_bytes())
             .map_err(|e| format!("cannot write {}: {e}", path.display()))?;
@@ -376,17 +471,23 @@ impl Dispatch {
         text: &str,
         port: u16,
         settings: &DispatchSettings,
+        extra: Option<&str>,
     ) -> Result<(String, mpsc::Receiver<Value>), String> {
         let text = text.trim();
         if text.is_empty() {
             return Err("type a task first".into());
         }
         let mut argv = self.claude().await?;
-        let config = self.write_mcp_config(port)?;
+        let config = self.write_mcp_config(port, extra)?;
         let cancel = Arc::new(Notify::new());
         let (id, resume) = self.begin(conversation, text, cancel.clone())?;
         self.shared.save(&id);
-        let allowed: Vec<String> = TOOLS.iter().map(|t| format!("{TOOL_PREFIX}{t}")).collect();
+        let mut allowed: Vec<String> = TOOLS.iter().map(|t| format!("{TOOL_PREFIX}{t}")).collect();
+        allowed.extend(
+            extra_servers(extra)
+                .into_iter()
+                .map(|name| format!("mcp__{name}")),
+        );
         argv.extend(
             [
                 "-p",
@@ -481,6 +582,23 @@ async fn run_turn(
         }
         finished |= message["type"] == "result";
         for event in events_of(&message, &mut tools) {
+            if event["role"] == "tool_result"
+                && event["name"] == "start_session"
+                && event["is_error"] != true
+            {
+                if let Some(t) = event["text"].as_str().and_then(follow::started) {
+                    if let Some(c) = shared.lock().get_mut(id) {
+                        let known = c
+                            .stored
+                            .sessions
+                            .iter()
+                            .any(|s| s.machine == t.machine && s.name == t.name);
+                        if !known {
+                            c.stored.sessions.push(t);
+                        }
+                    }
+                }
+            }
             shared.push(id, event.clone());
             let _ = tx.send(event).await;
         }
@@ -496,6 +614,17 @@ async fn run_turn(
         });
     }
     Ok(())
+}
+
+fn extra_servers(extra: Option<&str>) -> Vec<String> {
+    extra
+        .and_then(|text| serde_json::from_str::<Value>(text).ok())
+        .and_then(|v| {
+            v["mcpServers"]
+                .as_object()
+                .map(|m| m.keys().cloned().collect())
+        })
+        .unwrap_or_default()
 }
 
 fn short(text: &str) -> String {
@@ -656,6 +785,105 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn sessions_it_starts_are_followed_into_the_conversation() {
+        use crate::config::HostTerminal;
+        use crate::snapshot::Activity;
+        use crate::state::{MachineView, SessionView, StateView};
+        let dir = tempfile::tempdir().unwrap();
+        let args = dir.path().join("args");
+        let script = format!(
+            r#"printf '%s\n' "$@" > {}
+echo '{{"type":"system","subtype":"init","session_id":"s1"}}'
+echo '{{"type":"assistant","message":{{"content":[{{"type":"tool_use","id":"t1","name":"mcp__yardbell__start_session","input":{{}}}}]}}}}'
+echo '{{"type":"user","message":{{"content":[{{"type":"tool_result","tool_use_id":"t1","content":"{{\"machine\":\"hp\",\"name\":\"hp-app\",\"path\":\"/r/app\"}}"}}]}}}}'
+echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
+            args.display()
+        );
+        let dispatch = fake_claude(dir.path(), &script);
+        let linear =
+            r#"{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/mcp"}}}"#;
+        let (id, rx) = dispatch
+            .ask(
+                None,
+                "fix it",
+                4000,
+                &DispatchSettings::default(),
+                Some(linear),
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let config = std::fs::read_to_string(dir.path().join("dispatch/mcp.json")).unwrap();
+        assert!(
+            config.contains("mcp.linear.app") && config.contains("yardbell"),
+            "{config}"
+        );
+        assert!(std::fs::read_to_string(&args)
+            .unwrap()
+            .contains("mcp__linear"));
+        assert_eq!(dispatch.get(&id).unwrap()["sessions"][0]["name"], "hp-app");
+
+        let view = |activity: Activity| StateView {
+            agents: vec![],
+            default_agent: "claude".into(),
+            machines: vec![MachineView {
+                name: "hp".into(),
+                up: true,
+                reason: None,
+                last_seen: None,
+                local: true,
+                health: None,
+                mesh_on: None,
+            }],
+            folders: vec![],
+            sessions: vec![SessionView {
+                id: "x".into(),
+                machine: "hp".into(),
+                agent: "claude".into(),
+                pid: 1,
+                folder: "app".into(),
+                ticket: "-".into(),
+                branch: "main".into(),
+                activity,
+                attachable: true,
+                tmux: Some("hp-app".into()),
+                stale: false,
+                ports: vec![],
+            }],
+            ended: vec![],
+            host_terminal: HostTerminal::None,
+            mesh: None,
+            server: None,
+        };
+        assert!(dispatch.observe(&view(Activity::Active)).is_empty());
+        let changes = dispatch.observe(&view(Activity::Blocked));
+        assert_eq!(changes.len(), 1);
+        dispatch.report(&changes[0], "Run the migration?\n ❯ 1. Yes\n   2. No");
+        let events = dispatch.get(&id).unwrap()["events"].clone();
+        let card = events.as_array().unwrap().last().unwrap().clone();
+        assert_eq!(card["role"], "session");
+        assert_eq!(card["state"], "blocked");
+        assert_eq!(card["options"][1]["label"], "No");
+    }
+
+    #[test]
+    fn saved_tasks_are_kept_by_name() {
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().to_path_buf());
+        dispatch
+            .save_task("Tests", "run the tests everywhere")
+            .unwrap();
+        dispatch.save_task("Tests", "run all tests").unwrap();
+        dispatch.save_task("Deps", "update dependencies").unwrap();
+        let names: Vec<String> = dispatch.tasks().into_iter().map(|t| t.name).collect();
+        assert_eq!(names, ["Tests", "Deps"]);
+        assert_eq!(dispatch.tasks()[0].text, "run all tests");
+        dispatch.delete_task("Tests").unwrap();
+        assert_eq!(dispatch.tasks().len(), 1);
+        assert!(dispatch.save_task(" ", "x").is_err());
+    }
+
+    #[tokio::test]
     async fn conversations_resume_their_own_claude_session_and_survive_a_restart() {
         let dir = tempfile::tempdir().unwrap();
         let args = dir.path().join("args");
@@ -673,6 +901,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
                 "fix the login bug",
                 4000,
                 &DispatchSettings::default(),
+                None,
             )
             .await
             .unwrap();
@@ -690,7 +919,13 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         assert!(config.contains(&format!("Bearer {}", dispatch.token())));
 
         let (second, rx) = dispatch
-            .ask(None, "update the docs", 4000, &DispatchSettings::default())
+            .ask(
+                None,
+                "update the docs",
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
             .await
             .unwrap();
         drain(rx).await;
@@ -707,6 +942,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
                 "and logout",
                 4000,
                 &DispatchSettings::default(),
+                None,
             )
             .await
             .unwrap();
@@ -739,7 +975,10 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
             model: "haiku".into(),
             ..DispatchSettings::default()
         };
-        let (_, rx) = dispatch.ask(None, "hi", 4000, &settings).await.unwrap();
+        let (_, rx) = dispatch
+            .ask(None, "hi", 4000, &settings, None)
+            .await
+            .unwrap();
         drain(rx).await;
         assert!(std::fs::read_to_string(&args)
             .unwrap()
@@ -751,7 +990,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         let dir = tempfile::tempdir().unwrap();
         let dispatch = fake_claude(dir.path(), "echo 'not logged in' >&2; exit 1");
         let (_, rx) = dispatch
-            .ask(None, "hi", 4000, &DispatchSettings::default())
+            .ask(None, "hi", 4000, &DispatchSettings::default(), None)
             .await
             .unwrap();
         assert_eq!(
@@ -768,12 +1007,18 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         let dir = tempfile::tempdir().unwrap();
         let dispatch = fake_claude(dir.path(), "sleep 30");
         let (busy, rx) = dispatch
-            .ask(None, "long task", 4000, &DispatchSettings::default())
+            .ask(None, "long task", 4000, &DispatchSettings::default(), None)
             .await
             .unwrap();
         assert_eq!(
             dispatch
-                .ask(Some(&busy), "again", 4000, &DispatchSettings::default())
+                .ask(
+                    Some(&busy),
+                    "again",
+                    4000,
+                    &DispatchSettings::default(),
+                    None
+                )
                 .await
                 .unwrap_err(),
             "this conversation is still answering"
@@ -782,7 +1027,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
 
         let quick = fake_claude(dir.path(), "true");
         let (idle, rx2) = quick
-            .ask(None, "short task", 4000, &DispatchSettings::default())
+            .ask(None, "short task", 4000, &DispatchSettings::default(), None)
             .await
             .unwrap();
         drain(rx2).await;
@@ -812,7 +1057,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         let dispatch = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().join("d"));
         assert_eq!(
             dispatch
-                .ask(None, "hi", 4000, &DispatchSettings::default())
+                .ask(None, "hi", 4000, &DispatchSettings::default(), None)
                 .await
                 .unwrap_err(),
             "Claude Code is not installed on this machine, Dispatch needs it"

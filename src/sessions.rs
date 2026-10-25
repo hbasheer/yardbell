@@ -224,6 +224,13 @@ impl Sessions {
         self.exec(m, &cmd).await
     }
 
+    // Keys typed as they are, without Enter, for picking an agent's numbered choice.
+    pub async fn send_keys(&self, m: &Machine, name: &str, keys: &str) -> Result<(), String> {
+        let target = quote(&format!("{}:", exact(name)));
+        self.exec(m, &format!("tmux send-keys -t {target} -l {}", quote(keys)))
+            .await
+    }
+
     pub async fn scroll(&self, m: &Machine, name: &str, lines: i32) -> Result<(), String> {
         self.exec(m, &scroll_command(name, lines)).await
     }
