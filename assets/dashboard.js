@@ -1,3 +1,6 @@
+import { html, render as litRender } from "/vendor/lit-html/lit-html.js";
+import { repeat } from "/vendor/lit-html/directives/repeat.js";
+
 const $ = (id) => document.getElementById(id);
 const onHost = ["localhost", "127.0.0.1"].includes(location.hostname);
 const Nav = window.YardbellNav;
@@ -12,16 +15,12 @@ const filters = { q: "", status: "all" };
 let sshHosts = null;
 
 const ICONS = {
-  open: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5 6 7.5 3 10.5M7.5 11.5H13"/></svg>',
-  external: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3H13v3.5M13 3 7.5 8.5M11 9.5V13H3V5h3.5"/></svg>',
-  chevron: '<svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>',
-  plus: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>',
-  more: '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="0.6"/><circle cx="8" cy="8" r="0.6"/><circle cx="12.5" cy="8" r="0.6"/></svg>',
+  open: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5 6 7.5 3 10.5M7.5 11.5H13"/></svg>`,
+  external: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3H13v3.5M13 3 7.5 8.5M11 9.5V13H3V5h3.5"/></svg>`,
+  chevron: html`<svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg>`,
+  plus: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>`,
+  more: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="0.6"/><circle cx="8" cy="8" r="0.6"/><circle cx="12.5" cy="8" r="0.6"/></svg>`,
 };
-
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
 
 function short(path) {
   return String(path ?? "").replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
@@ -105,11 +104,11 @@ function renderMeshBanner(mesh) {
   banner.hidden = !mesh || mesh.on !== false;
   if (banner.hidden) return;
   const button = mesh.can_turn_on
-    ? `<button class="btn primary" type="button" data-act="mesh-on">Turn on ${esc(mesh.label)}</button>` : "";
-  banner.innerHTML = `<div class="banner-text">
-      <strong>${esc(mesh.label)} is off on this machine.</strong>
-      <span>Other machines and your phone cannot reach Yardbell or its tunnels. ${esc(mesh.hint || "")}</span>
-    </div>${button}`;
+    ? html`<button class="btn primary" type="button" data-act="mesh-on">Turn on ${mesh.label}</button>` : "";
+  litRender(html`<div class="banner-text">
+      <strong>${mesh.label} is off on this machine.</strong>
+      <span>Other machines and your phone cannot reach Yardbell or its tunnels. ${mesh.hint || ""}</span>
+    </div>${button}`, banner);
 }
 
 function memory(m) {
@@ -122,9 +121,9 @@ function memory(m) {
   const pct = Nav.memPct(m);
   const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
   const label = `Memory ${pct}% used of ${gb(h.mem_total_kb)} GB: agents ${gb(h.agent_kb)} GB, other ${gb(otherKb)} GB, free ${gb(freeKb)} GB`;
-  return `<div class="mem${level}">
+  return html`<div class="mem${level}">
     <div class="mem-head"><span>Memory <span class="mem-pct">${pct}% used</span> of ${gb(h.mem_total_kb)} GB</span></div>
-    <div class="mem-bar" role="img" aria-label="${esc(label)}">
+    <div class="mem-bar" role="img" aria-label=${label}>
       <span class="mem-agents" style="width:${(agents * 100).toFixed(1)}%"></span>
       <span class="mem-other" style="width:${((used - agents) * 100).toFixed(1)}%"></span>
     </div>
@@ -143,32 +142,32 @@ function disk(m) {
   const freeKb = Math.max(h.disk_total_kb - h.disk_used_kb, 0);
   const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
   const label = `Disk ${pct}% used of ${gb(h.disk_total_kb)} GB, ${gb(freeKb)} GB free`;
-  return `<div class="mem disk${level}">
+  return html`<div class="mem disk${level}">
     <div class="mem-head"><span>Disk <span class="mem-pct">${pct}% used</span> of ${gb(h.disk_total_kb)} GB</span><span>${gb(freeKb)} GB free</span></div>
-    <div class="mem-bar" role="img" aria-label="${esc(label)}">
+    <div class="mem-bar" role="img" aria-label=${label}>
       <span class="mem-other" style="width:${Math.min(pct, 100)}%"></span>
     </div>
   </div>`;
 }
 
 function statusBadge(s) {
-  if (s.stale) return `<span class="badge">Last known</span>`;
-  if (s.activity === "blocked") return `<span class="badge blocked" title="Waiting for your answer or approval">Needs you</span>`;
+  if (s.stale) return html`<span class="badge">Last known</span>`;
+  if (s.activity === "blocked") return html`<span class="badge blocked" title="Waiting for your answer or approval">Needs you</span>`;
   return s.activity === "active"
-    ? `<span class="badge busy">Working</span>`
-    : `<span class="badge">Idle</span>`;
+    ? html`<span class="badge busy">Working</span>`
+    : html`<span class="badge">Idle</span>`;
 }
 
 function ports(s) {
   if (!s.ports.length) return "";
-  return `<ul class="port-list">${s.ports.map((p) => {
-    const name = `<span class="svc">${esc(p.service)}</span><span class="num">:${p.local ?? p.remote}</span>`;
-    const state = `<span class="dot ${tone(p.status)}" title="${esc(p.status)}"></span>`;
+  return html`<ul class="port-list">${s.ports.map((p) => {
+    const name = html`<span class="svc">${p.service}</span><span class="num">:${p.local ?? p.remote}</span>`;
+    const state = html`<span class="dot ${tone(p.status)}" title=${p.status}></span>`;
     const body = p.url
-      ? `<a href="${esc(p.url)}" target="_blank" rel="noopener" title="${esc(p.status)}, remote port ${p.remote}">${state}${name}${ICONS.external}</a>`
-      : `<span>${state}${name}</span>`;
-    return `<li>${body}<span class="port-status ${tone(p.status)}">${esc(p.status)}</span></li>`;
-  }).join("")}</ul>`;
+      ? html`<a href=${p.url} target="_blank" rel="noopener" title="${p.status}, remote port ${p.remote}">${state}${name}${ICONS.external}</a>`
+      : html`<span>${state}${name}</span>`;
+    return html`<li>${body}<span class="port-status ${tone(p.status)}">${p.status}</span></li>`;
+  })}</ul>`;
 }
 
 function termUrl(s) {
@@ -178,10 +177,10 @@ function termUrl(s) {
 function actions(s) {
   if (!s.attachable || s.stale) return "";
   const host = onHost && current.host_terminal !== "none"
-    ? `<button class="btn" type="button" data-act="host" data-machine="${esc(s.machine)}" data-name="${esc(s.tmux)}">Terminal app</button>` : "";
-  return `<div class="row-actions">
-    <a class="btn" href="${termUrl(s)}" target="_blank" rel="noopener">${ICONS.open}Open</a>${host}
-    <button class="btn quiet danger stop" type="button" data-act="stop" data-machine="${esc(s.machine)}" data-name="${esc(s.tmux)}">Stop</button>
+    ? html`<button class="btn" type="button" data-act="host" data-machine=${s.machine} data-name=${s.tmux}>Terminal app</button>` : "";
+  return html`<div class="row-actions">
+    <a class="btn" href=${termUrl(s)} target="_blank" rel="noopener">${ICONS.open}Open</a>${host}
+    <button class="btn quiet danger stop" type="button" data-act="stop" data-machine=${s.machine} data-name=${s.tmux}>Stop</button>
   </div>`;
 }
 
@@ -211,43 +210,39 @@ function agentLabel(name) {
 }
 
 function identity(s, extra = "") {
-  const ticket = s.ticket !== "-" ? `<span class="ticket">${esc(s.ticket)}</span>` : "";
-  const branch = s.branch ? `<span class="branch">${esc(s.branch)}</span>` : "";
-  const agent = s.agent ? `<span class="agent">${esc(agentLabel(s.agent))}</span>` : "";
-  return `<div class="s-line"><span class="folder">${esc(short(s.folder))}</span>${ticket}${extra}</div>
+  const ticket = s.ticket !== "-" ? html`<span class="ticket">${s.ticket}</span>` : "";
+  const branch = s.branch ? html`<span class="branch">${s.branch}</span>` : "";
+  const agent = s.agent ? html`<span class="agent">${agentLabel(s.agent)}</span>` : "";
+  return html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}${extra}</div>
     <div class="s-sub">${branch}${agent}</div>`;
 }
 
 function sessionRow(s) {
-  const openable = s.attachable && !s.stale;
-  const attrs = openable
-    ? ` class="s-row openable${focusedId === s.id ? " kb" : ""}" data-id="${esc(s.id)}" data-href="${esc(termUrl(s))}" tabindex="0" aria-label="Open ${esc(short(s.folder))} on ${esc(s.machine)}"`
-    : ` class="s-row${s.stale ? " stale" : ""}"`;
-  return `<li${attrs}>
-    <div class="s-main">${identity(s)}</div>
+  const cells = html`<div class="s-main">${identity(s)}</div>
     <div class="s-status">${statusBadge(s)}</div>
     <div class="s-ports">${ports(s)}</div>
-    <div class="s-actions">${actions(s)}</div>
-  </li>`;
+    <div class="s-actions">${actions(s)}</div>`;
+  if (!s.attachable || s.stale) return html`<li class="s-row${s.stale ? " stale" : ""}">${cells}</li>`;
+  return html`<li class="s-row openable${focusedId === s.id ? " kb" : ""}" data-id=${s.id} data-href=${termUrl(s)} tabindex="0" aria-label="Open ${short(s.folder)} on ${s.machine}">${cells}</li>`;
 }
 
 function looseRow(s) {
-  const busy = s.activity === "active" ? `<span class="badge busy" title="Estimated from CPU use">Working</span>` : "";
-  return `<li class="sub-row">
+  const busy = s.activity === "active" ? html`<span class="badge busy" title="Estimated from CPU use">Working</span>` : "";
+  return html`<li class="sub-row">
     <div class="s-main">${identity(s, busy)}</div>
     <div class="row-actions">
-      <button class="btn" type="button" data-act="move" data-machine="${esc(s.machine)}" data-pid="${s.pid}" data-folder="${esc(short(s.folder))}" data-agent="${esc(s.agent)}" data-busy="${s.activity === "active"}">Move to tmux</button>
-      <button class="btn quiet danger" type="button" data-act="stop-pid" data-machine="${esc(s.machine)}" data-pid="${s.pid}" data-folder="${esc(short(s.folder))}" data-agent="${esc(s.agent)}" data-busy="${s.activity === "active"}">Stop</button>
+      <button class="btn" type="button" data-act="move" data-machine=${s.machine} data-pid=${s.pid} data-folder=${short(s.folder)} data-agent=${s.agent} data-busy=${s.activity === "active"}>Move to tmux</button>
+      <button class="btn quiet danger" type="button" data-act="stop-pid" data-machine=${s.machine} data-pid=${s.pid} data-folder=${short(s.folder)} data-agent=${s.agent} data-busy=${s.activity === "active"}>Stop</button>
     </div>
   </li>`;
 }
 
 function endedRow(e) {
-  return `<li class="sub-row">
+  return html`<li class="sub-row">
     <div class="s-main">${identity({ ...e, branch: "" })}</div>
     <div class="row-actions">
-      <button class="btn" type="button" data-act="resume" data-machine="${esc(e.machine)}" data-folder="${esc(e.folder)}" data-agent="${esc(e.agent)}">Resume</button>
-      <button class="btn quiet" type="button" data-act="forget" data-id="${esc(e.id)}">Forget</button>
+      <button class="btn" type="button" data-act="resume" data-machine=${e.machine} data-folder=${e.folder} data-agent=${e.agent}>Resume</button>
+      <button class="btn quiet" type="button" data-act="forget" data-id=${e.id}>Forget</button>
     </div>
   </li>`;
 }
@@ -261,18 +256,18 @@ function disclosure(kind, m, count, label, body) {
   const open = filtering() || remembered(panelKey(kind, m.name)) === "1";
   const id = `${kind}-${m.name.replace(/[^a-z0-9-]/gi, "-")}`;
   return {
-    toggle: `<button type="button" class="mg-toggle" data-toggle="${kind}" data-machine="${esc(m.name)}" aria-expanded="${open}" aria-controls="${id}">${ICONS.chevron}<span class="mg-toggle-count">${count}</span>${label}</button>`,
-    panel: `<div class="mg-panel" id="${id}"${open ? "" : " hidden"}>${body}</div>`,
+    toggle: html`<button type="button" class="mg-toggle" data-toggle=${kind} data-machine=${m.name} aria-expanded=${open} aria-controls=${id}>${ICONS.chevron}<span class="mg-toggle-count">${count}</span>${label}</button>`,
+    panel: html`<div class="mg-panel" id=${id} ?hidden=${!open}>${body}</div>`,
   };
 }
 
 function machineActions(m) {
-  const name = esc(m.name);
+  const name = m.name;
   const work = m.up
-    ? `<button class="btn icon-btn quiet" type="button" data-act="new" data-machine="${name}" aria-label="New session on ${name}" title="New session on ${name}">${ICONS.plus}</button>
-       <button class="btn icon-btn quiet" type="button" data-act="shell" data-machine="${name}" aria-label="Open a shell on ${name}" title="Open a shell on ${name}">${ICONS.open}</button>`
+    ? html`<button class="btn icon-btn quiet" type="button" data-act="new" data-machine=${name} aria-label="New session on ${name}" title="New session on ${name}">${ICONS.plus}</button>
+       <button class="btn icon-btn quiet" type="button" data-act="shell" data-machine=${name} aria-label="Open a shell on ${name}" title="Open a shell on ${name}">${ICONS.open}</button>`
     : "";
-  return `<div class="mg-actions">${work}<button class="btn icon-btn quiet" type="button" data-act="more" data-machine="${name}" data-local="${m.local}" aria-label="More for ${name}" title="More" aria-haspopup="menu" aria-expanded="false">${ICONS.more}</button></div>`;
+  return html`<div class="mg-actions">${work}<button class="btn icon-btn quiet" type="button" data-act="more" data-machine=${name} data-local=${m.local} aria-label="More for ${name}" title="More" aria-haspopup="menu" aria-expanded="false">${ICONS.more}</button></div>`;
 }
 
 function group(state, m) {
@@ -283,28 +278,28 @@ function group(state, m) {
   if (filtering() && !rows.length && !loose.length && !ended.length) return "";
   const live = mine.filter((s) => !s.stale).length;
   const collapsed = !filtering() && remembered(`collapsed:${m.name}`) === "1";
-  const looseHelp = `<p class="loose-help">Yardbell can only open sessions that run in tmux. Move one to stop its agent and start it again in tmux with the same conversation, or <a href="https://github.com/hbasheer/yardbell#making-every-session-openable" target="_blank" rel="noopener">start agents inside tmux</a> from now on.</p>`;
-  const outside = disclosure("loose", m, loose.length, "outside tmux", `${looseHelp}<ul class="sub-list">${loose.map(looseRow).join("")}</ul>`);
-  const gone = disclosure("ended", m, ended.length, "ended", `<ul class="sub-list">${ended.map(endedRow).join("")}</ul>`);
+  const looseHelp = html`<p class="loose-help">Yardbell can only open sessions that run in tmux. Move one to stop its agent and start it again in tmux with the same conversation, or <a href="https://github.com/hbasheer/yardbell#making-every-session-openable" target="_blank" rel="noopener">start agents inside tmux</a> from now on.</p>`;
+  const outside = disclosure("loose", m, loose.length, "outside tmux", html`${looseHelp}<ul class="sub-list">${repeat(loose, (s) => s.id, looseRow)}</ul>`);
+  const gone = disclosure("ended", m, ended.length, "ended", html`<ul class="sub-list">${repeat(ended, (e) => e.id, endedRow)}</ul>`);
   const empty = filtering()
-    ? `<li class="s-empty"><span>No matching open sessions</span></li>`
+    ? html`<li class="s-empty"><span>No matching open sessions</span></li>`
     : m.up
-    ? `<li class="s-empty"><span>No open sessions</span><button class="btn quiet" type="button" data-act="new" data-machine="${esc(m.name)}">Start one</button></li>`
-    : `<li class="s-empty"><span>Unreachable. Its sessions reappear when it reconnects.</span></li>`;
+    ? html`<li class="s-empty"><span>No open sessions</span><button class="btn quiet" type="button" data-act="new" data-machine=${m.name}>Start one</button></li>`
+    : html`<li class="s-empty"><span>Unreachable. Its sessions reappear when it reconnects.</span></li>`;
   const foot = outside.toggle || gone.toggle
-    ? `<div class="mg-foot">${outside.toggle}${gone.toggle}</div>${outside.panel}${gone.panel}` : "";
+    ? html`<div class="mg-foot">${outside.toggle}${gone.toggle}</div>${outside.panel}${gone.panel}` : "";
   const bodyId = `mg-body-${m.name.replace(/[^a-z0-9-]/gi, "-")}`;
-  const body = collapsed ? "" : `<div id="${bodyId}"><ul class="s-list">${rows.length ? rows.map(sessionRow).join("") : empty}</ul>${foot}</div>`;
+  const body = collapsed ? "" : html`<div id=${bodyId}><ul class="s-list">${rows.length ? repeat(rows, (s) => s.id, sessionRow) : empty}</ul>${foot}</div>`;
   const state_ = m.up ? (Nav.memPct(m) >= Nav.RATED ? " hot" : "") : " down";
   const dot = m.up ? (state_ === " hot" ? "warn" : "ok") : "bad";
   const fold = filtering()
-    ? `<span class="mg-fold" aria-hidden="true"></span>`
-    : `<button type="button" class="mg-fold" data-collapse="${esc(m.name)}" aria-expanded="${!collapsed}" aria-controls="${bodyId}" aria-label="${collapsed ? "Show" : "Hide"} sessions on ${esc(m.name)}">${ICONS.chevron}</button>`;
-  return `<section class="mgroup${state_}${collapsed ? " collapsed" : ""}" aria-labelledby="mg-${esc(m.name)}">
+    ? html`<span class="mg-fold" aria-hidden="true"></span>`
+    : html`<button type="button" class="mg-fold" data-collapse=${m.name} aria-expanded=${!collapsed} aria-controls=${bodyId} aria-label="${collapsed ? "Show" : "Hide"} sessions on ${m.name}">${ICONS.chevron}</button>`;
+  return html`<section class="mgroup${state_}${collapsed ? " collapsed" : ""}" aria-labelledby="mg-${m.name}">
     <header class="mg-head">
       <div class="mg-id">
-        <div class="mg-title">${fold}<span class="dot ${dot}"></span><h2 id="mg-${esc(m.name)}">${esc(m.name)}</h2>${m.up ? `<span class="mg-count">${plural(live, "session")}</span>` : ""}</div>
-        <p class="mg-conn">${esc(connection(m))}</p>
+        <div class="mg-title">${fold}<span class="dot ${dot}"></span><h2 id="mg-${m.name}">${m.name}</h2>${m.up ? html`<span class="mg-count">${plural(live, "session")}</span>` : ""}</div>
+        <p class="mg-conn">${connection(m)}</p>
       </div>
       <div class="health">${memory(m)}${disk(m)}</div>
       ${machineActions(m)}
@@ -328,36 +323,21 @@ function renderGroups(state) {
   renderCounts(state);
   const visible = state.sessions.filter((s) => (!selected || s.machine === selected) && (s.attachable || s.stale) && matches(s));
   if (focusedId && !visible.some((s) => s.id === focusedId)) focusedId = "";
-  $("groups").classList.toggle("no-ports", !visible.some((s) => s.ports.length));
-  const key = focusKey(document.activeElement);
-  if (!machines.length) {
-    $("groups").innerHTML = `<div class="empty"><p>No machines yet. Add one to see its agent sessions here.</p><a class="btn primary" href="/add">Add machine</a></div>`;
-  } else {
-    const html = machines.map((m) => group(state, m)).join("");
-    $("groups").innerHTML = html || `<div class="empty"><p>No sessions match${filters.q ? ` "${esc(filters.q)}"` : ""}.</p><button class="btn" type="button" data-act="clear-filters">Clear filters</button></div>`;
-  }
-  refocus(key);
-  keepMenuTrigger();
-}
-
-const FOCUS_KEYS = ["data-act", "data-collapse", "data-toggle", "data-machine", "data-name", "data-pid", "data-id", "data-folder", "href"];
-
-function focusKey(el) {
   const groups = $("groups");
-  // The desktop app keeps the dashboard loaded behind session tabs, and WebKitGTK hands keyboard
-  // focus to a hidden webview whose page calls focus(), taking it from the terminal.
-  if (!document.hasFocus()) return null;
-  if (!(el instanceof HTMLElement) || el === groups || !groups.contains(el)) return null;
-  const attrs = FOCUS_KEYS.filter((a) => el.hasAttribute(a)).map((a) => `[${a}="${CSS.escape(el.getAttribute(a))}"]`).join("");
-  if (!attrs) return null;
-  const selector = el.localName + attrs;
-  return { selector, index: [...groups.querySelectorAll(selector)].indexOf(el), visible: el.matches(":focus-visible") };
-}
-
-function refocus(key) {
-  if (!key) return;
-  const found = $("groups").querySelectorAll(key.selector);
-  (found[key.index] || found[0])?.focus({ preventScroll: true, focusVisible: key.visible });
+  groups.classList.toggle("no-ports", !visible.some((s) => s.ports.length));
+  // lit renders after whatever the container already holds, so the page's static placeholder has to go.
+  groups.querySelector(":scope > .checking")?.remove();
+  const shown = machines.map((m) => group(state, m));
+  let view;
+  if (!machines.length) {
+    view = html`<div class="empty"><p>No machines yet. Add one to see its agent sessions here.</p><a class="btn primary" href="/add">Add machine</a></div>`;
+  } else if (shown.every((g) => g === "")) {
+    view = html`<div class="empty"><p>No sessions match${filters.q ? ` "${filters.q}"` : ""}.</p><button class="btn" type="button" data-act="clear-filters">Clear filters</button></div>`;
+  } else {
+    view = repeat(machines, (m) => m.name, (m, i) => shown[i]);
+  }
+  litRender(view, groups);
+  followMenuTrigger();
 }
 
 function render(state) {
@@ -552,9 +532,9 @@ function openMenu(button) {
   const name = button.dataset.machine;
   const local = button.dataset.local === "true";
   const menu = $("menu");
-  menu.innerHTML = `<a role="menuitem" href="/settings#machine-${esc(name)}">Machine settings</a>${local ? "" : `
-    <button type="button" role="menuitem" data-act="copy-ssh" data-machine="${esc(name)}">Copy ssh command</button>
-    <button type="button" role="menuitem" class="danger" data-act="remove" data-machine="${esc(name)}">Remove machine…</button>`}`;
+  litRender(html`<a role="menuitem" href="/settings#machine-${name}">Machine settings</a>${local ? "" : html`
+    <button type="button" role="menuitem" data-act="copy-ssh" data-machine=${name}>Copy ssh command</button>
+    <button type="button" role="menuitem" class="danger" data-act="remove" data-machine=${name}>Remove machine…</button>`}`, menu);
   menu.hidden = false;
   placeMenu(button);
   button.setAttribute("aria-expanded", "true");
@@ -563,22 +543,18 @@ function openMenu(button) {
   if (!local) loadSshHosts();
 }
 
-function keepMenuTrigger() {
-  if (!menuButton || menuButton.isConnected) return;
-  const trigger = $("groups").querySelector(`[data-act="more"][data-machine="${CSS.escape(menuButton.dataset.machine)}"]`);
-  if (!trigger) {
-    closeMenu(false);
-    return;
-  }
-  trigger.setAttribute("aria-expanded", "true");
-  menuButton = trigger;
-  placeMenu(trigger);
+function followMenuTrigger() {
+  if (!menuButton) return;
+  if (menuButton.isConnected) placeMenu(menuButton);
+  else closeMenu(false);
 }
 
 async function ask(title, body, options) {
-  const key = focusKey(document.activeElement);
+  const back = document.activeElement;
+  const visible = back?.matches(":focus-visible");
   const yes = await Nav.confirm(title, body, options);
-  if (!document.activeElement || document.activeElement === document.body) refocus(key);
+  const lost = !document.activeElement || document.activeElement === document.body;
+  if (lost && back?.isConnected) back.focus({ preventScroll: true, focusVisible: visible });
   return yes;
 }
 

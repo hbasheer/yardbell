@@ -303,6 +303,22 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/theme.js", get(|| async { asset("theme.js") }))
         .route("/side.js", get(|| async { asset("side.js") }))
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
+        .route(
+            "/vendor/lit-html/lit-html.js",
+            get(|| async { asset("vendor/lit-html/lit-html.js") }),
+        )
+        .route(
+            "/vendor/lit-html/directive.js",
+            get(|| async { asset("vendor/lit-html/directive.js") }),
+        )
+        .route(
+            "/vendor/lit-html/directive-helpers.js",
+            get(|| async { asset("vendor/lit-html/directive-helpers.js") }),
+        )
+        .route(
+            "/vendor/lit-html/directives/repeat.js",
+            get(|| async { asset("vendor/lit-html/directives/repeat.js") }),
+        )
         .route("/nav.js", get(|| async { asset("nav.js") }))
         .route("/newsession.js", get(|| async { asset("newsession.js") }))
         .route("/state", get(state_json))
