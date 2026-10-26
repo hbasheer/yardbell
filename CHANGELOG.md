@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.6] - 2026-10-27
+
 - The dashboard updates only what changed on each check instead of redrawing every machine, so
   selected text, keyboard focus and the Working pulse stay put while it refreshes. It is drawn
   with lit-html 3.3.3, which ships inside Yardbell, so the page still loads without a build step.
