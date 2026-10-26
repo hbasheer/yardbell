@@ -104,13 +104,24 @@ pub fn options(screen: &str) -> Vec<(String, String)> {
         let Some((key, label)) = text.split_once(". ") else {
             continue;
         };
-        if key.len() == 1 && key.chars().all(|c| c.is_ascii_digit()) && !label.trim().is_empty() {
+        let label = beside_preview(label);
+        if key.len() == 1 && key.chars().all(|c| c.is_ascii_digit()) && !label.is_empty() {
             found.retain(|(k, _)| k != key);
-            found.push((key.to_string(), label.trim().to_string()));
+            found.push((key.to_string(), label.to_string()));
         }
     }
     found.sort();
     found
+}
+
+// A question with a preview draws the preview box to the right of the choices, on the same lines.
+fn beside_preview(label: &str) -> &str {
+    let gap = label.find("   ").unwrap_or(label.len());
+    let label = &label[..gap];
+    let border = label
+        .find(|c| ('\u{2500}'..='\u{257f}').contains(&c))
+        .unwrap_or(label.len());
+    label[..border].trim()
 }
 
 pub fn event(change: &Change, screen: &str) -> Value {
@@ -330,6 +341,22 @@ mod tests {
         );
         assert!(options("1. step one in a plan\nsome text").len() == 1);
         assert!(options("nothing to pick").is_empty());
+    }
+
+    #[test]
+    fn choices_stop_where_a_preview_box_beside_them_starts() {
+        let screen = "❯ 1. Allow bin/dev up here        ┌──────────────────┐\n  2. Run on hp over ssh           │ Running now:     │\n  3. You run them, I wait         │   rails-1        │\n  4. Reuse the shared             │   vite-1         │\n    container                     └──────────────────┘\n  5. Two words│ tight border";
+        let labels: Vec<String> = options(screen).into_iter().map(|(_, l)| l).collect();
+        assert_eq!(
+            labels,
+            [
+                "Allow bin/dev up here",
+                "Run on hp over ssh",
+                "You run them, I wait",
+                "Reuse the shared",
+                "Two words"
+            ]
+        );
     }
 
     #[test]

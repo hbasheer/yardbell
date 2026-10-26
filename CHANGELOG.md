@@ -8,6 +8,16 @@ and the project uses [Semantic Versioning](https://semver.org).
 - The dashboard updates only what changed on each check instead of redrawing every machine, so
   selected text, keyboard focus and the Working pulse stay put while it refreshes. It is drawn
   with lit-html 3.3.3, which ships inside Yardbell, so the page still loads without a build step.
+- Dispatch: a conversation no longer runs off the right side of the window. One session screen
+  with a long unbroken line, such as a rule drawn across the terminal, used to widen every message
+  in the conversation past the page.
+- Dispatch: when an agent asks a question with a preview box beside the choices, the answer
+  buttons show only the choice, not the preview text that sat on the same line.
+- Dispatch: session cards are easier to read. The session name, its machine and folder, and a
+  status badge sit at the top; the screen below wraps long lines, drops the lines drawn only to
+  frame the terminal, and is set in larger type on the page's own colours instead of a black box.
+- Dispatch is drawn with lit-html too, so a new session card or reply is added without redrawing
+  the conversation, and an open step or an answered question stays as it is.
 
 ## [0.6.5] - 2026-10-26
 
