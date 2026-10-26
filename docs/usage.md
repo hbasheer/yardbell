@@ -57,6 +57,11 @@ agent there or to open one of the workspace's sessions. Panes split right or dow
 dragging the border between them; **Keyboard shortcuts** in the sidebar lists the keys. On a phone
 the sidebar comes first and a session opens full screen.
 
+**Dispatch** sits in the Workspace too, as a panel between the sidebar and the terminals. Sessions
+it starts or links to open in a pane. Hide it with **Dispatch** in the sidebar menu, the speech
+bubble before the tabs, or the button at the top of the panel; the Workspace remembers whether it
+was open. The sidebar menu is the same as on every other page, with **Dashboard** first.
+
 ### Terminal and phone
 
 <img src="screenshots/phone.png" alt="Yardbell on a phone" width="320" align="right">

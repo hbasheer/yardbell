@@ -209,6 +209,7 @@
   }
 
   window.YardbellNav = { loadUsage, render, order, memPct, RATED, appKey, tabKey, confirm: ask, checkBuild };
+  if (document.documentElement.classList.contains("embedded")) return;
   if (page !== "dashboard") {
     load();
     setInterval(load, 10000);

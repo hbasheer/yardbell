@@ -344,6 +344,9 @@ const FOCUS_KEYS = ["data-act", "data-collapse", "data-toggle", "data-machine", 
 
 function focusKey(el) {
   const groups = $("groups");
+  // The desktop app keeps the dashboard loaded behind session tabs, and WebKitGTK hands keyboard
+  // focus to a hidden webview whose page calls focus(), taking it from the terminal.
+  if (!document.hasFocus()) return null;
   if (!(el instanceof HTMLElement) || el === groups || !groups.contains(el)) return null;
   const attrs = FOCUS_KEYS.filter((a) => el.hasAttribute(a)).map((a) => `[${a}="${CSS.escape(el.getAttribute(a))}"]`).join("");
   if (!attrs) return null;

@@ -919,3 +919,51 @@ restore();
 if (phone.matches) document.body.classList.add("ws-picking");
 load();
 setInterval(load, 3000);
+
+const DISPATCH_KEY = "yardbell.dispatch";
+
+function dispatchShown() {
+  try { return localStorage.getItem(DISPATCH_KEY) !== "closed"; } catch { return true; }
+}
+
+function showDispatch(open) {
+  const toggle = $("dispatch-toggle");
+  const aside = $("ws-dispatch");
+  if (open && !aside.querySelector("iframe")) {
+    const frame = document.createElement("iframe");
+    frame.src = "/dispatch";
+    frame.title = "Dispatch";
+    aside.append(frame);
+  }
+  aside.hidden = !open;
+  toggle.setAttribute("aria-pressed", String(open));
+  toggle.title = open ? "Hide Dispatch" : "Show Dispatch";
+  if (open) $("side-dispatch").setAttribute("aria-current", "true");
+  else $("side-dispatch").removeAttribute("aria-current");
+  try {
+    if (open) localStorage.removeItem(DISPATCH_KEY);
+    else localStorage.setItem(DISPATCH_KEY, "closed");
+  } catch {}
+}
+
+function toggleDispatch() {
+  if (phone.matches) { location.href = "/dispatch"; return; }
+  showDispatch($("ws-dispatch").hidden);
+}
+
+$("dispatch-toggle").addEventListener("click", toggleDispatch);
+$("side-dispatch").addEventListener("click", toggleDispatch);
+
+$("logout").hidden = Boolean(window.__TAURI__);
+$("logout").addEventListener("click", async () => {
+  await fetch("/logout", { method: "POST" });
+  location.href = "/login";
+});
+
+window.addEventListener("message", (e) => {
+  if (e.origin !== location.origin || e.data?.yardbell !== "dispatch") return;
+  if (e.data.action === "hide") showDispatch(false);
+  if (e.data.action === "open" && typeof e.data.key === "string") open(e.data.key);
+});
+
+if (dispatchShown() && !phone.matches) showDispatch(true);
