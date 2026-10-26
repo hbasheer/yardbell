@@ -264,16 +264,36 @@ function renderSide() {
     </button></li>`;
   };
   let lastMachine = "";
+  const folds = foldedMachines();
   $("tree").innerHTML = projects().map((name) => {
     const mine = sessions().filter((s) => projectOf(s) === name);
     const current = name === project();
     const machine = machineOf(name);
-    const head = machine !== lastMachine ? `<li class="ws-machine"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.2"/><path d="M6 13.5h4M8 11v2.5"/></svg>${esc(machine)}</li>` : "";
+    const folded = folds.has(machine);
+    const live = sessions().filter((s) => !s.stale && s.machine === machine).length;
+    const head = machine !== lastMachine ? `<li class="ws-machine"><button type="button" class="ws-machine-btn" data-fold="${esc(machine)}" aria-expanded="${!folded}" title="${folded ? "Show" : "Hide"} the sessions on ${esc(machine)}">
+      <svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.2"/><path d="M6 13.5h4M8 11v2.5"/></svg><span class="ws-machine-name">${esc(machine)}</span><span class="ws-count">${live}</span>
+    </button></li>` : "";
     lastMachine = machine;
-    return `${head}<li><button type="button" class="ws-space${current ? " current" : ""}" data-space="${esc(name)}" title="${esc(spaceLabel(name))}"${current ? ' aria-current="true"' : ""}>
+    const hide = folded ? ' class="ws-folded"' : "";
+    return `${head}<li${hide}><button type="button" class="ws-space${current ? " current" : ""}" data-space="${esc(name)}" title="${esc(spaceLabel(name))}"${current ? ' aria-current="true"' : ""}>
       ${dot(worst(mine))}<span class="rail-initial" aria-hidden="true">${esc(window.YardbellSide.initials(spaceLabel(name)))}</span><span class="ws-space-name">${esc(spaceLabel(name))}</span><span class="ws-count">${mine.filter((s) => !s.stale).length}</span>
-    </button></li>${mine.length ? `<li><ul class="ws-terminals">${mine.map(row).join("")}</ul></li>` : ""}`;
+    </button></li>${mine.length ? `<li${hide}><ul class="ws-terminals">${mine.map(row).join("")}</ul></li>` : ""}`;
   }).join("") || `<li class="ws-empty">No sessions running. Start one with New session.</li>`;
+}
+
+const FOLDED_KEY = "yardbell.ws.folded";
+
+function foldedMachines() {
+  try { return new Set(JSON.parse(localStorage.getItem(FOLDED_KEY) || "[]")); } catch { return new Set(); }
+}
+
+function fold(machine, hide) {
+  const folds = foldedMachines();
+  if (hide) folds.add(machine);
+  else folds.delete(machine);
+  try { localStorage.setItem(FOLDED_KEY, JSON.stringify([...folds])); } catch {}
+  renderSide();
 }
 
 let renaming = null;
@@ -788,6 +808,11 @@ function shortcut(code) {
 }
 
 $("tree").addEventListener("click", (e) => {
+  const folder = e.target.closest("[data-fold]");
+  if (folder) {
+    fold(folder.dataset.fold, folder.getAttribute("aria-expanded") === "true");
+    return;
+  }
   const b = e.target.closest("[data-space]");
   if (b) {
     openSpace(b.dataset.space);
@@ -938,8 +963,6 @@ function showDispatch(open) {
   aside.hidden = !open;
   toggle.setAttribute("aria-pressed", String(open));
   toggle.title = open ? "Hide Dispatch" : "Show Dispatch";
-  if (open) $("side-dispatch").setAttribute("aria-current", "true");
-  else $("side-dispatch").removeAttribute("aria-current");
   try {
     if (open) localStorage.removeItem(DISPATCH_KEY);
     else localStorage.setItem(DISPATCH_KEY, "closed");
@@ -952,7 +975,6 @@ function toggleDispatch() {
 }
 
 $("dispatch-toggle").addEventListener("click", toggleDispatch);
-$("side-dispatch").addEventListener("click", toggleDispatch);
 
 $("logout").hidden = Boolean(window.__TAURI__);
 $("logout").addEventListener("click", async () => {
@@ -967,3 +989,5 @@ window.addEventListener("message", (e) => {
 });
 
 if (dispatchShown() && !phone.matches) showDispatch(true);
+
+window.YardbellSide.resizable({ handle: $("dispatch-resize"), panel: $("ws-dispatch"), prop: "--ws-dispatch", key: "yardbell.ws.dispatch-width", min: 300, normal: 380, max: 640 });

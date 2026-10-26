@@ -58,9 +58,14 @@ dragging the border between them; **Keyboard shortcuts** in the sidebar lists th
 the sidebar comes first and a session opens full screen.
 
 **Dispatch** sits in the Workspace too, as a panel between the sidebar and the terminals. Sessions
-it starts or links to open in a pane. Hide it with **Dispatch** in the sidebar menu, the speech
-bubble before the tabs, or the button at the top of the panel; the Workspace remembers whether it
-was open. The sidebar menu is the same as on every other page, with **Dashboard** first.
+it starts or links to open in a pane. Hide or show it with the speech bubble before the tabs or the
+button at the top of the panel; the Workspace remembers whether it was open. **Dispatch** in the
+sidebar menu opens the full Dispatch page. The sidebar menu is the same as on every other page,
+with **Dashboard** first.
+
+Click a machine's name in the sidebar to fold its folders and sessions away. Drag the right edge of
+the sidebar or of the Dispatch panel to resize it, and double-click the edge to reset it. The
+sidebar keeps the same width on every page.
 
 ### Terminal and phone
 
