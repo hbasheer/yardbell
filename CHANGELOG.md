@@ -5,6 +5,16 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.5] - 2026-10-26
+
+- The sidebar has one width on every page, 256px to start. Drag its right edge on any page to make
+  it wider or narrower, from 220 to 480px, and every page follows; double-click the edge to reset.
+- Workspace: each machine in the sidebar folds with a click on its name, shown by a chevron, and
+  stays folded. Long folder names end in an ellipsis instead of scrolling the sidebar sideways.
+- Workspace: the Dispatch panel resizes from its right edge too, from 300 to 640px, and its message
+  box stays at the bottom of the panel however short or long the conversation is.
+- Workspace: Dispatch in the sidebar menu opens the full Dispatch page, and is marked as the
+  current page only there; the speech bubble and the panel's own button show and hide the panel.
 - On a phone, the header no longer covers the Yardbell name: the Dashboard link added to the menu
   in 0.6.4 stays out of it there, since the name and the back links already lead home.
 - The README and the guide show the 0.6.4 look, with Dispatch in the Workspace.

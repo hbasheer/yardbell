@@ -16,7 +16,7 @@
 </head>
 <body data-page="workspace">
 <div class="ws" id="ws">
-  <aside class="ws-side" aria-label="Workspaces and agents">
+  <aside class="ws-side" id="ws-side" aria-label="Workspaces and agents">
     <div class="ws-side-head">
       <a class="wordmark" href="/">Yardbell</a>
       <a class="btn quiet ws-home" href="/" title="Back to the dashboard"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard</a>
@@ -34,9 +34,9 @@
       <a class="side-link" href="/workspace" aria-current="page">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10M8 8h5.5"/></svg>Workspace
       </a>
-      <button class="side-link" id="side-dispatch" type="button" aria-controls="ws-dispatch">
+      <a class="side-link" id="side-dispatch" href="/dispatch">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z"/></svg>Dispatch
-      </button>
+      </a>
       <a class="side-link" href="/settings">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:2.3"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings
       </a>
@@ -50,7 +50,9 @@
     </div>
   </aside>
 
-  <aside class="ws-dispatch" id="ws-dispatch" aria-label="Dispatch" hidden></aside>
+  <aside class="ws-dispatch" id="ws-dispatch" aria-label="Dispatch" hidden>
+    <div class="resize-edge" id="dispatch-resize" role="separator" aria-orientation="vertical" aria-label="Resize Dispatch" aria-controls="ws-dispatch" tabindex="0" title="Drag to resize. Double-click to reset."></div>
+  </aside>
 
   <main class="ws-main">
     <header class="ws-head">
