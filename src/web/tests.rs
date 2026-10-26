@@ -252,37 +252,46 @@ fn resolve_import(from: &str, spec: &str) -> String {
 }
 
 #[tokio::test]
-async fn every_module_the_dashboard_imports_is_served() {
+async fn every_module_a_page_imports_is_served() {
     let r = rig();
     let c = cookie(&r.app).await;
-    let html = String::from_utf8(Assets::get("dashboard.html").unwrap().data.into_owned()).unwrap();
-    assert!(html.contains(r#"<script type="module" src="/dashboard.js"></script>"#));
     let import = regex::Regex::new(r#"\bfrom\s*["']([^"']+)["']"#).unwrap();
-    let mut queue = vec!["/dashboard.js".to_string()];
-    let mut seen = std::collections::HashSet::new();
-    while let Some(path) = queue.pop() {
-        if !seen.insert(path.clone()) {
-            continue;
+    for page in ["dashboard", "dispatch"] {
+        let html = String::from_utf8(
+            Assets::get(&format!("{page}.html"))
+                .unwrap()
+                .data
+                .into_owned(),
+        )
+        .unwrap();
+        let script = format!(r#"<script type="module" src="/{page}.js"></script>"#);
+        assert!(html.contains(&script), "{page}");
+        let mut queue = vec![format!("/{page}.js")];
+        let mut seen = std::collections::HashSet::new();
+        while let Some(path) = queue.pop() {
+            if !seen.insert(path.clone()) {
+                continue;
+            }
+            let req = Request::get(&path)
+                .header(header::COOKIE, c.clone())
+                .body(Body::empty())
+                .unwrap();
+            let (status, headers, body) = send(&r.app, req).await;
+            assert_eq!(status, StatusCode::OK, "{path}");
+            assert_eq!(
+                headers[header::CONTENT_TYPE],
+                "text/javascript; charset=utf-8",
+                "{path}"
+            );
+            for spec in import.captures_iter(&body) {
+                queue.push(resolve_import(&path, &spec[1]));
+            }
         }
-        let req = Request::get(&path)
-            .header(header::COOKIE, c.clone())
-            .body(Body::empty())
-            .unwrap();
-        let (status, headers, body) = send(&r.app, req).await;
-        assert_eq!(status, StatusCode::OK, "{path}");
-        assert_eq!(
-            headers[header::CONTENT_TYPE],
-            "text/javascript; charset=utf-8",
-            "{path}"
+        assert!(
+            seen.contains("/vendor/lit-html/directive-helpers.js"),
+            "{page}: {seen:?}"
         );
-        for spec in import.captures_iter(&body) {
-            queue.push(resolve_import(&path, &spec[1]));
-        }
     }
-    assert!(
-        seen.contains("/vendor/lit-html/directive-helpers.js"),
-        "{seen:?}"
-    );
 }
 
 #[tokio::test]

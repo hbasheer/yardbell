@@ -1,3 +1,6 @@
+import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
+import { repeat } from "/vendor/lit-html/directives/repeat.js";
+
 const $ = (id) => document.getElementById(id);
 const Nav = window.YardbellNav;
 const form = $("dispatch-form");
@@ -6,19 +9,22 @@ const narrow = window.matchMedia("(max-width: 900px)");
 let current = new URLSearchParams(location.search).get("c");
 let conversations = [];
 let busy = false;
+let events = [];
 let shownEvents = 0;
 let tracked = [];
 let savedTasks = [];
+let answers = new Map();
+let view = 0;
 
 let editingTask = null;
 
-const SESSION_WORDS = {
-  blocked: "is waiting for you",
-  idle: "stopped: finished, or waiting for the next step",
-  ended: "ended",
+const SESSION_STATES = {
+  blocked: { badge: "blocked", word: "Waiting for you", hint: "The session is asking something. Pick an answer below or open it." },
+  idle: { badge: "", word: "Stopped", hint: "Finished, or waiting for the next step." },
+  ended: { badge: "", word: "Ended", hint: "The session is gone." },
 };
 
-const INTRO = `<div class="dispatch-intro" id="dispatch-intro">
+const INTRO = html`<div class="dispatch-intro">
   <h2>What should your agents work on?</h2>
   <p>Describe a task in plain words. Dispatch finds the machine that has the repository and the most room, and starts an agent there.</p>
   <p class="help">Dispatch runs Claude Code on this machine with Yardbell's own tools. It can start, read and answer sessions, but never edits files itself.</p>
@@ -34,15 +40,25 @@ const LABELS = {
   stop_session: "Stopped a session",
 };
 
-function esc(value) {
-  return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
-}
+const ICONS = {
+  edit: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l.6-2.6L10.8 3.2a1.4 1.4 0 0 1 2 2L5.6 12.4z"/></svg>`,
+  close: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`,
+};
+
+const INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g;
 
 function inline(text) {
-  return esc(text)
-    .replace(/`([^`\n]+)`/g, "<code>$1</code>")
-    .replace(/\*\*([^*\n]+)\*\*/g, "<strong>$1</strong>")
-    .replace(/\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g, '<a href="$2" target="_blank" rel="noopener">$1</a>');
+  const out = [];
+  let last = 0;
+  for (const m of text.matchAll(INLINE)) {
+    out.push(text.slice(last, m.index));
+    if (m[1] !== undefined) out.push(html`<code>${m[1]}</code>`);
+    else if (m[2] !== undefined) out.push(html`<strong>${inline(m[2])}</strong>`);
+    else out.push(html`<a href=${m[4]} target="_blank" rel="noopener">${inline(m[3])}</a>`);
+    last = m.index + m[0].length;
+  }
+  out.push(text.slice(last));
+  return out;
 }
 
 function cells(line) {
@@ -50,7 +66,7 @@ function cells(line) {
 }
 
 // The replies are Markdown; this covers what Dispatch writes: paragraphs, headings, lists, tables
-// and code blocks. Everything is escaped before any tag is added.
+// and code blocks.
 function markdown(text) {
   const lines = String(text).replace(/\r/g, "").split("\n");
   const out = [];
@@ -63,12 +79,12 @@ function markdown(text) {
       i++;
       while (i < lines.length && !lines[i].trim().startsWith("```")) code.push(lines[i++]);
       i++;
-      out.push(`<pre class="md-code">${esc(code.join("\n"))}</pre>`);
+      out.push(html`<pre class="md-code">${code.join("\n")}</pre>`);
       continue;
     }
     const heading = line.match(/^(#{1,4})\s+(.*)$/);
     if (heading) {
-      out.push(`<h4 class="md-h">${inline(heading[2])}</h4>`);
+      out.push(html`<h4 class="md-h">${inline(heading[2])}</h4>`);
       i++;
       continue;
     }
@@ -77,7 +93,7 @@ function markdown(text) {
       i += 2;
       const rows = [];
       while (i < lines.length && lines[i].trim().startsWith("|")) rows.push(cells(lines[i++]));
-      out.push(`<div class="md-table"><table><thead><tr>${head.map((c) => `<th>${inline(c)}</th>`).join("")}</tr></thead><tbody>${rows.map((r) => `<tr>${r.map((c) => `<td>${inline(c)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`);
+      out.push(html`<div class="md-table"><table><thead><tr>${head.map((c) => html`<th>${inline(c)}</th>`)}</tr></thead><tbody>${rows.map((r) => html`<tr>${r.map((c) => html`<td>${inline(c)}</td>`)}</tr>`)}</tbody></table></div>`);
       continue;
     }
     const bullet = /^\s*[-*]\s+/;
@@ -92,24 +108,18 @@ function markdown(text) {
         else break;
         i++;
       }
-      const tag = ordered ? "ol" : "ul";
-      out.push(`<${tag} class="md-list">${items.map((it) => `<li>${inline(it)}</li>`).join("")}</${tag}>`);
+      const list = items.map((it) => html`<li>${inline(it)}</li>`);
+      out.push(ordered ? html`<ol class="md-list">${list}</ol>` : html`<ul class="md-list">${list}</ul>`);
       continue;
     }
     const para = [];
     while (i < lines.length && lines[i].trim() && !/^\s*([-*]|\d+[.)])\s+/.test(lines[i]) && !lines[i].trim().startsWith("|") && !lines[i].trim().startsWith("```") && !/^#{1,4}\s/.test(lines[i])) {
       para.push(lines[i++].trim());
     }
-    if (!para.length) { out.push(`<p>${inline(lines[i++])}</p>`); continue; }
-    out.push(`<p>${para.map(inline).join("<br>")}</p>`);
+    if (!para.length) { out.push(html`<p>${inline(lines[i++])}</p>`); continue; }
+    out.push(html`<p>${para.map((l, n) => (n ? [html`<br>`, inline(l)] : inline(l)))}</p>`);
   }
-  return out.join("");
-}
-
-// Steps in a row share one line of small chips, like an agent's tool calls in a terminal.
-function toolGroup() {
-  const last = log.lastElementChild;
-  return last?.classList.contains("tool-group") ? last : add(`<div class="tool-group"></div>`);
+  return out;
 }
 
 function toast(message, kind = "error") {
@@ -141,18 +151,42 @@ function ago(stamp) {
   return new Date(stamp).toLocaleDateString();
 }
 
+function convoItem(c) {
+  const selected = c.id === current;
+  return html`<li class="convo ${selected ? "selected" : ""}">
+    <a href="/dispatch?c=${c.id}" aria-current=${selected ? "true" : nothing} @click=${(e) => switchTo(e, c)}>
+      <span class="convo-title">${c.title}</span>
+      <span class="convo-meta">${c.busy ? html`<span class="dot ok"></span>working` : ago(c.updated)}</span>
+    </a>
+    <button class="btn quiet danger delete" type="button" aria-label="Delete ${c.title}" title="Delete" @click=${() => deleteConvo(c)}>${ICONS.close}</button>
+  </li>`;
+}
+
 function renderList() {
   $("clear-all").hidden = !conversations.length;
-  $("convo-list").innerHTML = conversations.length
-    ? conversations.map((c) => `<li class="convo${c.id === current ? " selected" : ""}">
-        <a href="/dispatch?c=${esc(c.id)}" data-open="${esc(c.id)}"${c.id === current ? ' aria-current="true"' : ""}>
-          <span class="convo-title">${esc(c.title)}</span>
-          <span class="convo-meta">${c.busy ? '<span class="dot ok"></span>working' : esc(ago(c.updated))}</span>
-        </a>
-        <button class="btn quiet danger delete" type="button" data-delete="${esc(c.id)}" aria-label="Delete ${esc(c.title)}" title="Delete">
-          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-        </button></li>`).join("")
-    : '<li><p class="convo-empty">No conversations yet.</p></li>';
+  render(conversations.length
+    ? repeat(conversations, (c) => c.id, convoItem)
+    : html`<li><p class="convo-empty">No conversations yet.</p></li>`, $("convo-list"));
+}
+
+function switchTo(e, c) {
+  e.preventDefault();
+  if (busy && c.id !== current) {
+    toast("This conversation is still working. Stop it or wait, then switch.");
+    return;
+  }
+  open(c.id);
+}
+
+async function deleteConvo(c) {
+  if (!(await Nav.confirm("Delete this conversation?", c.title, { confirm: "Delete", danger: true }))) return;
+  try {
+    await api("POST", `/dispatch/conversations/${encodeURIComponent(c.id)}/delete`, {});
+    await loadList();
+    if (c.id === current) open(null);
+  } catch (err) {
+    toast(err.message);
+  }
 }
 
 async function loadList() {
@@ -166,80 +200,154 @@ function scrollDown() {
   window.scrollTo({ top: document.body.scrollHeight });
 }
 
-function add(html) {
-  $("dispatch-intro")?.remove();
-  log.insertAdjacentHTML("beforeend", html);
-  scrollDown();
-  return log.lastElementChild;
-}
-
 function target(input) {
   const where = [input?.machine, input?.folder || input?.path, input?.branch].filter(Boolean);
-  return where.length ? ` · ${esc(where.join(" · "))}` : "";
+  return where.length ? ` · ${where.join(" · ")}` : "";
 }
 
-function terminalLink(text) {
-  try {
-    const started = JSON.parse(text);
-    if (!started.machine || !started.name) return "";
-    const url = `/term/${encodeURIComponent(started.machine)}/${encodeURIComponent(started.name)}`;
-    return `<a class="btn" href="${esc(url)}" target="_blank" rel="noopener">Open ${esc(started.name)}</a>`;
-  } catch {
-    return "";
-  }
+function short(path) {
+  return String(path ?? "").replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
 }
 
 function termUrl(machine, name) {
   return `/term/${encodeURIComponent(machine)}/${encodeURIComponent(name)}`;
 }
 
-function sessionCard(event) {
-  const where = `data-machine="${esc(event.machine)}" data-name="${esc(event.name)}"`;
-  const options = (event.options || []).map((o) =>
-    `<button class="btn${o.key === "1" ? " primary" : ""}" type="button" data-keys="${esc(o.key)}" ${where}>${esc(o.label)}</button>`).join("");
-  const review = event.state === "idle"
-    ? `<button class="btn" type="button" data-review ${where} data-path="${esc(event.path || "")}">Review branch</button>` : "";
-  const open = event.state === "ended" ? "" : `<a class="btn quiet" href="${esc(termUrl(event.machine, event.name))}" target="_blank" rel="noopener">Open</a>`;
-  return `<div class="session-card ${esc(event.state)}">
-    <p class="session-card-head"><span class="dot ${event.state === "blocked" ? "warn" : event.state === "ended" ? "" : "ok"}"></span><strong>${esc(event.name)}</strong> on ${esc(event.machine)} ${esc(SESSION_WORDS[event.state] || event.state)}</p>
-    ${event.screen ? `<pre>${esc(event.screen)}</pre>` : ""}
-    <div class="session-card-actions">${options}${review}${open}</div>
+function started(text) {
+  try {
+    const s = JSON.parse(text);
+    return s.machine && s.name ? s : null;
+  } catch {
+    return null;
+  }
+}
+
+// A question with a preview draws the preview box beside the choices. Conversations saved before
+// the server cut labels there still carry the box, so it is cut here too.
+function optionLabel(label) {
+  return String(label).split(/ {3}|[─-╿]/)[0].trim() || label;
+}
+
+// Rules drawn across the terminal carry no text and are the widest lines on screen, and the
+// agent's own left margin only pushes every line right.
+function readable(screen) {
+  const lines = String(screen).split("\n")
+    .filter((l) => !/^[\s─-╿]+$/.test(l) || !l.trim())
+    .map((l) => l.replace(/\s*[│┃]?\s*$/, ""))
+    .filter((l, i, all) => l.trim() || (i > 0 && all[i - 1].trim()));
+  const indents = lines.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length);
+  const cut = indents.length ? Math.min(...indents) : 0;
+  return lines.map((l) => l.slice(cut)).join("\n").replace(/^\n+|\n+$/g, "");
+}
+
+// Tool calls in a row share one line of small chips, like an agent's tool calls in a terminal,
+// and each result lands on the first chip of its name still waiting for one.
+function blocks(list) {
+  const out = [];
+  const waiting = [];
+  let group = null;
+  list.forEach((e, i) => {
+    if (e.role === "tool" || e.role === "tool_result") {
+      let chip = e.role === "tool_result" ? waiting.find((c) => c.name === e.name && !c.result) : null;
+      if (!chip) {
+        if (!group) out.push(group = { kind: "tools", key: i, chips: [] });
+        chip = { name: e.name, input: e.role === "tool" ? e.input : null, result: null };
+        group.chips.push(chip);
+        waiting.push(chip);
+      }
+      if (e.role === "tool_result") {
+        chip.result = e;
+        const s = e.name === "start_session" && !e.is_error ? started(e.text) : null;
+        if (s) {
+          out.push({ kind: "started", key: i, session: s });
+          group = null;
+        }
+      }
+      return;
+    }
+    group = null;
+    out.push({ kind: e.role, key: i, event: e });
+  });
+  return out;
+}
+
+function chip(c) {
+  const tone = c.result ? (c.result.is_error ? "bad" : "ok") : busy ? "running" : "";
+  return html`<details class="tool ${tone}"><summary><span class="mark"></span>${LABELS[c.name] || c.name}${target(c.input)}</summary>${c.result ? html`<pre>${c.result.text}</pre>` : nothing}</details>`;
+}
+
+function sessionCard(e, key) {
+  const state = SESSION_STATES[e.state] || { badge: "", word: e.state, hint: "" };
+  const answer = answers.get(key);
+  const options = (e.options || []).map((o) => {
+    const label = optionLabel(o.label);
+    return html`<button class="btn ${o.key === "1" ? "primary" : ""} ${answer?.key === o.key ? "picked" : ""}" type="button" title=${label} ?disabled=${Boolean(answer)} @click=${() => pick(e, key, o.key, label)}><span class="btn-label">${label}</span></button>`;
+  });
+  return html`<div class="session-card ${e.state}">
+    <header class="session-card-head">
+      <div class="session-card-id">
+        <strong>${e.name}</strong>
+        <span class="session-card-where">on ${e.machine}${e.path ? html` · <code>${short(e.path)}</code>` : nothing}</span>
+      </div>
+      <span class="badge ${state.badge}" title=${state.hint}>${state.word}</span>
+    </header>
+    ${e.screen ? html`<pre class="session-screen">${readable(e.screen)}</pre>` : nothing}
+    <div class="session-card-actions">
+      ${options}
+      ${e.state === "idle" ? html`<button class="btn" type="button" @click=${() => review(e)}>Review branch</button>` : nothing}
+      ${e.state === "ended" ? nothing : html`<a class="btn quiet" href=${termUrl(e.machine, e.name)} target="_blank" rel="noopener">Open</a>`}
+    </div>
   </div>`;
 }
 
-function show(event) {
-  switch (event.role) {
+function block(b) {
+  switch (b.kind) {
+    case "tools":
+      return html`<div class="tool-group">${b.chips.map(chip)}</div>`;
+    case "started":
+      return html`<div class="started"><a class="btn" href=${termUrl(b.session.machine, b.session.name)} target="_blank" rel="noopener" title="Open ${b.session.name}"><span class="btn-label">Open ${b.session.name}</span></a></div>`;
     case "session":
-      add(sessionCard(event));
-      break;
+      return sessionCard(b.event, `${view}:${b.key}`);
     case "user":
-      add(`<p class="msg user">${esc(event.text)}</p>`);
-      break;
+      return html`<p class="msg user">${b.event.text}</p>`;
     case "assistant":
-      add(`<div class="msg md">${markdown(event.text)}</div>`);
-      break;
+      return html`<div class="msg md">${markdown(b.event.text)}</div>`;
     case "error":
-      add(`<p class="msg error">${esc(event.text)}</p>`);
-      break;
-    case "tool":
-      toolGroup().insertAdjacentHTML("beforeend", `<details class="tool running" data-tool="${esc(event.name)}"><summary><span class="mark"></span>${esc(LABELS[event.name] || event.name)}${target(event.input)}</summary></details>`);
-      scrollDown();
-      break;
-    case "tool_result": {
-      const open = [...log.querySelectorAll(".tool.running")].find((t) => t.dataset.tool === event.name);
-      if (!open) toolGroup().insertAdjacentHTML("beforeend", `<details class="tool"><summary><span class="mark"></span>${esc(LABELS[event.name] || event.name)}</summary></details>`);
-      const box = open || log.lastElementChild.lastElementChild;
-      box.classList.remove("running");
-      box.classList.add(event.is_error ? "bad" : "ok");
-      box.insertAdjacentHTML("beforeend", `<pre>${esc(event.text)}</pre>`);
-      if (event.name === "start_session" && !event.is_error) {
-        const link = terminalLink(event.text);
-        if (link) add(`<div class="started">${link}</div>`);
-      }
-      scrollDown();
-      break;
-    }
+      return html`<p class="msg error">${b.event.text}</p>`;
+    default:
+      return nothing;
   }
+}
+
+function draw() {
+  render(!current && !events.length
+    ? INTRO
+    : repeat(blocks(events), (b) => `${view}:${b.key}`, block), log);
+}
+
+function show(event) {
+  events.push(event);
+  draw();
+  scrollDown();
+}
+
+async function pick(e, key, keys, label) {
+  answers.set(key, { key: null });
+  draw();
+  try {
+    await api("POST", `/sessions/${encodeURIComponent(e.machine)}/${encodeURIComponent(e.name)}/keys`, { keys });
+    answers.set(key, { key: keys });
+    toast(`Answered "${label}"`, "ok");
+  } catch (err) {
+    answers.delete(key);
+    toast(err.message);
+  }
+  draw();
+}
+
+function review(e) {
+  if (busy) { toast("Dispatch is still working on the last message."); return; }
+  ask(`Review the branch that session ${e.name} on ${e.machine} worked on${e.path ? `, in ${e.path}` : ""}: start a review session as instructed and tell me what it finds.`);
 }
 
 function setBusy(on) {
@@ -247,8 +355,8 @@ function setBusy(on) {
   $("dispatch-send").disabled = on;
   $("dispatch-stop").hidden = !on;
   $("dispatch-thinking").hidden = !on;
+  draw();
   if (on) scrollDown();
-  if (!on) log.querySelectorAll(".tool.running").forEach((t) => t.classList.remove("running"));
 }
 
 function setUrl() {
@@ -257,8 +365,10 @@ function setUrl() {
 
 async function open(id) {
   current = id;
+  view++;
   setUrl();
-  log.innerHTML = "";
+  events = [];
+  answers = new Map();
   setBusy(false);
   renderList();
   if (narrow.matches) $("convos").open = false;
@@ -266,24 +376,25 @@ async function open(id) {
   shownEvents = 0;
   renderTracked();
   if (!id) {
-    log.innerHTML = INTRO;
     if (document.hasFocus()) form.text.focus();
     return;
   }
   try {
     const convo = await api("GET", `/dispatch/conversations/${encodeURIComponent(id)}`);
     if (current !== id) return;
-    convo.events.forEach(show);
+    events = convo.events.slice();
     shownEvents = convo.events.length;
     tracked = convo.sessions || [];
     renderTracked();
     setBusy(convo.busy);
+    scrollDown();
     if (convo.busy) watch(id);
   } catch (err) {
     toast(err.message);
     current = null;
     setUrl();
-    log.innerHTML = INTRO;
+    events = [];
+    draw();
   }
 }
 
@@ -351,47 +462,67 @@ async function catchUp(showNew = true) {
   const id = current;
   const convo = await api("GET", `/dispatch/conversations/${encodeURIComponent(id)}`).catch(() => null);
   if (!convo || current !== id || busy) return;
-  if (showNew) convo.events.slice(shownEvents).forEach(show);
+  if (showNew && convo.events.length > shownEvents) {
+    events.push(...convo.events.slice(shownEvents));
+    draw();
+    scrollDown();
+  }
   shownEvents = convo.events.length;
   tracked = convo.sessions || [];
   renderTracked();
 }
 
+function trackedItem(t, state) {
+  const s = state?.sessions.find((x) => x.machine === t.machine && x.tmux === t.name && !x.stale);
+  const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : "idle";
+  const tone = !s ? "" : s.activity === "blocked" ? "warn" : s.activity === "active" ? "ok" : "";
+  return html`<span class="dispatch-session"><span class="dot ${tone}"></span>${s
+    ? html`<a href=${termUrl(t.machine, t.name)} target="_blank" rel="noopener">${t.name}</a>`
+    : t.name}<span class="muted">${t.machine} · ${word}</span></span>`;
+}
+
 async function renderTracked() {
   const box = $("dispatch-sessions");
   box.hidden = !tracked.length;
-  if (!tracked.length) { box.innerHTML = ""; return; }
+  if (!tracked.length) { render(nothing, box); return; }
   const state = await api("GET", "/state").catch(() => null);
-  const live = (t) => state?.sessions.find((s) => s.machine === t.machine && s.tmux === t.name && !s.stale);
-  box.innerHTML = `<span class="dispatch-sessions-label">Sessions</span>` + tracked.map((t) => {
-    const s = live(t);
-    const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : "idle";
-    const tone = !s ? "" : s.activity === "blocked" ? "warn" : s.activity === "active" ? "ok" : "";
-    const name = s ? `<a href="${esc(termUrl(t.machine, t.name))}" target="_blank" rel="noopener">${esc(t.name)}</a>` : esc(t.name);
-    return `<span class="dispatch-session"><span class="dot ${tone}"></span>${name}<span class="muted">${esc(t.machine)} · ${word}</span></span>`;
-  }).join("");
+  render(html`<span class="dispatch-sessions-label">Sessions</span>${repeat(tracked, (t) => `${t.machine}/${t.name}`, (t) => trackedItem(t, state))}`, box);
+}
+
+function taskItem(t) {
+  return html`<li class="convo task">
+    <button type="button" class="task-run" title=${t.text} @click=${() => runTask(t)}>
+      <span class="convo-title">${t.name}</span>
+      <span class="convo-meta">${t.text}</span>
+    </button>
+    <button class="btn quiet delete" type="button" aria-label="Edit ${t.name}" title="Edit" @click=${() => editTask(t)}>${ICONS.edit}</button>
+    <button class="btn quiet danger delete" type="button" aria-label="Delete ${t.name}" title="Delete" @click=${() => forgetTask(t)}>${ICONS.close}</button>
+  </li>`;
 }
 
 function renderTasks() {
   const shown = savedTasks.filter((t) => !t.hidden);
   $("task-restore").hidden = !savedTasks.some((t) => t.hidden);
-  $("task-list").innerHTML = shown.length
-    ? shown.map((t) => `<li class="convo task">
-        <button type="button" class="task-run" data-run="${esc(t.name)}" title="${esc(t.text)}">
-          <span class="convo-title">${esc(t.name)}</span>
-          <span class="convo-meta">${esc(t.text)}</span>
-        </button>
-        <button class="btn quiet delete" type="button" data-edit-task="${esc(t.name)}" aria-label="Edit ${esc(t.name)}" title="Edit">
-          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l.6-2.6L10.8 3.2a1.4 1.4 0 0 1 2 2L5.6 12.4z"/></svg>
-        </button>
-        <button class="btn quiet danger delete" type="button" data-forget-task="${esc(t.name)}" aria-label="Delete ${esc(t.name)}" title="Delete">
-          <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>
-        </button></li>`).join("")
-    : '<li><p class="convo-empty">No tasks yet.</p></li>';
+  render(shown.length
+    ? repeat(shown, (t) => t.name, taskItem)
+    : html`<li><p class="convo-empty">No tasks yet.</p></li>`, $("task-list"));
 }
 
 async function loadTasks() {
   savedTasks = await api("GET", "/dispatch/tasks").catch(() => []);
+  renderTasks();
+}
+
+function runTask(task) {
+  if (busy) { toast("Dispatch is still working on the last message."); return; }
+  if (narrow.matches) $("tasks").open = false;
+  ask(task.text);
+}
+
+async function forgetTask(task) {
+  const note = task.builtin ? "It is a default task, so Restore default tasks brings it back." : "Conversations it started are kept.";
+  if (!(await Nav.confirm(`Delete the task "${task.name}"?`, note, { confirm: "Delete", danger: true }))) return;
+  savedTasks = await api("POST", "/dispatch/tasks/delete", { name: task.name }).catch((err) => { toast(err.message); return savedTasks; });
   renderTasks();
 }
 
@@ -430,31 +561,6 @@ $("task-form").addEventListener("submit", async (e) => {
   }
 });
 
-$("task-list").addEventListener("click", async (e) => {
-  const run = e.target.closest("[data-run]");
-  if (run) {
-    const task = savedTasks.find((t) => t.name === run.dataset.run);
-    if (!task) return;
-    if (busy) { toast("Dispatch is still working on the last message."); return; }
-    if (narrow.matches) $("tasks").open = false;
-    ask(task.text);
-    return;
-  }
-  const edit = e.target.closest("[data-edit-task]");
-  if (edit) {
-    editTask(savedTasks.find((t) => t.name === edit.dataset.editTask));
-    return;
-  }
-  const forget = e.target.closest("[data-forget-task]");
-  if (forget) {
-    const builtin = savedTasks.find((t) => t.name === forget.dataset.forgetTask)?.builtin;
-    const note = builtin ? "It is a default task, so Restore default tasks brings it back." : "Conversations it started are kept.";
-    if (!(await Nav.confirm(`Delete the task "${forget.dataset.forgetTask}"?`, note, { confirm: "Delete", danger: true }))) return;
-    savedTasks = await api("POST", "/dispatch/tasks/delete", { name: forget.dataset.forgetTask }).catch((err) => { toast(err.message); return savedTasks; });
-    renderTasks();
-  }
-});
-
 $("task-restore").addEventListener("click", async () => {
   savedTasks = await api("POST", "/dispatch/tasks/restore", {}).catch((err) => { toast(err.message); return savedTasks; });
   renderTasks();
@@ -464,29 +570,6 @@ $("save-as-task").addEventListener("click", () => {
   const text = form.text.value.trim();
   if (!text) { toast("Type the task first, then save it."); form.text.focus(); return; }
   editTask(null, text);
-});
-
-log.addEventListener("click", async (e) => {
-  const pick = e.target.closest("[data-keys]");
-  if (pick) {
-    const card = pick.closest(".session-card");
-    card.querySelectorAll("[data-keys]").forEach((b) => { b.disabled = true; });
-    try {
-      await api("POST", `/sessions/${encodeURIComponent(pick.dataset.machine)}/${encodeURIComponent(pick.dataset.name)}/keys`, { keys: pick.dataset.keys });
-      pick.classList.add("picked");
-      toast(`Answered "${pick.textContent}"`, "ok");
-    } catch (err) {
-      card.querySelectorAll("[data-keys]").forEach((b) => { b.disabled = false; });
-      toast(err.message);
-    }
-    return;
-  }
-  const review = e.target.closest("[data-review]");
-  if (review) {
-    if (busy) { toast("Dispatch is still working on the last message."); return; }
-    const { machine, name, path } = review.dataset;
-    ask(`Review the branch that session ${name} on ${machine} worked on${path ? `, in ${path}` : ""}: start a review session as instructed and tell me what it finds.`);
-  }
 });
 
 setInterval(() => catchUp(true), 5000);
@@ -522,31 +605,6 @@ $("dispatch-stop").addEventListener("click", () => {
 $("new-chat").addEventListener("click", () => {
   if (busy) { toast("This conversation is still working. Stop it or wait, then start a new one."); return; }
   open(null);
-});
-
-$("convo-list").addEventListener("click", async (e) => {
-  const del = e.target.closest("[data-delete]");
-  if (del) {
-    const c = conversations.find((x) => x.id === del.dataset.delete);
-    if (!c) return;
-    if (!(await Nav.confirm("Delete this conversation?", c.title, { confirm: "Delete", danger: true }))) return;
-    try {
-      await api("POST", `/dispatch/conversations/${encodeURIComponent(c.id)}/delete`, {});
-      await loadList();
-      if (c.id === current) open(null);
-    } catch (err) {
-      toast(err.message);
-    }
-    return;
-  }
-  const link = e.target.closest("[data-open]");
-  if (!link) return;
-  e.preventDefault();
-  if (busy && link.dataset.open !== current) {
-    toast("This conversation is still working. Stop it or wait, then switch.");
-    return;
-  }
-  open(link.dataset.open);
 });
 
 $("clear-all").addEventListener("click", async (e) => {
