@@ -19,7 +19,8 @@ Rust binary with a plain HTML UI, plus apps for macOS, Linux and Android.
   branch, and whether the agent is working, idle or waiting for you, read from its own screen.
 - **A terminal anywhere.** Any tmux session in the browser, the desktop app or the phone, with
   scrollback, a key row on phones, and the screen you use setting the session's size.
-- **Workspace.** Every terminal in one sidebar by machine and folder, with tabs and split panes.
+- **Workspace.** Every terminal in one sidebar by machine and folder, with tabs and split panes,
+  and Dispatch in a panel beside them.
 - **New sessions where you want them.** Pick a machine, one of its installed agents, a folder and a
   branch; other branches get their own git worktree.
 - **Ports, already tunnelled.** Docker Compose ports from each session's folder, forwarded to the
@@ -27,16 +28,19 @@ Rust binary with a plain HTML UI, plus apps for macOS, Linux and Android.
 - **Phone notifications.** The Android app says when an agent waits for you, a session ends, a
   machine goes down or memory runs low, with no other app to install.
 - **Dispatch.** Describe a task and Yardbell picks the machine with the repository and the most room,
-  then starts an agent there.
+  then starts an agent there. It sits beside your terminals in the Workspace, and hides with one
+  click.
 - **Add machines from the UI.** Mesh peers, ssh key setup, `~/.ssh/config`, tool checks and a folder
   picker, without editing a file.
 - **Mesh VPN aware.** NordVPN Meshnet, Tailscale, Headscale, NetBird and ZeroTier, and the apps
   find the servers on it so signing in takes only the passcode.
 - **An MCP server for agents.** Agents can list machines and sessions, start, read and answer them.
+- **One menu on every page.** Dashboard, Workspace, Dispatch and Settings in the same place
+  everywhere, with Dashboard always first.
 - **Light or dark, and small to run.** A theme button in every sidebar; about 9 MB of memory, a
   service in one command and a `doctor` that checks everything.
 
-![Workspace with two terminals side by side](docs/screenshots/workspace.png)
+![Workspace with Dispatch beside two terminals](docs/screenshots/workspace.png)
 
 ## Download
 

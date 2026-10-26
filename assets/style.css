@@ -1263,6 +1263,8 @@ html.embedded .embed-only { display: inline-flex; }
   .side-foot { margin: 0; padding: 0; border: 0; position: absolute; top: max(8px, env(safe-area-inset-top)); right: 8px; display: flex; gap: 2px; }
   .side-foot .side-link { padding: 4px 6px; font-size: 12px; }
   .side-foot .side-link .icon { display: none; }
+  /* The wordmark and the back links lead home on a phone, and the header has no room for one more. */
+  .side-foot .side-link[href="/"] { display: none; }
   .side-foot .theme-toggle .icon { display: inline-block; width: 18px; height: 18px; }
   .side-foot .theme-toggle .theme-word { display: none; }
   .banner { flex-direction: column; align-items: stretch; }
