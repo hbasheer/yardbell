@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- The dashboard updates only what changed on each check instead of redrawing every machine, so
+  selected text, keyboard focus and the Working pulse stay put while it refreshes. It is drawn
+  with lit-html 3.3.3, which ships inside Yardbell, so the page still loads without a build step.
+
 ## [0.6.5] - 2026-10-26
 
 - The sidebar has one width on every page, 256px to start. Drag its right edge on any page to make

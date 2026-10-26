@@ -233,6 +233,58 @@ async fn shared_nav_script_is_served_to_logged_in_pages() {
     }
 }
 
+fn resolve_import(from: &str, spec: &str) -> String {
+    if spec.starts_with('/') {
+        return spec.to_string();
+    }
+    let mut parts: Vec<&str> = from.split('/').collect();
+    parts.pop();
+    for seg in spec.split('/') {
+        match seg {
+            "." => {}
+            ".." => {
+                parts.pop();
+            }
+            seg => parts.push(seg),
+        }
+    }
+    parts.join("/")
+}
+
+#[tokio::test]
+async fn every_module_the_dashboard_imports_is_served() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let html = String::from_utf8(Assets::get("dashboard.html").unwrap().data.into_owned()).unwrap();
+    assert!(html.contains(r#"<script type="module" src="/dashboard.js"></script>"#));
+    let import = regex::Regex::new(r#"\bfrom\s*["']([^"']+)["']"#).unwrap();
+    let mut queue = vec!["/dashboard.js".to_string()];
+    let mut seen = std::collections::HashSet::new();
+    while let Some(path) = queue.pop() {
+        if !seen.insert(path.clone()) {
+            continue;
+        }
+        let req = Request::get(&path)
+            .header(header::COOKIE, c.clone())
+            .body(Body::empty())
+            .unwrap();
+        let (status, headers, body) = send(&r.app, req).await;
+        assert_eq!(status, StatusCode::OK, "{path}");
+        assert_eq!(
+            headers[header::CONTENT_TYPE],
+            "text/javascript; charset=utf-8",
+            "{path}"
+        );
+        for spec in import.captures_iter(&body) {
+            queue.push(resolve_import(&path, &spec[1]));
+        }
+    }
+    assert!(
+        seen.contains("/vendor/lit-html/directive-helpers.js"),
+        "{seen:?}"
+    );
+}
+
 #[tokio::test]
 async fn the_phone_app_polls_its_notifications() {
     let r = rig();
