@@ -5,6 +5,22 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.4] - 2026-10-26
+
+- Dispatch is in the Workspace: a panel between the sidebar and the terminals, open until you hide
+  it. Sessions it starts or links to open in a Workspace pane. Hide it with Dispatch in the sidebar
+  menu, the speech bubble before the tabs, or the button at the top of the panel; the Workspace
+  remembers the choice.
+- The Workspace sidebar has the same menu as every other page: Dashboard, Workspace, Dispatch,
+  Settings and Log out.
+- Dashboard, with a home icon, is the first link in the sidebar menu on every page, and the back
+  links and the terminal's Dashboard button carry the same icon.
+- A quieter look shared with Commslayer: the sidebar sits on a light gray rail, the page is one
+  white card, machines are cards, primary buttons are near-black, and controls are 28px with a
+  slight bevel. Dark mode follows.
+- Fixed: in the desktop app, a terminal opened from the dashboard could lose keyboard focus a few
+  seconds later, when the hidden dashboard refreshed.
+
 ## [0.6.3] - 2026-10-25
 
 - Workspace keeps one row of tabs for every session on every machine. Clicking a session in the

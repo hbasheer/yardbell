@@ -267,7 +267,7 @@ async function open(id) {
   renderTracked();
   if (!id) {
     log.innerHTML = INTRO;
-    form.text.focus();
+    if (document.hasFocus()) form.text.focus();
     return;
   }
   try {
@@ -628,3 +628,19 @@ loadTasks();
 loadList()
   .then(() => open(current && conversations.some((c) => c.id === current) ? current : null))
   .catch((err) => toast(err.message));
+
+// Inside the Workspace, Dispatch opens sessions as Workspace panes and other pages in the whole window.
+if (window.top !== window.self) {
+  const tell = (message) => window.parent.postMessage({ yardbell: "dispatch", ...message }, location.origin);
+  $("hide-panel").addEventListener("click", () => tell({ action: "hide" }));
+  document.addEventListener("click", (e) => {
+    const link = e.target.closest("a[href]");
+    if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+    const url = new URL(link.href, location.href);
+    if (url.origin !== location.origin || url.pathname === "/dispatch") return;
+    e.preventDefault();
+    const [first, machine, name] = url.pathname.split("/").slice(1).map(decodeURIComponent);
+    if (first === "term" && machine && name) tell({ action: "open", key: `${machine}/${name}` });
+    else window.top.location.href = url.href;
+  });
+}

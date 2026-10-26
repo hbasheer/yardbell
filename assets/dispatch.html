@@ -13,6 +13,7 @@
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
 <script src="/side.js"></script>
+<script>if (window.top !== window.self) document.documentElement.classList.add("embedded");</script>
 </head>
 <body data-page="dispatch">
 <div class="app">
@@ -28,6 +29,9 @@
     </nav>
     <div class="side-foot">
       <p class="vpn" id="nav-vpn"></p>
+      <a class="side-link" href="/">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard
+      </a>
       <a class="side-link" href="/workspace">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10M8 8h5.5"/></svg>Workspace
       </a>
@@ -45,8 +49,8 @@
   </aside>
 
   <main class="main dispatch-main">
-    <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 4 6 8l4 4"/></svg>Dashboard</a>
-    <header class="main-head"><h1>Dispatch</h1><a class="btn quiet small-link" href="/settings#dispatch">Settings</a></header>
+    <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard</a>
+    <header class="main-head"><h1>Dispatch</h1><a class="btn quiet small-link" href="/settings#dispatch">Settings</a><button class="btn quiet icon-btn embed-only" type="button" id="hide-panel" aria-label="Hide Dispatch" title="Hide Dispatch"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10M10.5 6.5 9 8l1.5 1.5"/></svg></button></header>
     <div class="dispatch">
       <aside class="dispatch-side" id="dispatch-side" aria-label="Conversations and tasks">
         <button class="btn primary dispatch-new" type="button" id="new-chat">
