@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- On a phone, the header no longer covers the Yardbell name: the Dashboard link added to the menu
+  in 0.6.4 stays out of it there, since the name and the back links already lead home.
+- The README and the guide show the 0.6.4 look, with Dispatch in the Workspace.
+
 ## [0.6.4] - 2026-10-26
 
 - Dispatch is in the Workspace: a panel between the sidebar and the terminals, open until you hide
