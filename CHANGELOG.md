@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- On a machine shared with other people, only your own agent sessions are listed. Other accounts'
+  agents showed up as yours, with an error message for a folder, and counted toward agent memory.
+- A machine that limits your account's memory (a cgroup limit, as on a shared dev server) shows
+  that limit and your account's use of it, instead of the whole machine's RAM, so the memory bar
+  and the 95% alert match what you can actually use.
+
 ## [0.6.6] - 2026-10-27
 
 - The dashboard updates only what changed on each check instead of redrawing every machine, so
