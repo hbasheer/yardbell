@@ -34,7 +34,7 @@ json_text() {
 # mark the machine down, so its port list gets 3 seconds: the watchdog ends docker, and read -t
 # below stops waiting even if something else still holds the pipe. macOS has no timeout(1).
 docker_ps() {
-  docker ps --format '{{.Label "com.docker.compose.project.working_dir"}}|{{.Label "com.docker.compose.service"}}|{{.Ports}}' 2>/dev/null &
+  docker ps --format '{{.Label "dev.yardbell.workdir"}}|{{.Label "com.docker.compose.project.working_dir"}}|{{.Label "com.docker.compose.service"}}|{{.Ports}}' 2>/dev/null &
   local pid=$!
   (sleep 3; kill "$pid") >/dev/null 2>&1 &
   local watchdog=$!
@@ -159,14 +159,25 @@ fi
 printf '],"ports":['
 first=1
 if has docker; then
-  while IFS='|' read -r -t 3 workdir service ports; do
+  # A compose file kept outside the checkout labels every container with its own folder, so a
+  # dev.yardbell.workdir label names the checkout instead.
+  while IFS='|' read -r -t 3 label workdir service ports; do
     case "$services" in *" $service "*) ;; *) continue ;; esac
-    for hp in $(printf '%s\n' "$ports" | grep -oE ':[0-9]+->' | tr -d ':>-' | sort -un); do
+    workdir=${label:-$workdir}
+    seen=" "
+    for binding in $(printf '%s\n' "$ports" | grep -oE '(\[[0-9a-fA-F:]*\]|[0-9.]+):[0-9]+->' | tr -d '>-'); do
+      hp=${binding##*:}
+      case "$seen" in *" $hp "*) continue ;; esac
+      seen="$seen$hp "
+      addr=${binding%:*}
+      case "$addr" in 0.0.0.0 | 127.0.0.1 | \[*) addr="" ;; esac
       [ $first -eq 0 ] && printf ','
       first=0
       listening=false
-      (echo >"/dev/tcp/127.0.0.1/$hp") 2>/dev/null && listening=true
-      printf '{"workdir":%s,"service":%s,"host_port":%s,"listening":%s}' "$(esc "$workdir")" "$(esc "$service")" "$hp" "$listening"
+      (echo >"/dev/tcp/${addr:-127.0.0.1}/$hp") 2>/dev/null && listening=true
+      host=""
+      [ -n "$addr" ] && host=",\"host\":$(esc "$addr")"
+      printf '{"workdir":%s,"service":%s,"host_port":%s,"listening":%s%s}' "$(esc "$workdir")" "$(esc "$service")" "$hp" "$listening" "$host"
     done
   done < <(docker_ps)
 fi

@@ -375,6 +375,7 @@ mod tests {
                 service: "rails".into(),
                 remote_port: 3020,
                 listening: true,
+                host: None,
             }],
         );
         snap.ports.insert(
@@ -383,6 +384,7 @@ mod tests {
                 service: "rails".into(),
                 remote_port: 3000,
                 listening: false,
+                host: None,
             }],
         );
         MachineStatus {

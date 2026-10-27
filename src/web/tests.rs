@@ -59,6 +59,7 @@ fn rig() -> Rig {
             service: "rails".into(),
             remote_port: 3020,
             listening: true,
+            host: None,
         }],
     );
     snap.sessions.push(crate::snapshot::Session {

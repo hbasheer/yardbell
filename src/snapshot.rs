@@ -18,6 +18,7 @@ pub struct Port {
     pub service: String,
     pub remote_port: u16,
     pub listening: bool,
+    pub host: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -130,6 +131,8 @@ struct RawPort {
     host_port: u16,
     #[serde(default = "yes")]
     listening: bool,
+    #[serde(default)]
+    host: Option<String>,
 }
 
 fn yes() -> bool {
@@ -215,6 +218,7 @@ pub fn parse(
             service: p.service.clone(),
             remote_port: p.host_port,
             listening: p.listening,
+            host: p.host.clone(),
         };
         let list = snap.ports.entry(key).or_default();
         if !list.iter().any(|q| q.remote_port == port.remote_port) {
@@ -349,12 +353,14 @@ mod tests {
         assert!(slot2.contains(&Port {
             service: "rails".into(),
             remote_port: 3020,
-            listening: true
+            listening: true,
+            host: None
         }));
         assert!(slot2.contains(&Port {
             service: "mailpit".into(),
             remote_port: 8225,
-            listening: false
+            listening: false,
+            host: None
         }));
         let s = snap.sessions.iter().find(|s| s.pid == 1900001).unwrap();
         assert_eq!(s.folder, "slots/slot2");
@@ -605,5 +611,84 @@ mod tests {
         let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
         assert_eq!(json["ports"], serde_json::json!([]));
         assert!(json["health"].is_object(), "{json}");
+    }
+
+    #[test]
+    fn script_takes_the_workdir_label_and_the_bound_address() {
+        let dir = tempfile::tempdir().unwrap();
+        let docker = dir.path().join("docker");
+        std::fs::write(
+            &docker,
+            "#!/bin/sh\n\
+             echo '/w/app|/shared|rails|127.0.1.3:3230->3000/tcp'\n\
+             echo '/w/app|/shared|vite|3000/tcp, 127.0.1.3:5330->5173/tcp'\n\
+             echo '|/w/other|web|0.0.0.0:3000->3000/tcp, [::]:3000->3000/tcp'\n",
+        )
+        .unwrap();
+        std::fs::set_permissions(&docker, std::os::unix::fs::PermissionsExt::from_mode(0o755))
+            .unwrap();
+        let path = format!(
+            "{}:{}",
+            dir.path().display(),
+            std::env::var("PATH").unwrap_or_default()
+        );
+        let mut script = std::process::Command::new("bash")
+            .args(["-s", "--", "/tmp", "--", "rails", "vite", "web", "--"])
+            .env("PATH", path)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        script
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(SCRIPT.as_bytes())
+            .unwrap();
+        let out = script.wait_with_output().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let ports = json["ports"].as_array().unwrap();
+        let summary: Vec<(String, String, u64, Option<String>)> = ports
+            .iter()
+            .map(|p| {
+                (
+                    p["workdir"].as_str().unwrap().to_string(),
+                    p["service"].as_str().unwrap().to_string(),
+                    p["host_port"].as_u64().unwrap(),
+                    p["host"].as_str().map(String::from),
+                )
+            })
+            .collect();
+        assert_eq!(
+            summary,
+            vec![
+                (
+                    "/w/app".into(),
+                    "rails".into(),
+                    3230,
+                    Some("127.0.1.3".into())
+                ),
+                (
+                    "/w/app".into(),
+                    "vite".into(),
+                    5330,
+                    Some("127.0.1.3".into())
+                ),
+                ("/w/other".into(), "web".into(), 3000, None),
+            ],
+            "{json}"
+        );
+    }
+
+    #[test]
+    fn parse_keeps_the_bound_address() {
+        let json = r#"{"agents":[],"folders":[{"path":"/w/app","branch":"main"}],"ports":[
+            {"workdir":"/w/app","service":"rails","host_port":3230,"listening":true,"host":"127.0.1.3"},
+            {"workdir":"/w/app","service":"web","host_port":3000,"listening":true}]}"#;
+        let snap = parse(json, &machine("devbox1", "/w"), Path::new("/w"), None).unwrap();
+        let ports = snap.ports.get("app").unwrap();
+        assert_eq!(ports[0].host.as_deref(), Some("127.0.1.3"));
+        assert_eq!(ports[1].host, None);
     }
 }
