@@ -12,6 +12,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 - A machine that limits your account's memory (a cgroup limit, as on a shared dev server) shows
   that limit and your account's use of it, instead of the whole machine's RAM, so the memory bar
   and the 95% alert match what you can actually use.
+- A session whose Docker Compose file lives outside its checkout, such as one shared
+  `session.yaml` started with `docker compose -f` from every worktree, shows its ports under its
+  own folder. Give its containers the label `dev.yardbell.workdir` set to the checkout; without
+  the label, the compose file's folder is used as before.
+- On a machine whose Docker publishes ports on one address (an `"ip"` in `daemon.json`, as on a
+  shared server), those ports show as running, and Yardbell's tunnel forwards to that address
+  instead of `localhost`, where nothing was listening.
 
 ## [0.6.6] - 2026-10-27
 
