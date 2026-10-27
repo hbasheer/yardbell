@@ -22,7 +22,7 @@ pub fn local_port(prefix: u8, remote: u16) -> Option<u16> {
 struct Entry {
     pid: Option<u32>,
     prefix: u8,
-    ports: Vec<u16>,
+    ports: Vec<(u16, String)>,
     failures: usize,
     next_try: Option<Instant>,
     started: Instant,
@@ -56,7 +56,7 @@ impl Tunnels {
         self.log_dir.join(format!("tunnel-{name}.log"))
     }
 
-    fn argv(&self, m: &Machine, ports: &[u16]) -> Vec<String> {
+    fn argv(&self, m: &Machine, ports: &[(u16, String)]) -> Vec<String> {
         let prefix = m.port_prefix.unwrap_or(0);
         let mut argv = vec!["ssh".to_string()];
         for opt in [
@@ -76,13 +76,13 @@ impl Tunnels {
         ] {
             argv.push(opt.into());
         }
-        for remote in ports {
+        for (remote, host) in ports {
             let Some(local) = local_port(prefix, *remote) else {
                 continue;
             };
             for bind in &self.bind {
                 argv.push("-L".into());
-                argv.push(format!("{bind}:{local}:localhost:{remote}"));
+                argv.push(format!("{bind}:{local}:{host}:{remote}"));
             }
         }
         argv.push(m.ssh_host().into());
@@ -109,13 +109,16 @@ impl Tunnels {
         let Some(prefix) = m.port_prefix else {
             return;
         };
-        let mut wanted: Vec<u16> = ports
+        let mut wanted: Vec<(u16, String)> = ports
             .iter()
-            .map(|p| p.remote_port)
-            .filter(|r| local_port(prefix, *r).is_some())
+            .filter(|p| local_port(prefix, p.remote_port).is_some())
+            .map(|p| {
+                let host = p.host.clone().unwrap_or_else(|| "localhost".into());
+                (p.remote_port, host)
+            })
             .collect();
         wanted.sort_unstable();
-        wanted.dedup();
+        wanted.dedup_by_key(|(remote, _)| *remote);
 
         let mut entries = self.entries.lock().expect("tunnels lock");
         if wanted.is_empty() {
@@ -207,7 +210,7 @@ impl PortStatus for Tunnels {
         let entries = self.entries.lock().expect("tunnels lock");
         let Some(entry) = entries
             .get(&m.name)
-            .filter(|e| e.ports.contains(&port.remote_port))
+            .filter(|e| e.ports.iter().any(|(r, _)| *r == port.remote_port))
         else {
             return "tunnel down".into();
         };
@@ -251,6 +254,7 @@ mod tests {
             service: "rails".into(),
             remote_port: remote,
             listening,
+            host: None,
         }
     }
 
@@ -439,6 +443,28 @@ mod tests {
             rig.tunnels.status(&m, &port(3020, true)),
             "local port 13020 in use"
         );
+    }
+
+    #[test]
+    fn a_port_bound_to_one_address_is_forwarded_there() {
+        let rig = Rig::new();
+        let mut bound = port(3230, true);
+        bound.host = Some("127.0.1.3".into());
+        rig.tunnels.sync(&machine(), &[bound, port(3020, true)]);
+        let argv = rig.fake.spawned()[0].1.join(" ");
+        assert!(argv.contains("-L 127.0.0.1:13230:127.0.1.3:3230"), "{argv}");
+        assert!(argv.contains("-L 127.0.0.1:13020:localhost:3020"), "{argv}");
+    }
+
+    #[test]
+    fn a_new_bound_address_respawns() {
+        let rig = Rig::new();
+        rig.tunnels.sync(&machine(), &[port(3230, true)]);
+        let mut bound = port(3230, true);
+        bound.host = Some("127.0.1.3".into());
+        rig.tunnels.sync(&machine(), &[bound]);
+        assert_eq!(rig.spawn_count(), 2);
+        assert!(!rig.fake.spawned()[0].2);
     }
 
     #[test]

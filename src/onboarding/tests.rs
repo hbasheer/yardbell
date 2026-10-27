@@ -354,6 +354,7 @@ async fn remove_kills_tunnel_and_leaves_ssh_config() {
             service: "rails".into(),
             remote_port: 3020,
             listening: true,
+            host: None,
         }],
     );
     let step = r.ob.remove("hp").await;
