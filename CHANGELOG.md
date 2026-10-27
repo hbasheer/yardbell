@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.7] - 2026-10-27
+
 - On a machine shared with other people, only your own agent sessions are listed. Other accounts'
   agents showed up as yours, with an error message for a folder, and counted toward agent memory.
 - A machine that limits your account's memory (a cgroup limit, as on a shared dev server) shows
