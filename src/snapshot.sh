@@ -47,13 +47,16 @@ if has tmux; then
   panes=$(tmux list-panes -a -F '#{session_name} #{pane_tty} #{pane_id}' 2>/dev/null || true)
 fi
 
+# On a machine shared with other people, their agents are not ours to show, and lsof reports
+# their unreadable cwd as an error string that would pass for a folder.
+uid=$(id -u)
 candidates=""
 all_pids=" "
 for spec in ${agents[@]+"${agents[@]}"}; do
   agent=${spec%%=*}
   proc=${spec#*=}
-  pids=$(pgrep -x "$proc" 2>/dev/null || true)
-  [ -z "$pids" ] && pids=$(pgrep -f "(^|/)$proc( |\$)" 2>/dev/null || true)
+  pids=$(pgrep -u "$uid" -x "$proc" 2>/dev/null || true)
+  [ -z "$pids" ] && pids=$(pgrep -u "$uid" -f "(^|/)$proc( |\$)" 2>/dev/null || true)
   for pid in $pids; do
     [ "$pid" = "$$" ] && continue
     case "$all_pids" in *" $pid "*) continue ;; esac
@@ -177,6 +180,29 @@ if [ -r /proc/meminfo ]; then
   mem_total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
   avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
   [ -n "$mem_total" ] && [ -n "$avail" ] && mem_used=$((mem_total - avail))
+  # On a shared server each account gets a cgroup memory limit, and that limit is what runs out,
+  # not the machine's RAM. Page cache the kernel can drop is not counted as used, as in MemAvailable.
+  cg_path=$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null)
+  cg_dir="/sys/fs/cgroup${cg_path%/}"
+  cg_limit=""
+  cg_limit_dir=""
+  while [ -n "$cg_path" ] && [ -d "$cg_dir" ]; do
+    max=$(cat "$cg_dir/memory.max" 2>/dev/null || true)
+    case "$max" in
+      '' | max) ;;
+      *) if [ -z "$cg_limit" ] || [ "$max" -lt "$cg_limit" ]; then cg_limit=$max; cg_limit_dir=$cg_dir; fi ;;
+    esac
+    [ "$cg_dir" = /sys/fs/cgroup ] && break
+    cg_dir=${cg_dir%/*}
+  done
+  if [ -n "$cg_limit" ] && [ -n "$mem_total" ] && [ $((cg_limit / 1024)) -lt "$mem_total" ]; then
+    current=$(cat "$cg_limit_dir/memory.current" 2>/dev/null || true)
+    inactive=$(awk '$1 == "inactive_file" {print $2}' "$cg_limit_dir/memory.stat" 2>/dev/null)
+    if [ -n "$current" ]; then
+      mem_total=$((cg_limit / 1024))
+      mem_used=$(((current - ${inactive:-0}) / 1024))
+    fi
+  fi
   load1=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
   cpus=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 0)
 elif command -v vm_stat >/dev/null 2>&1; then
