@@ -126,6 +126,9 @@ mod tests {
                 stale: false,
                 ports: vec![],
                 pull: None,
+                path: String::new(),
+                worktree: false,
+                setup: None,
             }],
             vec![],
         )
@@ -140,6 +143,9 @@ mod tests {
                 agent: "claude".into(),
                 folder: "acme/api".into(),
                 ticket: String::new(),
+                path: String::new(),
+                branch: String::new(),
+                worktree: false,
             }],
         )
     }

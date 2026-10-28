@@ -40,6 +40,12 @@ scan_folder with the machine, the folder (or a path inside it) and the kind: dea
 or security. It starts a scanner there that looks through all of the code, not a branch, and \
 changes nothing; its findings come back to the user as a scan they can send to a session to fix.
 
+When parallel branches from the same base are done, integrate_branches brings them together on \
+a new branch and stops at the first conflict; push it with push_branch only when the user asks, \
+since a push leaves the user's machines. remove_worktree cleans up a worktree whose session has \
+ended. When a machine is short of memory or the user asks to move work, move_session moves a \
+session's branch, uncommitted changes and task to another machine.
+
 When asked what is going on, summarise every machine and session briefly: what is working, what \
 is waiting for an answer, what has finished, and machines that are down or low on memory.";
 
@@ -52,8 +58,8 @@ one the machine, folder, agent and branch name, and what the agent will do. Star
 the user agrees; then start every session in the plan.";
 
 const PROPOSE: &str = "Starting, stopping and typing into sessions waits for the user's approval. \
-start_session, send_to_session, stop_session, review_session and scan_folder do not run when you \
-call them: each call becomes a proposal that the user approves, edits or rejects in Dispatch, and \
+start_session, send_to_session, stop_session, review_session, scan_folder and the worktree tools \
+do not run when you call them: each call becomes a proposal that the user approves, edits or rejects in Dispatch, and \
 it runs only once approved. start_group makes each child a proposal of its own, shown together in \
 one card. So call them as soon as you know what you would do instead of asking first in \
 words, one call per session, and never call one again for a step that is still waiting.

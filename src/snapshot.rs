@@ -121,6 +121,8 @@ pub struct Snapshot {
     pub sessions: Vec<Session>,
     pub folders: BTreeMap<String, String>,
     pub folder_paths: BTreeMap<String, String>,
+    // Folders whose .git is a file: worktrees, by their label.
+    pub linked: std::collections::BTreeSet<String>,
     pub ports: BTreeMap<String, Vec<Port>>,
 }
 
@@ -155,6 +157,8 @@ fn activity(c: &RawAgent) -> Activity {
 struct RawFolder {
     path: String,
     branch: String,
+    #[serde(default)]
+    linked: bool,
 }
 
 #[derive(Deserialize)]
@@ -244,6 +248,9 @@ pub fn parse(
     for f in &raw.folders {
         snap.folders.insert(label(&f.path), f.branch.clone());
         snap.folder_paths.insert(label(&f.path), f.path.clone());
+        if f.linked {
+            snap.linked.insert(label(&f.path));
+        }
     }
     for p in &raw.ports {
         let key = label(&p.workdir);

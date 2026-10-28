@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, Notify};
 const TURN_LIMIT: Duration = Duration::from_secs(900);
 const RESULT_PREVIEW: usize = 4000;
 const TOOL_PREFIX: &str = "mcp__yardbell__";
-const TOOLS: [&str; 10] = [
+const TOOLS: [&str; 14] = [
     "list_machines",
     "list_sessions",
     "list_folders",
@@ -25,6 +25,10 @@ const TOOLS: [&str; 10] = [
     "review_session",
     "scan_folder",
     "start_group",
+    "remove_worktree",
+    "integrate_branches",
+    "push_branch",
+    "move_session",
 ];
 
 // A conversation that a trigger starts, rather than the person: its title, the trigger's mark,

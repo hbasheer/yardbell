@@ -19,8 +19,10 @@ How Yardbell works, what it needs, and how to run it as a service, with its port
 
 Every few seconds Yardbell pipes a small read-only shell script (`src/snapshot.sh`) over ssh to each
 machine. It reports agent processes and their folders, tmux sessions, git branches, Docker Compose
-ports, memory, load and mesh addresses as JSON. Everything Yardbell changes on another machine is
-limited to `tmux new`, `tmux kill-session` and `git worktree add`.
+ports, memory, load and mesh addresses as JSON. What Yardbell changes on another machine is
+limited to `tmux new` and `tmux kill-session`, worktrees (`git worktree add` and `remove`, the
+setup commands you configure, merges onto a new integration branch, a moved branch and its
+changes), and a `git push` you or your Dispatch rules approve.
 
 Open pages keep a websocket to Yardbell, which says when a machine's check has finished, and the
 page then fetches the new state. After you start, stop or answer a session, only that machine is

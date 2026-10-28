@@ -555,6 +555,17 @@ impl Settings {
         self.save(&cfg, backup, None)
     }
 
+    pub fn set_worktree_setup(
+        &self,
+        setups: Vec<crate::worktrees::setup::WorktreeSetup>,
+    ) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.worktree_setup = setups;
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
     pub fn set_triggers(&self, triggers: Vec<crate::triggers::Trigger>) -> Result<(), String> {
         let mut cfg = self.load()?;
         cfg.triggers = triggers;

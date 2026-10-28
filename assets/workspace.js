@@ -773,6 +773,7 @@ function newTab() {
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `Could not start the session (${res.status})`);
+        if (data.setup && !data.setup.ok) toast(`${window.YardbellWorktree.setupNote(data.setup)}. The agent started anyway.`);
         const key = `${body.machine}/${data.name}`;
         await load();
         open(key);

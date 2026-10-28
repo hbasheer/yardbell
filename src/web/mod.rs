@@ -81,6 +81,8 @@ pub struct AppState {
     pub handoff: std::sync::Mutex<Vec<(String, Instant)>>,
     pub pairing: std::sync::Mutex<Vec<(String, Instant)>>,
     pub viewers: Viewers,
+    pub worktrees: crate::worktrees::Worktrees,
+    tasks: std::sync::Mutex<HashMap<(String, String), String>>,
     installed: std::sync::Mutex<HashMap<String, (Instant, Vec<String>)>>,
     servers: tokio::sync::Mutex<Option<(Instant, Vec<crate::discover::Found>)>>,
     refresh: Refresh,
@@ -105,6 +107,7 @@ pub struct Services {
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
     pub triggers: Arc<crate::triggers::Triggers>,
+    pub worktrees: crate::worktrees::Worktrees,
     pub refresh: Refresh,
     pub releases: crate::about::Fetch,
 }
@@ -122,6 +125,7 @@ impl AppState {
             phone,
             dispatch,
             triggers,
+            worktrees,
             refresh,
             releases,
         } = services;
@@ -149,6 +153,8 @@ impl AppState {
             handoff: std::sync::Mutex::new(Vec::new()),
             pairing: std::sync::Mutex::new(Vec::new()),
             viewers: Viewers::default(),
+            worktrees,
+            tasks: std::sync::Mutex::new(HashMap::new()),
             installed: std::sync::Mutex::new(HashMap::new()),
             servers: tokio::sync::Mutex::new(None),
             refresh,
@@ -157,6 +163,26 @@ impl AppState {
             started_at: now_secs(),
             clock,
         }
+    }
+
+    // The task a session was started with, kept while Yardbell runs, so a move can start the same
+    // task elsewhere.
+    pub fn task_of(&self, machine: &str, name: &str) -> Option<String> {
+        self.tasks
+            .lock()
+            .expect("tasks lock")
+            .get(&(machine.to_string(), name.to_string()))
+            .cloned()
+    }
+
+    pub fn remember_task(&self, machine: &str, name: &str, task: &str) {
+        if task.trim().is_empty() {
+            return;
+        }
+        self.tasks
+            .lock()
+            .expect("tasks lock")
+            .insert((machine.to_string(), name.to_string()), task.to_string());
     }
 
     pub fn forget_installed(&self) {
@@ -465,6 +491,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(scan_api::routes())
         .merge(pulls_api::routes())
         .merge(triggers_api::routes())
+        .merge(worktrees_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -1337,7 +1364,7 @@ impl NewSession {
     }
 }
 
-fn label_of(path: &str) -> String {
+pub(crate) fn label_of(path: &str) -> String {
     let parts: Vec<&str> = path.trim_end_matches('/').rsplit('/').take(2).collect();
     parts.into_iter().rev().collect::<Vec<_>>().join("/")
 }
@@ -1382,14 +1409,14 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
     } else {
         req.path.trim().to_string()
     };
-    let (path, branch) = if req.branch.is_empty() {
+    let (path, branch, created) = if req.branch.is_empty() {
         let known = snap
             .folder_paths
             .iter()
             .find(|(_, p)| **p == repo)
             .and_then(|(label, _)| snap.folders.get(label).cloned())
             .unwrap_or_default();
-        (repo.clone(), known)
+        (repo.clone(), known, false)
     } else {
         let current = app
             .folders
@@ -1402,15 +1429,30 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
             new_branch: req.new_branch,
             base: req.base.clone(),
         };
-        let path = app
+        let prepared = app
             .folders
             .prepare(&m, &repo, &pick, &current)
             .await
             .map_err(ApiError::gateway)?;
-        (path, req.branch.clone())
+        (prepared.path, req.branch.clone(), prepared.created)
+    };
+    // A failed setup still starts the agent: the person sees the warning on the session and
+    // the agent is told, which beats a session that never starts over a missing .env.
+    let setup = if created {
+        worktrees_api::run_setup(app, &cfg, &m, &repo, &path).await
+    } else {
+        None
     };
     let ticket = snapshot::ticket(&branch, cfg.ticket_regex().as_ref());
-    let start = match (req.resume, req.prompt.trim()) {
+    let prompt = match (
+        req.prompt.trim(),
+        setup.as_ref().and_then(|s| s.note_for_agent()),
+    ) {
+        ("", _) => String::new(),
+        (task, Some(note)) => format!("{task}\n\n{note}"),
+        (task, None) => task.to_string(),
+    };
+    let start = match (req.resume, prompt.as_str()) {
         (true, _) => Start::Resume,
         (false, "") => Start::New,
         (false, prompt) => Start::Task(prompt),
@@ -1436,12 +1478,17 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
     if !req.resume {
         app.dispatch
             .started_in(&m.name, &path, &agent.name, read_only);
+        app.remember_task(&m.name, &name, req.prompt.trim());
     }
     remember(app, &m.name, &repo);
-    Ok(json!({ "machine": m.name, "name": name, "path": path }))
+    let mut started = json!({ "machine": m.name, "name": name, "path": path });
+    if let Some(setup) = setup {
+        started["setup"] = json!(setup);
+    }
+    Ok(started)
 }
 
-fn mcp_config(
+pub(crate) fn mcp_config(
     cfg: &Config,
     m: &Machine,
     agent: &crate::agents::Agent,
@@ -1933,6 +1980,7 @@ mod review_api;
 mod scan_api;
 mod settings_api;
 mod triggers_api;
+pub mod worktrees_api;
 
 #[cfg(test)]
 mod tests;

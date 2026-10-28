@@ -32,3 +32,4 @@ pub mod triggers;
 pub mod tunnels;
 pub mod viewers;
 pub mod web;
+pub mod worktrees;

@@ -36,6 +36,7 @@
       <h3 class="step-title">Folder</h3>
       <div id="recent" class="recent"></div>
       <nav id="crumbs" class="crumbs" aria-label="Folder path"></nav>
+      <p id="wt-here" class="wt-here" hidden></p>
       <ul id="dir-list" class="dir-list" aria-label="Folders"></ul>
     </section>
 
@@ -213,6 +214,10 @@
     const crumbs = [`<button type="button" class="crumb home" data-path="~">Home</button><span class="crumb-divider"></span>`, `<button type="button" class="crumb" data-path="/">/</button>`];
     parts.forEach((p, i) => crumbs.push(`${i ? `<span class="sep">/</span>` : ""}<button type="button" class="crumb${i === parts.length - 1 ? " here" : ""}" data-path="/${esc(parts.slice(0, i + 1).join("/"))}">${esc(p)}</button>`));
     $("crumbs").innerHTML = crumbs.join("");
+    $("wt-here").hidden = !l.linked;
+    $("wt-here").innerHTML = l.linked
+      ? `<span>This folder is a worktree${l.branch ? ` on <code>${esc(l.branch)}</code>` : ""}.</span><button type="button" class="btn quiet danger" data-remove-wt="${esc(l.path)}">Remove worktree</button>`
+      : "";
     const up = parts.length ? `<li><button type="button" class="dir" data-path="/${esc(parts.slice(0, -1).join("/"))}"><span class="dir-name">..</span></button></li>` : "";
     $("dir-list").innerHTML = up + (l.entries.length
       ? l.entries.map((e) => `<li><button type="button" class="dir${e.git ? " git" : ""}" data-path="${esc(`${l.path.replace(/\/$/, "")}/${e.name}`)}">
@@ -249,10 +254,24 @@
       ? names.slice(0, 40).map((n) => {
           const wt = b.worktrees[n];
           const note = wt ? "has a worktree" : b.local.includes(n) ? "local" : "origin";
-          return `<li><button type="button" class="branch-opt${nm.picked === n ? " picked" : ""}" role="option" aria-selected="${nm.picked === n}" data-branch="${esc(n)}">
-            <span class="dir-name">${esc(n)}</span><span class="dir-branch">${note}</span></button></li>`;
+          const remove = wt ? `<button type="button" class="btn quiet danger dir-remove" data-remove-wt="${esc(wt)}" aria-label="Remove the worktree of ${esc(n)}" title="Remove the worktree at ${esc(short(wt))}">Remove</button>` : "";
+          return `<li${wt ? ' class="has-worktree"' : ""}><button type="button" class="branch-opt${nm.picked === n ? " picked" : ""}" role="option" aria-selected="${nm.picked === n}" data-branch="${esc(n)}">
+            <span class="dir-name">${esc(n)}</span><span class="dir-branch">${note}</span></button>${remove}</li>`;
         }).join("")
       : `<li class="dir-empty">No matching branches</li>`;
+  }
+
+  function removeWorktree(path) {
+    const here = nm.listing?.path === path;
+    window.YardbellWorktree.remove({
+      machine: nm.machine,
+      path,
+      toast: (message, kind) => (nm.opts.onNotice || nm.opts.onError)?.(message, kind),
+      done: () => {
+        if (here) browseTo(nm.listing.path.replace(/\/[^/]+\/?$/, "") || "/");
+        else loadBranches().then(() => setMode("existing"));
+      },
+    });
   }
 
   function mode() {
@@ -304,6 +323,8 @@
     $("new-dialog").addEventListener("click", (e) => {
       const forget = e.target.closest("[data-forget]");
       if (forget) { forgetRecent(forget.dataset.forget); return; }
+      const removeWt = e.target.closest("[data-remove-wt]");
+      if (removeWt) { removeWorktree(removeWt.dataset.removeWt); return; }
       const target = e.target.closest("[data-path]");
       if (target) { browseTo(target.dataset.path); return; }
       const opt = e.target.closest("[data-branch]");

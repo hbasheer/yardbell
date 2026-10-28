@@ -311,7 +311,7 @@ and `deny`.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, or `any` (the default). |
+| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, or `any` (the default). |
 | `machine` | no | A machine name, or `any` (the default). |
 | `folder` | no | A folder pattern. Empty matches every folder. |
 | `approval` | yes | `allow`, `prompt` or `deny`. |
@@ -320,7 +320,8 @@ A folder pattern is a folder's name as the folder list shows it, relative to the
 (like `acme/web`), or an absolute path (like `/srv/apps/**`), and it covers the folders inside it.
 `*` matches any part of one folder name, `**` matches across folders and `?` matches one character.
 For a new session the folder is the one it starts in, for a review the folder of the session it
-reviews, and for stopping or typing into a session that session's folder.
+reviews, for stopping, typing into or moving a session that session's folder, and for removing a
+worktree, integrating or pushing the folder or path the step names.
 
 Which rule decides:
 
@@ -336,6 +337,37 @@ Dispatch gets an error that names the rule and tells you about it. A step that a
 run says which rule on its card. Yardbell refuses to load rules with an unknown action or machine,
 a folder starting with `~`, a rule that names nothing (set `approval` instead) or two rules for the
 same steps, and says which rule is wrong.
+
+### `worktree_setup` (optional)
+
+Commands that run in a new worktree right after Yardbell creates it, before the agent starts. The
+**Worktree setup** section of the Settings page edits it.
+
+```yaml
+worktree_setup:
+  - folder: acme/web               # the repository's main checkout: a label or a path, * allowed
+    command: npm ci && cp "$YARDBELL_MAIN_CHECKOUT/.env" .
+  - folder: acme/api
+    machine: devbox                # optional, default any
+    command: bin/setup
+    timeout_seconds: 900           # optional, default 300, at most 3600
+```
+
+`folder` is matched like a Dispatch rule's folder, against the main checkout the worktree was made
+from. When several entries match, the one that names the machine wins, then the one with the
+longer folder pattern. The command runs in the new worktree through your login shell on that
+machine, with `$YARDBELL_WORKTREE` and `$YARDBELL_MAIN_CHECKOUT` set. Its output goes to
+`yardbell-setup.log` in the worktree's git folder. A command that fails or passes its timeout is
+stopped with every process it started, and the agent starts anyway with a note about it; the
+session shows the output. Yardbell refuses to load an entry without a folder or command, with a
+folder starting with `~`, an unknown machine, a timeout outside 1 to 3600 seconds, or two entries
+for the same folder and machine.
+
+Only commands written here run. Yardbell does not look for a setup script in the repository on its
+own, because such a script comes from whatever branch the worktree is on, which can be a branch
+someone else pushed or an agent wrote, and it would run before anyone looked at it. To use a script
+the repository keeps, name it here, like `command: .yardbell/setup`, which says you trust that
+repository's branches.
 
 ### `pull_requests` (optional)
 
@@ -492,6 +524,7 @@ yourself keeps its mode until Yardbell first saves it, so run `chmod 600` on it.
 | Change | Takes effect |
 |---|---|
 | machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications`, `pull_requests`, `triggers` | on the next check, a few seconds |
+| `worktree_setup` | for the next worktree Yardbell creates |
 | passcode, "Log out everywhere" (from Settings) | immediately |
 | `port`, `listen_ip`, the host machine's `mesh_ip` | after restarting Yardbell |
 

@@ -1,6 +1,7 @@
 use crate::config::{Config, HostTerminal, Machine};
 use crate::probe::MachineStatus;
 use crate::snapshot::{Account, Activity, Health, Port, Session, Snapshot};
+use crate::worktrees::setup::SetupRun;
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -17,7 +18,17 @@ struct Inner {
     last_seen: HashMap<String, DateTime<Local>>,
     snapshots: HashMap<String, Snapshot>,
     ended: BTreeMap<String, Session>,
+    ended_in: HashMap<String, Place>,
+    setups: HashMap<(String, String), SetupRun>,
     pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>,
+}
+
+// The checkout an ended session ran in, as the last check before it ended saw it.
+#[derive(Clone, Default)]
+struct Place {
+    path: String,
+    branch: String,
+    worktree: bool,
 }
 
 #[derive(Clone)]
@@ -81,6 +92,12 @@ pub struct SessionView {
     pub ports: Vec<PortView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull: Option<crate::pulls::PullView>,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub worktree: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub setup: Option<SetupRun>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -90,6 +107,12 @@ pub struct EndedView {
     pub agent: String,
     pub folder: String,
     pub ticket: String,
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub branch: String,
+    #[serde(default)]
+    pub worktree: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -148,15 +171,30 @@ impl State {
                         .collect()
                 })
                 .unwrap_or_default();
+            let prev = inner.snapshots.get(&st.name).cloned().unwrap_or_default();
             for s in gone.into_iter().filter(Session::attachable) {
                 inner
                     .ended
                     .retain(|_, e| !(e.machine == s.machine && e.folder == s.folder));
+                let place = Place {
+                    path: prev
+                        .folder_paths
+                        .get(&s.folder)
+                        .cloned()
+                        .unwrap_or_else(|| s.cwd.clone()),
+                    branch: s.branch.clone(),
+                    worktree: prev.linked.contains(&s.folder),
+                };
+                inner.ended_in.insert(s.id(), place);
                 inner.ended.insert(s.id(), s);
             }
             for id in &live {
                 inner.ended.remove(id);
             }
+            let Inner {
+                ended, ended_in, ..
+            } = &mut *inner;
+            ended_in.retain(|id, _| ended.contains_key(id));
             inner.snapshots.insert(st.name.clone(), snap.clone());
             inner.last_seen.insert(st.name.clone(), st.checked_at);
         }
@@ -194,7 +232,50 @@ impl State {
     }
 
     pub fn forget(&self, id: &str) {
-        self.inner.write().expect("state lock").ended.remove(id);
+        let mut inner = self.inner.write().expect("state lock");
+        inner.ended.remove(id);
+        inner.ended_in.remove(id);
+        drop(inner);
+        self.touch();
+    }
+
+    pub fn set_setup(&self, machine: &str, run: SetupRun) {
+        self.inner
+            .write()
+            .expect("state lock")
+            .setups
+            .insert((machine.to_string(), run.path.clone()), run);
+        self.touch();
+    }
+
+    pub fn setup(&self, machine: &str, path: &str) -> Option<SetupRun> {
+        self.inner
+            .read()
+            .expect("state lock")
+            .setups
+            .get(&(machine.to_string(), path.to_string()))
+            .cloned()
+    }
+
+    // A worktree that is gone takes its setup and any ended session that ran in it along.
+    pub fn worktree_removed(&self, machine: &str, path: &str) {
+        let mut inner = self.inner.write().expect("state lock");
+        inner
+            .setups
+            .remove(&(machine.to_string(), path.to_string()));
+        let gone: Vec<String> = inner
+            .ended_in
+            .iter()
+            .filter(|(id, p)| {
+                p.path == path && inner.ended.get(*id).is_some_and(|s| s.machine == machine)
+            })
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in gone {
+            inner.ended.remove(&id);
+            inner.ended_in.remove(&id);
+        }
+        drop(inner);
         self.touch();
     }
 
@@ -313,6 +394,11 @@ impl State {
                             .collect()
                     })
                     .unwrap_or_default();
+                let path = snap
+                    .folder_paths
+                    .get(&s.folder)
+                    .cloned()
+                    .unwrap_or_default();
                 view.sessions.push(SessionView {
                     id: s.id(),
                     machine: m.name.clone(),
@@ -332,16 +418,23 @@ impl State {
                             .get(&(m.name.clone(), path.clone(), s.branch.clone()))
                             .cloned()
                     }),
+                    worktree: snap.linked.contains(&s.folder),
+                    setup: inner.setups.get(&(m.name.clone(), path.clone())).cloned(),
+                    path,
                 });
             }
         }
         for s in inner.ended.values() {
+            let place = inner.ended_in.get(&s.id()).cloned().unwrap_or_default();
             view.ended.push(EndedView {
                 id: s.id(),
                 machine: s.machine.clone(),
                 agent: s.agent.clone(),
                 folder: s.folder.clone(),
                 ticket: s.ticket.clone(),
+                path: place.path,
+                branch: place.branch,
+                worktree: place.worktree,
             });
         }
         view

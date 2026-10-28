@@ -3,12 +3,16 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
-const ACTIONS: [&str; 5] = [
+const ACTIONS: [&str; 9] = [
     "start_session",
     "stop_session",
     "send_to_session",
     "review_session",
     "scan_folder",
+    "remove_worktree",
+    "integrate_branches",
+    "push_branch",
+    "move_session",
 ];
 
 fn any() -> String {
@@ -141,6 +145,14 @@ pub fn decide<'a>(default: Approval, rules: &'a [Rule], step: &Step) -> Verdict<
             rule: None,
         },
     }
+}
+
+pub fn folder_matches(glob: &str, folders: &[String]) -> bool {
+    pattern(glob).is_ok_and(|re| folders.iter().any(|f| re.is_match(f)))
+}
+
+pub fn valid_folder_pattern(glob: &str) -> Result<(), String> {
+    pattern(glob).map(|_| ()).map_err(|e| e.to_string())
 }
 
 // A folder pattern matches a folder's label (relative to the machine's root, like acme/web) or its
@@ -403,7 +415,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],
