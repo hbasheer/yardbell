@@ -1,3 +1,9 @@
+mod diff;
+mod evidence;
+
+pub use diff::{changed_file, changed_files, valid_base, valid_path, Anchor};
+pub use evidence::{gather, valid_file as valid_evidence_file};
+
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
@@ -5,6 +11,7 @@ const START: &str = "YARDBELL REVIEW";
 const END: &str = "END REVIEW";
 const MAX_FINDINGS: usize = 30;
 const MAX_TEXT: usize = 600;
+const SHOT_TAG: &str = "[screenshot";
 
 // The session a reviewer looks at, so its findings can go back to it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -15,9 +22,28 @@ pub struct ReviewOf {
     pub path: String,
     #[serde(default)]
     pub branch: String,
+    // The folder under the repository's git dir where this reviewer may save screenshots.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub evidence: String,
 }
 
-pub fn prompt(branch: &str, focus: &str) -> String {
+// The apps the reviewer can open, offered only when the reviewed folder has one running.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Screenshots {
+    pub folder: String,
+    pub apps: Vec<String>,
+}
+
+pub fn evidence_folder() -> String {
+    use rand::Rng;
+    rand::thread_rng()
+        .sample_iter(&rand::distributions::Alphanumeric)
+        .take(12)
+        .map(|b| char::from(b).to_ascii_lowercase())
+        .collect()
+}
+
+pub fn prompt(branch: &str, focus: &str, shots: Option<&Screenshots>) -> String {
     let what = if branch.is_empty() {
         "the current branch".to_string()
     } else {
@@ -26,15 +52,30 @@ pub fn prompt(branch: &str, focus: &str) -> String {
     let mut text = format!(
         "Review the work on {what} in this folder: the commits that are not on the branch it was \
 made from (usually main, or origin/main when this is main) and any uncommitted changes. Run the \
-project's tests and linters if it has them. Do not change, stage or commit any files."
+project's tests and linters if it has them. Do not change, stage or commit any files in the \
+branch."
     );
     let focus = focus.trim();
     if !focus.is_empty() {
         text.push_str(&format!(" Pay special attention to this: {focus}"));
     }
+    if let Some(shots) = shots.filter(|s| !s.apps.is_empty()) {
+        text.push_str(&format!(
+            "\n\nThe app is running at {}. Screenshots are optional: when one shows a problem better \
+than words, take it with a headless browser, save it as a PNG in the folder that `git rev-parse \
+--git-path yardbell-review/{}` prints (create it; it is inside .git, so the branch does not change), \
+and end that finding's line with [screenshot: name.png]. Use short file names of letters, digits, \
+dots, dashes and underscores, and at most {} screenshots of up to {} MB each.",
+            shots.apps.join(", "),
+            shots.folder,
+            evidence::MAX_SHOTS,
+            evidence::MAX_BYTES / (1024 * 1024)
+        ));
+    }
     text.push_str(&format!(
         "\n\nWhen you are done, end your reply with this report and nothing after it:\n\n{START}\n\
-verdict: ready, or changes needed\nsummary: one or two sentences\n\
+verdict: ready, or changes needed\nbase: the branch or commit you compared against\n\
+summary: one or two sentences\n\
 - high: path/to/file:line: what is wrong and how to fix it\n- medium: ...\n- low: ...\n{END}\n\n\
 List only real problems, most serious first, one line each. Write \"- none\" when there are none."
     ));
@@ -46,26 +87,38 @@ pub struct Finding {
     pub severity: &'static str,
     pub place: String,
     pub text: String,
+    pub shots: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Report {
     pub ready: bool,
     pub summary: String,
+    pub base: String,
     pub findings: Vec<Finding>,
 }
 
 impl Report {
     pub fn to_json(&self) -> Value {
-        json!({
+        let mut report = json!({
             "verdict": if self.ready { "ready" } else { "changes" },
             "summary": self.summary,
-            "findings": self.findings.iter().map(|f| json!({
-                "severity": f.severity,
-                "place": f.place,
-                "text": f.text,
-            })).collect::<Vec<_>>(),
-        })
+            "findings": self.findings.iter().map(|f| {
+                let mut finding = json!({
+                    "severity": f.severity,
+                    "place": f.place,
+                    "text": f.text,
+                });
+                if !f.shots.is_empty() {
+                    finding["shots"] = json!(f.shots);
+                }
+                finding
+            }).collect::<Vec<_>>(),
+        });
+        if valid_base(&self.base) {
+            report["base"] = json!(self.base);
+        }
+        report
     }
 }
 
@@ -145,8 +198,34 @@ fn finding(item: &str) -> Finding {
     Finding {
         severity: level,
         place,
-        text: clip(text),
+        text: text.to_string(),
+        shots: Vec::new(),
     }
+}
+
+// "[screenshot: a.png]" or "[screenshots: a.png, b.png]" anywhere in a finding's text names the
+// screenshots that go with it, and is taken out of the text.
+fn take_shots(finding: &mut Finding) {
+    let mut text = finding.text.clone();
+    while let Some(at) = text.to_ascii_lowercase().find(SHOT_TAG) {
+        let Some(len) = text[at..].find(']') else {
+            break;
+        };
+        let tag = &text[at + 1..at + len];
+        let names = tag.split_once(':').map(|(_, n)| n).unwrap_or_default();
+        for name in names.split([',', ' ']).map(|n| n.trim_matches('`')) {
+            if !name.is_empty() && !finding.shots.iter().any(|s| s == name) {
+                finding.shots.push(name.to_string());
+            }
+        }
+        text.replace_range(at..at + len + 1, "");
+    }
+    finding.text = clip(
+        text.split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .as_str(),
+    );
 }
 
 fn is_marker(line: &str, marker: &str) -> bool {
@@ -161,6 +240,7 @@ pub fn parse(screen: &str) -> Option<Report> {
     let end = start + lines[start..].iter().position(|l| is_marker(l, END))?;
     let mut ready = None;
     let mut summary = String::new();
+    let mut base = String::new();
     let mut findings: Vec<Finding> = Vec::new();
     let mut in_summary = false;
     for line in lines[start + 1..end].iter().filter(|l| !l.is_empty()) {
@@ -175,6 +255,9 @@ pub fn parse(screen: &str) -> Option<Report> {
         } else if let Some(text) = value_of(line, "summary") {
             summary = text.to_string();
             in_summary = true;
+        } else if let Some(text) = value_of(line, "base") {
+            base = text.trim_matches('`').to_string();
+            in_summary = false;
         } else if let Some(item) = bullet(line) {
             in_summary = false;
             if bare(item)
@@ -189,14 +272,39 @@ pub fn parse(screen: &str) -> Option<Report> {
         } else if in_summary {
             summary = format!("{summary} {line}");
         } else if let Some(last) = findings.last_mut() {
-            last.text = clip(&format!("{} {line}", last.text));
+            last.text = format!("{} {line}", last.text);
         }
     }
+    findings.iter_mut().for_each(take_shots);
     Some(Report {
         ready: ready?,
         summary: clip(summary.trim()),
+        base,
         findings,
     })
+}
+
+// The findings picked on a review card, each with the screenshots kept for it, so the session
+// that fixes them can open the same files.
+pub fn picked(review: &Value, picks: &[usize]) -> Vec<Value> {
+    let all = review["findings"].as_array().cloned().unwrap_or_default();
+    picks
+        .iter()
+        .filter_map(|&i| {
+            let mut f = all.get(i)?.clone();
+            let shots: Vec<Value> = review["evidence"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|e| e["finding"] == i && e["file"].is_string())
+                .filter_map(|e| e.get("source").cloned())
+                .collect();
+            if !shots.is_empty() {
+                f["screenshots"] = json!(shots);
+            }
+            Some(f)
+        })
+        .collect()
 }
 
 // One line, so an agent that sends on Enter gets the whole request at once.
@@ -211,8 +319,19 @@ pub fn fix_request(findings: &[Value]) -> String {
             } else {
                 format!(" {place}:")
             };
+            let shots: Vec<&str> = f["screenshots"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+                .collect();
+            let seen = if shots.is_empty() {
+                String::new()
+            } else {
+                format!(" (screenshot: {})", shots.join(", "))
+            };
             format!(
-                "{}) {}{at} {}",
+                "{}) {}{at} {}{seen}",
                 i + 1,
                 f["severity"].as_str().unwrap_or("medium"),
                 f["text"].as_str().unwrap_or_default()
@@ -272,6 +391,7 @@ mod tests {
                 severity: "high",
                 place: "src/checkout.rs:88".into(),
                 text: "The retry loop has no limit, so a payment provider that is down hangs the request forever. Stop after 3 tries.".into(),
+                shots: vec![],
             }
         );
         assert_eq!(
@@ -289,7 +409,7 @@ mod tests {
 
     #[test]
     fn the_prompt_alone_is_not_a_report() {
-        let echoed = format!("> {}\n\n⏺ Reading the diff.", prompt("eng-1", ""));
+        let echoed = format!("> {}\n\n⏺ Reading the diff.", prompt("eng-1", "", None));
         assert_eq!(parse(&echoed), None, "the template's verdict is not one");
         assert_eq!(
             parse(CLAUDE_SCREEN.replace("  END REVIEW", "").as_str()),
@@ -310,12 +430,14 @@ mod tests {
                 Finding {
                     severity: "low",
                     place: "src/a.rs:3".into(),
-                    text: "Rename x.".into()
+                    text: "Rename x.".into(),
+                    shots: vec![],
                 },
                 Finding {
                     severity: "low",
                     place: String::new(),
-                    text: "spelling in docs".into()
+                    text: "spelling in docs".into(),
+                    shots: vec![],
                 },
             ]
         );
@@ -326,11 +448,48 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_branch_and_the_focus() {
-        let text = prompt("eng-1", "  the migration ");
+        let text = prompt("eng-1", "  the migration ", None);
         assert!(text.starts_with("Review the work on branch eng-1 in this folder"));
         assert!(text.contains("Pay special attention to this: the migration"));
         assert!(text.contains("\n\nYARDBELL REVIEW\nverdict: ready, or changes needed\n"));
-        assert!(prompt("", "").starts_with("Review the work on the current branch"));
+        assert!(prompt("", "", None).starts_with("Review the work on the current branch"));
+        assert!(text.contains("\nbase: the branch or commit you compared against\n"));
+        assert!(!text.contains("screenshot"), "no app, no screenshots");
+        let shots = Screenshots {
+            folder: "abcdef123456".into(),
+            apps: vec!["http://localhost:3020 (rails)".into()],
+        };
+        let text = prompt("eng-1", "", Some(&shots));
+        assert!(text.contains(
+            "The app is running at http://localhost:3020 (rails). Screenshots are optional"
+        ));
+        assert!(text.contains("`git rev-parse --git-path yardbell-review/abcdef123456`"));
+        assert!(text.contains("[screenshot: name.png]"));
+        assert!(text.contains("at most 6 screenshots of up to 2 MB each"));
+        assert_eq!(parse(&format!("> {text}")), None);
+        assert_eq!(evidence_folder().len(), 12);
+    }
+
+    #[test]
+    fn a_report_names_its_base_and_screenshots() {
+        let screen = "YARDBELL REVIEW\nverdict: changes needed\nbase: `origin/develop`\nsummary: One.\n\
+- high: web/login.html:12: The button is under the footer on a phone. [screenshot: login-phone.png]\n\
+- medium: a.rs:1: Two views [screenshots: `a.png`, b.png] disagree,\n  see [Screenshot: c.png] too.\n\
+- low: b.rs: No picture [screenshot]\nEND REVIEW";
+        let report = parse(screen).unwrap();
+        assert_eq!(report.base, "origin/develop");
+        let f = &report.findings;
+        assert_eq!(f[0].text, "The button is under the footer on a phone.");
+        assert_eq!(f[0].shots, ["login-phone.png"]);
+        assert_eq!(f[1].text, "Two views disagree, see too.");
+        assert_eq!(f[1].shots, ["a.png", "b.png", "c.png"]);
+        assert_eq!((f[2].text.as_str(), f[2].shots.len()), ("No picture", 0));
+        let json = report.to_json();
+        assert_eq!(json["base"], "origin/develop");
+        assert_eq!(json["findings"][0]["shots"], json!(["login-phone.png"]));
+        assert!(json["findings"][2].get("shots").is_none());
+        let unsafe_base = parse(&screen.replace("`origin/develop`", "$(rm -rf ~)")).unwrap();
+        assert!(unsafe_base.to_json().get("base").is_none());
     }
 
     #[test]
@@ -342,5 +501,25 @@ mod tests {
         assert!(text.starts_with("A review of this branch found these 2 problems. Fix them,"));
         assert!(text.contains("1) high src/checkout.rs:88: The retry loop"));
         assert!(fix_request(&all[2..]).contains("found this problem. Fix it,"));
+    }
+
+    #[test]
+    fn picked_findings_carry_their_screenshots() {
+        let review = json!({
+            "findings": [{ "severity": "high", "place": "a.rs:1", "text": "Off." }, { "severity": "low", "place": "", "text": "Nit." }],
+            "evidence": [
+                { "finding": 0, "name": "a.png", "file": "aaaaaaaaaaaaaaaa.png", "source": "/r/.git/yardbell-review/x/a.png" },
+                { "finding": 0, "name": "b.png", "error": "not found in the review folder" },
+            ],
+        });
+        let chosen = picked(&review, &[0, 1, 9]);
+        assert_eq!(chosen.len(), 2);
+        let text = fix_request(&chosen);
+        assert!(
+            text.contains(
+                "1) high a.rs:1: Off. (screenshot: /r/.git/yardbell-review/x/a.png) 2) low Nit."
+            ),
+            "{text}"
+        );
     }
 }

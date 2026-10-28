@@ -145,7 +145,12 @@ impl Folders {
         Folders { runner, ssh }
     }
 
-    async fn exec(&self, m: &Machine, script: &str, timeout: Duration) -> Result<String, String> {
+    pub(crate) async fn exec(
+        &self,
+        m: &Machine,
+        script: &str,
+        timeout: Duration,
+    ) -> Result<String, String> {
         let out = self
             .runner
             .run(self.ssh.command(m, script), None, timeout)

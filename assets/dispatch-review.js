@@ -1,4 +1,4 @@
-import { html, nothing } from "/vendor/lit-html/lit-html.js";
+import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 
 // Dispatch's steps that change something (start, stop or type into a session) and the results of
 // reviews, drawn as cards the person approves, edits, rejects or acts on.
@@ -12,6 +12,7 @@ const ICONS = {
   review: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg>`,
   check: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7"/></svg>`,
   edit: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l.6-2.6L10.8 3.2a1.4 1.4 0 0 1 2 2L5.6 12.4z"/></svg>`,
+  chevron: html`<svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>`,
 };
 
 const TITLES = {
@@ -22,12 +23,15 @@ const TITLES = {
 
 const SEVERITY = { high: "High", medium: "Medium", low: "Low" };
 
+const CHANGE = { M: "Modified", A: "Added", D: "Deleted", R: "Renamed", C: "Copied", T: "Type changed", U: "Unmerged" };
+
 let ctx = null;
 const drafts = new Map();
 const working = new Map();
 const expanded = new Set();
 const picks = new Map();
 const sending = new Set();
+const diffs = new Map();
 
 export function setup(context) {
   ctx = context;
@@ -39,6 +43,7 @@ export function reset() {
   expanded.clear();
   picks.clear();
   sending.clear();
+  diffs.clear();
 }
 
 function clock(stamp) {
@@ -359,6 +364,236 @@ async function settle(e, index, decision) {
   }
 }
 
+function diffOf(index) {
+  if (!diffs.has(index)) diffs.set(index, { open: false, list: null, error: "", loading: null, files: new Map(), hit: null });
+  return diffs.get(index);
+}
+
+function diffUrl(index, params = {}) {
+  const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null)).toString();
+  return `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/diff${query ? `?${query}` : ""}`;
+}
+
+function loadList(index) {
+  const d = diffOf(index);
+  if (d.list) return Promise.resolve(d.list);
+  if (d.loading) return d.loading;
+  d.error = "";
+  d.loading = ctx.api("GET", diffUrl(index))
+    .then((list) => { d.list = list; return list; })
+    .catch((err) => { d.error = err.message; return null; })
+    .finally(() => { d.loading = null; ctx.draw(); });
+  ctx.draw();
+  return d.loading;
+}
+
+function fileOf(d, path) {
+  if (!d.files.has(path)) d.files.set(path, { open: false, lines: null, next: 0, total: 0, loading: false, error: "" });
+  return d.files.get(path);
+}
+
+async function loadFile(index, path, line) {
+  const f = fileOf(diffOf(index), path);
+  if (f.loading) return;
+  f.loading = true;
+  f.error = "";
+  ctx.draw();
+  try {
+    const page = await ctx.api("GET", diffUrl(index, { file: path, from: f.next, line }));
+    f.lines = [...(f.lines || []), ...page.lines];
+    Object.assign(f, { next: page.next, total: page.total, binary: page.binary, notes: page.notes, cut: page.cut });
+  } catch (err) {
+    f.error = err.message;
+  } finally {
+    f.loading = false;
+    ctx.draw();
+  }
+}
+
+function toggleDiff(index) {
+  const d = diffOf(index);
+  d.open = !d.open;
+  if (d.open) loadList(index);
+  ctx.draw();
+}
+
+function toggleFile(index, path) {
+  const f = fileOf(diffOf(index), path);
+  f.open = !f.open;
+  if (f.open && !f.lines) loadFile(index, path);
+  ctx.draw();
+}
+
+// "src/a.rs:88", "src/a.rs:88-92" or "src/a.rs", matched to a changed file even when the
+// reviewer wrote a longer or shorter path than git does.
+function placeOf(place) {
+  const m = String(place).match(/^(.+?)(?::(\d+)(?:[-:,]\d+)*)?$/);
+  if (!m) return null;
+  return { path: m[1].replace(/^\.\//, ""), line: m[2] ? Number(m[2]) : null };
+}
+
+function fileFor(list, path) {
+  const files = list?.files || [];
+  const exact = files.find((f) => f.path === path);
+  if (exact) return exact;
+  const near = files.filter((f) => f.path.endsWith(`/${path}`) || path.endsWith(`/${f.path}`));
+  return near.length === 1 ? near[0] : null;
+}
+
+function rowId(index, path, line) {
+  return `diff-${index}-${encodeURIComponent(path)}-L${line}`;
+}
+
+async function jump(index, place) {
+  const at = placeOf(place);
+  if (!at) return;
+  const d = diffOf(index);
+  d.open = true;
+  const list = await loadList(index);
+  if (!list) { ctx.draw(); return; }
+  const file = fileFor(list, at.path);
+  if (!file) {
+    ctx.toast(`${at.path} is not in this review's changes`);
+    ctx.draw();
+    return;
+  }
+  const f = fileOf(d, file.path);
+  f.open = true;
+  d.hit = { path: file.path, line: at.line };
+  const reached = () => !at.line || (f.lines || []).some((l) => l.n >= at.line) || (f.lines && f.next >= f.total);
+  if (!reached()) await loadFile(index, file.path, at.line ?? undefined);
+  ctx.draw();
+  requestAnimationFrame(() => {
+    const row = at.line
+      ? document.getElementById(rowId(index, file.path, (f.lines || []).find((l) => l.n >= at.line)?.n))
+      : null;
+    (row || document.getElementById(`diff-${index}-${encodeURIComponent(file.path)}`))?.scrollIntoView({ block: "center" });
+  });
+}
+
+function stats(f) {
+  if (f.binary) return html`<span class="diff-stat muted">binary</span>`;
+  if (f.added == null && f.removed == null) return nothing;
+  if (!f.added && !f.removed) return nothing;
+  return html`<span class="diff-stat"><span class="add">+${f.added ?? 0}</span> <span class="del">−${f.removed ?? 0}</span></span>`;
+}
+
+function fileBody(index, d, file, f) {
+  if (f.error) return html`<p class="diff-msg error">${f.error} <button class="link-btn" type="button" @click=${() => loadFile(index, file.path)}>Try again</button></p>`;
+  if (!f.lines) return html`<p class="diff-msg">Loading the diff…</p>`;
+  const notes = (f.notes || []).map((n) => html`<p class="diff-msg">${n}.</p>`);
+  if (f.binary) return html`${notes}<p class="diff-msg">A binary file, so there is nothing to show.</p>`;
+  if (!f.lines.length) return html`${notes}${notes.length ? nothing : html`<p class="diff-msg">No changes inside the file.</p>`}`;
+  const hit = d.hit?.path === file.path ? d.hit.line : null;
+  const hitRow = hit ? f.lines.find((l) => l.n >= hit)?.n : null;
+  const left = f.total - f.next;
+  return html`${notes}<div class="diff-scroll"><table class="diff-table">
+    <tbody>${f.lines.map((l) => l.k === "hunk"
+      ? html`<tr class="hunk"><td class="ln"></td><td class="ln"></td><td class="code">${l.t}</td></tr>`
+      : html`<tr class="${l.k} ${l.n && l.n === hitRow && l.k !== "del" ? "hit" : ""}" id=${l.n && l.k !== "del" ? rowId(index, file.path, l.n) : nothing}>
+        <td class="ln">${l.o ?? ""}</td><td class="ln">${l.n ?? ""}</td>
+        <td class="code"><span class="mark" aria-hidden="true">${l.k === "add" ? "+" : l.k === "del" ? "−" : " "}</span>${l.t}</td>
+      </tr>`)}</tbody>
+  </table></div>
+  ${left > 0 ? html`<button class="link-btn diff-more" type="button" ?disabled=${f.loading} @click=${() => loadFile(index, file.path)}>${f.loading ? "Loading…" : `Show ${Math.min(left, 400)} more lines (${left} left)`}</button>` : nothing}
+  ${f.cut && left <= 0 ? html`<p class="diff-msg">The rest of this diff is over 2 MB, so it is not shown.</p>` : nothing}`;
+}
+
+function fileRow(index, d, file) {
+  const f = fileOf(d, file.path);
+  const word = file.untracked ? "New, not committed" : CHANGE[file.status] || file.status;
+  return html`<li class="diff-file ${f.open ? "open" : ""}">
+    <button class="diff-file-head" type="button" id=${`diff-${index}-${encodeURIComponent(file.path)}`} aria-expanded=${f.open ? "true" : "false"} @click=${() => toggleFile(index, file.path)}>
+      ${ICONS.chevron}
+      <span class="diff-status" title=${word}><span aria-hidden="true">${file.untracked ? "?" : file.status}</span><span class="visually-hidden">${word}</span></span>
+      <span class="diff-path">${file.old_path ? html`<span class="muted">${file.old_path} → </span>` : nothing}${file.path}</span>
+      ${stats(file)}
+    </button>
+    ${f.open ? html`<div class="diff-file-body">${fileBody(index, d, file, f)}</div>` : nothing}
+  </li>`;
+}
+
+function diffNote(e, list) {
+  const base = list.base || e.diff?.base;
+  const parts = [];
+  if (!base) parts.push(html`Yardbell found no base branch, so these are the changes not yet committed.`);
+  else if (list.merge_base === list.head) parts.push(html`No commits beyond <code>${base}</code>, so these are the changes not yet committed.`);
+  else parts.push(html`Against <code>${base}</code> from <code>${list.merge_base.slice(0, 7)}</code>, with changes not yet committed.`);
+  parts.push(html` Read from the folder as it is now.`);
+  return html`<p class="diff-msg">${parts}${list.moved ? html` <strong>The branch has new commits since this review.</strong>` : nothing}</p>`;
+}
+
+function diffPanel(e, index) {
+  const d = diffOf(index);
+  const list = d.list;
+  const files = list?.files || [];
+  const added = files.reduce((n, f) => n + (f.added || 0), 0);
+  const removed = files.reduce((n, f) => n + (f.removed || 0), 0);
+  const count = list ? html`<span class="review-diff-count">${files.length} ${files.length === 1 ? "file" : "files"}${files.length ? html` <span class="add">+${added}</span> <span class="del">−${removed}</span>` : nothing}</span>` : nothing;
+  let body = nothing;
+  if (d.open) {
+    if (d.error) body = html`<p class="diff-msg error">${d.error} <button class="link-btn" type="button" @click=${() => loadList(index)}>Try again</button></p>`;
+    else if (!list) body = html`<p class="diff-msg">Reading the changes on ${e.machine}…</p>`;
+    else body = html`${diffNote(e, list)}
+      ${files.length ? html`<ul class="diff-files">${files.map((f) => fileRow(index, d, f))}</ul>` : html`<p class="diff-msg">No changes.</p>`}
+      ${list.truncated ? html`<p class="diff-msg">Only part of a very large change is listed.</p>` : nothing}`;
+  }
+  return html`<section class="review-diff">
+    <button class="review-diff-toggle" type="button" aria-expanded=${d.open ? "true" : "false"} @click=${() => toggleDiff(index)}>${ICONS.chevron}<span>Changes</span>${count}</button>
+    ${d.open ? html`<div class="review-diff-body">${body}</div>` : nothing}
+  </section>`;
+}
+
+function shotUrl(index, file) {
+  return `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/evidence/${encodeURIComponent(file)}`;
+}
+
+function viewer() {
+  let dialog = document.getElementById("shot-view");
+  if (!dialog) {
+    dialog = document.createElement("dialog");
+    dialog.id = "shot-view";
+    dialog.className = "shot-view";
+    dialog.addEventListener("click", (ev) => { if (ev.target === dialog) dialog.close(); });
+    document.body.append(dialog);
+  }
+  return dialog;
+}
+
+function openShot(index, shot) {
+  const dialog = viewer();
+  const url = shotUrl(index, shot.file);
+  const zoom = (ev) => ev.currentTarget.closest(".shot-view-body").classList.toggle("actual");
+  render(html`<div class="shot-view-head">
+      <strong>${shot.name}</strong>
+      <span class="muted">${shot.width} × ${shot.height}</span>
+      <button class="btn" type="button" @click=${() => dialog.close()}>Close</button>
+    </div>
+    <div class="shot-view-body"><img src=${url} alt=${`Screenshot ${shot.name}`} width=${shot.width} height=${shot.height} title="Click to switch between fitting the window and the actual size" @click=${zoom}></div>`, dialog);
+  dialog.querySelector(".shot-view-body").classList.remove("actual");
+  dialog.showModal();
+}
+
+function shots(e, index, i) {
+  const mine = (e.evidence || []).filter((s) => s.finding === i);
+  if (!mine.length) return nothing;
+  const kept = mine.filter((s) => s.file);
+  const lost = mine.filter((s) => !s.file);
+  return html`${kept.length ? html`<span class="finding-shots">${kept.map((s) => html`<button class="shot" type="button" aria-label=${`Open the screenshot ${s.name} full size`} title=${s.name} @click=${(ev) => { ev.preventDefault(); openShot(index, s); }}>
+      <img src=${shotUrl(index, s.file)} alt="" loading="lazy" width=${s.width} height=${s.height}>
+    </button>`)}</span>` : nothing}
+    ${lost.map((s) => html`<span class="finding-shot-error">${s.name} was not attached: ${s.error}.</span>`)}`;
+}
+
+function place(e, index, f) {
+  if (!f.place) return nothing;
+  const at = placeOf(f.place);
+  const list = diffOf(index).list;
+  const linked = at && (!list || fileFor(list, at.path));
+  if (!linked) return html`<code class="finding-place">${f.place}</code>`;
+  return html`<button class="finding-place link" type="button" title="Show this in the changes" @click=${(ev) => { ev.preventDefault(); jump(index, f.place); }}>${f.place}</button>`;
+}
+
 function finding(e, index, f, i, chosen) {
   const decided = Boolean(e.outcome);
   const toggle = (ev) => {
@@ -369,7 +604,7 @@ function finding(e, index, f, i, chosen) {
   return html`<li><label class="finding ${decided && !chosen.has(i) ? "left-out" : ""}">
     <input type="checkbox" .checked=${chosen.has(i)} ?disabled=${decided || sending.has(index)} @change=${toggle}>
     <span class="sev ${f.severity}">${SEVERITY[f.severity] || f.severity}</span>
-    <span class="finding-text">${f.place ? html`<code class="finding-place">${f.place}</code>` : nothing}<span>${f.text}</span></span>
+    <span class="finding-text">${place(e, index, f)}<span>${f.text}</span>${shots(e, index, i)}</span>
   </label></li>`;
 }
 
@@ -404,6 +639,7 @@ export function reviewCard(e, index) {
       ${findings.length
         ? html`<ul class="findings">${findings.map((f, i) => finding(e, index, f, i, chosen))}</ul>`
         : html`<p class="step-card-text muted">No problems found.</p>`}
+      ${diffPanel(e, index)}
     </div>
     <footer class="step-card-foot">${decided}</footer>
   </article>`;

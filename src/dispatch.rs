@@ -12,7 +12,11 @@ mod usage;
 pub use actions::{changes_something, valid_id as valid_action_id, By};
 pub use follow::Change;
 pub use mcp_config::CONVERSATION_HEADER;
-pub use review::{fix_request, prompt as review_prompt, ReviewOf};
+pub use review::{
+    changed_file as review_file, changed_files as review_files, evidence_folder, fix_request,
+    picked as review_picked, prompt as review_prompt, valid_path as valid_review_path,
+    Anchor as ReviewAnchor, ReviewOf, Screenshots,
+};
 pub use rules::{decide as decide_step, validate as validate_rules, Rule, Step, Verdict};
 pub use store::valid_id;
 pub use tasks::SavedTask;
@@ -300,6 +304,41 @@ impl Dispatch {
         self.shared.save(&change.conversation);
     }
 
+    // A review's card also gets its screenshots and the start of its diff, read from the
+    // reviewer's machine before the card is shown.
+    pub async fn report_from(
+        &self,
+        change: &Change,
+        screen: &str,
+        folders: &crate::folders::Folders,
+        m: &crate::config::Machine,
+    ) {
+        let event = match self.review_result(change, screen) {
+            Some(review) => {
+                let store = self.evidence_dir(&change.conversation);
+                review::gather(review, &store, folders, m).await
+            }
+            None => follow::event(change, screen),
+        };
+        self.shared.push(&change.conversation, event);
+        self.shared.save(&change.conversation);
+    }
+
+    fn evidence_dir(&self, id: &str) -> PathBuf {
+        self.shared.dir.join("evidence").join(id)
+    }
+
+    pub fn evidence(&self, id: &str, card: usize, file: &str) -> Option<Vec<u8>> {
+        let review = self.event(id, card).filter(|e| e["role"] == "review")?;
+        let listed = review["evidence"]
+            .as_array()?
+            .iter()
+            .any(|e| e["file"] == file);
+        (listed && review::valid_evidence_file(file))
+            .then(|| std::fs::read(self.evidence_dir(id).join(file)).ok())
+            .flatten()
+    }
+
     // A reviewer that finished with its report gives a review result instead of a session card,
     // once: the same report seen again, after the person typed into the reviewer, is a card.
     fn review_result(&self, change: &Change, screen: &str) -> Option<Value> {
@@ -357,6 +396,7 @@ impl Dispatch {
             }
         }
         let _ = std::fs::remove_file(self.mcp_config_file(id));
+        let _ = std::fs::remove_dir_all(self.evidence_dir(id));
         match std::fs::remove_file(self.shared.file(id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 Err(format!("could not delete the conversation: {e}"))
@@ -736,12 +776,13 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             name: "hp-app".into(),
             path: "/r/app".into(),
             branch: "eng-1".into(),
+            evidence: String::new(),
         };
         let step = dispatch
             .propose(
                 &id,
                 "start_session",
-                json!({ "machine": "hp", "path": "/r/app", "prompt": review_prompt("eng-1", "") }),
+                json!({ "machine": "hp", "path": "/r/app", "prompt": review_prompt("eng-1", "", None) }),
                 By::You,
                 Some(of.clone()),
                 None,

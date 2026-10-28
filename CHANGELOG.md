@@ -5,6 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Dispatch review cards have **Changes**: the reviewed branch's diff against the base the reviewer
+  used, with changes not yet committed. It lists each changed file with its added and removed
+  lines, loads a file's diff when you open it, shows long diffs 400 lines at a time, and names
+  binary files and renames. A finding's `file:line` opens the diff at that line. The diff is read
+  with `git` on the session's machine and changes nothing there. The reviewer now also names its
+  base in the report.
+- A reviewer can attach screenshots to its findings when the reviewed app is running on one of its
+  ports. It saves PNG files in a folder inside `.git` and names them in its report; Yardbell copies
+  them into the conversation (up to 6 per review, 2 MB each, 24 MB per conversation), shows them
+  as thumbnails that open full size, and passes their paths on when you send the findings back.
+
 ## [0.7.1] - 2026-10-28
 
 - Dispatch has rules for what it may do. Each rule matches a step (starting, stopping or typing
