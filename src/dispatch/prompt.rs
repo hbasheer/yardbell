@@ -26,6 +26,11 @@ When asked to review a session's branch, call review_session with that session. 
 reviewer in the same folder that runs the tests and changes nothing, and its findings come back to \
 the user as a review they can send to the session to fix.
 
+When asked to scan a folder or repository for dead code, test gaps or security problems, call \
+scan_folder with the machine, the folder (or a path inside it) and the kind: dead_code, test_gaps \
+or security. It starts a scanner there that looks through all of the code, not a branch, and \
+changes nothing; its findings come back to the user as a scan they can send to a session to fix.
+
 When asked what is going on, summarise every machine and session briefly: what is working, what \
 is waiting for an answer, what has finished, and machines that are down or low on memory.";
 
@@ -38,9 +43,9 @@ one the machine, folder, agent and branch name, and what the agent will do. Star
 the user agrees; then start every session in the plan.";
 
 const PROPOSE: &str = "Starting, stopping and typing into sessions waits for the user's approval. \
-start_session, send_to_session, stop_session and review_session do not run when you call them: \
-each call becomes a proposal that the user approves, edits or rejects in Dispatch, and it runs \
-only once approved. So call them as soon as you know what you would do instead of asking first in \
+start_session, send_to_session, stop_session, review_session and scan_folder do not run when you \
+call them: each call becomes a proposal that the user approves, edits or rejects in Dispatch, and \
+it runs only once approved. So call them as soon as you know what you would do instead of asking first in \
 words, one call per session, and never call one again for a step that is still waiting.
 
 When the user asks you to work through tickets or several tasks, first read them (the user's \
@@ -51,8 +56,8 @@ After proposing, end your reply with one or two sentences on what you proposed a
 user's next message starts with what happened to each proposal; trust it over what you expected.";
 
 const RULES: &str = "The user's rules decide some steps differently: a call that starts, stops, \
-types into or reviews a session may run at once, become a proposal for the user, or be refused. \
-Each tool result says which. When a call is refused, tell the user which rule refused it and that \
+types into or reviews a session, or scans a folder, may run at once, become a proposal for the \
+user, or be refused. Each tool result says which. When a call is refused, tell the user which rule refused it and that \
 they can change it in Yardbell's Settings, and do not try it again or reach the same result \
 another way.";
 

@@ -20,6 +20,18 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Settings has a **Triggers** section to add, edit, turn off and delete triggers, with **Run now**
   or **Check now**, the next run, the last run and what went wrong. Triggers live under
   `triggers:` in `yardbell.yml` and are checked when it loads.
+- Dispatch can scan a whole folder, or a folder inside one, for dead code, test gaps or security
+  problems. **Scan** on a session card and **Scan** in the message box prepare a scanner, a new
+  session in that folder told to change no files, and Dispatch can propose one with its new
+  `scan_folder` tool, which your rules decide as **Start a scan**. The findings come back as a scan
+  card with the number of issues found, and **Files** shows the files they point at, read-only and
+  only those. **Send** types the picked findings into a session in that folder, or prepares a new
+  session to fix them. Three new default tasks, **Security scan**, **Dead code scan** and **Test gap
+  scan**, scan each repository once.
+- Reviewers and scanners start unable to edit files: Claude Code without its file editing tools
+  (`--disallowed-tools 'Edit,Write,NotebookEdit'`) and Codex in its read-only sandbox
+  (`--sandbox read-only`), also when such a session is resumed. Other agents are read-only by
+  instruction, and their card says so.
 
 ## [0.7.2] - 2026-10-28
 

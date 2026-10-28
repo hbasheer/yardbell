@@ -3,6 +3,7 @@ mod follow;
 mod mcp_config;
 mod prompt;
 mod pull;
+mod read_only;
 mod review;
 mod rules;
 mod store;
@@ -14,9 +15,10 @@ pub use actions::{changes_something, valid_id as valid_action_id, By};
 pub use follow::Change;
 pub use mcp_config::CONVERSATION_HEADER;
 pub use review::{
-    changed_file as review_file, changed_files as review_files, evidence_folder, fix_request,
-    picked as review_picked, prompt as review_prompt, valid_path as valid_review_path,
-    Anchor as ReviewAnchor, ReviewOf, Screenshots,
+    changed_file as review_file, changed_files as review_files, evidence_folder, file_view,
+    fix_request, found_by, picked as review_picked, places as finding_files,
+    prompt as review_prompt, scan_prompt, valid_path as valid_review_path, Anchor as ReviewAnchor,
+    ReviewOf, ScanKind, Screenshots,
 };
 pub use rules::{decide as decide_step, validate as validate_rules, Rule, Step, Verdict};
 pub use store::valid_id;
@@ -147,6 +149,25 @@ impl Dispatch {
                     .collect()
             })
             .unwrap_or_default()
+    }
+
+    // A conversation of its own for a step the person asks for outside one, such as a scan of a
+    // folder started before any message.
+    pub fn open_conversation(&self, title: &str) -> String {
+        let id = store::new_id();
+        let stamp = now();
+        self.shared.lock().insert(
+            id.clone(),
+            Conversation::new(Stored {
+                id: id.clone(),
+                title: store::title_of(title),
+                created: stamp.clone(),
+                updated: stamp,
+                ..Stored::default()
+            }),
+        );
+        self.shared.save(&id);
+        id
     }
 
     pub fn propose(
@@ -319,7 +340,7 @@ impl Dispatch {
     }
 
     // A review's card also gets its screenshots and the start of its diff, read from the
-    // reviewer's machine before the card is shown.
+    // reviewer's machine before the card is shown. A scan has neither.
     pub async fn report_from(
         &self,
         change: &Change,
@@ -328,6 +349,7 @@ impl Dispatch {
         m: &crate::config::Machine,
     ) {
         let event = match self.review_result(change, screen) {
+            Some(scan) if scan["of"]["scan"].is_string() => scan,
             Some(review) => {
                 let store = self.evidence_dir(&change.conversation);
                 review::gather(review, &store, folders, m).await
@@ -355,9 +377,13 @@ impl Dispatch {
 
     // A reviewer that finished with its report gives a review result instead of a session card,
     // once: the same report seen again, after the person typed into the reviewer, is a card.
+    // A scanner's report is read the same way, from its own block.
     fn review_result(&self, change: &Change, screen: &str) -> Option<Value> {
         let of = change.review.as_ref().filter(|_| change.state == "idle")?;
-        let report = review::parse(screen)?.to_json();
+        let report = match of.scan_kind() {
+            Some(_) => review::parse_scan(screen)?.to_scan_json(),
+            None => review::parse(screen)?.to_json(),
+        };
         let chats = self.shared.lock();
         let earlier = chats
             .get(&change.conversation)?
@@ -792,6 +818,7 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             path: "/r/app".into(),
             branch: "eng-1".into(),
             evidence: String::new(),
+            scan: String::new(),
         };
         let step = dispatch
             .propose(
@@ -858,6 +885,78 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         assert!(dispatch
             .review_outcome(&id, index, json!({ "decision": "dismissed" }))
             .is_err());
+    }
+
+    #[tokio::test]
+    async fn a_finished_scanner_reports_a_scan_without_a_diff() {
+        use crate::snapshot::Activity;
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = fake_claude(dir.path(), "true");
+        let id = dispatch.open_conversation("security scan of app");
+        assert_eq!(dispatch.get(&id).unwrap()["title"], "security scan of app");
+        let of = ReviewOf {
+            machine: "hp".into(),
+            name: String::new(),
+            path: "/r/app".into(),
+            branch: String::new(),
+            evidence: String::new(),
+            scan: "security".into(),
+        };
+        let input = json!({ "machine": "hp", "path": "/r/app", "prompt": scan_prompt(ScanKind::Security, "") });
+        let step = dispatch
+            .propose(&id, "start_session", input, By::You, Some(of.clone()), None)
+            .unwrap();
+        let step = step["id"].as_str().unwrap();
+        dispatch.approve(&id, step, None).unwrap();
+        dispatch
+            .ran(
+                &id,
+                step,
+                &Ok(json!({ "machine": "hp", "name": "hp-app-2", "path": "/r/app" })),
+            )
+            .unwrap();
+        dispatch.observe(&view(Some(Activity::Active), "hp-app-2"));
+        let changes = dispatch.observe(&view(Some(Activity::Idle), "hp-app-2"));
+        let review_screen = "YARDBELL REVIEW\nverdict: ready\nsummary: x\nEND REVIEW";
+        dispatch.report(&changes[0], review_screen);
+        let card = dispatch.get(&id).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(card["role"], "session", "a review's report is not a scan's");
+        dispatch.observe(&view(Some(Activity::Active), "hp-app-2"));
+        let changes = dispatch.observe(&view(Some(Activity::Idle), "hp-app-2"));
+        let folders = crate::folders::Folders::new(
+            Arc::new(FakeRunner::default()),
+            crate::ssh::Ssh::new(dir.path().join("ssh")),
+        );
+        let m: crate::config::Machine =
+            serde_yaml::from_str("name: hp\nlocal: true\nroot: /r").unwrap();
+        dispatch
+            .report_from(
+                &changes[0],
+                "YARDBELL SCAN\nverdict: clean\nsummary: Nothing found.\n- none\nEND SCAN",
+                &folders,
+                &m,
+            )
+            .await;
+        let card = dispatch.get(&id).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .clone();
+        assert_eq!(card["role"], "review");
+        assert_eq!(
+            (&card["verdict"], &card["of"]["scan"]),
+            (&json!("clean"), &json!("security"))
+        );
+        assert!(
+            card.get("diff").is_none() && card.get("evidence").is_none(),
+            "{card}"
+        );
     }
 
     #[tokio::test]

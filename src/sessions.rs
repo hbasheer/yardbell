@@ -38,6 +38,7 @@ pub struct Launch<'a> {
     pub agent: &'a Agent,
     pub start: Start<'a>,
     pub mcp_config: Option<&'a str>,
+    pub read_only: bool,
 }
 
 fn exact(name: &str) -> String {
@@ -195,6 +196,7 @@ impl Sessions {
             agent,
             start,
             mcp_config,
+            read_only,
         } = launch;
         let name = session_name(&m.name, ticket, folder_label);
         let mut run = match start {
@@ -202,7 +204,11 @@ impl Sessions {
             Start::Resume => agent.resume.clone(),
             Start::Task(prompt) => agent.with_prompt(prompt)?,
         };
-        // --mcp-config takes several values, so it goes last or it would swallow the task.
+        // --disallowed-tools and --mcp-config take several values, so they go after the task or
+        // they would swallow it.
+        if let Some(flags) = agent.read_only_flags().filter(|_| read_only) {
+            run = format!("{run} {flags}");
+        }
         if let Some(config) = mcp_config {
             let file = self.write_mcp_config(m, config).await?;
             run = format!("{run} --mcp-config {}", quote(&file));
@@ -448,6 +454,7 @@ mod tests {
                     agent: &claude(),
                     start: Start::New,
                     mcp_config: None,
+                    read_only: false,
                 },
             )
             .await
@@ -509,6 +516,7 @@ mod tests {
                     agent: &claude(),
                     start: Start::New,
                     mcp_config: None,
+                    read_only: false,
                 },
             )
             .await
@@ -530,6 +538,7 @@ mod tests {
                     agent: &claude(),
                     start: Start::Task("fix login"),
                     mcp_config: None,
+                    read_only: false,
                 },
             )
             .await
@@ -561,6 +570,7 @@ mod tests {
             agent,
             start: Start::Task("fix login"),
             mcp_config: Some(MCP_CONFIG),
+            read_only: false,
         }
     }
 
@@ -820,6 +830,55 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_read_only_start_turns_off_editing_for_claude_and_codex_only() {
+        let builtin = crate::agents::builtin();
+        let by = |n: &str| builtin.iter().find(|a| a.name == n).unwrap().clone();
+        let started = |agent: Agent, start: Start<'static>, read_only: bool, mcp: bool| async move {
+            let fake = Arc::new(FakeRunner::default());
+            fake.stub("tmux new", Output::ok_with(""));
+            fake.stub("yardbell/mcp", Output::ok_with("/c/mcp-1.json\n"));
+            sessions(fake.clone())
+                .create(
+                    &machine(true),
+                    Launch {
+                        folder_path: "/r/app",
+                        ticket: "-",
+                        folder_label: "app",
+                        agent: &agent,
+                        start,
+                        mcp_config: mcp.then_some(MCP_CONFIG),
+                        read_only,
+                    },
+                )
+                .await
+                .unwrap();
+            last_command(&fake)
+        };
+        let ran = |agent: &str, run: &str| {
+            crate::shell::login_shell(&start_script(
+                &machine(true),
+                "hp-app",
+                "/r/app",
+                run,
+                &by(agent),
+            ))
+        };
+        let task = Start::Task("review it");
+        for (agent, start, read_only, mcp, run) in [
+            ("claude", task, true, true, "claude 'review it' --disallowed-tools 'Edit,Write,NotebookEdit' --mcp-config '/c/mcp-1.json'"),
+            ("codex", task, true, false, "codex 'review it' --sandbox read-only"),
+            ("claude", Start::Resume, true, false, "claude --continue --disallowed-tools 'Edit,Write,NotebookEdit'"),
+            ("codex", Start::Resume, true, false, "codex resume --last --sandbox read-only"),
+            ("claude", task, false, true, "claude 'review it' --mcp-config '/c/mcp-1.json'"),
+            ("codex", task, false, false, "codex 'review it'"),
+            ("gemini", task, true, false, "gemini -i 'review it'"),
+        ] {
+            let cmd = started(by(agent), start, read_only, mcp).await;
+            assert!(cmd.ends_with(&ran(agent, run)), "{run}: {cmd}");
+        }
+    }
+
+    #[tokio::test]
     async fn resume_uses_the_agents_resume_command() {
         let fake = Arc::new(FakeRunner::default());
         fake.stub("tmux new", Output::ok_with(""));
@@ -833,6 +892,7 @@ mod tests {
                     agent: &claude(),
                     start: Start::Resume,
                     mcp_config: None,
+                    read_only: false,
                 },
             )
             .await
@@ -858,6 +918,7 @@ mod tests {
                 agent: &codex,
                 start: Start::New,
                 mcp_config: None,
+                read_only: false,
             },
         )
         .await
@@ -872,6 +933,7 @@ mod tests {
                 agent: &codex,
                 start: Start::Resume,
                 mcp_config: None,
+                read_only: false,
             },
         )
         .await
@@ -923,6 +985,7 @@ mod tests {
                     agent: &claude(),
                     start: Start::New,
                     mcp_config: None,
+                    read_only: false,
                 },
             )
             .await
@@ -946,6 +1009,7 @@ mod tests {
                     agent: &claude(),
                     start: Start::New,
                     mcp_config: None,
+                    read_only: false,
                 },
             )
             .await
