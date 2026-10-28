@@ -373,10 +373,12 @@ mod tests {
                 AgentView {
                     name: "claude".into(),
                     label: "Claude Code".into(),
+                    read_only: true,
                 },
                 AgentView {
                     name: "codex".into(),
                     label: "Codex".into(),
+                    read_only: true,
                 },
             ],
             ..view(vec![], vec![], vec![])
@@ -771,6 +773,7 @@ mod tests {
         v.agents = vec![AgentView {
             name: "claude".into(),
             label: "Claude".into(),
+            read_only: true,
         }];
         v.folders = vec![FolderView {
             machine: "hp".into(),

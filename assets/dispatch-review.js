@@ -3,13 +3,15 @@ import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 // Dispatch's steps that change something (start, stop or type into a session) and the results of
 // reviews, drawn as cards the person approves, edits, rejects or acts on.
 
-export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session"]);
+export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder"]);
 
 const ICONS = {
   start_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
   send_to_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5 6.5 8 3 11.5M8.5 12h5"/></svg>`,
   stop_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>`,
   review: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg>`,
+  scan: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3M2.5 8h11"/></svg>`,
+  file: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg>`,
   check: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 8.5 3 3 6-7"/></svg>`,
   edit: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l.6-2.6L10.8 3.2a1.4 1.4 0 0 1 2 2L5.6 12.4z"/></svg>`,
   chevron: html`<svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="m6 4 4 4-4 4"/></svg>`,
@@ -23,6 +25,14 @@ const TITLES = {
 
 const SEVERITY = { high: "High", medium: "Medium", low: "Low" };
 
+const SCANS = { dead_code: "Dead code scan", test_gaps: "Test gap scan", security: "Security scan" };
+const SCAN_WHAT = {
+  dead_code: "unused functions, modules, routes, assets and config",
+  test_gaps: "important code without tests, and runs the tests",
+  security: "secrets, injection, unsafe input, missing auth checks and advisories",
+};
+const scanOf = (of) => (of && SCANS[of.scan] ? of.scan : null);
+
 const CHANGE = { M: "Modified", A: "Added", D: "Deleted", R: "Renamed", C: "Copied", T: "Type changed", U: "Unmerged" };
 
 let ctx = null;
@@ -32,6 +42,7 @@ const expanded = new Set();
 const picks = new Map();
 const sending = new Set();
 const diffs = new Map();
+const targets = new Map();
 
 export function setup(context) {
   ctx = context;
@@ -44,6 +55,7 @@ export function reset() {
   picks.clear();
   sending.clear();
   diffs.clear();
+  targets.clear();
 }
 
 function clock(stamp) {
@@ -98,6 +110,9 @@ function badge(e, state) {
 
 function where(e) {
   const i = e.input || {};
+  if (scanOf(e.review)) {
+    return html`<code>${ctx.short(e.review.path || i.path)}</code> on ${i.machine} · ${agentLabel(i.agent)}`;
+  }
   if (e.review) {
     const of = e.review;
     return html`of <strong>${of.name}</strong> on ${i.machine}${of.branch ? html` · <code>${of.branch}</code>` : nothing} · ${agentLabel(i.agent)}`;
@@ -110,6 +125,16 @@ function where(e) {
   return html`<strong>${i.name}</strong> on ${i.machine}`;
 }
 
+// Claude Code and Codex start without a way to edit files; other agents are only asked not to.
+function readOnlyNote(i) {
+  const state = ctx.state();
+  const agent = (state?.agents || []).find((a) => a.name === (i.agent || state?.default_agent));
+  if (!agent) return nothing;
+  return agent.read_only
+    ? html`<p class="step-card-text muted">${agent.label} starts with file editing turned off.</p>`
+    : html`<p class="step-card-text muted read-only-note">Read-only by instruction: ${agent.label} cannot be started with file editing turned off, so it is only asked to change nothing.</p>`;
+}
+
 function longText(id, text) {
   const long = text.length > 420 || text.split("\n").length > 6;
   const open = expanded.has(id);
@@ -119,9 +144,18 @@ function longText(id, text) {
 
 function body(e) {
   const i = e.input || {};
+  const scan = scanOf(e.review);
+  if (scan) {
+    return html`<div class="step-card-body">
+      <p class="step-card-text">A new session in <code>${ctx.short(i.path)}</code> looks through all of its code for ${SCAN_WHAT[scan]}. It changes no files, and its findings come back here.</p>
+      ${readOnlyNote(i)}
+      <details class="step-card-more"><summary>Instructions for the scanner</summary><p class="step-card-text step-card-mono">${i.prompt}</p></details>
+    </div>`;
+  }
   if (e.review) {
     return html`<div class="step-card-body">
       <p class="step-card-text">A new session in <code>${ctx.short(i.path)}</code> reviews this branch, runs the tests and changes no files. Its findings come back here.</p>
+      ${readOnlyNote(i)}
       <details class="step-card-more"><summary>Instructions for the reviewer</summary><p class="step-card-text step-card-mono">${i.prompt}</p></details>
     </div>`;
   }
@@ -171,7 +205,7 @@ function editor(e) {
       <label class="check"><input type="checkbox" .checked=${Boolean(draft.new_branch)} @change=${(ev) => { draft.new_branch = ev.target.checked; ctx.draw(); }}>Create the branch</label>
       ${draft.new_branch ? field(draft, "base", "From", { placeholder: "main" }) : nothing}
     </div>`}
-    <label>${e.review ? "Instructions for the reviewer" : "Task"}<textarea rows=${e.review ? 9 : 6} .value=${draft.prompt ?? ""} @input=${(ev) => { draft.prompt = ev.target.value; }}></textarea></label>
+    <label>${scanOf(e.review) ? "Instructions for the scanner" : e.review ? "Instructions for the reviewer" : "Task"}<textarea rows=${e.review ? 9 : 6} .value=${draft.prompt ?? ""} @input=${(ev) => { draft.prompt = ev.target.value; }}></textarea></label>
   </div>`;
 }
 
@@ -240,19 +274,22 @@ function outcome(e, state) {
   return html`<p class="step-card-outcome">${ICONS.check}<span>${word}</span></p>`;
 }
 
-const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews" };
+const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans" };
 
 function ruleText(r) {
   const machine = !r.machine || r.machine === "any" ? "any machine" : r.machine;
   return `${RULE_STEPS[r.action] || "any step"} on ${machine}${r.folder ? ` in ${r.folder}` : ""}`;
 }
 
-// A step the person asked for goes ahead in its own words: a review starts, a message is sent.
+// A step the person asked for goes ahead in its own words: a review or a scan starts, a message is
+// sent.
 const MINE = {
-  start_session: { go: "Start review", done: "Started", edited: "started", waiting: "Not started" },
+  review: { go: "Start review", done: "Started", edited: "started", waiting: "Not started" },
+  scan: { go: "Start scan", done: "Started", edited: "started", waiting: "Not started" },
+  start_session: { go: "Start session", done: "Started", edited: "started", waiting: "Not started" },
   send_to_session: { go: "Send", done: "Sent", edited: "sent", waiting: "Not sent" },
 };
-const mineWords = (e) => MINE[e.tool] || MINE.start_session;
+const mineWords = (e) => MINE[scanOf(e.review) ? "scan" : e.review ? "review" : e.tool] || MINE.start_session;
 
 function trail(e, state) {
   if (e.legacy) return "Ran without asking";
@@ -288,14 +325,20 @@ function actions(e, state) {
   </div>`;
 }
 
+function stepTitle(e) {
+  const scan = scanOf(e.review);
+  if (scan) return `Start a ${SCANS[scan].toLowerCase()}`;
+  return e.review ? "Start a review" : TITLES[e.tool] || e.tool;
+}
+
 export function stepCard(e) {
   const state = stateOf(e);
-  const icon = e.review ? ICONS.review : ICONS[e.tool] || ICONS.start_session;
-  return html`<article class="step-card ${state}" aria-label=${e.review ? "Start a review" : TITLES[e.tool] || e.tool}>
+  const icon = scanOf(e.review) ? ICONS.scan : e.review ? ICONS.review : ICONS[e.tool] || ICONS.start_session;
+  return html`<article class="step-card ${state}" aria-label=${stepTitle(e)}>
     <header class="step-card-head">
       <span class="step-card-icon">${icon}</span>
       <div class="step-card-title">
-        <strong>${e.review ? "Start a review" : TITLES[e.tool] || e.tool}</strong>
+        <strong>${stepTitle(e)}</strong>
         <span class="step-card-where">${where(e)}</span>
       </div>
       ${badge(e, state)}
@@ -354,14 +397,21 @@ function picked(e, index) {
   return picks.get(index);
 }
 
-async function settle(e, index, decision) {
+async function settle(e, index, decision, to) {
   const findings = [...picked(e, index)].sort((a, b) => a - b);
+  const words = `${findings.length} ${findings.length === 1 ? "finding" : "findings"}`;
   sending.add(index);
   ctx.draw();
   try {
-    const review = await ctx.api("POST", `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}`, { decision, findings });
-    ctx.replaceAt(index, review);
-    if (decision === "send") ctx.toast(`Sent ${findings.length} ${findings.length === 1 ? "finding" : "findings"} to ${e.of.name}`, "ok");
+    const answer = await ctx.api("POST", `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}`, { decision, findings, ...(to ? { to } : {}) });
+    if (decision === "start") {
+      ctx.replaceAt(index, answer.card);
+      ctx.addStep(answer.step);
+      ctx.toast(`A new session for ${words} waits below for you to start it`, "ok");
+    } else {
+      ctx.replaceAt(index, answer);
+      if (decision === "send") ctx.toast(`Sent ${words} to ${to || e.of.name}`, "ok");
+    }
   } catch (err) {
     ctx.toast(err.message);
     if (/already/.test(err.message)) ctx.reload();
@@ -372,13 +422,15 @@ async function settle(e, index, decision) {
 }
 
 function diffOf(index) {
-  if (!diffs.has(index)) diffs.set(index, { open: false, list: null, error: "", loading: null, files: new Map(), hit: null });
+  if (!diffs.has(index)) diffs.set(index, { open: false, list: null, error: "", loading: null, files: new Map(), hit: null, scan: false });
   return diffs.get(index);
 }
 
+// A review reads its branch's diff; a scan reads the files its findings point at.
 function diffUrl(index, params = {}) {
   const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v !== undefined && v !== null)).toString();
-  return `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/diff${query ? `?${query}` : ""}`;
+  const what = diffOf(index).scan ? "files" : "diff";
+  return `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/${what}${query ? `?${query}` : ""}`;
 }
 
 function loadList(index) {
@@ -439,6 +491,21 @@ function placeOf(place) {
   return { path: m[1].replace(/^\.\//, ""), line: m[2] ? Number(m[2]) : null };
 }
 
+function safePath(path) {
+  return Boolean(path) && !path.startsWith("/") && !/[\u0000-\u001f]/.test(path) && path.split("/").every((p) => p && p !== "." && p !== "..");
+}
+
+// The files a scan's findings point at, each once, with how many findings name it. The server
+// shows only these.
+function scanFiles(e) {
+  const seen = new Map();
+  for (const f of e.findings || []) {
+    const at = f.place ? placeOf(f.place) : null;
+    if (at && safePath(at.path)) seen.set(at.path, (seen.get(at.path) || 0) + 1);
+  }
+  return [...seen].map(([path, count]) => ({ path, count }));
+}
+
 function fileFor(list, path) {
   const files = list?.files || [];
   const exact = files.find((f) => f.path === path);
@@ -456,25 +523,29 @@ async function jump(index, place) {
   if (!at) return;
   const d = diffOf(index);
   d.open = true;
-  const list = await loadList(index);
-  if (!list) { ctx.draw(); return; }
-  const file = fileFor(list, at.path);
-  if (!file) {
-    ctx.toast(`${at.path} is not in this review's changes`);
-    ctx.draw();
-    return;
+  let path = at.path;
+  if (!d.scan) {
+    const list = await loadList(index);
+    if (!list) { ctx.draw(); return; }
+    const file = fileFor(list, at.path);
+    if (!file) {
+      ctx.toast(`${at.path} is not in this review's changes`);
+      ctx.draw();
+      return;
+    }
+    path = file.path;
   }
-  const f = fileOf(d, file.path);
+  const f = fileOf(d, path);
   f.open = true;
-  d.hit = { path: file.path, line: at.line };
-  const reached = () => !at.line || (f.lines || []).some((l) => l.n >= at.line) || (f.lines && f.next >= f.total);
-  if (!reached()) await loadFile(index, file.path, at.line ?? undefined);
+  d.hit = { path, line: at.line };
+  const reached = () => (f.lines && !at.line) || (f.lines || []).some((l) => l.n >= at.line) || (f.lines && f.next >= f.total);
+  if (!reached()) await loadFile(index, path, at.line ?? undefined);
   ctx.draw();
   requestAnimationFrame(() => {
     const row = at.line
-      ? document.getElementById(rowId(index, file.path, (f.lines || []).find((l) => l.n >= at.line)?.n))
+      ? document.getElementById(rowId(index, path, (f.lines || []).find((l) => l.n >= at.line)?.n))
       : null;
-    (row || document.getElementById(`diff-${index}-${encodeURIComponent(file.path)}`))?.scrollIntoView({ block: "center" });
+    (row || document.getElementById(`diff-${index}-${encodeURIComponent(path)}`))?.scrollIntoView({ block: "center" });
   });
 }
 
@@ -487,23 +558,28 @@ function stats(f) {
 
 function fileBody(index, d, file, f) {
   if (f.error) return html`<p class="diff-msg error">${f.error} <button class="link-btn" type="button" @click=${() => loadFile(index, file.path)}>Try again</button></p>`;
-  if (!f.lines) return html`<p class="diff-msg">Loading the diff…</p>`;
+  if (!f.lines) return html`<p class="diff-msg">${d.scan ? "Loading the file…" : "Loading the diff…"}</p>`;
   const notes = (f.notes || []).map((n) => html`<p class="diff-msg">${n}.</p>`);
   if (f.binary) return html`${notes}<p class="diff-msg">A binary file, so there is nothing to show.</p>`;
-  if (!f.lines.length) return html`${notes}${notes.length ? nothing : html`<p class="diff-msg">No changes inside the file.</p>`}`;
+  if (!f.lines.length) return html`${notes}${notes.length ? nothing : html`<p class="diff-msg">${d.scan ? "The file is empty." : "No changes inside the file."}</p>`}`;
   const hit = d.hit?.path === file.path ? d.hit.line : null;
   const hitRow = hit ? f.lines.find((l) => l.n >= hit)?.n : null;
   const left = f.total - f.next;
-  return html`${notes}<div class="diff-scroll"><table class="diff-table">
-    <tbody>${f.lines.map((l) => l.k === "hunk"
-      ? html`<tr class="hunk"><td class="ln"></td><td class="ln"></td><td class="code">${l.t}</td></tr>`
-      : html`<tr class="${l.k} ${l.n && l.n === hitRow && l.k !== "del" ? "hit" : ""}" id=${l.n && l.k !== "del" ? rowId(index, file.path, l.n) : nothing}>
+  const row = (l) => d.scan
+    ? html`<tr class="ctx ${l.n === hitRow ? "hit" : ""}" id=${rowId(index, file.path, l.n)}>
+        <td class="ln">${l.n}</td><td class="code">${l.t}</td>
+      </tr>`
+    : html`<tr class="${l.k} ${l.n && l.n === hitRow && l.k !== "del" ? "hit" : ""}" id=${l.n && l.k !== "del" ? rowId(index, file.path, l.n) : nothing}>
         <td class="ln">${l.o ?? ""}</td><td class="ln">${l.n ?? ""}</td>
         <td class="code"><span class="mark" aria-hidden="true">${l.k === "add" ? "+" : l.k === "del" ? "−" : " "}</span>${l.t}</td>
-      </tr>`)}</tbody>
+      </tr>`;
+  return html`${notes}<div class="diff-scroll"><table class="diff-table ${d.scan ? "file-table" : ""}">
+    <tbody>${f.lines.map((l) => l.k === "hunk"
+      ? html`<tr class="hunk"><td class="ln"></td><td class="ln"></td><td class="code">${l.t}</td></tr>`
+      : row(l))}</tbody>
   </table></div>
   ${left > 0 ? html`<button class="link-btn diff-more" type="button" ?disabled=${f.loading} @click=${() => loadFile(index, file.path)}>${f.loading ? "Loading…" : `Show ${Math.min(left, 400)} more lines (${left} left)`}</button>` : nothing}
-  ${f.cut && left <= 0 ? html`<p class="diff-msg">The rest of this diff is over 2 MB, so it is not shown.</p>` : nothing}`;
+  ${f.cut && left <= 0 ? html`<p class="diff-msg">The rest of this ${d.scan ? "file" : "diff"} is over 2 MB, so it is not shown.</p>` : nothing}`;
 }
 
 function fileRow(index, d, file) {
@@ -551,6 +627,36 @@ function diffPanel(e, index) {
   </section>`;
 }
 
+function scanFileRow(index, d, file) {
+  const f = fileOf(d, file.path);
+  return html`<li class="diff-file ${f.open ? "open" : ""}">
+    <button class="diff-file-head" type="button" id=${`diff-${index}-${encodeURIComponent(file.path)}`} aria-expanded=${f.open ? "true" : "false"} @click=${() => toggleFile(index, file.path)}>
+      ${ICONS.chevron}
+      <span class="diff-status" aria-hidden="true">${ICONS.file}</span>
+      <span class="diff-path">${file.path}</span>
+      <span class="diff-stat muted">${file.count} ${file.count === 1 ? "finding" : "findings"}</span>
+    </button>
+    ${f.open ? html`<div class="diff-file-body">${fileBody(index, d, file, f)}</div>` : nothing}
+  </li>`;
+}
+
+// A scan has no branch diff, so the card shows the files its findings point at instead, read
+// from the folder as it is now.
+function filesPanel(e, index) {
+  const d = diffOf(index);
+  d.scan = true;
+  const files = scanFiles(e);
+  if (!files.length) return nothing;
+  const folder = e.of?.path || e.path;
+  return html`<section class="review-diff">
+    <button class="review-diff-toggle" type="button" aria-expanded=${d.open ? "true" : "false"} @click=${() => { d.open = !d.open; ctx.draw(); }}>${ICONS.chevron}<span>Files</span><span class="review-diff-count">${files.length} ${files.length === 1 ? "file" : "files"}</span></button>
+    ${d.open ? html`<div class="review-diff-body">
+      <p class="diff-msg">The files the findings point at, read from <code>${ctx.short(folder)}</code> as it is now.</p>
+      <ul class="diff-files">${files.map((f) => scanFileRow(index, d, f))}</ul>
+    </div>` : nothing}
+  </section>`;
+}
+
 function shotUrl(index, file) {
   return `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/evidence/${encodeURIComponent(file)}`;
 }
@@ -595,10 +701,11 @@ function shots(e, index, i) {
 function place(e, index, f) {
   if (!f.place) return nothing;
   const at = placeOf(f.place);
+  const scan = scanOf(e.of);
   const list = diffOf(index).list;
-  const linked = at && (!list || fileFor(list, at.path));
+  const linked = at && (scan ? safePath(at.path) : !list || fileFor(list, at.path));
   if (!linked) return html`<code class="finding-place">${f.place}</code>`;
-  return html`<button class="finding-place link" type="button" title="Show this in the changes" @click=${(ev) => { ev.preventDefault(); jump(index, f.place); }}>${f.place}</button>`;
+  return html`<button class="finding-place link" type="button" title=${scan ? "Show this in the file" : "Show this in the changes"} @click=${(ev) => { ev.preventDefault(); jump(index, f.place); }}>${f.place}</button>`;
 }
 
 function finding(e, index, f, i, chosen) {
@@ -615,7 +722,85 @@ function finding(e, index, f, i, chosen) {
   </label></li>`;
 }
 
+function targetsOf(e, index) {
+  if (!targets.has(index)) {
+    const t = { list: null, pick: "" };
+    targets.set(index, t);
+    ctx.api("GET", `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/sessions`)
+      .then((r) => {
+        t.list = r.sessions || [];
+        t.pick = t.list.some((s) => s.name === e.of?.name) ? e.of.name : t.list[0]?.name || "";
+      })
+      .catch(() => { t.list = []; })
+      .finally(() => ctx.draw());
+  }
+  return targets.get(index);
+}
+
+function scanVerdict(e) {
+  const n = (e.findings || []).length;
+  if (e.verdict === "clean" || !n) return { tone: "done", word: e.verdict === "clean" ? "Clean" : "Issues found" };
+  return { tone: "blocked", word: `${n} ${n === 1 ? "issue" : "issues"} found` };
+}
+
+function scanCard(e, index) {
+  const findings = e.findings || [];
+  const chosen = picked(e, index);
+  const of = e.of || {};
+  const busy = sending.has(index);
+  const done = e.outcome;
+  const count = chosen.size;
+  const verdict = scanVerdict(e);
+  const title = SCANS[of.scan];
+  const decidedWords = (o) => {
+    const n = `${o.findings?.length || 0} ${o.findings?.length === 1 ? "finding" : "findings"}`;
+    if (o.decision === "sent") return `Sent ${n} to ${o.to} ${clock(o.at)}`;
+    if (o.decision === "started") return `Asked for a new session to fix ${n} ${clock(o.at)}`;
+    return `Dismissed ${clock(o.at)}`;
+  };
+  let send = nothing;
+  if (!done && findings.length) {
+    const t = targetsOf(e, index);
+    const sessions = t.list || [];
+    send = html`${sessions.length ? html`<label class="scan-target"><span class="visually-hidden">Send the findings to</span>
+        <select ?disabled=${busy} @change=${(ev) => { t.pick = ev.target.value; ctx.draw(); }}>
+          ${sessions.map((s) => html`<option value=${s.name} ?selected=${t.pick === s.name}>${s.name}</option>`)}
+          <option value="" ?selected=${!t.pick}>A new session</option>
+        </select></label>` : nothing}
+      <button class="btn primary" type="button" ?disabled=${busy || !count || !t.list}
+        title=${t.pick ? `Type the chosen findings into ${t.pick} so it fixes them` : "Prepare a new session in this folder with the chosen findings as its task"}
+        @click=${() => settle(e, index, t.pick ? "send" : "start", t.pick)}><span class="btn-label">${t.pick ? `Send ${count} to ${t.pick}` : `Fix ${count} in a new session`}</span></button>`;
+  }
+  const foot = done
+    ? html`<span class="step-card-trail">${decidedWords(done)}</span>`
+    : html`<span class="step-card-trail">Finished ${clock(e.at)}</span>
+      <div class="step-card-actions">
+        <button class="btn" type="button" ?disabled=${busy} @click=${() => settle(e, index, "dismiss")}>Dismiss</button>
+        ${send}
+      </div>`;
+  const folder = String(of.path || "").replace(/\/+$/, "").split("/").pop() || of.path;
+  return html`<article class="step-card review scan ${done ? "done" : verdict.tone === "done" ? "ready" : "pending"}" aria-label="${title} of ${folder}">
+    <header class="step-card-head">
+      <span class="step-card-icon">${ICONS.scan}</span>
+      <div class="step-card-title">
+        <strong>${title} of <code>${folder}</code></strong>
+        <span class="step-card-where">by <a href=${ctx.termUrl(e.machine, e.name)} target="_blank" rel="noopener">${e.name}</a> on ${e.machine} · <code>${ctx.short(of.path)}</code>${of.branch ? html` · <code>${of.branch}</code>` : nothing}</span>
+      </div>
+      <span class="badge ${verdict.tone}">${verdict.word}</span>
+    </header>
+    <div class="step-card-body">
+      ${e.summary ? html`<p class="step-card-text">${e.summary}</p>` : nothing}
+      ${findings.length
+        ? html`<ul class="findings">${findings.map((f, i) => finding(e, index, f, i, chosen))}</ul>`
+        : html`<p class="step-card-text muted">No issues found.</p>`}
+      ${filesPanel(e, index)}
+    </div>
+    <footer class="step-card-foot">${foot}</footer>
+  </article>`;
+}
+
 export function reviewCard(e, index) {
+  if (scanOf(e.of)) return scanCard(e, index);
   const findings = e.findings || [];
   const chosen = picked(e, index);
   const ready = e.verdict === "ready";

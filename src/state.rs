@@ -96,6 +96,9 @@ pub struct EndedView {
 pub struct AgentView {
     pub name: String,
     pub label: String,
+    // Whether a reviewer or scanner on this agent starts unable to edit files.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -249,6 +252,7 @@ impl State {
                 .map(|a| AgentView {
                     name: a.name.clone(),
                     label: a.display(),
+                    read_only: a.read_only_flags().is_some(),
                 })
                 .collect(),
             default_agent: cfg.default_agent().to_string(),

@@ -454,6 +454,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/settings.js", get(|| async { asset("settings.js") }))
         .merge(settings_api::routes())
         .merge(review_api::routes())
+        .merge(scan_api::routes())
         .merge(pulls_api::routes())
         .merge(triggers_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
@@ -973,10 +974,18 @@ async fn decide(
                 let tool = step["tool"].as_str().unwrap_or_default();
                 crate::mcp::check(app, &app.config()?, tool, input)?;
             }
-            let (tool, input) = app
+            let (tool, mut input) = app
                 .dispatch
                 .approve(id, action, req.input.clone())
                 .map_err(refused)?;
+            // A reviewer or scanner stays read-only even when its step was edited.
+            if app
+                .dispatch
+                .step(id, action)
+                .is_some_and(|s| s["review"].is_object())
+            {
+                input["read_only"] = json!(true);
+            }
             let (app, id, action) = (app.clone(), id.to_string(), action.to_string());
             detached(async move {
                 let outcome = crate::mcp::perform(&app, &tool, input)
@@ -1080,6 +1089,8 @@ struct ReviewDecision {
     decision: String,
     #[serde(default)]
     findings: Vec<usize>,
+    #[serde(default)]
+    to: Option<String>,
 }
 
 async fn dispatch_review_outcome(
@@ -1095,9 +1106,10 @@ async fn dispatch_review_outcome(
             "this review was already handled".into(),
         ));
     }
+    let scan = review["of"]["scan"].is_string();
     let outcome = match req.decision.as_str() {
         "dismiss" => json!({ "decision": "dismissed" }),
-        "send" => {
+        "send" | "start" if scan || req.decision == "send" => {
             let all = review["findings"].as_array().cloned().unwrap_or_default();
             let mut picked = req.findings.clone();
             picked.sort_unstable();
@@ -1107,6 +1119,12 @@ async fn dispatch_review_outcome(
                     StatusCode::BAD_REQUEST,
                     "pick the findings to send".into(),
                 ));
+            }
+            if scan {
+                let settled =
+                    scan_api::settle(&app, id, card, &review, &req.decision, picked, req.to)
+                        .await?;
+                return Ok(Json(settled).into_response());
             }
             let chosen = crate::dispatch::review_picked(&review, &picked);
             let of = &review["of"];
@@ -1118,8 +1136,9 @@ async fn dispatch_review_outcome(
             let m = find_machine(&cfg, machine)?;
             let (app, id, name) = (app.clone(), id.to_string(), name.to_string());
             let event = detached(async move {
+                let request = crate::dispatch::fix_request("A review of this branch", &chosen);
                 app.sessions
-                    .send(&m, &name, &crate::dispatch::fix_request(&chosen))
+                    .send(&m, &name, &request)
                     .await
                     .map_err(|e| ApiError::gateway(format!("could not send to {name}: {e}")))?;
                 let outcome = json!({ "decision": "sent", "findings": picked, "to": name });
@@ -1133,7 +1152,12 @@ async fn dispatch_review_outcome(
         _ => {
             return Err(ApiError(
                 StatusCode::BAD_REQUEST,
-                "decision must be send or dismiss".into(),
+                if scan {
+                    "decision must be send, start or dismiss"
+                } else {
+                    "decision must be send or dismiss"
+                }
+                .into(),
             ))
         }
     };
@@ -1213,6 +1237,9 @@ pub struct NewSession {
     agent: String,
     #[serde(default)]
     prompt: String,
+    // A reviewer or scanner: the agent starts unable to edit files where it has a way to.
+    #[serde(default)]
+    read_only: bool,
     // Answer only once the machine was checked again, so /state already lists the session.
     #[serde(default)]
     wait: bool,
@@ -1321,6 +1348,8 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
         (false, "") => Start::New,
         (false, prompt) => Start::Task(prompt),
     };
+    let read_only =
+        req.read_only || req.resume && app.dispatch.last_was_read_only(&m.name, &path, &agent.name);
     let name = app
         .sessions
         .create(
@@ -1332,10 +1361,15 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
                 agent: &agent,
                 start,
                 mcp_config: mcp_config.as_deref(),
+                read_only,
             },
         )
         .await
         .map_err(ApiError::gateway)?;
+    if !req.resume {
+        app.dispatch
+            .started_in(&m.name, &path, &agent.name, read_only);
+    }
     remember(app, &m.name, &repo);
     Ok(json!({ "machine": m.name, "name": name, "path": path }))
 }
@@ -1568,6 +1602,7 @@ async fn move_to_tmux(
                 agent: &agent,
                 start: Start::Resume,
                 mcp_config: mcp_config.as_deref(),
+                read_only: false,
             },
         )
         .await;
@@ -1828,6 +1863,7 @@ async fn remove_machine(
 
 mod pulls_api;
 mod review_api;
+mod scan_api;
 mod settings_api;
 mod triggers_api;
 

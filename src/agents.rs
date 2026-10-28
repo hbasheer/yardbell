@@ -26,6 +26,17 @@ impl Agent {
         self.label.clone().unwrap_or_else(|| self.name.clone())
     }
 
+    // What makes a reviewer or scanner unable to edit files, for the agents that have a way:
+    // Claude Code without its file editing tools, Codex in its read-only sandbox. Anything else is
+    // read-only only because its prompt says so.
+    pub fn read_only_flags(&self) -> Option<&'static str> {
+        match self.process_name().as_str() {
+            "claude" => Some("--disallowed-tools 'Edit,Write,NotebookEdit'"),
+            "codex" => Some("--sandbox read-only"),
+            _ => None,
+        }
+    }
+
     pub fn with_prompt(&self, prompt: &str) -> Result<String, String> {
         let Some(arg) = &self.prompt_arg else {
             return Err(format!(
@@ -199,6 +210,25 @@ mod tests {
         let mut a = agent("x", "npx foo", "x");
         a.process = Some("foo".into());
         assert_eq!(a.process_name(), "foo");
+    }
+
+    #[test]
+    fn only_claude_and_codex_can_be_made_read_only() {
+        let flags = |n: &str| {
+            builtin()
+                .into_iter()
+                .find(|a| a.name == n)
+                .unwrap()
+                .read_only_flags()
+        };
+        assert_eq!(
+            flags("claude"),
+            Some("--disallowed-tools 'Edit,Write,NotebookEdit'")
+        );
+        assert_eq!(flags("codex"), Some("--sandbox read-only"));
+        assert_eq!(flags("gemini"), None);
+        let custom = agent("codex", "/opt/bin/codex --full-auto", "codex resume --last");
+        assert_eq!(custom.read_only_flags(), Some("--sandbox read-only"));
     }
 
     #[test]

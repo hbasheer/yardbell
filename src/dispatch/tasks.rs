@@ -1,5 +1,5 @@
 use super::store::write_private;
-use super::Dispatch;
+use super::{Dispatch, ScanKind};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -183,7 +183,25 @@ of its branch. List the branches you are reviewing.",
             "Find sessions that ended or have sat idle for a long time and suggest which to stop. \
 Don't stop anything without my go-ahead.",
         ),
+        scan_task("Security scan", ScanKind::Security),
+        scan_task("Dead code scan", ScanKind::DeadCode),
+        scan_task("Test gap scan", ScanKind::TestGaps),
     ]
+}
+
+// Scans run once per repository, so a task can run unattended; naming folders in the same
+// message narrows it.
+fn scan_task(name: &str, kind: ScanKind) -> SavedTask {
+    builtin(
+        name,
+        &format!(
+            "Start a {} with scan_folder, kind {}, of each repository in list_folders: once per \
+repository rather than once per worktree, on the machine with the most room. When this message \
+names folders, scan only those. List the scans you started.",
+            kind.name(),
+            kind.key()
+        ),
+    )
 }
 
 #[cfg(test)]
@@ -253,5 +271,24 @@ mod tests {
         assert!(own(&dispatch).is_empty());
         assert_eq!(dispatch.tasks().len(), defaults);
         assert!(dispatch.save_task(" ", "x", None).is_err());
+    }
+
+    #[test]
+    fn scans_come_as_tasks_in_the_usual_format() {
+        let scans: Vec<SavedTask> = default_tasks()
+            .into_iter()
+            .filter(|t| t.name.ends_with(" scan"))
+            .collect();
+        let names: Vec<&str> = scans.iter().map(|t| t.name.as_str()).collect();
+        assert_eq!(names, ["Security scan", "Dead code scan", "Test gap scan"]);
+        assert!(scans[0].text.starts_with(
+            "Start a security scan with scan_folder, kind security, of each repository"
+        ));
+        assert!(scans[1].text.contains("kind dead_code"));
+        assert!(scans[2].text.contains("kind test_gaps"));
+        let json = serde_json::to_value(&scans[0]).unwrap();
+        let mut keys: Vec<&String> = json.as_object().unwrap().keys().collect();
+        keys.sort();
+        assert_eq!(keys, ["builtin", "name", "text"]);
     }
 }

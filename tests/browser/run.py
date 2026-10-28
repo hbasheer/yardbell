@@ -23,6 +23,7 @@ MACHINE = "hp"
 SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
 REVIEW_CHAT = "browserreview001"
+SCAN_CHAT = "browserscan00001"
 SHOT_FILE = "shotbrowsertest1.png"
 PULL_CHAT = "browsertestpull0"
 PULL_SESSION = "hp-pull-test"
@@ -137,6 +138,26 @@ def review_card(repo, anchor):
         "evidence": [
             {"finding": 0, "name": "login.png", "file": SHOT_FILE, "bytes": 1, "width": 640, "height": 400, "source": "/x/login.png"},
             {"finding": 1, "name": "gone.png", "error": "not found in the review folder"},
+        ],
+    }
+
+
+# A security scan of the whole folder: one finding in a file that is there, one in a file that is
+# gone, and one at a path outside the folder that must not become a link.
+def scan_card(repo):
+    return {
+        "role": "review",
+        "machine": MACHINE,
+        "name": "hp-demo-app-3",
+        "path": repo,
+        "of": {"machine": MACHINE, "name": "", "path": repo, "branch": "fix-login", "scan": "security"},
+        "at": "2026-01-01T10:10:00+00:00",
+        "verdict": "issues",
+        "summary": "A token in the login script, and two places worth a look.",
+        "findings": [
+            {"severity": "high", "place": "src/login.js:42", "text": "step42 holds a token. Read it from the environment."},
+            {"severity": "medium", "place": "config/missing.yml:3", "text": "This file is gone."},
+            {"severity": "low", "place": "/etc/passwd:1", "text": "Not a place in the folder."},
         ],
     }
 
@@ -258,6 +279,15 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "Review the login fix",
             [{"role": "user", "text": "Review the login fix"}, review_card(repo, review_branch(repo))],
         )
+        session_card = {
+            "role": "session", "machine": MACHINE, "name": "hp-demo-app", "path": repo, "state": "idle",
+            "screen": "Done.", "options": [], "at": "2026-01-01T10:00:00+00:00",
+        }
+        scan = conversation(
+            SCAN_CHAT,
+            "Security scan of demo-app",
+            [{"role": "user", "text": "Scan demo-app"}, session_card, scan_card(repo)],
+        )
         evidence = os.path.join(self.state, "dispatch", "evidence", REVIEW_CHAT)
         os.makedirs(evidence)
         with open(os.path.join(evidence, SHOT_FILE), "wb") as f:
@@ -274,7 +304,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "at": "2026-01-01T10:00:00+00:00",
         }
         pull = conversation(PULL_CHAT, "Pull request #12: Fix the login redirect", [card])
-        for chat in (short, long, review, pull):
+        for chat in (short, long, review, pull, scan):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -477,6 +507,80 @@ class Suite:
         b.wait("(() => { const i = document.querySelector('dialog.shot-view[open] img'); return i && i.complete && i.naturalWidth === 640; })()", "the screenshot full size")
         b.click("dialog.shot-view .btn")
         b.wait("!document.querySelector('dialog.shot-view[open]')", "the screenshot to close")
+
+    def test_dispatch_scan_card_findings_and_files(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={SCAN_CHAT}"))
+        card = "#dispatch-log .step-card.review.scan"
+        b.wait(f"document.querySelector('{card}')?.textContent.includes('Security scan of')", "the seeded scan card")
+        if b.js(f"document.querySelector('{card} .badge').textContent") != "3 issues found":
+            raise Failure("the scan's verdict does not count its issues")
+        if b.js(f"document.querySelector('{card}').textContent.includes('Changes')"):
+            raise Failure("a scan card has a branch diff")
+        links = b.js(f"[...document.querySelectorAll('{card} .finding-place.link')].map((l) => l.textContent).join()")
+        if links != "src/login.js:42,config/missing.yml:3":
+            raise Failure(f"the finding links are {links!r}")
+        if b.js(f"[...document.querySelectorAll('{card} code.finding-place')].map((c) => c.textContent).join()") != "/etc/passwd:1":
+            raise Failure("a place outside the folder is a link")
+        b.click(f"{card} .finding-place.link")
+        b.wait(
+            f"""(() => {{
+              const hit = document.querySelector('{card} .file-table tr.hit');
+              return hit && hit.id.endsWith('-L42') && hit.textContent.includes('const step42 = 42;');
+            }})()""",
+            "the file opened at src/login.js:42",
+        )
+        if b.js(f"document.querySelector('{card} .review-diff-toggle').textContent.trim()") != "Files2 files":
+            raise Failure("the Files panel does not count the files")
+        b.click(f"{card} .diff-file-head[id$='missing.yml']")
+        b.wait(f"document.querySelector('{card} .diff-msg.error')?.textContent.includes('config/missing.yml is not in the scanned folder')", "the missing file's error")
+        b.wait(f"document.querySelector('{card} .step-card-foot .btn.primary')?.textContent.trim().startsWith(document.querySelector('{card} .scan-target') ? 'Send 3 to' : 'Fix 3 in a new session')", "the send button once the sessions are read")
+        if self.session and b.js(f"[...document.querySelectorAll('{card} .scan-target option')].map((o) => o.value).join()") != f"{self.session},":
+            raise Failure("the shell session in demo-app is not offered")
+        b.js(f"(() => {{ const s = document.querySelector('{card} .scan-target select'); if (s) {{ s.value = ''; s.dispatchEvent(new Event('change')); }} }})()")
+        b.wait(f"document.querySelector('{card} .step-card-foot .btn.primary')?.textContent.trim() === 'Fix 3 in a new session'", "the new session choice")
+        b.click(f"{card} .step-card-foot .btn.primary")
+        b.wait(f"document.querySelector('{card} .step-card-trail')?.textContent.startsWith('Asked for a new session to fix 3 findings')", "the card's outcome")
+        b.wait(
+            """(() => {
+              const step = [...document.querySelectorAll('#dispatch-log .step-card.pending')].at(-1);
+              return step && step.textContent.includes('Start a session') && step.textContent.includes('A security scan of') && step.querySelector('.btn.primary')?.textContent.includes('Start session');
+            })()""",
+            "the session that fixes them, waiting to be started",
+        )
+
+    def test_dispatch_scan_starts_from_a_card_or_a_folder(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={SCAN_CHAT}"))
+        b.wait("document.querySelector('#dispatch-log .session-card .scan-btn')", "Scan on the session card")
+        b.click("#dispatch-log .session-card .scan-btn")
+        b.wait("!document.getElementById('scan-menu').hidden && document.activeElement?.closest('#scan-menu')", "the Scan menu with focus")
+        if b.js("[...document.querySelectorAll('#scan-menu [role=menuitem] .scan-menu-item > span:first-child')].map((s) => s.textContent).join()") != "Dead code,Test gaps,Security":
+            raise Failure("the Scan menu does not offer the three kinds")
+        b.click("#scan-menu [role=menuitem]:nth-child(3)")
+        b.wait(
+            """(() => {
+              const step = [...document.querySelectorAll('#dispatch-log .step-card.pending')].at(-1);
+              return step && step.querySelector('.step-card-title strong').textContent === 'Start a security scan' && step.querySelector('.btn.primary').textContent.includes('Start scan');
+            })()""",
+            "the scan waiting to be started",
+        )
+        note = b.js("[...document.querySelectorAll('#dispatch-log .step-card.pending')].at(-1).querySelector('.read-only-note')?.textContent || ''")
+        if not note.startswith("Read-only by instruction: Shell cannot be started with file editing turned off"):
+            raise Failure(f"the Shell agent's scan does not say it is read-only by instruction: {note!r}")
+        b.click("#new-chat")
+        b.wait("!new URLSearchParams(location.search).get('c')", "a new conversation")
+        b.click("#insert-scan")
+        b.wait("document.getElementById('scan-dialog')?.open && document.querySelector('#scan-dialog select option')", "the Scan a folder dialog")
+        b.js("(() => { const s = document.querySelector('#scan-dialog select'); s.value = [...s.options].find((o) => o.textContent.startsWith('demo-api')).value; s.dispatchEvent(new Event('change')); })()")
+        b.click("#scan-dialog input[value=dead_code]")
+        b.click("#scan-dialog button[type=submit]")
+        b.wait(
+            """!document.getElementById('scan-dialog').open && new URLSearchParams(location.search).get('c')
+              && document.querySelector('#dispatch-log .step-card.pending .step-card-title strong')?.textContent === 'Start a dead code scan'
+              && document.getElementById('convo-list').textContent.includes('Dead code scan of demo-api')""",
+            "a new conversation with the folder's scan",
+        )
 
     def test_dispatch_composer_on_a_phone(self):
         b = self.b

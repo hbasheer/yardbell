@@ -16,7 +16,8 @@ const INSTRUCTIONS: &str = "Yardbell runs AI coding agents in tmux sessions on s
 Use list_machines to see which machines are up and how much memory and load they have, \
 list_folders to see which git checkouts each machine has, and start_session to start an agent \
 in a folder with a task. read_session shows what a session's terminal shows now, \
-send_to_session types a reply into it, and review_session starts a reviewer for a session's work.";
+send_to_session types a reply into it, review_session starts a reviewer for a session's work, \
+and scan_folder starts a read-only scan of a folder for dead code, test gaps or security problems.";
 
 pub fn token_matches(expected: &str, given: &str) -> bool {
     let (a, b) = (expected.as_bytes(), given.as_bytes());
@@ -231,6 +232,19 @@ fn tools() -> Vec<Value> {
             }),
             &["machine", "name"],
         ),
+        tool(
+            "scan_folder",
+            "Start a read-only scan of a folder: a new session there looks through all of its code (not a branch's changes) for one kind of problem, changes no files, and ends with a report of findings. kind is dead_code (unused functions, modules, routes, assets and config), test_gaps (important code without tests; it runs the project's tests) or security (secrets in the repository, injection, unsafe deserialization, missing auth checks, dependency advisories). Give folder (a label from list_folders) or path (a checkout, or a folder inside one, to scan only that part).",
+            json!({
+                "machine": machine,
+                "kind": { "type": "string", "enum": ["dead_code", "test_gaps", "security"], "description": "What to look for" },
+                "folder": { "type": "string", "description": "Folder label from list_folders" },
+                "path": { "type": "string", "description": "Absolute path on the machine, instead of folder" },
+                "agent": { "type": "string", "description": "Agent for the scanner; empty uses the default" },
+                "focus": { "type": "string", "description": "Anything the scanner should look at closely" },
+            }),
+            &["machine", "kind"],
+        ),
     ]
 }
 
@@ -335,13 +349,14 @@ Yardbell's Settings, under Dispatch. Do not try it again or reach the same resul
 }
 
 // What the rules match a step on. The folder is the one the step works in: the folder it starts
-// in, the folder of the session it reviews, or the folder of the session it stops or types into.
+// in or scans, the folder of the session it reviews, or the folder of the session it stops or
+// types into.
 pub fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
     let machine = input["machine"].as_str().unwrap_or_default().to_string();
     let snap = app.state.snapshot(&machine).unwrap_or_default();
     let text = |key: &str| input[key].as_str().unwrap_or_default().trim().to_string();
     let folders = match called {
-        "start_session" | "review_session" => {
+        "start_session" | "review_session" | "scan_folder" => {
             let path = match text("path") {
                 path if path.is_empty() => snap.folder_paths.get(&text("folder")).cloned(),
                 path => Some(path),
@@ -370,6 +385,20 @@ pub fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
 }
 
 #[derive(Deserialize)]
+struct ScanArgs {
+    machine: String,
+    kind: String,
+    #[serde(default)]
+    folder: String,
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    focus: String,
+}
+
+#[derive(Deserialize)]
 struct ReviewArgs {
     machine: String,
     name: String,
@@ -379,7 +408,8 @@ struct ReviewArgs {
     focus: String,
 }
 
-// What a step will run: review_session becomes the start_session that starts the reviewer.
+// What a step will run: review_session and scan_folder become the start_session that starts the
+// reviewer or the scanner.
 fn plan(
     app: &AppState,
     cfg: &Config,
@@ -389,6 +419,17 @@ fn plan(
     if name == "review_session" {
         let r: ReviewArgs = arg(args)?;
         let (input, of) = review_plan(app, cfg, &r.machine, &r.name, "", &r.agent, &r.focus)?;
+        return Ok(("start_session".into(), input, Some(of)));
+    }
+    if name == "scan_folder" {
+        let s: ScanArgs = arg(args)?;
+        let target = ScanTarget {
+            machine: &s.machine,
+            folder: &s.folder,
+            path: &s.path,
+            session: "",
+        };
+        let (input, of) = scan_plan(app, cfg, &target, &s.kind, &s.agent, &s.focus)?;
         return Ok(("start_session".into(), input, Some(of)));
     }
     check(app, cfg, name, &args)?;
@@ -456,10 +497,12 @@ pub fn review_plan(
         agent.to_string()
     };
     let shots = screenshots(&snap, running.map(|s| s.folder.as_str()), &path);
+    let prompt = crate::dispatch::review_prompt(&branch, focus, shots.as_ref());
     let mut input = json!({
         "machine": m.name,
         "path": path,
-        "prompt": crate::dispatch::review_prompt(&branch, focus, shots.as_ref()),
+        "prompt": read_only_prompt(cfg, &agent, prompt),
+        "read_only": true,
     });
     if !agent.is_empty() {
         input["agent"] = json!(agent);
@@ -470,9 +513,107 @@ pub fn review_plan(
         path,
         branch,
         evidence: shots.map(|s| s.folder).unwrap_or_default(),
+        scan: String::new(),
     };
     Ok((input, of))
 }
+
+pub struct ScanTarget<'a> {
+    pub machine: &'a str,
+    pub folder: &'a str,
+    pub path: &'a str,
+    // The session the scan was started from, which its findings go back to by default.
+    pub session: &'a str,
+}
+
+fn bad(message: String) -> ApiError {
+    ApiError(StatusCode::BAD_REQUEST, message)
+}
+
+// The scanner runs in the folder it scans, which can be a whole checkout or a folder inside one.
+pub fn scan_plan(
+    app: &AppState,
+    cfg: &Config,
+    target: &ScanTarget,
+    kind: &str,
+    agent: &str,
+    focus: &str,
+) -> Result<(Value, ReviewOf), ApiError> {
+    let m = find_machine(cfg, target.machine)?;
+    let kind = crate::dispatch::ScanKind::parse(kind)
+        .ok_or_else(|| bad("kind must be dead_code, test_gaps or security".into()))?;
+    let snap = app.state.snapshot(&m.name).unwrap_or_default();
+    let path = match (target.path.trim(), target.folder.trim()) {
+        ("", "") => return Err(bad("give a folder from list_folders, or a path".into())),
+        ("", folder) => snap
+            .folder_paths
+            .get(folder)
+            .cloned()
+            .ok_or_else(|| bad(format!("{} has no folder {folder}", m.name)))?,
+        (path, _) if !path.starts_with('/') || path.chars().any(char::is_control) => {
+            return Err(bad(format!(
+                "{path} is not an absolute path; give one, or a folder from list_folders"
+            )))
+        }
+        (path, _) => path.trim_end_matches('/').to_string(),
+    };
+    if path.is_empty() {
+        return Err(bad("scanning / is not supported; give a folder".into()));
+    }
+    let branch = snap
+        .folder_paths
+        .iter()
+        .find(|(_, p)| **p == path)
+        .and_then(|(label, _)| snap.folders.get(label).cloned())
+        .unwrap_or_default();
+    let agent = if agent.is_empty() {
+        cfg.dispatch.agent.clone()
+    } else {
+        agent.to_string()
+    };
+    if !agent.is_empty() && cfg.agent(&agent).is_none() {
+        return Err(bad(format!("no agent named {agent}")));
+    }
+    let prompt = crate::dispatch::scan_prompt(kind, focus);
+    let mut input = json!({
+        "machine": m.name,
+        "path": path,
+        "prompt": read_only_prompt(cfg, &agent, prompt),
+        "read_only": true,
+    });
+    if !agent.is_empty() {
+        input["agent"] = json!(agent);
+    }
+    let of = ReviewOf {
+        machine: m.name.clone(),
+        name: target.session.to_string(),
+        path,
+        branch,
+        evidence: String::new(),
+        scan: kind.key().to_string(),
+    };
+    Ok((input, of))
+}
+
+// Claude Code and Codex start unable to edit files; any other agent is only asked not to, and is
+// told so.
+fn read_only_prompt(cfg: &Config, agent: &str, mut prompt: String) -> String {
+    let name = if agent.is_empty() {
+        cfg.default_agent()
+    } else {
+        agent
+    };
+    let enforced = cfg
+        .agent(name)
+        .is_some_and(|a| a.read_only_flags().is_some());
+    if !enforced {
+        prompt.push_str(&format!("\n\n{READ_ONLY_BY_INSTRUCTION}"));
+    }
+    prompt
+}
+
+pub const READ_ONLY_BY_INSTRUCTION: &str = "This session is read-only by instruction: Yardbell \
+cannot turn off this agent's file editing, so it relies on you to change no files.";
 
 // The reviewer runs on the reviewed session's machine, so it opens the app's ports there.
 fn screenshots(
@@ -605,7 +746,7 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
             app.check(&machine).await;
             Ok(started)
         }
-        "review_session" => {
+        "review_session" | "scan_folder" => {
             let (_, input, _) = plan(app, &cfg, name, args)?;
             let started = start_session(app, arg(input)?).await?;
             app.refresh().await;

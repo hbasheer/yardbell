@@ -280,6 +280,31 @@ shows a thumbnail that opens full size. A screenshot that could not be kept says
 stay with the conversation after a restart, or after the worktree is gone, and are deleted with
 it. Findings you send back carry the screenshot's path, so the session can open the same file.
 
+**Scan** looks through a whole folder instead of a branch's changes, for one kind of problem:
+**Dead code** (functions, modules, routes, assets and config nothing uses), **Test gaps** (important
+code without tests; the scanner finds the project's test command and runs it) or **Security**
+(secrets committed to the repository, injection, unsafe deserialization, routes without auth
+checks, and dependency advisories from the ecosystem's audit tool when it is installed). Start one
+from **Scan** on a finished or ended session's card, which scans that session's folder, or from
+**Scan** in the message box, which asks for a folder Yardbell knows, optionally a folder inside it,
+and the kind. Asking Dispatch to scan a folder proposes the same scanner through its `scan_folder`
+tool, and your Dispatch rules decide it like a review (the rules call it **Start a scan**). Each way,
+the scanner is a new session in that folder that you start from its card, told to change no files,
+install nothing and run nothing that writes to the folder. Its findings come back as a scan card
+with the count of issues found (or **Clean**), a summary and each finding with its severity and
+`file:line`. Instead of **Changes**, a scan card has **Files**: the files its findings point at,
+read from the folder as it is now, 400 lines at a time, and a finding's `file:line` opens its file
+at that line. Only those files can be read, and never through a symbolic link or outside the
+folder. Pick the findings that matter and **Send** them to a session working in that folder, or
+pick **A new session** to prepare one with the findings as its task.
+
+Reviewers and scanners cannot edit files when their agent has a way to stop it: Claude Code starts
+with `--disallowed-tools 'Edit,Write,NotebookEdit'`, and Codex with `--sandbox read-only`. Resuming
+in a folder whose last session Yardbell started was a reviewer or scanner adds the same flags, and
+starting a normal session there ends that. Claude Code can still run commands, so its prompt still
+asks it to change nothing. Other agents are read-only by instruction only, and the step's card says
+so before you start it.
+
 A task with independent parts, such as two repositories or several tickets, gets one session per
 part. Ask it to work through tickets and it reads them first, proposes a numbered plan (machine,
 folder, agent and branch for each) and starts nothing until you agree. Dispatch can use the MCP
@@ -295,11 +320,13 @@ Code has not run for a while, the card keeps the figures from Dispatch's last re
 they are. A limit whose reset time has passed shows as reset until the next check. The circular
 arrow on the card checks right away; when it cannot, the card's tooltip says why.
 
-The **Tasks** list in Dispatch's sidebar sends a task in one click. Five come with Yardbell:
+The **Tasks** list in Dispatch's sidebar sends a task in one click. Eight come with Yardbell:
 **What's going on?** summarises every machine and session, **Who needs me?** lists the sessions
 waiting for an answer, **Plan my Linear tickets** plans your open tickets, **Review finished
-branches** proposes a reviewer for each branch of an idle or ended session, and **Tidy up
-sessions** suggests which sessions to stop. **New task** adds one of your own, which you can edit, rename or delete;
+branches** proposes a reviewer for each branch of an idle or ended session, **Tidy up
+sessions** suggests which sessions to stop, and **Security scan**, **Dead code scan** and **Test
+gap scan** propose a scan of each repository, once per repository. Name folders in the same message
+to scan only those. **New task** adds one of your own, which you can edit, rename or delete;
 the copy button next to a default starts a task of your own from its text. Deleting a default
 only hides it, and **Restore default tasks** brings the defaults back. **Save as task** in the
 message box keeps whatever you typed.

@@ -272,6 +272,7 @@ mod tests {
             agents: vec![AgentView {
                 name: "codex".into(),
                 label: "Codex".into(),
+                read_only: true,
             }],
             default_agent: "codex".into(),
             machines,

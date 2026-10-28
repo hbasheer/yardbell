@@ -163,10 +163,12 @@ mod tests {
                 AgentView {
                     name: "claude".into(),
                     label: "Claude Code".into(),
+                    read_only: true,
                 },
                 AgentView {
                     name: "codex".into(),
                     label: "Codex".into(),
+                    read_only: true,
                 },
             ],
             default_agent: "claude".into(),

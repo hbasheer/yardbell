@@ -1,15 +1,19 @@
 mod diff;
 mod evidence;
+mod files;
+mod scan;
 
 pub use diff::{changed_file, changed_files, valid_base, valid_path, Anchor};
 pub use evidence::{gather, valid_file as valid_evidence_file};
+pub use files::{file_view, places};
+pub use scan::{prompt as scan_prompt, Kind as ScanKind};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 
 const START: &str = "YARDBELL REVIEW";
 const END: &str = "END REVIEW";
-const MAX_FINDINGS: usize = 30;
+pub(crate) const MAX_FINDINGS: usize = 30;
 const MAX_TEXT: usize = 600;
 const SHOT_TAG: &str = "[screenshot";
 
@@ -25,6 +29,15 @@ pub struct ReviewOf {
     // The folder under the repository's git dir where this reviewer may save screenshots.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub evidence: String,
+    // A scan looks through the whole folder for one kind of problem instead of reviewing a branch.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub scan: String,
+}
+
+impl ReviewOf {
+    pub fn scan_kind(&self) -> Option<ScanKind> {
+        ScanKind::parse(&self.scan)
+    }
 }
 
 // The apps the reviewer can open, offered only when the reviewed folder has one running.
@@ -99,6 +112,15 @@ pub struct Report {
 }
 
 impl Report {
+    pub fn to_scan_json(&self) -> Value {
+        let mut report = self.to_json();
+        report["verdict"] = json!(if self.ready { "clean" } else { "issues" });
+        if let Some(o) = report.as_object_mut() {
+            o.remove("base");
+        }
+        report
+    }
+
     pub fn to_json(&self) -> Value {
         let mut report = json!({
             "verdict": if self.ready { "ready" } else { "changes" },
@@ -232,12 +254,45 @@ fn is_marker(line: &str, marker: &str) -> bool {
     bare(bullet(line).unwrap_or(line)).eq_ignore_ascii_case(marker)
 }
 
+// The report block a prompt asks for: its markers, and how its verdict reads (true for ready or
+// clean, None for anything else).
+pub(crate) struct Block {
+    pub start: &'static str,
+    pub end: &'static str,
+    pub verdict: fn(&str) -> Option<bool>,
+}
+
+fn review_verdict(text: &str) -> Option<bool> {
+    match text.trim_end_matches('.').to_ascii_lowercase().as_str() {
+        "ready" => Some(true),
+        "changes needed" | "changes requested" | "needs changes" => Some(false),
+        _ => None,
+    }
+}
+
+const REVIEW: Block = Block {
+    start: START,
+    end: END,
+    verdict: review_verdict,
+};
+
 // The report the review prompt asks for, the last one on the screen. A screen that only shows the
 // prompt (the template's verdict is not a verdict) or a report still being written gives None.
 pub fn parse(screen: &str) -> Option<Report> {
+    parse_block(screen, &REVIEW)
+}
+
+pub fn parse_scan(screen: &str) -> Option<Report> {
+    parse_block(screen, &scan::BLOCK)
+}
+
+fn parse_block(screen: &str, block: &Block) -> Option<Report> {
     let lines: Vec<&str> = screen.lines().map(unframed).collect();
-    let start = lines.iter().rposition(|l| is_marker(l, START))?;
-    let end = start + lines[start..].iter().position(|l| is_marker(l, END))?;
+    let start = lines.iter().rposition(|l| is_marker(l, block.start))?;
+    let end = start
+        + lines[start..]
+            .iter()
+            .position(|l| is_marker(l, block.end))?;
     let mut ready = None;
     let mut summary = String::new();
     let mut base = String::new();
@@ -245,12 +300,7 @@ pub fn parse(screen: &str) -> Option<Report> {
     let mut in_summary = false;
     for line in lines[start + 1..end].iter().filter(|l| !l.is_empty()) {
         if let Some(verdict) = value_of(line, "verdict") {
-            let verdict = verdict.trim_end_matches('.').to_ascii_lowercase();
-            ready = match verdict.as_str() {
-                "ready" => Some(true),
-                "changes needed" | "changes requested" | "needs changes" => Some(false),
-                _ => return None,
-            };
+            ready = Some((block.verdict)(verdict)?);
             in_summary = false;
         } else if let Some(text) = value_of(line, "summary") {
             summary = text.to_string();
@@ -307,8 +357,18 @@ pub fn picked(review: &Value, picks: &[usize]) -> Vec<Value> {
         .collect()
 }
 
+// What found the problems, as the start of the request that sends them to a session.
+pub fn found_by(of: &Value) -> String {
+    let path = of["path"].as_str().unwrap_or_default();
+    match ScanKind::parse(of["scan"].as_str().unwrap_or_default()) {
+        Some(kind) if !path.is_empty() => format!("A {} of {path}", kind.name()),
+        Some(kind) => format!("A {} of this folder", kind.name()),
+        None => "A review of this branch".into(),
+    }
+}
+
 // One line, so an agent that sends on Enter gets the whole request at once.
-pub fn fix_request(findings: &[Value]) -> String {
+pub fn fix_request(source: &str, findings: &[Value]) -> String {
     let items: Vec<String> = findings
         .iter()
         .enumerate()
@@ -339,7 +399,7 @@ pub fn fix_request(findings: &[Value]) -> String {
         })
         .collect();
     format!(
-        "A review of this branch found {}. Fix {}, run the tests, and tell me what you changed. {}",
+        "{source} found {}. Fix {}, run the tests, and tell me what you changed. {}",
         if items.len() == 1 {
             "this problem".to_string()
         } else {
@@ -496,11 +556,17 @@ mod tests {
     fn findings_go_back_as_one_line() {
         let report = parse(CLAUDE_SCREEN).unwrap().to_json();
         let all = report["findings"].as_array().unwrap();
-        let text = fix_request(&all[..2]);
+        let text = fix_request("A review of this branch", &all[..2]);
         assert!(!text.contains('\n'));
         assert!(text.starts_with("A review of this branch found these 2 problems. Fix them,"));
         assert!(text.contains("1) high src/checkout.rs:88: The retry loop"));
-        assert!(fix_request(&all[2..]).contains("found this problem. Fix it,"));
+        assert!(fix_request("A review of this branch", &all[2..])
+            .contains("found this problem. Fix it,"));
+        let of = json!({ "path": "/r/app", "scan": "security" });
+        assert_eq!(found_by(&of), "A security scan of /r/app");
+        assert!(fix_request(&found_by(&of), &all[..1])
+            .starts_with("A security scan of /r/app found this problem. Fix it,"));
+        assert_eq!(found_by(&json!({ "name": "x" })), "A review of this branch");
     }
 
     #[test]
@@ -514,7 +580,7 @@ mod tests {
         });
         let chosen = picked(&review, &[0, 1, 9]);
         assert_eq!(chosen.len(), 2);
-        let text = fix_request(&chosen);
+        let text = fix_request("A review of this branch", &chosen);
         assert!(
             text.contains(
                 "1) high a.rs:1: Off. (screenshot: /r/.git/yardbell-review/x/a.png) 2) low Nit."

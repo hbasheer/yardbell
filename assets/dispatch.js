@@ -1,6 +1,7 @@
 import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 import * as steps from "/dispatch-review.js";
 import * as pulls from "/dispatch-pull.js";
+import * as scans from "/dispatch-scan.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
 
@@ -302,6 +303,7 @@ function sessionCard(e, index) {
     <div class="session-card-actions">
       ${options}
       ${reviewable ? html`<button class="btn" type="button" title="Start a reviewer in the same folder that runs the tests and changes nothing" @click=${() => requestReview(index)}>Review branch</button>` : nothing}
+      ${reviewable && e.path ? html`<button class="btn scan-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Start a scanner in the same folder that reads all of its code and changes nothing" @click=${(ev) => scans.toggleMenu(ev.currentTarget, (kind) => requestScan({ card: index, kind }))}>Scan<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg></button>` : nothing}
       ${e.state === "ended" ? nothing : html`<a class="btn quiet" href=${termUrl(e.machine, e.name)} target="_blank" rel="noopener">Open</a>`}
       ${e.answer ? html`<span class="session-card-answer">You answered ${optionLabel(e.answer.label)}${e.answer.at ? ` at ${new Date(e.answer.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</span>` : nothing}
     </div>
@@ -411,6 +413,31 @@ async function requestReview(index) {
     toast(err.message);
   }
 }
+
+// A scan from a session card goes into this conversation; one of a folder picked in the composer
+// goes into the open conversation, or a new one named after it.
+async function requestScan(body) {
+  try {
+    const { conversation, step } = await api("POST", "/dispatch/scans", { conversation: current, ...body });
+    if (conversation !== current) {
+      await loadList();
+      await open(conversation);
+      return;
+    }
+    events.push(step);
+    shownEvents = Math.max(shownEvents, events.length);
+    draw();
+    scrollDown();
+  } catch (err) {
+    if (body.card !== undefined) toast(err.message);
+    else throw err;
+  }
+}
+
+$("insert-scan").addEventListener("click", async () => {
+  const state = lastState || (await loadState());
+  scans.openDialog({ state, submit: (body) => requestScan(body) });
+});
 
 function setBusy(on) {
   busy = on;
@@ -606,6 +633,11 @@ steps.setup({
   loadState,
   reload: () => catchUp(false),
   decided: () => loadList().catch(() => {}),
+  addStep(step) {
+    events.push(step);
+    shownEvents = Math.max(shownEvents, events.length);
+    requestAnimationFrame(scrollDown);
+  },
   replaceStep(step) {
     const i = events.findIndex((e) => e.role === "action" && e.id === step.id);
     if (i >= 0) events[i] = step;

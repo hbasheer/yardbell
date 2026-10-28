@@ -3,11 +3,12 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 4] = [
+const CHANGING: [&str; 5] = [
     "start_session",
     "send_to_session",
     "stop_session",
     "review_session",
+    "scan_folder",
 ];
 
 pub fn changes_something(tool: &str) -> bool {
@@ -133,10 +134,7 @@ fn what(action: &Value) -> String {
     let session = text(input, "name");
     match text(action, "tool") {
         "start_session" if action["review"].is_object() => {
-            format!(
-                "starting a review of {} on {machine}",
-                reviewed(&action["review"])
-            )
+            format!("starting {} on {machine}", work(&action["review"], "a"))
         }
         "start_session" => {
             let folder = [text(input, "folder"), text(input, "path")]
@@ -242,11 +240,7 @@ fn subject(action: &Value) -> String {
     if !of.is_object() {
         return what(action);
     }
-    format!(
-        "a review of {} on {}",
-        reviewed(of),
-        text(&action["input"], "machine")
-    )
+    format!("{} on {}", work(of, "a"), text(&action["input"], "machine"))
 }
 
 fn reviewed(of: &Value) -> String {
@@ -256,11 +250,28 @@ fn reviewed(of: &Value) -> String {
     }
 }
 
+// "a review of branch eng-1" or "the security scan of /r/app", with the article asked for.
+fn work(of: &Value, article: &str) -> String {
+    match super::ScanKind::parse(text(of, "scan")) {
+        Some(kind) => format!("{article} {} of {}", kind.name(), text(of, "path")),
+        None => format!("{article} review of {}", reviewed(of)),
+    }
+}
+
+fn issues(n: usize) -> String {
+    match n {
+        1 => "1 issue found".into(),
+        n => format!("{n} issues found"),
+    }
+}
+
 fn review_finished(review: &Value) -> String {
-    let verdict = if review["verdict"] == "ready" {
-        "ready"
-    } else {
-        "changes needed"
+    let count = review["findings"].as_array().map_or(0, Vec::len);
+    let verdict = match (review["verdict"].as_str(), count) {
+        (Some("ready"), _) => "ready".to_string(),
+        (Some("clean"), _) | (Some("issues"), 0) => "clean".to_string(),
+        (Some("issues"), n) => issues(n),
+        _ => "changes needed".to_string(),
     };
     let findings: Vec<String> = review["findings"]
         .as_array()
@@ -286,24 +297,35 @@ fn review_finished(review: &Value) -> String {
         format!(" Findings: {}", findings.join(" "))
     };
     format!(
-        "The review of {} by {} on {} finished: {verdict}. {}{listed}",
-        reviewed(&review["of"]),
+        "{} by {} on {} finished: {verdict}. {}{listed}",
+        capital(&work(&review["of"], "the")),
         text(review, "name"),
         text(review, "machine"),
         text(review, "summary")
     )
 }
 
+fn capital(text: &str) -> String {
+    let mut chars = text.chars();
+    chars
+        .next()
+        .map(|c| c.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
+}
+
 fn review_decided(review: &Value) -> String {
     let outcome = &review["outcome"];
-    let subject = reviewed(&review["of"]);
+    let subject = work(&review["of"], "the");
+    let count = outcome["findings"].as_array().map_or(0, Vec::len);
     match text(outcome, "decision") {
         "sent" => format!(
-            "I sent {} of the findings from the review of {subject} to {} to fix.",
-            outcome["findings"].as_array().map_or(0, Vec::len),
+            "I sent {count} of the findings from {subject} to {} to fix.",
             text(outcome, "to")
         ),
-        _ => format!("I dismissed the review of {subject}."),
+        "started" => {
+            format!("I asked for a new session to fix {count} of the findings from {subject}.")
+        }
+        _ => format!("I dismissed {subject}."),
     }
 }
 
@@ -444,6 +466,35 @@ mod tests {
             ["I sent 1 of the findings from the review of branch eng-1 to hp-app to fix."]
         );
         assert!(untold(&mut events).is_empty());
+    }
+
+    #[test]
+    fn scans_are_told_in_their_own_words() {
+        let of = json!({ "machine": "hp", "name": "", "path": "/r/app", "scan": "security" });
+        let mut step = event(
+            "start_session",
+            json!({ "machine": "hp", "path": "/r/app", "prompt": "scan" }),
+            By::Dispatch,
+            None,
+            "rejected",
+            "t0",
+        );
+        step["review"] = of.clone();
+        let mut events = vec![
+            step,
+            json!({ "role": "review", "machine": "hp", "name": "hp-app-2", "of": of, "verdict": "issues", "summary": "A token.", "findings": [{ "severity": "high", "place": "a.yml:1", "text": "A token." }, { "severity": "low", "place": "", "text": "Old TLS." }], "outcome": { "decision": "started", "findings": [0] } }),
+            json!({ "role": "review", "machine": "hp", "name": "hp-app-3", "of": { "path": "/r/app", "scan": "dead_code" }, "verdict": "clean", "summary": "None.", "findings": [], "outcome": { "decision": "dismissed" } }),
+        ];
+        assert_eq!(
+            untold(&mut events),
+            [
+                "You proposed starting a security scan of /r/app on hp. I rejected it.",
+                "The security scan of /r/app by hp-app-2 on hp finished: 2 issues found. A token. Findings: 1) high a.yml:1 A token. 2) low Old TLS.",
+                "I asked for a new session to fix 1 of the findings from the security scan of /r/app.",
+                "The dead code scan of /r/app by hp-app-3 on hp finished: clean. None. No findings.",
+                "I dismissed the dead code scan of /r/app.",
+            ]
+        );
     }
 
     #[test]

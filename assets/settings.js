@@ -144,7 +144,7 @@ function renderDispatch() {
   loadInstalled();
 }
 
-const RULE_STEPS = { any: "Any step", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review" };
+const RULE_STEPS = { any: "Any step", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan" };
 const RULE_APPROVALS = { allow: "Allow", prompt: "Ask me", deny: "Deny" };
 let rules = [];
 const CROSS = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`;

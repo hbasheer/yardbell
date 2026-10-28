@@ -1586,7 +1586,8 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "read_session",
             "send_to_session",
             "stop_session",
-            "review_session"
+            "review_session",
+            "scan_folder"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;
@@ -2250,6 +2251,7 @@ async fn a_review_card_shows_its_diff_and_screenshots() {
         path: "/r/slots/slot2".into(),
         branch: "eng-1301-inbox".into(),
         evidence: "abcdef123456".into(),
+        scan: String::new(),
     };
     let screen = "⏺ YARDBELL REVIEW\n  verdict: changes needed\n  base: main\n  summary: One.\n  - high: src/inbox.rs:2: The count is wrong. [screenshot: login.png]\n  END REVIEW";
     let cfg = r.app.config().unwrap();
@@ -3220,4 +3222,559 @@ async fn triggers_are_saved_checked_and_turned_off_from_settings() {
     assert!(body.contains("the secret linear is not set"), "{body}");
     let (status, _, _) = post_json(&r.app, &c, "/api/triggers/run", r#"{"name":"Nope"}"#).await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn scan_folder_is_checked_and_follows_the_rules() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let before = event_count(&r, &id);
+    for (args, error) in [
+        (
+            json!({ "machine": "hp", "kind": "lint", "folder": "slot2" }),
+            "kind must be dead_code, test_gaps or security",
+        ),
+        (
+            json!({ "machine": "hp", "kind": "security" }),
+            "give a folder from list_folders, or a path",
+        ),
+        (
+            json!({ "machine": "hp", "kind": "security", "folder": "nope" }),
+            "hp has no folder nope",
+        ),
+        (
+            json!({ "machine": "hp", "kind": "security", "path": "slots/slot2" }),
+            "slots/slot2 is not an absolute path; give one, or a folder from list_folders",
+        ),
+        (
+            json!({ "machine": "hp", "kind": "security", "path": "/" }),
+            "scanning / is not supported; give a folder",
+        ),
+        (
+            json!({ "machine": "hp", "kind": "security", "folder": "slot2", "agent": "nope" }),
+            "no agent named nope",
+        ),
+    ] {
+        let result = dispatch_tool(&r, Some(&id), "scan_folder", args).await;
+        assert_eq!(result["isError"], true, "{result}");
+        assert_eq!(result["content"][0]["text"], error);
+    }
+    assert_eq!(event_count(&r, &id), before, "a mistake is no step");
+
+    let asked = dispatch_tool(
+        &r,
+        Some(&id),
+        "scan_folder",
+        json!({ "machine": "hp", "kind": "security", "folder": "slot2", "focus": "the login form" }),
+    )
+    .await;
+    assert!(asked["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("Not run yet."));
+    let step = last_event(&r, &id);
+    assert_eq!(
+        (&step["tool"], &step["status"], &step["by"]),
+        (
+            &json!("start_session"),
+            &json!("pending"),
+            &json!("dispatch")
+        )
+    );
+    assert_eq!(
+        step["review"],
+        json!({ "machine": "hp", "name": "", "path": "/r/slots/slot2", "branch": "eng-1301-inbox", "scan": "security" })
+    );
+    let prompt = step["input"]["prompt"].as_str().unwrap();
+    assert!(prompt.starts_with("Run a security scan of this folder."));
+    assert!(prompt.contains("Pay special attention to this: the login form"));
+    assert!(prompt.contains("This scan is read-only."));
+    assert!(
+        !prompt.contains("screenshot"),
+        "a scan is not offered screenshots"
+    );
+    let inside = dispatch_tool(
+        &r,
+        Some(&id),
+        "scan_folder",
+        json!({ "machine": "hp", "kind": "dead-code", "path": "/r/slots/slot2/app/" }),
+    )
+    .await;
+    assert_eq!(inside["isError"], false, "{inside}");
+    let step = last_event(&r, &id);
+    assert_eq!(step["input"]["path"], "/r/slots/slot2/app");
+    assert_eq!(step["review"]["scan"], "dead_code");
+
+    set_rules(
+        &r,
+        "ask",
+        json!([
+            { "action": "scan_folder", "folder": "slot2", "approval": "deny" },
+            { "action": "scan_folder", "folder": "/r/other", "approval": "allow" },
+        ]),
+    );
+    let before = event_count(&r, &id);
+    let denied = dispatch_tool(
+        &r,
+        Some(&id),
+        "scan_folder",
+        json!({ "machine": "hp", "kind": "test_gaps", "path": "/r/slots/slot2/app" }),
+    )
+    .await;
+    assert_eq!(denied["isError"], true);
+    assert!(denied["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("\"deny scan_folder on any machine in slot2\""));
+    assert_eq!(event_count(&r, &id), before);
+    assert!(!ran(&r, "tmux new"));
+
+    r.fake.stub("tmux new", Output::ok_with("hp-other\n"));
+    let allowed = dispatch_tool(
+        &r,
+        Some(&id),
+        "scan_folder",
+        json!({ "machine": "hp", "kind": "test_gaps", "path": "/r/other" }),
+    )
+    .await;
+    assert_eq!(allowed["isError"], false, "{allowed}");
+    let step = last_event(&r, &id);
+    assert_eq!(step["status"], "auto");
+    assert_eq!(step["review"]["scan"], "test_gaps");
+    assert!(ran(&r, "Run a test gap scan of this folder"));
+    let tracked = r.app.dispatch.get(&id).unwrap()["sessions"].clone();
+    assert_eq!(tracked[0]["review"]["scan"], "test_gaps");
+}
+
+fn finished_scan(r: &Rig, id: &str, of: crate::dispatch::ReviewOf, screen: &str) -> usize {
+    r.app.dispatch.report(
+        &crate::dispatch::Change {
+            conversation: id.to_string(),
+            machine: "hp".into(),
+            name: "hp-eng-1301-2".into(),
+            path: of.path.clone(),
+            state: "idle",
+            review: Some(of),
+        },
+        screen,
+    );
+    event_count(r, id) - 1
+}
+
+#[tokio::test]
+async fn a_scan_starts_from_a_session_card_or_a_folder() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    r.app.dispatch.report(
+        &crate::dispatch::Change {
+            conversation: id.clone(),
+            machine: "hp".into(),
+            name: "hp-eng-1301".into(),
+            path: "/r/slots/slot2".into(),
+            state: "idle",
+            review: None,
+        },
+        "Done.",
+    );
+    let card = event_count(&r, &id) - 1;
+    let (status, body) = step_post(
+        &r,
+        &c,
+        "/dispatch/scans",
+        json!({ "conversation": id, "card": card, "kind": "security" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["conversation"], id.as_str());
+    let step = &body["step"];
+    assert_eq!(
+        (&step["by"], &step["status"]),
+        (&json!("you"), &json!("pending"))
+    );
+    assert_eq!(step["review"]["name"], "hp-eng-1301");
+    assert_eq!(step["review"]["scan"], "security");
+    assert_eq!(step["input"]["path"], "/r/slots/slot2");
+    let (status, _) = step_post(
+        &r,
+        &c,
+        "/dispatch/scans",
+        json!({ "conversation": id, "card": 0, "kind": "security" }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the first event is a message"
+    );
+
+    let (status, body) = step_post(
+        &r,
+        &c,
+        "/dispatch/scans",
+        json!({ "machine": "hp", "folder": "slot2", "inside": "src/api/", "kind": "dead_code" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let fresh = body["conversation"].as_str().unwrap();
+    assert_ne!(fresh, id);
+    let convo = r.app.dispatch.get(fresh).unwrap();
+    assert_eq!(convo["title"], "Dead code scan of slot2/src/api");
+    assert_eq!(
+        convo["events"][0]["review"]["path"],
+        "/r/slots/slot2/src/api"
+    );
+    assert_eq!(convo["events"][0]["review"]["name"], "");
+    for (body, error) in [
+        (
+            json!({ "machine": "hp", "folder": "slot2", "inside": "../x", "kind": "security" }),
+            "the folder inside must be a relative path without . or .. parts",
+        ),
+        (
+            json!({ "machine": "hp", "folder": "slot2", "kind": "everything" }),
+            "kind must be dead_code, test_gaps or security",
+        ),
+        (
+            json!({ "card": 1, "kind": "security" }),
+            "a session card belongs to a conversation",
+        ),
+    ] {
+        let (status, answer) = step_post(&r, &c, "/dispatch/scans", body).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(answer["error"], error);
+    }
+    let (status, body) = step_post(
+        &r,
+        &c,
+        "/dispatch/scans",
+        json!({ "machine": "hp", "folder": "slot2", "kind": "test_gaps" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let titled = r
+        .app
+        .dispatch
+        .get(body["conversation"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(titled["title"], "Test gap scan of slot2");
+}
+
+#[tokio::test]
+async fn a_scan_card_shows_the_files_its_findings_name_and_sends_them() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let of = crate::dispatch::ReviewOf {
+        machine: "hp".into(),
+        name: String::new(),
+        path: "/r/slots/slot2".into(),
+        branch: "eng-1301-inbox".into(),
+        evidence: String::new(),
+        scan: "security".into(),
+    };
+    let screen = "⏺ YARDBELL SCAN\n  verdict: 2 issues found\n  summary: A token and an injection.\n  - high: config/deploy.yml:3: A token is committed.\n  - medium: src/run.rs:2: The branch goes into sh -c.\n  END SCAN";
+    let card = finished_scan(&r, &id, of.clone(), screen);
+    let scan = last_event(&r, &id);
+    assert_eq!(
+        (&scan["role"], &scan["verdict"]),
+        (&json!("review"), &json!("issues"))
+    );
+    assert!(scan.get("diff").is_none() && scan.get("base").is_none());
+
+    let get = |url: String| {
+        let req = Request::get(url)
+            .header(header::ACCEPT, "application/json")
+            .header(header::COOKIE, &c);
+        send(&r.app, req.body(Body::empty()).unwrap())
+    };
+    let base = format!("/dispatch/conversations/{id}/reviews/{card}");
+    let (status, _, body) = get(format!("{base}/files")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list["files"], json!(["config/deploy.yml", "src/run.rs"]));
+    assert_eq!(list["folder"], "/r/slots/slot2");
+
+    let calls = r.fake.calls().len();
+    for bad in [
+        "..%2F..%2Fetc%2Fpasswd",
+        "%2Fetc%2Fpasswd",
+        "a%0Ab",
+        "src%2Fother.rs",
+        "src%2F.%2Frun.rs",
+    ] {
+        let (status, _, body) = get(format!("{base}/files?file={bad}")).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad}");
+        assert!(body.contains("no finding points at"), "{body}");
+    }
+    assert_eq!(
+        r.fake.calls().len(),
+        calls,
+        "nothing ran for a refused path"
+    );
+    r.fake.stub(
+        "@@YB-FILE@@",
+        Output::ok_with("@@YB-FILE@@\nfn run(branch: &str) {\n    sh(branch);\n}\n"),
+    );
+    let (status, _, body) = get(format!("{base}/files?file=src%2Frun.rs&line=2")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let page: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        page["lines"][1],
+        json!({ "k": "ctx", "o": null, "n": 2, "t": "    sh(branch);" })
+    );
+    assert!(ran(&r, "cd '/r/slots/slot2'") && ran(&r, "f='src/run.rs'"));
+    r.fake
+        .restub("@@YB-FILE@@", Output::ok_with("ERR outside\n"));
+    let (status, _, body) = get(format!("{base}/files?file=config%2Fdeploy.yml")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        body.contains("config/deploy.yml is outside the scanned folder"),
+        "{body}"
+    );
+    let (status, _, _) = get(format!("/dispatch/conversations/{id}/reviews/0/files")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "event 0 is not a scan");
+
+    let (status, _, body) = get(format!("{base}/sessions")).await;
+    assert_eq!(status, StatusCode::OK);
+    let targets: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(targets["sessions"][0]["name"], "hp-eng-1301");
+    assert_eq!(
+        targets["sessions"].as_array().unwrap().len(),
+        1,
+        "only tmux sessions in the folder"
+    );
+
+    let (status, answer) = step_post(
+        &r,
+        &c,
+        &base,
+        json!({ "decision": "send", "findings": [0] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(answer["error"], "pick a session to send the findings to");
+    let (status, answer) = step_post(
+        &r,
+        &c,
+        &base,
+        json!({ "decision": "send", "findings": [0], "to": "hp-elsewhere" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        answer["error"],
+        "hp-elsewhere is not a session in the scanned folder"
+    );
+    r.fake.stub("load-buffer", Output::ok_with(""));
+    let (status, sent) = step_post(
+        &r,
+        &c,
+        &base,
+        json!({ "decision": "send", "findings": [1], "to": "hp-eng-1301" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["outcome"]["to"], "hp-eng-1301");
+    let at = r
+        .fake
+        .calls()
+        .iter()
+        .position(|c| c.join(" ").contains("load-buffer"))
+        .unwrap();
+    let typed = r.fake.inputs()[at].clone().unwrap();
+    assert!(
+        typed.starts_with("A security scan of /r/slots/slot2 found this problem. Fix it,"),
+        "{typed}"
+    );
+    assert!(typed.contains("1) medium src/run.rs:2: The branch goes into sh -c."));
+
+    let second = finished_scan(
+        &r,
+        &id,
+        of,
+        &screen.replace("A token and an injection.", "Again."),
+    );
+    let url = format!("/dispatch/conversations/{id}/reviews/{second}");
+    let (status, started) = step_post(
+        &r,
+        &c,
+        &url,
+        json!({ "decision": "start", "findings": [0, 1] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    assert_eq!(started["card"]["outcome"]["decision"], "started");
+    let step = &started["step"];
+    assert_eq!(
+        (&step["by"], &step["status"]),
+        (&json!("you"), &json!("pending"))
+    );
+    assert_eq!(step["input"]["path"], "/r/slots/slot2");
+    assert!(step.get("review").is_none(), "the fixer is no scanner");
+    assert!(step["input"]["prompt"]
+        .as_str()
+        .unwrap()
+        .starts_with("A security scan of /r/slots/slot2 found these 2 problems."));
+    assert_eq!(started["card"]["outcome"]["step"], step["id"]);
+    let (status, _) = step_post(&r, &c, &url, json!({ "decision": "dismiss" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let review_url = format!("/dispatch/conversations/{id}/reviews/{}", card + 100);
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &review_url,
+        json!({ "decision": "start", "findings": [0] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+fn last_start(r: &Rig) -> String {
+    r.fake
+        .calls()
+        .iter()
+        .rev()
+        .find(|c| c.join(" ").contains("tmux new"))
+        .map(|c| c.join(" "))
+        .unwrap_or_default()
+}
+
+#[tokio::test]
+async fn reviewers_and_scanners_start_unable_to_edit_files() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "auto", json!([]));
+    r.fake.stub("tmux new", Output::ok_with("hp-x\n"));
+    let claude_off =
+        |cmd: &str| cmd.contains("--disallowed-tools") && cmd.contains("Edit,Write,NotebookEdit");
+
+    let review = dispatch_tool(
+        &r,
+        Some(&id),
+        "review_session",
+        json!({ "machine": "hp", "name": "hp-eng-1301" }),
+    )
+    .await;
+    assert_eq!(review["isError"], false, "{review}");
+    let cmd = last_start(&r);
+    assert!(claude_off(&cmd), "{cmd}");
+    assert!(!cmd.contains("read-only by instruction"));
+
+    let scan = dispatch_tool(
+        &r,
+        Some(&id),
+        "scan_folder",
+        json!({ "machine": "hp", "kind": "security", "folder": "slot2", "agent": "codex" }),
+    )
+    .await;
+    assert_eq!(scan["isError"], false, "{scan}");
+    let cmd = last_start(&r);
+    assert!(cmd.contains("--sandbox read-only"), "{cmd}");
+
+    let (status, _) = step_post(
+        &r,
+        &c,
+        "/sessions",
+        json!({ "machine": "hp", "folder": "slot2", "agent": "codex", "resume": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cmd = last_start(&r);
+    assert!(
+        cmd.contains("codex resume --last --sandbox read-only"),
+        "resuming the scanner stays read-only: {cmd}"
+    );
+
+    let normal = dispatch_tool(
+        &r,
+        Some(&id),
+        "start_session",
+        json!({ "machine": "hp", "folder": "slot2", "agent": "codex", "prompt": "fix the inbox" }),
+    )
+    .await;
+    assert_eq!(normal["isError"], false, "{normal}");
+    let cmd = last_start(&r);
+    assert!(
+        cmd.contains("fix the inbox") && !cmd.contains("--sandbox"),
+        "{cmd}"
+    );
+    let (status, _) = step_post(
+        &r,
+        &c,
+        "/sessions",
+        json!({ "machine": "hp", "folder": "slot2", "agent": "codex", "resume": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let cmd = last_start(&r);
+    assert!(
+        cmd.contains("codex resume --last") && !cmd.contains("--sandbox"),
+        "after a normal session, a resume is normal: {cmd}"
+    );
+    let (status, _) = step_post(
+        &r,
+        &c,
+        "/sessions",
+        json!({ "machine": "hp", "folder": "slot2", "prompt": "plain" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(!last_start(&r).contains("--disallowed-tools"));
+
+    let other = dispatch_tool(
+        &r,
+        Some(&id),
+        "scan_folder",
+        json!({ "machine": "hp", "kind": "dead_code", "folder": "slot2", "agent": "gemini" }),
+    )
+    .await;
+    assert_eq!(other["isError"], false, "{other}");
+    let cmd = last_start(&r);
+    assert!(
+        !cmd.contains("--sandbox") && !cmd.contains("--disallowed-tools"),
+        "{cmd}"
+    );
+    let step = last_event(&r, &id);
+    assert!(step["input"]["prompt"]
+        .as_str()
+        .unwrap()
+        .ends_with(crate::mcp::READ_ONLY_BY_INSTRUCTION));
+}
+
+#[tokio::test]
+async fn an_approved_review_stays_read_only_even_when_edited() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let asked = dispatch_tool(
+        &r,
+        Some(&id),
+        "scan_folder",
+        json!({ "machine": "hp", "kind": "security", "folder": "slot2" }),
+    )
+    .await;
+    assert!(asked["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("Not run yet."));
+    let step = last_event(&r, &id);
+    assert_eq!(step["input"]["read_only"], true);
+    let mut edited = step["input"].clone();
+    edited.as_object_mut().unwrap().remove("read_only");
+    edited["prompt"] = json!("scan, and also fix what you find");
+    r.fake.stub("tmux new", Output::ok_with("hp-x\n"));
+    let (status, ran) = step_post(
+        &r,
+        &c,
+        &format!(
+            "/dispatch/conversations/{id}/actions/{}",
+            step["id"].as_str().unwrap()
+        ),
+        json!({ "decision": "approve", "input": edited }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{ran}");
+    let cmd = last_start(&r);
+    assert!(cmd.contains("--disallowed-tools"), "{cmd}");
 }

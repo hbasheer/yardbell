@@ -3,11 +3,12 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
-const ACTIONS: [&str; 4] = [
+const ACTIONS: [&str; 5] = [
     "start_session",
     "stop_session",
     "send_to_session",
     "review_session",
+    "scan_folder",
 ];
 
 fn any() -> String {
@@ -402,7 +403,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],
