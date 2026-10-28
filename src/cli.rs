@@ -123,7 +123,12 @@ pub async fn serve(
 
     let hook_state = state.clone();
     let hook_tunnels = tunnels.clone();
+    let insights = Arc::new(crate::insights::Insights::load(dir.join("insights.json")));
+    let hook_insights = insights.clone();
     let hook: Hook = Arc::new(move |cfg: &Config, st: &MachineStatus| {
+        if let Some(snap) = &st.snapshot {
+            hook_insights.observe(&st.name, snap, st.checked_at);
+        }
         let names: Vec<String> = cfg.remote_machines().map(|m| m.name.clone()).collect();
         hook_tunnels.retain(&names);
         let Some(m) = cfg.machine(&st.name).filter(|m| !m.is_local()) else {
@@ -286,6 +291,7 @@ pub async fn serve(
         phone,
         dispatch,
         triggers,
+        insights,
         releases: crate::about::github(),
         refresh: Arc::new(move |machine: Option<String>| {
             let poller = poller.clone();

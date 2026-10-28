@@ -175,6 +175,8 @@ async fn missed_slots_run_once_after_a_restart() {
     assert_eq!(convo["trigger"]["name"], "Hourly status");
     assert_eq!(convo["trigger"]["kind"], "schedule");
     assert_eq!(convo["trigger"]["what"], "Every hour");
+    assert_eq!(convo["trigger"]["task"], "What's going on?");
+    assert_eq!(convo["trigger"]["version"], 1);
     assert_eq!(
         convo["trigger"]["slot"],
         at("2026-06-01 14:00").to_rfc3339(),
@@ -343,10 +345,12 @@ async fn linear_tickets_start_once_each_even_across_restarts() {
     let dir = tempfile::tempdir().unwrap();
     let file = dir.path().join("triggers.json");
     let d = dispatch(dir.path(), QUICK);
+    d.save_task("Start a ticket", "Start {ticket}", None)
+        .unwrap();
     d.save_task(
         "Start a ticket",
         "Start a session for {ticket} ({title}), it is {state}. {url}",
-        None,
+        Some("Start a ticket"),
     )
     .unwrap();
     let cfg = config(LINEAR);
@@ -395,6 +399,10 @@ async fn linear_tickets_start_once_each_even_across_restarts() {
     );
     assert_eq!(first["trigger"]["kind"], "linear");
     assert_eq!(first["trigger"]["what"], "ENG-1 moved to In Progress");
+    assert_eq!(
+        first["trigger"]["version"], 2,
+        "a trigger runs the task's current version and says which"
+    );
     assert_eq!(
         first["trigger"]["url"],
         "https://linear.app/acme/issue/ENG-1"

@@ -76,6 +76,7 @@ pub struct AppState {
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
     pub triggers: Arc<crate::triggers::Triggers>,
+    pub insights: Arc<crate::insights::Insights>,
     pub auth: Auth,
     pub key: std::sync::RwLock<Key>,
     pub handoff: std::sync::Mutex<Vec<(String, Instant)>>,
@@ -107,6 +108,7 @@ pub struct Services {
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
     pub triggers: Arc<crate::triggers::Triggers>,
+    pub insights: Arc<crate::insights::Insights>,
     pub worktrees: crate::worktrees::Worktrees,
     pub refresh: Refresh,
     pub releases: crate::about::Fetch,
@@ -125,6 +127,7 @@ impl AppState {
             phone,
             dispatch,
             triggers,
+            insights,
             worktrees,
             refresh,
             releases,
@@ -148,6 +151,7 @@ impl AppState {
             phone,
             dispatch,
             triggers,
+            insights,
             auth: Auth::new(cfg.passcode_hash.clone().unwrap_or_default(), clock.clone()),
             key: std::sync::RwLock::new(key),
             handoff: std::sync::Mutex::new(Vec::new()),
@@ -420,6 +424,16 @@ pub fn router(app: Arc<AppState>) -> Router {
             "/dispatch/memory",
             get(dispatch_memory).post(dispatch_change_memory),
         )
+        .route(
+            "/dispatch-tasks.js",
+            get(|| async { asset("dispatch-tasks.js") }),
+        )
+        .route("/dispatch/tasks/history", get(dispatch_task_history))
+        .route("/dispatch/tasks/diff", get(dispatch_task_diff))
+        .route(
+            "/dispatch/tasks/versions/restore",
+            post(dispatch_restore_task_version),
+        )
         .route("/dispatch/usage", get(dispatch_usage))
         .route("/dispatch/usage/refresh", post(dispatch_usage_refresh))
         .route(
@@ -496,6 +510,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(pulls_api::routes())
         .merge(triggers_api::routes())
         .merge(worktrees_api::routes())
+        .merge(insights_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -849,6 +864,58 @@ async fn dispatch_delete_task(
 }
 
 #[derive(Deserialize)]
+struct TaskQuery {
+    name: String,
+    #[serde(default)]
+    from: u32,
+    #[serde(default)]
+    to: u32,
+}
+
+async fn dispatch_task_history(
+    AxState(app): AxState<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<TaskQuery>,
+) -> Result<Response, ApiError> {
+    let history = app
+        .dispatch
+        .task_history(&q.name)
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, e))?;
+    Ok(Json(history).into_response())
+}
+
+async fn dispatch_task_diff(
+    AxState(app): AxState<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<TaskQuery>,
+) -> Result<Response, ApiError> {
+    let parts = app
+        .dispatch
+        .task_diff(&q.name, q.from, q.to)
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, e))?;
+    Ok(Json(json!({ "name": q.name, "from": q.from, "to": q.to, "parts": parts })).into_response())
+}
+
+#[derive(Deserialize)]
+struct RestoreVersion {
+    name: String,
+    version: u32,
+}
+
+async fn dispatch_restore_task_version(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<RestoreVersion>,
+) -> Result<Response, ApiError> {
+    let tasks = app
+        .dispatch
+        .restore_task_version(&req.name, req.version)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    let history = app
+        .dispatch
+        .task_history(&req.name)
+        .map_err(ApiError::internal)?;
+    Ok(Json(json!({ "tasks": tasks, "history": history })).into_response())
+}
+
+#[derive(Deserialize)]
 struct KeysInput {
     keys: String,
 }
@@ -908,6 +975,26 @@ struct DispatchAsk {
     #[serde(default)]
     conversation: Option<String>,
     text: String,
+    #[serde(default)]
+    task: Option<TaskMark>,
+    #[serde(default)]
+    improve: Option<ImproveMark>,
+}
+
+// The saved task, and the version of it, that a message ran.
+#[derive(Deserialize, serde::Serialize)]
+struct TaskMark {
+    name: String,
+    version: u32,
+}
+
+// The session a message asks Dispatch to suggest a better prompt for, and the task it came from.
+#[derive(Deserialize, serde::Serialize)]
+struct ImproveMark {
+    machine: String,
+    name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    task: Option<TaskMark>,
 }
 
 async fn dispatch_ask(
@@ -926,11 +1013,19 @@ async fn dispatch_ask(
             .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?,
         None => None,
     };
+    let mut marks = json!({});
+    if let Some(task) = &req.task {
+        marks["task"] = json!(task);
+    }
+    if let Some(improve) = &req.improve {
+        marks["improve"] = json!(improve);
+    }
     let (id, rx) = app
         .dispatch
-        .ask(
+        .ask_marked(
             conversation,
             &req.text,
+            &marks,
             cfg.port,
             &cfg.dispatch,
             host_mcp.as_deref(),
@@ -1994,6 +2089,7 @@ async fn remove_machine(
     Json(app.onboarding.remove(&name).await).into_response()
 }
 
+mod insights_api;
 mod pulls_api;
 mod review_api;
 mod scan_api;

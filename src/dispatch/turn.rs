@@ -40,11 +40,12 @@ pub struct Opening<'a> {
     pub note: &'a str,
 }
 
-// Who sends a turn's message: the person, a trigger that opens a conversation, or Yardbell in a
+// Who sends a turn's message: the person, with what the page knows about where the message came
+// from (such as the saved task it ran), a trigger that opens a conversation, or Yardbell in a
 // conversation that exists, with a note for Claude that nobody typed it.
 #[derive(Clone, Copy)]
 enum Author<'a> {
-    Person,
+    Person(Option<&'a Value>),
     Trigger(&'a Opening<'a>),
     Yardbell(&'a str),
 }
@@ -52,7 +53,7 @@ enum Author<'a> {
 impl Author<'_> {
     fn note(&self) -> Option<&str> {
         match self {
-            Author::Person => None,
+            Author::Person(_) => None,
             Author::Trigger(o) => Some(o.note),
             Author::Yardbell(note) => Some(note),
         }
@@ -138,6 +139,11 @@ impl Dispatch {
         if matches!(sender, Author::Yardbell(_)) {
             message["by"] = json!("yardbell");
         }
+        if let Author::Person(Some(Value::Object(about))) = sender {
+            for (key, value) in about {
+                message[key] = value.clone();
+            }
+        }
         c.stored.events.push(message);
         c.stored.updated = stamp;
         let prompt = actions::with_news(&news, text);
@@ -159,8 +165,37 @@ impl Dispatch {
         settings: &DispatchSettings,
         extra: Option<&str>,
     ) -> Result<(String, mpsc::Receiver<Value>), String> {
-        self.turn(conversation, Author::Person, text, port, settings, extra)
-            .await
+        self.turn(
+            conversation,
+            Author::Person(None),
+            text,
+            port,
+            settings,
+            extra,
+        )
+        .await
+    }
+
+    // The same turn, with the message marked with what started it, such as {"task": {"name",
+    // "version"}} for a saved task. The marks are for the page; Claude gets only the text.
+    pub async fn ask_marked(
+        &self,
+        conversation: Option<&str>,
+        text: &str,
+        marks: &Value,
+        port: u16,
+        settings: &DispatchSettings,
+        extra: Option<&str>,
+    ) -> Result<(String, mpsc::Receiver<Value>), String> {
+        self.turn(
+            conversation,
+            Author::Person(Some(marks)),
+            text,
+            port,
+            settings,
+            extra,
+        )
+        .await
     }
 
     // A message Yardbell sends in an existing conversation, with a note for Claude that nobody

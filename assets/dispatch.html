@@ -67,6 +67,7 @@
           <form class="task-form" id="task-form" hidden>
             <label>Name <input type="text" name="name" maxlength="60" autocomplete="off" required></label>
             <label>What to ask Dispatch <textarea name="text" rows="4" required></textarea></label>
+            <p class="task-version" id="task-version" hidden><span id="task-version-word"></span><button class="link-btn" type="button" id="task-history">History</button></p>
             <div class="row-actions"><button class="btn quiet" type="button" id="task-cancel">Cancel</button><button class="btn primary" type="submit">Save task</button></div>
           </form>
           <ul class="convo-list task-list" id="task-list"></ul>
@@ -113,6 +114,7 @@
 </div>
 <div id="toast" role="status"></div>
 <script src="/nav.js"></script>
+<script src="/insights.js"></script>
 <script type="module" src="/dispatch.js"></script>
 </body>
 </html>

@@ -54,9 +54,21 @@ TRIGGER = "Morning summary"
 # Dispatch runs this instead of Claude Code: canned stream-json, the shape `claude -p` prints.
 FAKE_CLAUDE = """#!/bin/sh
 echo '{"type":"system","subtype":"init","session_id":"fake-session"}'
-echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Nothing needs you right now."}]}}'
-echo '{"type":"result","is_error":false,"result":"Nothing needs you right now."}'
+case "$*" in
+*"Suggest a better prompt"*)
+  # printf, since the echo of dash turns \\n into a line break and breaks the JSON.
+  printf '%s\\n' '{"type":"assistant","message":{"content":[{"type":"text","text":"It waited for the test command.\\n\\n```prompt\\nFix the login redirect in demo-app. Run npm test before you finish.\\n```"}]}}'
+  ;;
+*)
+  echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Nothing needs you right now."}]}}'
+  ;;
+esac
+echo '{"type":"result","is_error":false,"result":"done"}'
 """
+INSIGHTS_CHAT = "browserinsight01"
+OLD_RUN = "hp-old-run"
+OLD_TASK = "Fix the login"
+PROMPT = "Fix the login redirect in demo-app. Run npm test before you finish."
 
 
 def git(*args, cwd):
@@ -381,7 +393,28 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         pull = conversation(PULL_CHAT, "Pull request #12: Fix the login redirect", [card])
         with open(os.path.join(self.state, "dispatch", "memory.md"), "w") as f:
             f.write(f"# Dispatch memory\n\n- {MEMORY_OLD}\n- Branches are named after the ticket\n")
-        for chat in (short, long, review, pull, scan, group_chat(self.root), results_chat(self.root), memory_chat()):
+        insight = conversation(INSIGHTS_CHAT, "Fix the login", [
+            {"role": "user", "text": "Fix the login redirect", "task": {"name": OLD_TASK, "version": 1}},
+            {"role": "action", "id": "insstart", "tool": "start_session", "by": "dispatch", "status": "approved",
+             "at": "2026-01-01T10:00:00+00:00", "input": {"machine": MACHINE, "folder": "demo-app", "prompt": "Fix the login redirect"},
+             "result": {"ok": True, "text": "{}", "at": "2026-01-01T10:00:00+00:00",
+                        "session": {"machine": MACHINE, "name": OLD_RUN, "path": repo}}},
+            {"role": "session", "machine": MACHINE, "name": OLD_RUN, "path": repo, "state": "ended",
+             "screen": "Done.", "options": [], "at": "2026-01-01T10:40:00+00:00"},
+        ])
+        # A tasks file from before versions were kept, and a timeline of a session that ended.
+        with open(os.path.join(self.state, "dispatch", "tasks.json"), "w") as f:
+            json.dump([{"name": OLD_TASK, "text": "Fix the login redirect", "builtin": False}], f)
+        at = lambda m: f"2026-01-01T10:{m:02d}:00+00:00"
+        marks = [{"at": at(0), "kind": "started"}, {"at": at(0), "kind": "active"},
+                 {"at": at(5), "kind": "test", "text": "Bash: npm test"},
+                 {"at": at(6), "kind": "test", "text": "Tests: 1 failed, 4 passed, 5 total", "ok": False},
+                 {"at": at(19), "kind": "blocked"}, {"at": at(24), "kind": "active"},
+                 {"at": at(30), "kind": "idle"}, {"at": at(40), "kind": "ended"}]
+        with open(os.path.join(self.state, "insights.json"), "w") as f:
+            json.dump({f"{MACHINE}:{OLD_RUN}": {"machine": MACHINE, "name": OLD_RUN, "agent": "shell", "folder": "demo-app",
+                                                "branch": "main", "marks": marks}}, f)
+        for chat in (short, long, review, pull, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -658,6 +691,28 @@ class Suite:
               && document.getElementById('convo-list').textContent.includes('Dead code scan of demo-api')""",
             "a new conversation with the folder's scan",
         )
+        # A project's worktree is picked as its branch, not listed as a folder of its own.
+        repo = os.path.join(self.y.root, "demo-app")
+        tree = os.path.join(self.y.root, "demo-app-worktrees", "scan-wt")
+        git("worktree", "add", "-q", "-b", "scan-wt", tree, cwd=repo)
+        try:
+            b.click("#new-chat")
+            b.wait("!new URLSearchParams(location.search).get('c')", "a new conversation")
+            b.click("#insert-scan")
+            b.wait("document.getElementById('scan-dialog')?.open", "the Scan a folder dialog")
+            b.js("(() => { const s = document.querySelector('#scan-dialog select[name=folder]'); s.value = [...s.options].find((o) => o.textContent === 'demo-app').value; s.dispatchEvent(new Event('change')); })()")
+            branch = "#scan-dialog select[name=checkout]"
+            b.wait(f"[...document.querySelectorAll('{branch} option')].some((o) => o.textContent === 'scan-wt (worktree)')", "the worktree's branch")
+            b.js(f"(() => {{ const s = document.querySelector('{branch}'); s.value = {json.dumps(tree)}; s.dispatchEvent(new Event('change')); }})()")
+            b.click("#scan-dialog button[type=submit]")
+            b.wait("!document.getElementById('scan-dialog').open && new URLSearchParams(location.search).get('c')", "the scan of the worktree")
+            convo = self.api("GET", f"/dispatch/conversations/{b.js('new URLSearchParams(location.search).get(\'c\')')}")
+            step = [e for e in convo["events"] if e["role"] == "action"][-1]
+            if step["input"]["path"] != tree or step["review"]["branch"] != "scan-wt":
+                raise Failure(f"the scan reads {step['input']['path']} on {step['review'].get('branch')!r}")
+        finally:
+            git("worktree", "remove", "--force", tree, cwd=repo)
+            git("branch", "-D", "scan-wt", cwd=repo)
 
     def test_dispatch_composer_on_a_phone(self):
         b = self.b
@@ -1031,6 +1086,87 @@ class Suite:
             raise Failure(f"memory.md holds {saved!r}")
         if os.stat(os.path.join(self.y.state, "dispatch", "memory.md")).st_mode & 0o777 != 0o600:
             raise Failure("memory.md is readable by other accounts")
+
+    def test_task_history_diff_and_restore(self):
+        b = self.b
+        b.goto(self.url("/dispatch"))
+        item = f"[...document.querySelectorAll('#task-list .task')].find((t) => t.textContent.includes({json.dumps(OLD_TASK)}))"
+        b.wait(item, "the task kept from before versions")
+        b.js(f"{item}.querySelector('[aria-label^=Edit]').click()")
+        b.wait("document.getElementById('task-version-word').textContent === 'Version 1'", "a task from an old file as version 1")
+        b.js("document.querySelector('#task-form textarea').value = ''")
+        b.click("#task-form textarea")
+        b.type("Fix the login redirect and run the tests")
+        b.click("#task-form button[type=submit]")
+        b.wait(f"{item}?.textContent.includes('run the tests')", "the saved text in the list")
+        b.js(f"{item}.querySelector('[aria-label^=Edit]').click()")
+        b.wait("document.getElementById('task-version-word').textContent === 'Version 2'", "the save as version 2")
+        b.click("#task-history")
+        b.wait("document.querySelectorAll('.th-dialog .th-version').length === 2", "both versions in the history")
+        b.wait("document.querySelector('.th-diff ins')?.textContent === ' and run the tests'", "the added words in the diff")
+        if b.js("document.querySelector('.th-diff del')"):
+            raise Failure("nothing was removed, but the diff shows a removal")
+        b.click(".th-dialog .th-version:last-child .btn")
+        b.wait("document.querySelectorAll('.th-dialog .th-version').length === 3", "the restored text as a new version")
+        head = b.js("document.querySelector('.th-dialog .th-version').innerText")
+        if "Version 3" not in head or "Restored from version 1" not in head or "Current" not in head:
+            raise Failure(f"the newest version reads {head!r}")
+        b.wait("document.querySelector('.th-diff del')?.textContent === ' and run the tests'", "the diff of version 2 and the restored one")
+        b.click(".th-dialog .dialog-foot .btn.primary")
+        b.wait(f"!document.querySelector('.th-dialog') && {item}.querySelector('.convo-meta').textContent === 'Fix the login redirect'", "the restored text in the list")
+        tasks = self.api("GET", "/dispatch/tasks")
+        mine = next(t for t in tasks if t["name"] == OLD_TASK)
+        if mine["version"] != 3:
+            raise Failure(f"the task is at version {mine['version']}")
+
+    def test_insights_timeline_and_a_better_prompt(self):
+        b = self.b
+        if not self.session:
+            path = os.path.join(self.y.root, "demo-app")
+            self.session = self.api("POST", "/sessions", {"machine": MACHINE, "path": path, "wait": True})["name"]
+        row = f".s-row [data-act=insights][data-name={json.dumps(self.session)}]"
+        b.goto(self.url("/"))
+        b.wait(f"document.querySelector('{row}')", "Insights on a session row", timeout=15)
+        b.click(row)
+        b.wait("document.querySelector('.ins-dialog .ins-body')", "the Insights of a live session")
+        b.click(".ins-dialog [data-ins=close]")
+        b.wait("!document.querySelector('.ins-dialog')", "the dialog to close")
+
+        b.goto(self.url(f"/dispatch?c={INSIGHTS_CHAT}"))
+        card = "#dispatch-log .session-card"
+        b.wait(f"[...document.querySelectorAll('{card} .btn')].find((x) => x.textContent === 'Insights')", "Insights on the session card")
+        b.js(f"[...document.querySelectorAll('{card} .btn')].find((x) => x.textContent === 'Insights').click()")
+        b.wait("document.querySelector('.ins-dialog .ins-list')", "the seeded timeline")
+        text = b.js("document.querySelector('.ins-dialog').innerText")
+        for expected in ("Insights for hp-old-run", "Working 25 min", "Waiting for you 5 min, 1 time", "Idle 10 min",
+                         "Test results 0 passed, 1 failed", "Bash: npm test", "Tests: 1 failed, 4 passed, 5 total",
+                         "Failed", "Ended", "Fix the login redirect", f"From the task {OLD_TASK}, version 1"):
+            if expected not in text:
+                raise Failure(f"Insights do not show {expected!r}:\n{text}")
+        states = b.js("[...document.querySelectorAll('.ins-dialog .ins-period .ins-text')].map((x) => x.textContent).join()")
+        if states != "Working,Waiting for you,Working,Idle,Ended":
+            raise Failure(f"the timeline's periods are {states!r}")
+        if b.js("document.querySelectorAll('.ins-dialog .ins-bar .ins-seg').length") != 4:
+            raise Failure("the bar does not draw each period")
+
+        b.click(".ins-dialog [data-ins=suggest]")
+        b.wait("[...document.querySelectorAll('#dispatch-log .msg.user.marked .msg-by')].some((x) => x.textContent === 'Suggest a better prompt for hp-old-run on hp')",
+               "the request as a message in this conversation")
+        save = "[...document.querySelectorAll('#dispatch-log .prompt-actions .btn')]"
+        b.wait(f"{save}.length === 2", "the proposed prompt with its two save buttons", timeout=20)
+        convo = self.api("GET", f"/dispatch/conversations/{INSIGHTS_CHAT}")
+        asked = [e for e in convo["events"] if e["role"] == "user"][-1]
+        if asked.get("improve", {}).get("name") != OLD_RUN or asked["improve"].get("task", {}).get("name") != OLD_TASK:
+            raise Failure(f"the request is marked {asked.get('improve')}")
+        if "It started with this task:" not in asked["text"] or "1 failing test run" not in asked["text"]:
+            raise Failure(f"Dispatch was asked:\n{asked['text']}")
+        b.js(f"{save}[1].click()")
+        b.wait(f"(async () => (await (await fetch('/dispatch/tasks')).json()).find((t) => t.name === {json.dumps(OLD_TASK)})?.text === {json.dumps(PROMPT)})()",
+               "the proposal saved as the next version of its task")
+        b.js(f"{save}[0].click()")
+        b.wait(f"!document.getElementById('task-form').hidden && document.querySelector('#task-form textarea').value === {json.dumps(PROMPT)} && !document.querySelector('#task-form input[name=name]').value",
+               "the proposal in a new task's form")
+        b.click("#task-cancel")
 
     def check_errors(self, where):
         if self.b.errors:

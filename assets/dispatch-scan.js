@@ -66,8 +66,22 @@ export function toggleMenu(button, pick) {
   menu.querySelector("[role=menuitem]").focus();
 }
 
-// Scan a folder from the composer: pick a folder Yardbell knows, optionally a folder inside it,
-// and the kind. The scan waits as a step in the conversation, like one started from a card.
+async function checkouts(machine, path) {
+  const res = await fetch(`/machines/${encodeURIComponent(machine)}/branches?path=${encodeURIComponent(path)}`, { headers: { Accept: "application/json" } });
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.error || `Request failed (${res.status})`);
+  return [
+    { branch: data.current, path: "" },
+    ...Object.entries(data.worktrees || {})
+      .filter(([branch, at]) => branch !== data.current && at !== path)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([branch, at]) => ({ branch, path: at })),
+  ];
+}
+
+// Scan a folder from the composer: pick a project, then the branch to read, from its own
+// checkout or one of its worktrees, optionally a folder inside it, and the kind. The scan waits
+// as a step in the conversation, like one started from a card.
 export function openDialog({ state, submit }) {
   let dialog = document.getElementById("scan-dialog");
   if (!dialog) {
@@ -80,10 +94,26 @@ export function openDialog({ state, submit }) {
   }
   const up = new Set((state?.machines || []).filter((m) => m.up).map((m) => m.name));
   const folders = (state?.folders || [])
-    .filter((f) => up.has(f.machine))
+    .filter((f) => up.has(f.machine) && !f.worktree)
     .sort((a, b) => Number(a.label.startsWith("/")) - Number(b.label.startsWith("/")) || a.label.localeCompare(b.label));
   const machines = [...new Set(folders.map((f) => f.machine))];
-  const form = { folder: folders[0] ? `${folders[0].machine}\n${folders[0].label}` : "", inside: "", kind: "security", busy: false, error: "" };
+  const form = { folder: folders[0] ? `${folders[0].machine}\n${folders[0].label}` : "", branches: null, checkout: "", inside: "", kind: "security", busy: false, error: "" };
+  const project = () => folders.find((f) => `${f.machine}\n${f.label}` === form.folder);
+  async function pickProject(value) {
+    form.folder = value;
+    form.checkout = "";
+    const f = project();
+    form.branches = f?.branch ? [{ branch: f.branch, path: "" }] : null;
+    draw();
+    if (!f) return;
+    try {
+      const found = await checkouts(f.machine, f.path);
+      if (form.folder === value) form.branches = found;
+    } catch {
+      if (form.folder === value && !form.branches) form.branches = [];
+    }
+    if (dialog.open && form.folder === value) draw();
+  }
   const draw = () => render(html`<form method="dialog" class="scan-form" @submit=${go}>
     <div class="dialog-head">
       <h2 id="scan-title">Scan a folder</h2>
@@ -91,10 +121,13 @@ export function openDialog({ state, submit }) {
     </div>
     ${folders.length ? html`
     <section class="step grid2">
-      <label>Folder<select name="folder" @change=${(ev) => { form.folder = ev.target.value; }}>
-        ${machines.map((m) => html`<optgroup label=${m}>${folders.filter((f) => f.machine === m).map((f) => html`<option value=${`${f.machine}\n${f.label}`} ?selected=${form.folder === `${f.machine}\n${f.label}`}>${f.label}${f.branch ? ` (${f.branch})` : ""}</option>`)}</optgroup>`)}
+      <label>Project<select name="folder" @change=${(ev) => pickProject(ev.target.value)}>
+        ${machines.map((m) => html`<optgroup label=${m}>${folders.filter((f) => f.machine === m).map((f) => html`<option value=${`${f.machine}\n${f.label}`} ?selected=${form.folder === `${f.machine}\n${f.label}`}>${f.label}</option>`)}</optgroup>`)}
       </select></label>
-      <label>Only this folder inside it<input type="text" name="inside" .value=${form.inside} placeholder="Leave empty for all of it" autocomplete="off" autocapitalize="off" spellcheck="false" @input=${(ev) => { form.inside = ev.target.value; }}></label>
+      <label>Branch<select name="checkout" ?disabled=${!form.branches?.length} @change=${(ev) => { form.checkout = ev.target.value; }}>
+        ${form.branches === null ? html`<option value="">Reading branches…</option>` : !form.branches.length ? html`<option value="">This checkout</option>` : form.branches.map((b) => html`<option value=${b.path} ?selected=${form.checkout === b.path}>${b.branch || "No branch"}${b.path ? " (worktree)" : ""}</option>`)}
+      </select></label>
+      <label class="span2">Only this folder inside it<input type="text" name="inside" .value=${form.inside} placeholder="Leave empty for all of it" autocomplete="off" autocapitalize="off" spellcheck="false" @input=${(ev) => { form.inside = ev.target.value; }}></label>
     </section>
     <section class="step">
       <h3 class="step-title">Look for</h3>
@@ -113,11 +146,12 @@ export function openDialog({ state, submit }) {
   async function go(ev) {
     ev.preventDefault();
     const [machine, folder] = form.folder.split("\n");
+    const picked = form.branches?.find((b) => b.path === form.checkout);
     form.busy = true;
     form.error = "";
     draw();
     try {
-      await submit({ machine, folder, inside: form.inside.trim(), kind: form.kind });
+      await submit({ machine, folder, inside: form.inside.trim(), kind: form.kind, ...(picked?.path ? { path: picked.path, branch: picked.branch } : {}) });
       dialog.close();
     } catch (err) {
       form.error = err.message;
@@ -129,4 +163,5 @@ export function openDialog({ state, submit }) {
   draw();
   dialog.showModal();
   dialog.querySelector("select, button")?.focus();
+  if (form.folder) pickProject(form.folder);
 }

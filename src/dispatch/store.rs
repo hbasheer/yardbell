@@ -157,7 +157,7 @@ pub(super) fn title_of(text: &str) -> String {
     cut
 }
 
-pub(super) fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+pub fn write_private(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(dir) = path.parent() {
         std::fs::create_dir_all(dir)?;
     }

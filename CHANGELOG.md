@@ -17,6 +17,23 @@ and the project uses [Semantic Versioning](https://semver.org).
   of its 8 KB cap is used and keeps the history of changes with dates. A change that would go
   over the cap is refused with a note to forget or shorten an entry. The memory is
   `dispatch/memory.md` in the state folder, readable only by your account.
+- Dispatch tasks keep their versions. Every save keeps the text before it with its date, and
+  **History** in a task's editor lists the versions, compares any two word by word and restores
+  one as a new version, so nothing is lost. A default task is version 1 until you change it and has
+  **Reset to the default**. Each task keeps its last 30 versions, and a tasks file from an older
+  Yardbell becomes one version per task. Triggers still name the task, so they run its current
+  version, and a triggered conversation, like a message sent from the Tasks list, says which
+  version ran.
+- **Insights** on a session row, an ended session, a Workspace pane's new **⋯** menu and a Dispatch
+  session card shows the session's timeline: when it started, how long it worked, waited for you
+  and sat idle, and the tool calls and test runs its screen showed, with whether each test run
+  passed. Yardbell records the changes from its usual checks, keeps them across restarts and
+  needs no AI for it.
+- **Suggest a better prompt** asks Dispatch, as a message you send, to read a session's task and
+  scrollback and propose a clearer prompt for next time. Save the proposal as a new task, or as the
+  next version of the task the session came from.
+- **Scan** in the Dispatch message box picks a project and then the branch to scan, from its own
+  checkout or one of its worktrees, instead of listing every folder.
 
 ## [0.7.4] - 2026-10-28
 

@@ -3,6 +3,7 @@ import * as steps from "/dispatch-review.js";
 import * as pulls from "/dispatch-pull.js";
 import * as scans from "/dispatch-scan.js";
 import * as groups from "/dispatch-group.js";
+import { openHistory, proposedPrompt } from "/dispatch-tasks.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
 
@@ -307,6 +308,7 @@ function sessionCard(e, index) {
       ${options}
       ${reviewable ? html`<button class="btn" type="button" title="Start a reviewer in the same folder that runs the tests and changes nothing" @click=${() => requestReview(index)}>Review branch</button>` : nothing}
       ${reviewable && e.path ? html`<button class="btn scan-btn" type="button" aria-haspopup="menu" aria-expanded="false" title="Start a scanner in the same folder that reads all of its code and changes nothing" @click=${(ev) => scans.toggleMenu(ev.currentTarget, (kind) => requestScan({ card: index, kind }))}>Scan<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="m4.5 6.5 3.5 3.5 3.5-3.5"/></svg></button>` : nothing}
+      <button class="btn quiet" type="button" title="When it worked, waited and idled, and the tools and tests it ran" @click=${() => insights(e.machine, e.name, true)}>Insights</button>
       ${e.state === "ended" ? nothing : html`<a class="btn quiet" href=${termUrl(e.machine, e.name)} target="_blank" rel="noopener">Open</a>`}
       ${e.answer ? html`<span class="session-card-answer">You answered ${optionLabel(e.answer.label)}${e.answer.at ? ` at ${new Date(e.answer.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</span>` : nothing}
     </div>
@@ -330,11 +332,12 @@ function block(b) {
     case "results":
       return groups.resultsCard(b.event, b.key);
     case "user":
-      return b.event.by === "yardbell"
-        ? html`<div class="msg user by-yardbell"><span class="msg-by">Sent by Yardbell once the results were in</span>${b.event.text}</div>`
-        : html`<p class="msg user">${b.event.text}</p>`;
+      if (b.event.by === "yardbell") return html`<div class="msg user by-yardbell"><span class="msg-by">Sent by Yardbell once the results were in</span>${b.event.text}</div>`;
+      if (b.event.improve) return html`<div class="msg user marked"><span class="msg-by">Suggest a better prompt for ${b.event.improve.name} on ${b.event.improve.machine}</span><details class="msg-more"><summary>What Dispatch was asked</summary>${b.event.text}</details></div>`;
+      if (b.event.task) return html`<div class="msg user marked"><span class="msg-by">Task ${b.event.task.name} · version ${b.event.task.version}</span>${b.event.text}</div>`;
+      return html`<p class="msg user">${b.event.text}</p>`;
     case "assistant":
-      return html`<div class="msg md">${markdown(b.event.text)}</div>`;
+      return html`<div class="msg md">${markdown(b.event.text)}${promptActions(b)}</div>`;
     case "error":
       return html`<p class="msg error">${b.event.text}</p>`;
     default:
@@ -359,7 +362,7 @@ function triggerHead() {
     ${ICONS.trigger}
     <div class="trigger-head-text">
       <strong>Started by the trigger ${trigger.name}</strong>
-      <span>${trigger.what} · ${serverTime(trigger.at)}${late ? `, late for ${serverTime(trigger.slot).split(", ")[1]}` : ""}${known && !on ? " · The trigger is off" : ""}${triggerInfo && !known ? " · The trigger was deleted" : ""}</span>
+      <span>${trigger.task ? html`Task ${trigger.task}${trigger.version ? `, version ${trigger.version}` : ""} · ` : nothing}${trigger.what} · ${serverTime(trigger.at)}${late ? `, late for ${serverTime(trigger.slot).split(", ")[1]}` : ""}${known && !on ? " · The trigger is off" : ""}${triggerInfo && !known ? " · The trigger was deleted" : ""}</span>
     </div>
     <div class="trigger-head-actions">
       ${trigger.url ? html`<a class="btn quiet" href=${trigger.url} target="_blank" rel="noopener">Open ticket</a>` : nothing}
@@ -526,14 +529,14 @@ async function watch(id) {
   }
 }
 
-async function ask(text) {
+async function ask(text, marks = {}) {
   setBusy(true);
-  show({ role: "user", text });
+  show({ role: "user", text, ...marks });
   try {
     const res = await fetch("/dispatch/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation: current, text }),
+      body: JSON.stringify({ conversation: current, text, ...marks }),
     });
     if (res.status === 401) { location.href = "/login"; return; }
     if (!res.ok) {
@@ -707,7 +710,54 @@ async function loadTasks() {
 function runTask(task) {
   if (busy) { toast("Dispatch is still working on the last message."); return; }
   if (narrow.matches) $("tasks").open = false;
-  ask(task.text);
+  ask(task.text, { task: { name: task.name, version: task.version } });
+}
+
+// The reply to "Suggest a better prompt" ends with the proposal in a block marked prompt, which
+// can become a task of its own or the next version of the task the session came from.
+function promptActions(b) {
+  const asked = events.slice(0, b.key).reverse().find((e) => e.role === "user");
+  if (!asked?.improve) return nothing;
+  const text = proposedPrompt(b.event.text);
+  if (!text) return nothing;
+  const from = asked.improve.task && savedTasks.find((t) => t.name === asked.improve.task.name && !t.hidden);
+  return html`<div class="prompt-actions">
+    <button class="btn" type="button" @click=${() => editTask(null, text)}>Save as a new task</button>
+    ${from ? html`<button class="btn primary" type="button" @click=${() => saveVersion(from, text)}>Save as version ${from.version + 1} of ${from.name}</button>` : nothing}
+  </div>`;
+}
+
+async function saveVersion(task, text) {
+  try {
+    savedTasks = await api("POST", "/dispatch/tasks", { name: task.name, text, replacing: task.name });
+    const saved = savedTasks.find((t) => t.name === task.name);
+    toast(saved && saved.version !== task.version ? `Saved as version ${saved.version} of "${task.name}"` : `"${task.name}" already has this text`, "ok");
+    renderTasks();
+    draw();
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+function insights(machine, name, here) {
+  window.YardbellInsights.open({ machine, name, onSuggest: (data) => suggest(data, here) });
+}
+
+// A normal turn the person starts, in this conversation when asked from one of its cards, or in a
+// new one otherwise.
+async function suggest(data, here = false) {
+  if (busy) { toast("Dispatch is still working on the last message. Stop it or wait, then try again."); return; }
+  if (!here && current) await open(null);
+  const task = data.from ? { name: data.from.name, version: data.from.version } : undefined;
+  ask(data.suggest, { improve: { machine: data.machine, name: data.name, ...(task ? { task } : {}) } });
+}
+
+async function suggestFor(machine, name) {
+  try {
+    suggest(await window.YardbellInsights.load(machine, name));
+  } catch (err) {
+    toast(err.message);
+  }
 }
 
 async function forgetTask(task) {
@@ -722,7 +772,9 @@ function editTask(task, text = "") {
   const f = $("task-form");
   f.hidden = false;
   f.name.value = task?.name || "";
-  f.text.value = task?.text || text;
+  f.text.value = text || task?.text || "";
+  $("task-version").hidden = !task;
+  if (task) $("task-version-word").textContent = `Version ${task.version}${task.builtin ? (task.customised ? ", changed from the default" : ", the default") : ""}`;
   $("tasks").open = true;
   f.name.focus();
 }
@@ -738,6 +790,23 @@ $("task-new").addEventListener("click", (e) => {
 });
 
 $("task-cancel").addEventListener("click", closeTaskForm);
+
+$("task-history").addEventListener("click", () => {
+  const task = savedTasks.find((t) => t.name === editingTask);
+  if (!task) return;
+  openHistory({
+    name: task.name,
+    customised: task.customised,
+    api,
+    toast,
+    changed(tasks) {
+      savedTasks = tasks;
+      renderTasks();
+      const now = savedTasks.find((t) => t.name === task.name);
+      if (now && editingTask === now.name) editTask(now);
+    },
+  });
+});
 
 $("task-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -874,16 +943,22 @@ for (const id of ["convos", "tasks"]) {
     remember(FOLDED_KEY, folded.size ? [...folded].join(",") : null);
   });
 }
+const handedOver = window.YardbellInsights.takeOver();
 loadTasks();
 loadState().then(() => draw());
 loadList()
-  .then(() => open(current && conversations.some((c) => c.id === current) ? current : null))
+  .then(() => open(!handedOver && current && conversations.some((c) => c.id === current) ? current : null))
+  .then(() => { if (handedOver) suggestFor(handedOver.machine, handedOver.name); })
   .catch((err) => toast(err.message));
 
 // Inside the Workspace, Dispatch opens sessions as Workspace panes and other pages in the whole window.
 if (window.top !== window.self) {
   const tell = (message) => window.parent.postMessage({ yardbell: "dispatch", ...message }, location.origin);
   $("hide-panel").addEventListener("click", () => tell({ action: "hide" }));
+  window.addEventListener("message", (e) => {
+    if (e.origin !== location.origin || e.source !== window.parent || e.data?.yardbell !== "suggest") return;
+    if (typeof e.data.machine === "string" && typeof e.data.name === "string") suggestFor(e.data.machine, e.data.name);
+  });
   document.addEventListener("click", (e) => {
     const link = e.target.closest("a[href]");
     if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
