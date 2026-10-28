@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.4] - 2026-10-28
+
 - A Mac with a container port bound to a loopback address it does not have, such as `127.0.1.3`,
   no longer stalls each check for 75 seconds per port and shows as down. Each port check now
   gives up after a second.
