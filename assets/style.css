@@ -891,8 +891,9 @@ body.resizing { cursor: col-resize; user-select: none; }
 .msg.user { justify-self: end; max-width: 85%; padding: 10px 14px; border-radius: 12px 12px 4px 12px; background: var(--selected); color: var(--ink); }
 .msg.error { color: var(--bad-text); }
 .tool-group { display: flex; flex-wrap: wrap; gap: 6px; }
-.tool { display: grid; grid-template-columns: minmax(0, 1fr); gap: 6px; min-width: 0; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--side); font-size: 12.5px; }
-.tool[open] { flex-basis: 100%; padding: 8px 12px; border-radius: var(--radius); }
+.tool { display: grid; grid-template-columns: minmax(0, 1fr); min-width: 0; padding: 3px 10px; border: 1px solid var(--line); border-radius: 999px; background: var(--side); font-size: 12.5px; }
+/* gap only when open: WebKit keeps a closed chip's hidden content as an empty row, and a gap under it lifted the label above the middle */
+.tool[open] { flex-basis: 100%; gap: 6px; padding: 8px 12px; border-radius: var(--radius); }
 .started { display: flex; min-width: 0; }
 .msg.md { white-space: normal; display: grid; grid-template-columns: minmax(0, 1fr); gap: 10px; }
 .msg.md p, .msg.md .md-h { margin: 0; }

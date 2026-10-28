@@ -26,6 +26,8 @@ and the project uses [Semantic Versioning](https://semver.org).
   sidebar or the list, start a new session, press Alt+[ or Alt+], or reload the page.
 - Workspace: tabs are 140 to 220px wide, and a long name ends in an ellipsis with the full name in
   its tooltip. Enter or Space opens the tab that has keyboard focus.
+- Dispatch: the dot and label in the small chips under a message, such as **Checked machines**,
+  sit in the middle of the chip again in the desktop app, which drew them 3px too high.
 
 ## [0.6.7] - 2026-10-27
 
