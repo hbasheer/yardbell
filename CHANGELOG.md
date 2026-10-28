@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-10-28
+
 - Dispatch review cards have **Changes**: the reviewed branch's diff against the base the reviewer
   used, with changes not yet committed. It lists each changed file with its added and removed
   lines, loads a file's diff when you open it, shows long diffs 400 lines at a time, and names
