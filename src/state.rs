@@ -65,6 +65,8 @@ pub struct FolderView {
     pub label: String,
     pub path: String,
     pub branch: String,
+    #[serde(default)]
+    pub worktree: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -382,6 +384,7 @@ impl State {
                     label: label.clone(),
                     path: path.clone(),
                     branch: snap.folders.get(label).cloned().unwrap_or_default(),
+                    worktree: snap.linked.contains(label),
                 });
             }
             for s in &snap.sessions {

@@ -1762,3 +1762,79 @@ del .memory-diff-mark { color: var(--bad-text); }
 .memory-history ol { margin: 8px 0 0; padding: 0; list-style: none; display: grid; gap: 8px; }
 .memory-history li { display: grid; gap: 4px; padding: 8px 10px; border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--surface); }
 .memory-history .help { margin: 0; }
+
+/* session insights */
+
+dialog.ins-dialog { display: flex; flex-direction: column; width: min(600px, calc(100% - 32px)); max-height: min(86vh, 860px); padding: 0; }
+dialog.ins-dialog:not([open]) { display: none; }
+.ins-top { padding: 16px 20px 10px; border-bottom: 1px solid var(--line); }
+.ins-top h2 { margin: 0; overflow-wrap: anywhere; }
+.ins-where { margin: 2px 0 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.ins-top .wt-error { margin: 6px 0 0; color: var(--bad-text); }
+.ins-body { flex: 1; min-height: 0; overflow-y: auto; padding: 14px 20px 18px; }
+.ins-since { margin: 0 0 8px; color: var(--ink-2); font-size: 13px; }
+.ins-totals { display: flex; flex-wrap: wrap; gap: 6px 16px; margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
+.ins-totals > span { display: inline-flex; align-items: center; gap: 6px; }
+.ins-totals b { color: var(--ink); font-weight: 600; font-variant-numeric: tabular-nums; }
+.ins-totals b.ins-bad { color: var(--bad-text); }
+.ins-bar { display: flex; gap: 1px; height: 8px; margin: 0 0 16px; border-radius: 999px; overflow: hidden; background: var(--line); box-shadow: inset 0 0 0 1px var(--line-strong); }
+.ins-seg { min-width: 2px; flex-basis: 0; background: var(--line-strong); }
+.ins-seg.working { background: var(--ok); }
+.ins-seg.waiting { background: var(--warn); }
+.ins-head { margin: 16px 0 6px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.ins-head:first-child { margin-top: 0; }
+.ins-note { margin: 0 0 8px; }
+.ins-list { margin: 0; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 8px; }
+.ins-list > li { display: grid; grid-template-columns: 52px 18px minmax(0, 1fr) auto; align-items: center; gap: 8px; min-height: 32px; padding: 5px 10px; border-top: 1px solid var(--line); font-size: 13px; }
+.ins-list > li:first-child { border-top: 0; }
+.ins-time { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ins-mark { display: inline-flex; justify-content: center; color: var(--muted); }
+.ins-mark .icon { width: 14px; height: 14px; }
+.ins-text { min-width: 0; overflow-wrap: anywhere; }
+.ins-text code { font: 12px/1.5 var(--mono); color: var(--ink); }
+.ins-period .ins-text { font-weight: 550; }
+.ins-period.waiting .ins-text { color: var(--warn-text); }
+.ins-period.ended .ins-text { color: var(--muted); }
+.ins-len { color: var(--muted); font-size: 12px; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.ins-result { padding: 1px 8px; border-radius: 999px; font-size: 12px; font-weight: 500; white-space: nowrap; }
+.ins-result.ok { background: color-mix(in srgb, var(--ok) 11%, transparent); color: var(--ok-text); }
+.ins-result.bad { background: color-mix(in srgb, var(--bad) 12%, transparent); color: var(--bad-text); }
+.ins-list > li.ins-more { display: block; color: var(--muted); font-size: 12.5px; background: var(--side); }
+.ins-task { margin: 0 0 8px; padding: 10px 12px; max-height: 200px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--side); color: var(--ink); font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+dialog.ins-dialog .dialog-foot { flex-wrap: wrap; }
+.ws-pane-head .ws-more-btn .icon { stroke-width: 2.4; }
+
+/* task history and saved prompts */
+
+.task-version { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin: 0; color: var(--muted); font-size: 12px; }
+dialog.th-dialog { padding: 0; display: flex; flex-direction: column; max-height: min(86vh, 860px); }
+dialog.th-dialog:not([open]) { display: none; }
+dialog.th-dialog .dialog-head { padding-bottom: 4px; }
+dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
+.th-pad { margin: 0; padding: 0 20px 10px; }
+.th-compare { display: grid; gap: 8px; }
+.th-pick { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; }
+.th-pick label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
+.th-pick select { height: 32px; }
+.th-diff { max-height: 240px; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--side); font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
+.th-diff ins { padding: 0 1px; text-decoration: none; border-radius: 3px; background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok-text); }
+.th-diff del { padding: 0 1px; border-radius: 3px; background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--bad-text); }
+.th-list { flex: 0 1 auto; min-height: 0; overflow-y: auto; margin: 0 20px 14px; padding: 0; list-style: none; border: 1px solid var(--line); border-radius: 8px; }
+.th-version { display: grid; gap: 6px; padding: 10px 12px; border-top: 1px solid var(--line); }
+.th-version:first-child { border-top: 0; }
+.th-version-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; font-size: 13px; }
+.th-version-head .btn { margin-left: auto; height: 26px; }
+.th-when, .th-note { color: var(--muted); font-size: 12px; }
+.th-text { margin: 0; max-height: 120px; overflow: auto; font: 12px/1.5 var(--mono); color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; }
+.msg.user.marked { display: grid; gap: 2px; }
+.msg-more summary { cursor: pointer; color: var(--muted); font-size: 12.5px; }
+.msg-more[open] summary { margin-bottom: 4px; }
+.prompt-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+@media (max-width: 640px) {
+  dialog.ins-dialog, dialog.th-dialog { width: 100%; max-width: none; height: 100%; max-height: none; margin: 0; border-radius: 0; }
+  .ins-list > li { grid-template-columns: 68px 16px minmax(0, 1fr); gap: 6px; padding: 6px 8px; }
+  dialog.ins-dialog .dialog-foot .where { display: none; }
+  dialog.ins-dialog .dialog-foot .btn { flex: 1; height: 40px; }
+  .ins-list > li > .ins-len, .ins-list > li > .ins-result { grid-column: 3; justify-self: start; }
+  .prompt-actions .btn { flex: 1 1 100%; height: 40px; }
+}

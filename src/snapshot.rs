@@ -124,6 +124,8 @@ pub struct Snapshot {
     // Folders whose .git is a file: worktrees, by their label.
     pub linked: std::collections::BTreeSet<String>,
     pub ports: BTreeMap<String, Vec<Port>>,
+    // The tool calls and test runs each session's screen shows, by session id.
+    pub runs: BTreeMap<String, Vec<crate::insights::runs::Run>>,
 }
 
 #[derive(Deserialize)]
@@ -272,7 +274,12 @@ pub fn parse(
         let activity = activity(&c);
         let folder = label(&c.cwd);
         let branch = snap.folders.get(&folder).cloned().unwrap_or_default();
-        snap.sessions.push(Session {
+        let runs = c
+            .screen
+            .as_deref()
+            .map(crate::insights::runs::runs)
+            .unwrap_or_default();
+        let session = Session {
             machine: machine.name.clone(),
             agent: c.agent,
             pid: c.pid,
@@ -282,7 +289,11 @@ pub fn parse(
             branch,
             tmux: c.tmux,
             activity,
-        });
+        };
+        if !runs.is_empty() {
+            snap.runs.insert(session.id(), runs);
+        }
+        snap.sessions.push(session);
     }
     Ok(snap)
 }

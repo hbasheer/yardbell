@@ -1,4 +1,5 @@
 mod actions;
+mod diff;
 mod follow;
 mod group;
 mod mcp_config;
@@ -14,6 +15,7 @@ mod turn;
 mod usage;
 
 pub use actions::{changes_something, valid_id as valid_action_id, By};
+pub use diff::{Op as DiffOp, Part as DiffPart};
 pub use follow::Change;
 pub use group::{
     clash as group_clash, clash_message as group_clash_message, plan as plan_group, ChildStart,
@@ -33,7 +35,8 @@ pub use rules::{
     validate as validate_rules, Rule, Step, Verdict,
 };
 pub use store::valid_id;
-pub use tasks::SavedTask;
+pub use store::write_private;
+pub use tasks::{History as TaskHistory, SavedTask, Version as TaskVersion, MAX_VERSIONS};
 pub use turn::Opening;
 
 use crate::shell::Runner;
@@ -41,6 +44,13 @@ use serde_json::{json, Value};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use store::{load, now, Conversation, Shared, Stored};
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Origin {
+    pub conversation: String,
+    pub prompt: String,
+    pub task: Option<(String, Option<u32>)>,
+}
 
 #[derive(Debug, PartialEq)]
 pub enum Refusal {
@@ -129,6 +139,48 @@ impl Dispatch {
             "busy": c.busy,
             "trigger": c.stored.trigger,
         }))
+    }
+
+    // Where a session Dispatch started came from: the task it was given, and the saved task
+    // that the conversation ran, from its trigger or from the message that asked for it.
+    pub fn origin(&self, machine: &str, name: &str) -> Option<Origin> {
+        let chats = self.shared.lock();
+        let mut found: Vec<(&str, usize, &Conversation)> = chats
+            .values()
+            .filter_map(|c| {
+                let i = c.stored.events.iter().rposition(|e| {
+                    e["role"] == "action"
+                        && e["tool"] == "start_session"
+                        && e["result"]["session"]["machine"] == machine
+                        && e["result"]["session"]["name"] == name
+                })?;
+                Some((c.stored.updated.as_str(), i, c))
+            })
+            .collect();
+        found.sort_by(|a, b| b.0.cmp(a.0));
+        let (_, i, c) = found.into_iter().next()?;
+        let events = &c.stored.events;
+        let task = |mark: &Value| {
+            let task = mark["name"].as_str().filter(|n| !n.is_empty())?;
+            Some((
+                task.to_string(),
+                mark["version"].as_u64().and_then(|v| u32::try_from(v).ok()),
+            ))
+        };
+        let asked = events[..i]
+            .iter()
+            .rev()
+            .find(|e| e["role"] == "user" && e["by"] != "yardbell");
+        let from = asked.and_then(|e| task(&e["task"])).or_else(|| {
+            let t = c.stored.trigger.as_ref()?;
+            task(&json!({ "name": t["task"], "version": t["version"] }))
+        });
+        let input = &events[i]["input"];
+        Some(Origin {
+            conversation: c.stored.id.clone(),
+            prompt: input["prompt"].as_str().unwrap_or_default().to_string(),
+            task: from,
+        })
     }
 
     pub fn triggered_busy(&self, trigger: &str) -> bool {
@@ -1032,5 +1084,103 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         assert_eq!(events[0], json!({ "role": "error", "text": "stopped" }));
         assert_eq!(dispatch.clear().unwrap(), 0);
         assert_eq!(dispatch.list(), json!([]));
+    }
+
+    fn started(name: &str) -> Value {
+        json!({
+            "role": "action", "id": format!("act-{name}"), "tool": "start_session",
+            "input": { "machine": "hp", "folder": "app", "prompt": format!("work on {name}") },
+            "status": "approved",
+            "result": { "ok": true, "session": { "machine": "hp", "name": name, "path": "/r/app" } },
+        })
+    }
+
+    #[test]
+    fn a_session_knows_its_task_and_the_saved_task_it_came_from() {
+        let dir = tempfile::tempdir().unwrap();
+        let chats = dir.path().join("dispatch/conversations");
+        std::fs::create_dir_all(&chats).unwrap();
+        let write = |id: &str, updated: &str, trigger: Value, events: Vec<Value>| {
+            let mut c = json!({ "id": id, "title": id, "created": updated, "updated": updated, "events": events });
+            if !trigger.is_null() {
+                c["trigger"] = trigger;
+            }
+            std::fs::write(chats.join(format!("{id}.json")), c.to_string()).unwrap();
+        };
+        write(
+            "chatfromtask0001",
+            "2026-10-28T10:00:00+00:00",
+            Value::Null,
+            vec![
+                json!({ "role": "user", "text": "Fix bugs", "task": { "name": "Fix bugs", "version": 3 } }),
+                started("hp-a"),
+                json!({ "role": "user", "text": "and another" }),
+                started("hp-b"),
+            ],
+        );
+        write(
+            "chattriggered001",
+            "2026-10-28T11:00:00+00:00",
+            json!({ "name": "Morning", "task": "Plan my day", "version": 2 }),
+            vec![json!({ "role": "user", "text": "plan" }), started("hp-c")],
+        );
+        write(
+            "chatoldtrigger01",
+            "2026-10-28T09:00:00+00:00",
+            json!({ "name": "Morning", "task": "Plan my day" }),
+            vec![json!({ "role": "user", "text": "plan" }), started("hp-d")],
+        );
+        let d = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().join("dispatch"));
+        let a = d.origin("hp", "hp-a").unwrap();
+        assert_eq!(a.conversation, "chatfromtask0001");
+        assert_eq!(a.prompt, "work on hp-a");
+        assert_eq!(a.task, Some(("Fix bugs".into(), Some(3))));
+        assert_eq!(
+            d.origin("hp", "hp-b").unwrap().task,
+            None,
+            "only the message that asked for it counts"
+        );
+        assert_eq!(
+            d.origin("hp", "hp-c").unwrap().task,
+            Some(("Plan my day".into(), Some(2)))
+        );
+        assert_eq!(
+            d.origin("hp", "hp-d").unwrap().task,
+            Some(("Plan my day".into(), None)),
+            "a trigger from before versions names no version"
+        );
+        assert!(d.origin("pro", "hp-a").is_none());
+        assert!(d.origin("hp", "hp-z").is_none());
+    }
+
+    #[tokio::test]
+    async fn a_marked_message_keeps_its_marks_and_claude_gets_only_the_text() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = dir.path().join("args");
+        let dispatch = fake_claude(
+            dir.path(),
+            &format!("printf '%s\\n' \"$@\" > {}", args.display()),
+        );
+        let marks = json!({ "task": { "name": "Fix bugs", "version": 4 } });
+        let (id, rx) = dispatch
+            .ask_marked(
+                None,
+                "Fix the bugs",
+                &marks,
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let events = dispatch.get(&id).unwrap()["events"].clone();
+        assert_eq!(
+            events[0],
+            json!({ "role": "user", "text": "Fix the bugs", "task": { "name": "Fix bugs", "version": 4 } })
+        );
+        let argv = std::fs::read_to_string(&args).unwrap();
+        assert!(argv.contains("Fix the bugs"));
+        assert!(!argv.contains("version"), "{argv}");
     }
 }

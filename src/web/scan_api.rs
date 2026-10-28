@@ -47,6 +47,12 @@ struct ScanRequest {
     folder: String,
     #[serde(default)]
     inside: String,
+    // A checkout of the folder's repository, such as one of its worktrees, to scan instead of
+    // the folder itself, and the branch it has out.
+    #[serde(default)]
+    path: String,
+    #[serde(default)]
+    branch: String,
     kind: String,
 }
 
@@ -84,7 +90,29 @@ async fn request(
         None => {
             let inside = req.inside.trim().trim_matches('/');
             let folder = req.folder.trim().to_string();
-            if inside.is_empty() {
+            let checkout = req.path.trim().trim_end_matches('/');
+            if !inside.is_empty() && !valid_review_path(inside) {
+                return Err(bad(
+                    "the folder inside must be a relative path without . or .. parts",
+                ));
+            }
+            if !checkout.is_empty() {
+                let path = match inside {
+                    "" => checkout.to_string(),
+                    inside => format!("{checkout}/{inside}"),
+                };
+                let named = match inside {
+                    "" => last_parts(checkout),
+                    inside => format!("{}/{inside}", last_parts(checkout)),
+                };
+                (
+                    req.machine.clone(),
+                    String::new(),
+                    path,
+                    String::new(),
+                    named,
+                )
+            } else if inside.is_empty() {
                 let named = folder.clone();
                 (
                     req.machine.clone(),
@@ -94,11 +122,6 @@ async fn request(
                     named,
                 )
             } else {
-                if !valid_review_path(inside) {
-                    return Err(bad(
-                        "the folder inside must be a relative path without . or .. parts",
-                    ));
-                }
                 let m = find_machine(&cfg, &req.machine)?;
                 let snap = app.state.snapshot(&m.name).unwrap_or_default();
                 let top = snap.folder_paths.get(&folder).ok_or_else(|| {
@@ -124,7 +147,10 @@ async fn request(
         path: &path,
         session: &session,
     };
-    let (input, of) = scan_plan(&app, &cfg, &target, &req.kind, "", "")?;
+    let (input, mut of) = scan_plan(&app, &cfg, &target, &req.kind, "", "")?;
+    if of.branch.is_empty() && req.card.is_none() {
+        of.branch = req.branch.trim().to_string();
+    }
     let id = match open {
         Some(id) => id.to_string(),
         None => {

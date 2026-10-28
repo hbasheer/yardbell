@@ -57,6 +57,22 @@ restart, and a note that it continued from the first machine. Both clones must h
 original keeps running unless you tick **Stop the original**, and the dialog offers to stop it once
 the new session runs.
 
+**Insights** on a session, also on one that ended, shows what Yardbell saw of it: when it started
+(or that it was already running when Yardbell started watching), how long it worked, waited for
+you and sat idle, as totals, a bar and a timeline, and the tool calls and test runs its screen
+showed, such as Claude Code's `Bash(cargo test)` or Codex's `Ran npm test`, with **Passed** or
+**Failed** for a test runner's summary line. Runs still in the scrollback from before Yardbell
+recorded them are listed under **Earlier, from the scrollback**, without times. Yardbell records
+each change from the checks it already makes, keeps up to 300 changes for each of the last 100
+sessions, and keeps them across restarts in `insights.json` in its state folder. None of this asks
+an AI. The same **Insights** is in a Workspace pane's **⋯** menu and on a Dispatch session card.
+
+**Suggest a better prompt**, in Insights and in the pane's menu, asks Dispatch, as a message you
+send, to read the session's task and scrollback and propose a clearer, more complete prompt for the
+next time. The reply ends with the proposed prompt, and **Save as a new task** puts it in the task
+form, or, when the session came from one of your tasks, **Save as version 4 of** that task saves it
+as the task's next version.
+
 ### New session
 
 ![New session dialog with branch picker](screenshots/new-session.png)
@@ -334,7 +350,8 @@ starts watching (when you add it, change what it watches, or turn it back on) ar
 A triggered conversation runs like one you typed: each step follows your Dispatch rules, so nothing
 starts, stops or types into a session unless the rules allow it, and steps that ask wait for you.
 It is named after the task, marked with a clock in the list, and opens with **Started by the
-trigger** and its name, what set it off and when, with **Turn off** to stop the trigger from there.
+trigger** and its name, the task and the version of it that ran, what set it off and when, with
+**Turn off** to stop the trigger from there.
 
 A trigger never stacks runs: while its last conversation is still working, a scheduled time is
 skipped and new tickets wait for the next check after it finishes, one ticket at a time. When
@@ -382,8 +399,8 @@ code without tests; the scanner finds the project's test command and runs it) or
 (secrets committed to the repository, injection, unsafe deserialization, routes without auth
 checks, and dependency advisories from the ecosystem's audit tool when it is installed). Start one
 from **Scan** on a finished or ended session's card, which scans that session's folder, or from
-**Scan** in the message box, which asks for a folder Yardbell knows, optionally a folder inside it,
-and the kind. Asking Dispatch to scan a folder proposes the same scanner through its `scan_folder`
+**Scan** in the message box, which asks for a project, the branch to read (its own checkout or one
+of its worktrees), optionally a folder inside it, and the kind. Asking Dispatch to scan a folder proposes the same scanner through its `scan_folder`
 tool, and your Dispatch rules decide it like a review (the rules call it **Start a scan**). Each way,
 the scanner is a new session in that folder that you start from its card, told to change no files,
 install nothing and run nothing that writes to the folder. Its findings come back as a scan card
@@ -426,6 +443,16 @@ to scan only those. **New task** adds one of your own, which you can edit, renam
 the copy button next to a default starts a task of your own from its text. Deleting a default
 only hides it, and **Restore default tasks** brings the defaults back. **Save as task** in the
 message box keeps whatever you typed.
+
+Every save of a task keeps the text it had as a version with its date, whether you edit it in the
+sidebar or save a suggested prompt. Edit a task to see its version, and **History** lists them,
+newest first, compares any two with the added and removed words marked, and **Restore** saves an
+older text again as the newest version, so nothing is lost. A default is version 1 until you change
+it, and **Reset to the default** brings its own text back as a new version; **Restore default
+tasks** keeps the versions too. Each task keeps its last 30 versions. A tasks file from an older
+Yardbell becomes one version per task. Triggers name the task, so they always run its current
+version, and a triggered conversation says which version it ran, as does a message sent from the
+list.
 
 In the message box, **Enter** sends and **Shift+Enter** starts a new line; **Ctrl+Enter**
 (**⌘+Enter** on a Mac) sends too. In a wide window, click the hint beside the Send button to send

@@ -403,6 +403,7 @@ function paneEl(leaf) {
       <button class="btn quiet icon-btn ws-split-btn" type="button" data-act="split-row" aria-label="Split right" title="Split right (Alt+\\)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10"/></svg></button>
       <button class="btn quiet icon-btn ws-split-btn" type="button" data-act="split-col" aria-label="Split down" title="Split down (Alt+-)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 8h11"/></svg></button>
       <button class="btn quiet icon-btn ws-own-btn" type="button" data-act="own-tab" aria-label="Move to its own tab" title="Move to its own tab"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 8 8M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/></svg></button>
+      <button class="btn quiet icon-btn ws-more-btn" type="button" data-act="more" aria-label="More for this session" title="More" aria-haspopup="menu" aria-expanded="false"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r=".9"/><circle cx="8" cy="8" r=".9"/><circle cx="12.5" cy="8" r=".9"/></svg></button>
       <button class="btn quiet icon-btn" type="button" data-act="close" aria-label="Close pane" title="Close pane (Alt+X)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
     </header>
     <div class="ws-pane-body"></div>`;
@@ -474,6 +475,7 @@ function fillPane(el, leaf, n, alone) {
   el.querySelector(".ws-pane-no").textContent = n;
   el.querySelectorAll(".ws-pane-btn").forEach((b) => { b.hidden = !leaf.key; });
   el.querySelector(".ws-own-btn").hidden = !leaf.key || alone;
+  el.querySelector(".ws-more-btn").hidden = !leaf.key;
   const body = el.querySelector(".ws-pane-body");
   const frame = body.querySelector("iframe");
   const head = el.querySelector(".ws-pane-title");
@@ -989,6 +991,7 @@ $("panes").addEventListener("click", (e) => {
     focusPane(id);
   } else if (e.target.closest("[data-start]") && leaf) startHere(leaf, e.target.closest("[data-start]").dataset.start);
   else if (act === "close") closePane(id);
+  else if (act === "more" && leaf?.key) paneMenu(e.target.closest("[data-act]"), leaf.key);
   else if (act === "own-tab") ownTab(id);
   else if (act === "split-row" || act === "split-col") {
     space().focus = id;
@@ -999,6 +1002,33 @@ $("panes").addEventListener("click", (e) => {
     focusPane(id);
   }
 });
+
+function paneMenu(button, key) {
+  if ($("ws-menu")?.trigger === button && !$("ws-menu").hidden) {
+    closeMenu();
+    return;
+  }
+  const [machine, ...rest] = key.split("/");
+  const name = rest.join("/");
+  showMenu(button.getBoundingClientRect(), [
+    { label: "Insights", run: () => window.YardbellInsights.open({ machine, name, onSuggest: (data) => askDispatch(data) }) },
+    { label: "Suggest a better prompt", run: () => askDispatch({ machine, name }) },
+  ], button);
+}
+
+// Dispatch's panel takes the request; on a phone, or with the panel closed for good, the
+// Dispatch page does.
+function askDispatch({ machine, name }) {
+  if (phone.matches) {
+    window.YardbellInsights.handOver({ machine, name });
+    return;
+  }
+  showDispatch(true);
+  const frame = $("ws-dispatch").querySelector("iframe");
+  const post = () => frame.contentWindow?.postMessage({ yardbell: "suggest", machine, name }, location.origin);
+  if (frame.contentDocument?.readyState === "complete" && frame.contentWindow?.location.pathname === "/dispatch") post();
+  else frame.addEventListener("load", post, { once: true });
+}
 
 $("panes").addEventListener("change", (e) => {
   const select = e.target.closest("[data-start-other]");

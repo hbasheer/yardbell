@@ -9,6 +9,7 @@ pub mod dispatch;
 pub mod doctor;
 pub mod events;
 pub mod folders;
+pub mod insights;
 pub mod local_server;
 pub mod mcp;
 pub mod mesh;

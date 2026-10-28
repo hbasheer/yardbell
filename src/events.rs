@@ -786,6 +786,7 @@ mod tests {
             label: "api".into(),
             path: "/r/api".into(),
             branch: "main".into(),
+            worktree: false,
         }];
         v.mesh = Some(MeshView {
             provider: crate::config::MeshProvider::Tailscale,

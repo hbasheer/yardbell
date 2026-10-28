@@ -11,6 +11,7 @@ use http_body_util::BodyExt;
 use std::path::Path;
 use tower::ServiceExt;
 
+mod insights;
 mod memory;
 mod worktrees;
 
@@ -153,6 +154,9 @@ fn rig() -> Rig {
         triggers: Arc::new(crate::triggers::Triggers::new(
             Arc::new(crate::triggers::Live::new(fake.clone())),
             dir.path().join("triggers.json"),
+        )),
+        insights: Arc::new(crate::insights::Insights::load(
+            dir.path().join("insights.json"),
         )),
         refresh: {
             let refreshes = refreshes.clone();
@@ -3644,6 +3648,29 @@ async fn a_scan_starts_from_a_session_card_or_a_folder() {
         "/r/slots/slot2/src/api"
     );
     assert_eq!(convo["events"][0]["review"]["name"], "");
+    let (status, body) = step_post(
+        &r,
+        &c,
+        "/dispatch/scans",
+        json!({ "machine": "hp", "folder": "slot2", "path": "/r/slots/slot2-worktrees/eng-9/", "branch": "eng-9", "inside": "web", "kind": "security" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let convo = r
+        .app
+        .dispatch
+        .get(body["conversation"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(convo["title"], "Security scan of slot2-worktrees/eng-9/web");
+    let picked = &convo["events"][0];
+    assert_eq!(
+        picked["input"]["path"],
+        "/r/slots/slot2-worktrees/eng-9/web"
+    );
+    assert_eq!(
+        picked["review"]["branch"], "eng-9",
+        "a worktree picked as the branch"
+    );
     for (body, error) in [
         (
             json!({ "machine": "hp", "folder": "slot2", "inside": "../x", "kind": "security" }),

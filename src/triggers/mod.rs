@@ -705,6 +705,7 @@ impl Triggers {
             "slot": slot.map(DateTime::to_rfc3339),
             "what": what,
             "task": task.name,
+            "version": task.version,
             "url": ticket.map(|(ticket, _)| ticket.url.clone()),
         });
         let note = format!(

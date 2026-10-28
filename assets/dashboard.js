@@ -208,6 +208,7 @@ function actions(s) {
     ? html`<button class="btn" type="button" data-act="host" data-machine=${s.machine} data-name=${s.tmux}>Terminal app</button>` : "";
   return html`<div class="row-actions">
     <a class="btn" href=${termUrl(s)} target="_blank" rel="noopener">${ICONS.open}Open</a>${host}
+    <button class="btn quiet" type="button" data-act="insights" data-machine=${s.machine} data-name=${s.tmux} title="When it worked, waited and idled, and the tools and tests it ran">Insights</button>
     <button class="btn quiet" type="button" data-act="move-machine" data-id=${s.id} title="Move this session's branch, changes and task to another machine">Move</button>
     <button class="btn quiet danger stop" type="button" data-act="stop" data-machine=${s.machine} data-name=${s.tmux}>Stop</button>
   </div>`;
@@ -286,6 +287,7 @@ function endedRow(e) {
     <div class="row-actions">
       <button class="btn" type="button" data-act="resume" data-machine=${e.machine} data-folder=${e.folder} data-path=${e.path || ""} data-agent=${e.agent}>Resume</button>
       ${remove}
+      <button class="btn quiet" type="button" data-act="insights" data-machine=${e.machine} data-name=${e.id.slice(e.machine.length + 1)} title="When it worked, waited and idled, and the tools and tests it ran">Insights</button>
       <button class="btn quiet" type="button" data-act="forget" data-id=${e.id}>Forget</button>
     </div>
   </li>`;
@@ -690,6 +692,10 @@ document.addEventListener("click", async (e) => {
   }
   if (act === "remove-worktree") {
     Worktree.remove({ machine, path: b.dataset.path, toast, done: () => Live.soon() });
+    return;
+  }
+  if (act === "insights") {
+    window.YardbellInsights.open({ machine, name, onSuggest: window.YardbellInsights.handOver });
     return;
   }
   if (act === "move-machine") {
