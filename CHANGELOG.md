@@ -5,6 +5,22 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Triggers start a saved Dispatch task without you typing it: on a schedule (daily or on weekdays
+  at a time, every few hours, or a cron expression, in the server's time zone), when a Linear
+  ticket is assigned to you or moves into a state you pick, or when a GitHub issue is assigned to
+  you or a pull request asks for your review. Linear is read with an API key saved as the secret
+  `linear`, GitHub with `gh` on the server's machine, every 3 minutes. A ticket trigger fills the
+  ticket into the task with `{ticket}`, `{title}`, `{url}`, `{state}` and `{repo}`, and starts once
+  per ticket and event, also after a restart. Tickets that already match when a trigger starts
+  watching are left alone.
+- A triggered conversation follows your Dispatch rules like any other, and opens with **Started by
+  the trigger** and its name, what set it off and when, with **Turn off**. A trigger never runs
+  twice at once: a scheduled time is skipped while its last run still works. After Yardbell was
+  not running, a missed schedule runs once, not once per missed time.
+- Settings has a **Triggers** section to add, edit, turn off and delete triggers, with **Run now**
+  or **Check now**, the next run, the last run and what went wrong. Triggers live under
+  `triggers:` in `yardbell.yml` and are checked when it loads.
+
 ## [0.7.2] - 2026-10-28
 
 - Dispatch review cards have **Changes**: the reviewed branch's diff against the base the reviewer

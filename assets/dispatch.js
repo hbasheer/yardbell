@@ -20,6 +20,8 @@ let lastState = null;
 let savedTasks = [];
 let answers = new Map();
 let view = 0;
+let trigger = null;
+let triggerInfo = null;
 
 let editingTask = null;
 
@@ -46,6 +48,7 @@ const LABELS = {
 const ICONS = {
   edit: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l.6-2.6L10.8 3.2a1.4 1.4 0 0 1 2 2L5.6 12.4z"/></svg>`,
   close: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`,
+  trigger: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8.5" r="5"/><path d="M8 6v2.5l1.8 1.2M6.5 2h3"/></svg>`,
 };
 
 const INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g;
@@ -159,7 +162,7 @@ function convoItem(c) {
   return html`<li class="convo ${selected ? "selected" : ""}">
     <a href="/dispatch?c=${c.id}" aria-current=${selected ? "true" : nothing} @click=${(e) => switchTo(e, c)}>
       <span class="convo-title">${c.title}</span>
-      <span class="convo-meta">${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
+      <span class="convo-meta">${c.trigger ? html`<span class="convo-trigger" title="Started by the trigger ${c.trigger}" aria-label="Started by a trigger">${ICONS.trigger}</span>` : nothing}${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
     </a>
     <button class="btn quiet danger delete" type="button" aria-label="Delete ${c.title}" title="Delete" @click=${() => deleteConvo(c)}>${ICONS.close}</button>
   </li>`;
@@ -328,10 +331,52 @@ function block(b) {
   }
 }
 
+// The server's wall clock, as written in the stamp, so a trigger's time reads as its schedule does.
+function serverTime(stamp) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(stamp || "");
+  if (!m) return "";
+  const day = new Date(`${m[1]}T12:00:00Z`).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  return `${day}, ${m[2]}`;
+}
+
+function triggerHead() {
+  if (!trigger) return nothing;
+  const known = triggerInfo?.triggers.find((v) => v.trigger.name === trigger.name);
+  const on = known?.trigger.enabled;
+  const late = trigger.slot && Date.parse(trigger.at) - Date.parse(trigger.slot) >= 120000;
+  return html`<div class="trigger-head ${known && !on ? "off" : ""}">
+    ${ICONS.trigger}
+    <div class="trigger-head-text">
+      <strong>Started by the trigger ${trigger.name}</strong>
+      <span>${trigger.what} · ${serverTime(trigger.at)}${late ? `, late for ${serverTime(trigger.slot).split(", ")[1]}` : ""}${known && !on ? " · The trigger is off" : ""}${triggerInfo && !known ? " · The trigger was deleted" : ""}</span>
+    </div>
+    <div class="trigger-head-actions">
+      ${trigger.url ? html`<a class="btn quiet" href=${trigger.url} target="_blank" rel="noopener">Open ticket</a>` : nothing}
+      <a class="btn quiet" href="/settings#triggers">Triggers</a>
+      ${known ? html`<button class="btn" type="button" @click=${() => setTrigger(!on)}>${on ? "Turn off" : "Turn on"}</button>` : nothing}
+    </div>
+  </div>`;
+}
+
+async function loadTriggerInfo() {
+  triggerInfo = await api("GET", "/api/triggers").catch(() => triggerInfo);
+  draw();
+}
+
+async function setTrigger(enabled) {
+  try {
+    triggerInfo = await api("POST", "/api/triggers/enable", { name: trigger.name, enabled });
+    toast(enabled ? `The trigger ${trigger.name} is on.` : `The trigger ${trigger.name} is off. It starts nothing until you turn it on here or in Settings.`, "ok");
+  } catch (err) {
+    toast(err.message);
+  }
+  draw();
+}
+
 function draw() {
   render(!current && !events.length
     ? INTRO
-    : html`${repeat(blocks(events), (b) => `${view}:${b.key}`, block)}${steps.waitingBar(events)}`, log);
+    : html`${triggerHead()}${repeat(blocks(events), (b) => `${view}:${b.key}`, block)}${steps.waitingBar(events)}`, log);
 }
 
 function show(event) {
@@ -386,6 +431,7 @@ async function open(id) {
   view++;
   setUrl();
   events = [];
+  trigger = null;
   answers = new Map();
   steps.reset();
   setBusy(false);
@@ -406,6 +452,8 @@ async function open(id) {
     events = convo.events.slice();
     shownEvents = convo.events.length;
     shownUpdated = convo.updated;
+    trigger = convo.trigger || null;
+    if (trigger) loadTriggerInfo();
     tracked = convo.sessions || [];
     renderTracked();
     setBusy(convo.busy);
@@ -650,7 +698,10 @@ $("save-as-task").addEventListener("click", () => {
   editTask(null, text);
 });
 
-window.YardbellLive.follow(() => catchUp(true), 5000);
+window.YardbellLive.follow(() => {
+  catchUp(true);
+  if (!busy) loadList().catch(() => {});
+}, 5000);
 
 function scroller() {
   const main = document.querySelector(".main");

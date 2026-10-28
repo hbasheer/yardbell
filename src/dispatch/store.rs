@@ -23,6 +23,8 @@ pub(super) struct Stored {
     pub(super) events: Vec<Value>,
     #[serde(default)]
     pub(super) sessions: Vec<follow::Tracked>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) trigger: Option<Value>,
 }
 
 pub(super) struct Conversation {

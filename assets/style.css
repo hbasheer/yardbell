@@ -716,7 +716,7 @@ input[type=checkbox].switch:focus-visible { outline: 2px solid var(--accent); ou
 
 label { display: grid; gap: 6px; margin-bottom: 14px; font-size: 13px; font-weight: 600; color: var(--ink); }
 label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; }
-select, input[type=text], input[type=password], input[type=search], input[type=number] {
+select, input[type=text], input[type=password], input[type=search], input[type=number], input[type=time] {
   font: 14px var(--sans);
   height: 36px;
   padding: 0 10px;
@@ -958,6 +958,15 @@ body.resizing { cursor: col-resize; user-select: none; }
 #dispatch-form.dispatch-compose textarea::placeholder { color: var(--muted); opacity: 0.8; }
 .dispatch-sessions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 14px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--side); font-size: 13px; }
 .dispatch-sessions-label { color: var(--ink-2); font-size: 13px; font-weight: 600; }
+.trigger-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 12px; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--side); font-size: 13px; }
+.trigger-head > .icon { flex: none; color: var(--accent-text); }
+.trigger-head.off > .icon { color: var(--muted); }
+.trigger-head-text { display: grid; gap: 2px; flex: 1 1 14rem; min-width: 0; }
+.trigger-head-text strong { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
+.trigger-head-text span { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.trigger-head-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.convo-trigger { display: inline-flex; color: var(--muted); }
+.convo-trigger .icon { width: 12px; height: 12px; }
 .dispatch-session { display: inline-flex; align-items: center; gap: 6px; }
 .dispatch-session a { color: var(--ink); font-weight: 600; text-decoration: none; }
 .dispatch-session a:hover { text-decoration: underline; }
@@ -1270,6 +1279,21 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .rule-row select, .rule-row input[type=text] { height: 32px; }
 .rule-row .btn { width: 32px; padding: 0; }
 .rule-empty { color: var(--muted); font-size: 13px; }
+#triggers > .help { margin: 0 0 12px; }
+#trigger-form { margin-top: 12px; }
+.trigger-help { margin: -6px 0 14px; }
+.trigger-watch > .choice { margin-bottom: 12px; }
+.trigger-row { align-items: flex-start; }
+.trigger-row > .switch { margin-top: 3px; }
+.trigger-row .row-main > .help { margin-top: 4px; }
+.trigger-row.off .folder { color: var(--ink-2); }
+.trigger-row .row-actions { flex-wrap: wrap; }
+.trigger-last[data-outcome=failed], .trigger-problem { color: var(--bad-text); }
+.trigger-last[data-outcome=skipped] { color: var(--warn-text); }
+@media (max-width: 760px) {
+  .trigger-row { flex-wrap: wrap; }
+  .trigger-row .row-actions { flex-basis: 100%; justify-content: flex-start; padding-left: 40px; }
+}
 @media (max-width: 760px) {
   .rule-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px; grid-template-areas: "action action remove" "machine approval approval" "folder folder folder"; }
   .rule-row [data-key=action] { grid-area: action; }

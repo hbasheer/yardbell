@@ -28,6 +28,7 @@ pub mod state;
 pub mod term;
 #[cfg(test)]
 pub mod testing;
+pub mod triggers;
 pub mod tunnels;
 pub mod viewers;
 pub mod web;

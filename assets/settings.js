@@ -294,6 +294,7 @@ async function load() {
   renderServers();
   renderSecrets();
   renderDispatch();
+  await loadTriggers().catch((err) => toast(err.message));
   if (!data.can_undo) $("undo-btn").hidden = true;
 }
 
@@ -463,6 +464,187 @@ $("rule-rows").addEventListener("click", (e) => {
   renderRules();
 });
 
+let triggerData = { zone: "", now: "", triggers: [], tasks: [] };
+let editingTrigger = null;
+
+function wall(stamp) {
+  const m = /^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2})/.exec(stamp || "");
+  return m ? { date: m[1], time: m[2] } : null;
+}
+
+// Times are the server's wall clock, as the schedule is, whatever the browser's own time zone.
+function serverWhen(stamp) {
+  const at = wall(stamp);
+  const today = wall(triggerData.now);
+  if (!at || !today) return "";
+  const days = Math.round((Date.parse(at.date) - Date.parse(today.date)) / 86400000);
+  if (days === 0) return `${at.time} today`;
+  if (days === 1) return `${at.time} tomorrow`;
+  if (days === -1) return `${at.time} yesterday`;
+  const day = new Date(`${at.date}T12:00:00Z`).toLocaleDateString([], { weekday: "short", day: "numeric", month: "short", timeZone: "UTC" });
+  return `${day} ${at.time}`;
+}
+
+function triggerRow(v, i) {
+  const t = v.trigger;
+  const schedule = v.kind === "schedule";
+  const plan = !t.enabled ? "Off" : v.busy ? "Running now" : schedule && v.next ? `Next ${serverWhen(v.next)}` : !schedule && v.checked ? `Checked ${serverWhen(v.checked)}` : "";
+  const last = v.last
+    ? `<p class="help trigger-last" data-outcome="${esc(v.last.outcome)}">${v.last.outcome === "watching" ? "" : "Last run "}${esc(serverWhen(v.last.at))}: ${esc(v.last.text)}.${v.last.conversation ? ` <a href="/dispatch?c=${encodeURIComponent(v.last.conversation)}">Open the conversation</a>` : ""}</p>`
+    : "";
+  return `<li class="row trigger-row${t.enabled ? "" : " off"}">
+    <input type="checkbox" class="switch" data-toggle="${i}" aria-label="${esc(t.name)} on"${t.enabled ? " checked" : ""}>
+    <div class="row-main">
+      <div class="row-title"><span class="folder">${esc(t.name)}</span><span class="note">${esc(v.describe)}</span></div>
+      <p class="help">Runs the task <strong>${esc(t.task)}</strong>${plan ? ` · ${esc(plan)}` : ""}</p>
+      ${last}
+      ${v.note ? `<p class="help">${esc(v.note)}.</p>` : ""}
+      ${v.problem ? `<p class="help trigger-problem">${esc(v.problem.charAt(0).toUpperCase() + v.problem.slice(1))}.</p>` : ""}
+    </div>
+    <div class="row-actions">
+      <button class="btn" type="button" data-run="${i}"${!schedule && !t.enabled ? " disabled" : ""}>${schedule ? "Run now" : "Check now"}</button>
+      <button class="btn" type="button" data-edit="${i}">Edit</button>
+      <button class="btn quiet danger" type="button" data-remove="${i}">Delete</button>
+    </div>
+  </li>`;
+}
+
+function renderTriggers() {
+  const list = triggerData.triggers;
+  if (triggerData.zone) $("trigger-zone").textContent = triggerData.zone;
+  $("trigger-rows").hidden = !list.length;
+  $("triggers-empty").hidden = Boolean(list.length);
+  $("trigger-rows").innerHTML = list.map(triggerRow).join("");
+}
+
+async function loadTriggers() {
+  triggerData = await api("GET", "/api/triggers");
+  renderTriggers();
+}
+
+function showTriggerKind() {
+  const f = $("trigger-form");
+  const kind = f.elements.kind.value;
+  const repeat = f.elements.repeat.value;
+  f.querySelectorAll("[data-kind]").forEach((el) => { el.hidden = !el.dataset.kind.split(" ").includes(kind); });
+  f.querySelectorAll("[data-repeat]").forEach((el) => { el.hidden = !el.dataset.repeat.split(" ").includes(repeat); });
+  // A field that is not shown is not checked or sent.
+  f.querySelectorAll("[data-kind] input, [data-kind] select").forEach((el) => { el.disabled = Boolean(el.closest("[hidden]")); });
+}
+
+function openTriggerForm(index) {
+  editingTrigger = index;
+  const t = index === null
+    ? { name: "", task: triggerData.tasks[0] || "", enabled: true, schedule: "daily 09:00" }
+    : triggerData.triggers[index].trigger;
+  const f = $("trigger-form");
+  f.reset();
+  const tasks = triggerData.tasks.includes(t.task) || !t.task ? triggerData.tasks : [...triggerData.tasks, t.task];
+  f.elements.task.innerHTML = tasks.map((name) => `<option value="${esc(name)}">${esc(name)}${triggerData.tasks.includes(name) ? "" : " (deleted)"}</option>`).join("");
+  f.elements.name.value = t.name;
+  f.elements.task.value = t.task;
+  f.elements.kind.value = t.linear ? "linear" : t.github ? "github" : "schedule";
+  const words = (t.schedule || "daily 09:00").split(/\s+/);
+  f.elements.repeat.value = ["daily", "weekdays", "every", "cron"].includes(words[0]) ? words[0] : "daily";
+  if (words[0] === "daily" || words[0] === "weekdays") f.elements.at.value = (words[1] || "09:00").padStart(5, "0");
+  if (words[0] === "every") f.elements.hours.value = parseInt(words[1], 10) || 4;
+  if (words[0] === "cron") f.elements.cron.value = words.slice(1).join(" ");
+  f.elements.linear_assigned.checked = t.linear ? Boolean(t.linear.assigned) : true;
+  f.elements.states.value = (t.linear?.states || []).join(", ");
+  f.elements.gh_assigned.checked = Boolean(t.github?.assigned);
+  f.elements.gh_review.checked = t.github ? Boolean(t.github.review_requested) : true;
+  f.elements.enabled.checked = t.enabled !== false;
+  f.hidden = false;
+  showTriggerKind();
+  f.elements.name.focus();
+}
+
+function readTrigger(f) {
+  const e = f.elements;
+  const t = { name: e.name.value.trim(), task: e.task.value, enabled: e.enabled.checked };
+  if (e.kind.value === "linear") {
+    t.linear = { assigned: e.linear_assigned.checked, states: e.states.value.split(",").map((s) => s.trim()).filter(Boolean) };
+  } else if (e.kind.value === "github") {
+    t.github = { assigned: e.gh_assigned.checked, review_requested: e.gh_review.checked };
+  } else {
+    const repeat = e.repeat.value;
+    t.schedule = repeat === "every" ? `every ${e.hours.value.trim()}h` : repeat === "cron" ? `cron ${e.cron.value.trim()}` : `${repeat} ${e.at.value}`;
+  }
+  return t;
+}
+
+async function saveTriggers(list, message) {
+  triggerData = await api("POST", "/api/triggers", { triggers: list });
+  renderTriggers();
+  saved(message);
+}
+
+$("trigger-add").addEventListener("click", () => openTriggerForm(null));
+$("trigger-cancel").addEventListener("click", () => { $("trigger-form").hidden = true; });
+$("trigger-form").elements.kind.addEventListener("change", showTriggerKind);
+$("trigger-form").elements.repeat.addEventListener("change", showTriggerKind);
+
+$("trigger-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const button = f.querySelector("button[type=submit]");
+  const t = readTrigger(f);
+  const list = triggerData.triggers.map((v) => v.trigger);
+  if (editingTrigger === null) list.push(t);
+  else list[editingTrigger] = t;
+  button.disabled = true;
+  try {
+    await saveTriggers(list, `Trigger ${t.name} saved.`);
+    f.hidden = true;
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("trigger-rows").addEventListener("change", async (e) => {
+  const toggle = e.target.closest("[data-toggle]");
+  if (!toggle) return;
+  const t = triggerData.triggers[Number(toggle.dataset.toggle)].trigger;
+  try {
+    triggerData = await api("POST", "/api/triggers/enable", { name: t.name, enabled: toggle.checked });
+    saved(`Trigger ${t.name} is ${toggle.checked ? "on" : "off"}.`);
+  } catch (err) {
+    toast(err.message);
+  }
+  renderTriggers();
+});
+
+$("trigger-rows").addEventListener("click", async (e) => {
+  const edit = e.target.closest("[data-edit]");
+  if (edit) { openTriggerForm(Number(edit.dataset.edit)); return; }
+  const remove = e.target.closest("[data-remove]");
+  if (remove) {
+    const index = Number(remove.dataset.remove);
+    const t = triggerData.triggers[index].trigger;
+    if (!(await Nav.confirm(`Delete the trigger ${t.name}?`, "Conversations it started are kept.", { confirm: "Delete", danger: true }))) return;
+    try {
+      await saveTriggers(triggerData.triggers.map((v) => v.trigger).filter((_, i) => i !== index), `Trigger ${t.name} deleted.`);
+      if (editingTrigger === index) $("trigger-form").hidden = true;
+    } catch (err) {
+      toast(err.message);
+    }
+    return;
+  }
+  const run = e.target.closest("[data-run]");
+  if (!run) return;
+  const t = triggerData.triggers[Number(run.dataset.run)].trigger;
+  run.disabled = true;
+  try {
+    const out = await api("POST", "/api/triggers/run", { name: t.name });
+    toast(out.conversation ? `${t.name} started a conversation in Dispatch.` : `${out.text}.`, "ok");
+  } catch (err) {
+    toast(err.message.charAt(0).toUpperCase() + err.message.slice(1));
+  }
+  await loadTriggers().catch((err) => toast(err.message));
+});
+
 let pairTimer = 0;
 
 function stopPairing(message) {
@@ -578,8 +760,13 @@ $("secret-rows").addEventListener("click", async (e) => {
   if (!del) return;
   const name = del.dataset.delete;
   const users = (data.secrets.list.find((x) => x.name === name) || {}).used_by || [];
+  const servers = users.filter((u) => u !== "Linear triggers");
   const text = users.length
-    ? `${users.join(", ")} ${users.length === 1 ? "uses" : "use"} it. New Claude Code sessions that get ${users.length === 1 ? "that server" : "those servers"} do not start until you set it again.`
+    ? [
+      `${users.join(", ")} ${users.length === 1 ? "uses" : "use"} it.`,
+      servers.length ? `New Claude Code sessions that get ${servers.length === 1 ? "that server" : "those servers"} do not start until you set it again.` : "",
+      servers.length < users.length ? "Linear triggers stop until you set it again." : "",
+    ].filter(Boolean).join(" ")
     : "No server uses it. The value cannot be brought back.";
   if (!(await Nav.confirm(`Delete the secret ${name}?`, text, { confirm: "Delete", danger: true }))) return;
   try {

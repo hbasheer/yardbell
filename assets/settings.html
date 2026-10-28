@@ -62,6 +62,7 @@
       <a href="#phone">Notifications</a>
       <p class="nav-label">Agents</p>
       <a href="#dispatch">Dispatch</a>
+      <a href="#triggers">Triggers</a>
       <a href="#mcp">Agent tools (MCP)</a>
       <a href="#servers">MCP servers</a>
       <p class="nav-label">General</p>
@@ -201,6 +202,60 @@
       <div class="form-foot">
         <p class="help">Dispatch runs Claude Code on this machine. The agent it starts can be any of yours.</p>
         <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="triggers">
+    <div class="section-head"><h2>Triggers</h2><button class="btn small-link" type="button" id="trigger-add">Add trigger</button></div>
+    <p class="help">A trigger starts a Dispatch conversation from one of your tasks, on a schedule or when a ticket comes your way. Its steps follow your Dispatch rules like any other conversation. Times are in <strong id="trigger-zone">this server's time zone</strong>, the time zone of the machine Yardbell runs on.</p>
+    <ul class="rows trigger-rows" id="trigger-rows" hidden></ul>
+    <p class="help" id="triggers-empty">No triggers yet.</p>
+    <form class="panel" id="trigger-form" hidden>
+      <div class="grid2">
+        <label>Name <input type="text" name="name" maxlength="60" placeholder="Morning summary" autocomplete="off" required></label>
+        <label>Task <select name="task" required></select></label>
+      </div>
+      <label>Start it
+        <select name="kind">
+          <option value="schedule">On a schedule</option>
+          <option value="linear">For Linear tickets</option>
+          <option value="github">For GitHub issues and reviews</option>
+        </select>
+      </label>
+      <div data-kind="schedule">
+        <div class="grid2">
+          <label>Repeat
+            <select name="repeat">
+              <option value="daily">Every day</option>
+              <option value="weekdays">Weekdays, Monday to Friday</option>
+              <option value="every">Every few hours</option>
+              <option value="cron">Cron expression</option>
+            </select>
+          </label>
+          <label data-repeat="daily weekdays">At <input type="time" name="at" value="09:00" step="60" required></label>
+          <label data-repeat="every">Hours between runs <input type="number" name="hours" min="1" max="23" step="1" value="4" inputmode="numeric" required></label>
+          <label data-repeat="cron">Cron <input type="text" name="cron" placeholder="30 9 * * 1-5" autocapitalize="off" spellcheck="false" required></label>
+        </div>
+        <p class="help trigger-help" data-repeat="every">Counted from midnight: every 4 hours runs at 00:00, 04:00, 08:00 and so on.</p>
+        <p class="help trigger-help" data-repeat="cron">Five fields: minute, hour, day of the month, month and day of the week, where 0 and 7 are Sunday. Use numbers, *, ranges like 1-5, lists like 1,15 and steps like */15.</p>
+      </div>
+      <div data-kind="linear" class="trigger-watch">
+        <label class="choice"><input type="checkbox" name="linear_assigned">A ticket is assigned to me</label>
+        <label>Or one of my tickets moves to <input type="text" name="states" placeholder="In Progress, Ready for dev" autocomplete="off"></label>
+        <p class="help trigger-help">Yardbell reads your open Linear tickets every 3 minutes with the API key saved as the secret <code>linear</code>, under MCP servers, Secrets. Separate states with commas.</p>
+      </div>
+      <div data-kind="github" class="trigger-watch">
+        <label class="choice"><input type="checkbox" name="gh_assigned">An issue is assigned to me</label>
+        <label class="choice"><input type="checkbox" name="gh_review">A pull request asks for my review</label>
+        <p class="help trigger-help">Yardbell asks the GitHub CLI <code>gh</code> on this machine every 3 minutes, as the account it is logged in with.</p>
+      </div>
+      <p class="help trigger-help" data-kind="linear github">The task gets the ticket: write {ticket}, {title}, {url}, {state} or {repo} in it where each goes, or the ticket is added at the end. One conversation per ticket, one at a time. Tickets that already match when the trigger starts watching are left alone.</p>
+      <div class="form-foot">
+        <label class="choice"><input type="checkbox" class="switch" name="enabled" checked>On</label>
+        <p class="help"></p>
+        <button class="btn quiet" type="button" id="trigger-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Save trigger</button>
       </div>
     </form>
   </section>

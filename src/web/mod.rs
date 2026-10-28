@@ -75,6 +75,7 @@ pub struct AppState {
     pub settings: Settings,
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
+    pub triggers: Arc<crate::triggers::Triggers>,
     pub auth: Auth,
     pub key: std::sync::RwLock<Key>,
     pub handoff: std::sync::Mutex<Vec<(String, Instant)>>,
@@ -103,6 +104,7 @@ pub struct Services {
     pub settings: Settings,
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
+    pub triggers: Arc<crate::triggers::Triggers>,
     pub refresh: Refresh,
     pub releases: crate::about::Fetch,
 }
@@ -119,6 +121,7 @@ impl AppState {
             settings,
             phone,
             dispatch,
+            triggers,
             refresh,
             releases,
         } = services;
@@ -140,6 +143,7 @@ impl AppState {
             settings,
             phone,
             dispatch,
+            triggers,
             auth: Auth::new(cfg.passcode_hash.clone().unwrap_or_default(), clock.clone()),
             key: std::sync::RwLock::new(key),
             handoff: std::sync::Mutex::new(Vec::new()),
@@ -451,6 +455,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(settings_api::routes())
         .merge(review_api::routes())
         .merge(pulls_api::routes())
+        .merge(triggers_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -1824,6 +1829,7 @@ async fn remove_machine(
 mod pulls_api;
 mod review_api;
 mod settings_api;
+mod triggers_api;
 
 #[cfg(test)]
 mod tests;
