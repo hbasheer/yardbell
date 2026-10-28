@@ -2,6 +2,7 @@ use crate::config::{Config, Machine};
 use crate::probe::{MachineStatus, Probe, Reason};
 use crate::state::State;
 use futures::future::BoxFuture;
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -28,7 +29,7 @@ pub struct Poller {
     state: State,
     hook: Hook,
     after: AfterTick,
-    ticking: tokio::sync::Mutex<()>,
+    turns: std::sync::Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
 
 impl Poller {
@@ -45,50 +46,66 @@ impl Poller {
             state,
             hook,
             after,
-            ticking: tokio::sync::Mutex::new(()),
+            turns: std::sync::Mutex::new(HashMap::new()),
         }
     }
 
-    pub async fn tick(&self) -> Option<Config> {
-        // A refresh can run alongside the background loop, and an older snapshot
-        // stored after a newer one would bring an ended session back.
-        let _turn = self.ticking.lock().await;
-        let cfg = match Config::load(&self.cfg_path) {
-            Ok(cfg) => Arc::new(cfg),
+    fn load(&self) -> Option<Arc<Config>> {
+        match Config::load(&self.cfg_path) {
+            Ok(cfg) => Some(Arc::new(cfg)),
             Err(e) => {
                 tracing::error!(error = %e, "config reload failed, skipping poll");
-                return None;
+                None
+            }
+        }
+    }
+
+    // A check after an action can run alongside the background loop, and an older snapshot
+    // stored after a newer one would bring an ended session back, so the checks of one machine
+    // take turns. Each machine is stored as soon as its own check is done.
+    async fn check_one(&self, cfg: &Arc<Config>, m: &Machine) {
+        let turn = self
+            .turns
+            .lock()
+            .expect("turns lock")
+            .entry(m.name.clone())
+            .or_default()
+            .clone();
+        let _turn = turn.lock().await;
+        let (check, task_cfg, task_m) = (self.check.clone(), cfg.clone(), m.clone());
+        let task = tokio::spawn(async move {
+            match tokio::time::timeout(CHECK_CAP, check.check(&task_cfg, &task_m)).await {
+                Ok(st) => st,
+                Err(_) => MachineStatus::down(&task_m.name, Reason::SshTimeout),
+            }
+        });
+        let st = match task.await {
+            Ok(st) => st,
+            Err(e) => {
+                tracing::error!(machine = %m.name, error = %e, "probe crashed");
+                MachineStatus::down(&m.name, Reason::BadSnapshot)
             }
         };
-        let tasks: Vec<_> = cfg
-            .machines
-            .iter()
-            .map(|m| {
-                let check = self.check.clone();
-                let cfg = cfg.clone();
-                let m = m.clone();
-                tokio::spawn(async move {
-                    match tokio::time::timeout(CHECK_CAP, check.check(&cfg, &m)).await {
-                        Ok(st) => st,
-                        Err(_) => MachineStatus::down(&m.name, Reason::SshTimeout),
-                    }
-                })
-            })
-            .collect();
-        let names: Vec<String> = cfg.machines.iter().map(|m| m.name.clone()).collect();
-        for (name, task) in names.iter().zip(tasks) {
-            let st = match task.await {
-                Ok(st) => st,
-                Err(e) => {
-                    tracing::error!(machine = %name, error = %e, "probe crashed");
-                    MachineStatus::down(name, Reason::BadSnapshot)
-                }
-            };
-            self.state.update(st.clone());
-            (self.hook)(&cfg, &st);
-        }
+        self.state.update(st.clone());
+        (self.hook)(cfg, &st);
+    }
+
+    pub async fn tick(&self) -> Option<Config> {
+        let cfg = self.load()?;
+        futures::future::join_all(cfg.machines.iter().map(|m| self.check_one(&cfg, m))).await;
         (self.after)(&cfg);
         Some(Arc::unwrap_or_clone(cfg))
+    }
+
+    pub async fn check_machine(&self, name: &str) {
+        let Some(cfg) = self.load() else {
+            return;
+        };
+        let Some(m) = cfg.machine(name).cloned() else {
+            return;
+        };
+        self.check_one(&cfg, &m).await;
+        (self.after)(&cfg);
     }
 
     pub fn start(self: Arc<Self>, interval: Duration) -> JoinHandle<()> {
@@ -257,5 +274,89 @@ mod tests {
         assert_eq!(state.status("pro").unwrap().reason, Some(Reason::NoMesh));
         let hp = state.status("hp").unwrap();
         assert!(!hp.up);
+    }
+
+    struct Delays(&'static [(&'static str, u64)]);
+
+    impl Check for Delays {
+        fn check<'a>(&'a self, _cfg: &'a Config, m: &'a Machine) -> BoxFuture<'a, MachineStatus> {
+            Box::pin(async move {
+                let ms = self
+                    .0
+                    .iter()
+                    .find(|(name, _)| *name == m.name)
+                    .map_or(10, |(_, ms)| *ms);
+                tokio::time::sleep(Duration::from_millis(ms)).await;
+                MachineStatus::down(&m.name, Reason::NoMesh)
+            })
+        }
+    }
+
+    fn poller_with(state: State, check: Arc<dyn Check>, after: AfterTick) -> Arc<Poller> {
+        Arc::new(Poller::new(
+            cfg_path(),
+            check,
+            state,
+            Arc::new(|_: &Config, _: &MachineStatus| {}),
+            after,
+        ))
+    }
+
+    #[tokio::test]
+    async fn a_machine_is_stored_while_a_slower_one_is_still_checked() {
+        let state = State::default();
+        let changes = state.changes();
+        let poller = poller_with(
+            state.clone(),
+            Arc::new(Delays(&[("mini", 1500)])),
+            Arc::new(|_: &Config| {}),
+        );
+        let tick = tokio::spawn({
+            let poller = poller.clone();
+            async move { poller.tick().await }
+        });
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        assert!(state.status("hp").is_some(), "hp waited for mini");
+        assert!(state.status("mini").is_none());
+        assert!(changes.has_changed().unwrap());
+        tick.await.unwrap();
+        assert!(state.status("mini").is_some());
+    }
+
+    #[tokio::test]
+    async fn checking_one_machine_skips_the_others_and_runs_after() {
+        let afters = Arc::new(AtomicUsize::new(0));
+        let counted = afters.clone();
+        let state = State::default();
+        let poller = poller_with(
+            state.clone(),
+            Arc::new(Delays(&[("mini", 1500), ("pro", 1500)])),
+            Arc::new(move |_: &Config| {
+                counted.fetch_add(1, Ordering::SeqCst);
+            }),
+        );
+        let start = Instant::now();
+        poller.check_machine("hp").await;
+        assert!(start.elapsed() < Duration::from_millis(500));
+        assert!(state.status("hp").is_some());
+        assert!(state.status("mini").is_none());
+        assert_eq!(afters.load(Ordering::SeqCst), 1);
+        poller.check_machine("nope").await;
+        assert_eq!(afters.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn checks_of_one_machine_take_turns() {
+        let check = Arc::new(CountingCheck::default());
+        let poller = poller_with(State::default(), check.clone(), Arc::new(|_: &Config| {}));
+        let background = tokio::spawn({
+            let poller = poller.clone();
+            async move { poller.tick().await }
+        });
+        tokio::time::sleep(Duration::from_millis(20)).await;
+        tokio::join!(poller.check_machine("hp"), poller.check_machine("hp"));
+        background.await.unwrap();
+        assert_eq!(check.most.load(Ordering::SeqCst), 1);
+        assert_eq!(check.inside.load(Ordering::SeqCst), 0);
     }
 }

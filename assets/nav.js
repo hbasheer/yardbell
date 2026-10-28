@@ -39,9 +39,21 @@
     </a></li>`;
   }
 
+  // Writing the same markup again replaces every link, which drops a click that lands in between
+  // and flickers the hover, so only a change is written.
+  const painted = new WeakMap();
+
+  function paint(el, markup) {
+    if (painted.get(el) === markup) return;
+    painted.set(el, markup);
+    el.innerHTML = markup;
+  }
+
   function render(state, selected) {
     const up = state.machines.filter((m) => m.up).length;
-    document.getElementById("nav-summary").textContent = `${up} of ${state.machines.length} connected`;
+    const summary = document.getElementById("nav-summary");
+    const counted = `${up} of ${state.machines.length} connected`;
+    if (summary.textContent !== counted) summary.textContent = counted;
     const onDashboard = page === "dashboard";
     const all = item("/", "", "All machines", running(state), onDashboard && !selected, ALL_ICON);
     const machines = order(state.machines).map((m) => item(
@@ -52,17 +64,17 @@
       onDashboard && selected === m.name,
       `<span class="dot ${tone(m)}" title="${esc(word(m))}"></span><span class="sr">${esc(word(m))}</span>`,
     ));
-    document.getElementById("nav-machines").innerHTML = all + machines.join("");
+    paint(document.getElementById("nav-machines"), all + machines.join(""));
     renderServer(state.server);
     const vpn = document.getElementById("nav-vpn");
     const mesh = state.mesh;
     if (!mesh) {
-      vpn.textContent = "";
+      paint(vpn, "");
       return;
     }
     const on = mesh.on === true ? "on" : mesh.on === false ? "off" : "status unknown";
     vpn.title = `${mesh.label} ${on}`;
-    vpn.innerHTML = `<span class="dot ${mesh.on === true ? "ok" : mesh.on === false ? "bad" : ""}"></span>${esc(mesh.label)} ${on}`;
+    paint(vpn, `<span class="dot ${mesh.on === true ? "ok" : mesh.on === false ? "bad" : ""}"></span>${esc(mesh.label)} ${on}`);
   }
 
   function renderServer(server) {
@@ -76,7 +88,7 @@
       nav.after(line);
     }
     line.title = `Yardbell runs on ${server.machine}. Phones and other machines reach it at ${server.address}.`;
-    line.innerHTML = `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>`;
+    paint(line, `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>`);
   }
 
   function resetsIn(epoch) {
@@ -212,8 +224,10 @@
   if (document.documentElement.classList.contains("embedded")) return;
   if (page !== "dashboard") {
     load();
-    setInterval(load, 10000);
+    window.YardbellLive.follow(load, 10000);
   }
   loadUsage();
-  setInterval(loadUsage, 60000);
+  setInterval(() => {
+    if (!document.hidden) loadUsage();
+  }, 60000);
 })();

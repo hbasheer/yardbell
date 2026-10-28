@@ -242,14 +242,25 @@ function dot(st) {
   return `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
 }
 
+// Every state the server pushes renders the sidebar, and writing the same markup again replaces
+// its buttons, which drops a click that lands in between. Only a change is written.
+const painted = new WeakMap();
+
+function paint(el, markup) {
+  if (painted.get(el) === markup) return;
+  painted.set(el, markup);
+  el.innerHTML = markup;
+}
+
 function renderSide() {
   const all = sessions().filter((s) => !s.stale);
   const counts = {};
   for (const s of all) counts[stateOf(s)] = (counts[stateOf(s)] || 0) + 1;
   const server = state.server;
-  $("server").innerHTML = server ? `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>` : "";
-  $("summary").textContent = ["blocked", "done", "working", "idle"]
+  paint($("server"), server ? `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>` : "");
+  const summary = ["blocked", "done", "working", "idle"]
     .filter((k) => counts[k]).map((k) => `${counts[k]} ${WORD[k]}`).join(" · ") || "No agents running";
+  if ($("summary").textContent !== summary) $("summary").textContent = summary;
 
   const inPane = new Map(leaves(tab().root).map((l, i) => [l.key, i + 1]));
   const row = (s) => {
@@ -265,7 +276,7 @@ function renderSide() {
   };
   let lastMachine = "";
   const folds = foldedMachines();
-  $("tree").innerHTML = projects().map((name) => {
+  paint($("tree"), projects().map((name) => {
     const mine = sessions().filter((s) => projectOf(s) === name);
     const current = name === project();
     const machine = machineOf(name);
@@ -279,7 +290,7 @@ function renderSide() {
     return `${head}<li${hide}><button type="button" class="ws-space${current ? " current" : ""}" data-space="${esc(name)}" title="${esc(spaceLabel(name))}"${current ? ' aria-current="true"' : ""}>
       ${dot(worst(mine))}<span class="rail-initial" aria-hidden="true">${esc(window.YardbellSide.initials(spaceLabel(name)))}</span><span class="ws-space-name">${esc(spaceLabel(name))}</span><span class="ws-count">${mine.filter((s) => !s.stale).length}</span>
     </button></li>${mine.length ? `<li${hide}><ul class="ws-terminals">${mine.map(row).join("")}</ul></li>` : ""}`;
-  }).join("") || `<li class="ws-empty">No sessions running. Start one with New session.</li>`;
+  }).join("") || `<li class="ws-empty">No sessions running. Start one with New session.</li>`);
 }
 
 const FOLDED_KEY = "yardbell.ws.folded";
@@ -435,7 +446,7 @@ async function startHere(leaf, agent) {
     const res = await fetch("/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ machine: where.machine, folder: where.label, agent }),
+      body: JSON.stringify({ machine: where.machine, folder: where.label, agent, wait: true }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Could not start the agent (${res.status})`);
@@ -750,12 +761,11 @@ function newTab() {
         const res = await fetch("/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...body, wait: true }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `Could not start the session (${res.status})`);
         const key = `${body.machine}/${data.name}`;
-        await fetch("/refresh", { method: "POST", headers: { Accept: "application/json" } }).catch(() => {});
         await load();
         open(key);
       } catch (err) {
@@ -1035,7 +1045,7 @@ async function load() {
 restore();
 if (phone.matches) document.body.classList.add("ws-picking");
 load();
-setInterval(load, 3000);
+window.YardbellLive.follow(load, 3000);
 
 const DISPATCH_KEY = "yardbell.dispatch";
 

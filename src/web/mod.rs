@@ -11,7 +11,7 @@ use crate::snapshot;
 use crate::state::{PortStatus, State};
 use crate::term;
 use crate::viewers::{Plan, Viewers};
-use axum::extract::ws::{WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, Path as UrlPath, Request, State as AxState};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -85,7 +85,9 @@ pub struct AppState {
     clock: Clock,
 }
 
-pub type Refresh = Arc<dyn Fn() -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
+// Checks one machine again, or every machine when given none.
+pub type Refresh =
+    Arc<dyn Fn(Option<String>) -> futures::future::BoxFuture<'static, ()> + Send + Sync>;
 
 pub struct Services {
     pub state: State,
@@ -147,16 +149,30 @@ impl AppState {
     }
 
     pub async fn refresh(&self) {
-        if tokio::time::timeout(Duration::from_secs(20), (self.refresh)())
-            .await
-            .is_err()
-        {
-            tracing::warn!("refresh did not finish within 20 seconds");
-        }
+        settle((self.refresh)(None)).await;
+    }
+
+    pub async fn check(&self, machine: &str) {
+        settle((self.refresh)(Some(machine.to_string()))).await;
+    }
+
+    // An action changes one machine, and every open page shows it once that machine is checked
+    // again, without waiting for the next poll or holding up the answer to the action.
+    pub fn recheck(&self, machine: &str) {
+        tokio::spawn((self.refresh)(Some(machine.to_string())));
     }
 
     pub fn jar(&self, headers: &HeaderMap) -> SignedCookieJar {
         SignedCookieJar::from_headers(headers, self.key.read().expect("key lock").clone())
+    }
+}
+
+async fn settle(check: futures::future::BoxFuture<'static, ()>) {
+    if tokio::time::timeout(Duration::from_secs(20), check)
+        .await
+        .is_err()
+    {
+        tracing::warn!("refresh did not finish within 20 seconds");
     }
 }
 
@@ -320,8 +336,10 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(|| async { asset("vendor/lit-html/directives/repeat.js") }),
         )
         .route("/nav.js", get(|| async { asset("nav.js") }))
+        .route("/live.js", get(|| async { asset("live.js") }))
         .route("/newsession.js", get(|| async { asset("newsession.js") }))
         .route("/state", get(state_json))
+        .route("/state/live", get(state_live))
         .route("/workspace", get(|| async { asset("workspace.html") }))
         .route("/workspace.js", get(|| async { asset("workspace.js") }))
         .route("/dispatch", get(|| async { asset("dispatch.html") }))
@@ -545,6 +563,46 @@ async fn state_json(
     Ok(([(BUILD_HEADER, page_build())], Json(view)).into_response())
 }
 
+const LIVE_SETTLE: Duration = Duration::from_millis(100);
+
+async fn state_live(
+    AxState(app): AxState<Arc<AppState>>,
+    headers: HeaderMap,
+    ws: WebSocketUpgrade,
+) -> Result<Response, ApiError> {
+    if !term::origin_ok(&headers) {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "origin does not match host".into(),
+        ));
+    }
+    let changes = app.state.changes();
+    Ok(ws.on_upgrade(move |socket| live(socket, changes)))
+}
+
+// Tells an open page that the state changed, and the page fetches /state as it always did. The
+// machines of one poll finish close together, so a short pause lets one message cover them.
+async fn live(mut socket: WebSocket, mut changes: tokio::sync::watch::Receiver<u64>) {
+    loop {
+        tokio::select! {
+            changed = changes.changed() => {
+                if changed.is_err() {
+                    return;
+                }
+                tokio::time::sleep(LIVE_SETTLE).await;
+                let version = *changes.borrow_and_update();
+                if socket.send(Message::Text(version.to_string().into())).await.is_err() {
+                    return;
+                }
+            }
+            incoming = socket.recv() => match incoming {
+                Some(Ok(Message::Close(_)) | Err(_)) | None => return,
+                Some(Ok(_)) => {}
+            },
+        }
+    }
+}
+
 async fn app_hello(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
     let server = server_view(&app.config()?);
     Ok(
@@ -681,6 +739,7 @@ async fn session_keys(
         .send_keys(&m, &name, &req.keys)
         .await
         .map_err(ApiError::gateway)?;
+    app.recheck(&m.name);
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -1068,6 +1127,9 @@ pub struct NewSession {
     agent: String,
     #[serde(default)]
     prompt: String,
+    // Answer only once the machine was checked again, so /state already lists the session.
+    #[serde(default)]
+    wait: bool,
 }
 
 impl NewSession {
@@ -1104,9 +1166,14 @@ async fn new_session(
     AxState(app): AxState<Arc<AppState>>,
     Json(req): Json<NewSession>,
 ) -> Result<Response, ApiError> {
-    start_session(&app, req)
-        .await
-        .map(|v| Json(v).into_response())
+    let (machine, wait) = (req.machine.clone(), req.wait);
+    let started = start_session(&app, req).await?;
+    if wait {
+        app.check(&machine).await;
+    } else {
+        app.recheck(&machine);
+    }
+    Ok(Json(started).into_response())
 }
 
 pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, ApiError> {
@@ -1333,6 +1400,7 @@ async fn stop_session(
         .stop(&m, &name)
         .await
         .map_err(ApiError::gateway)?;
+    app.recheck(&m.name);
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -1376,6 +1444,7 @@ async fn stop_process(
         .stop_pid(&m, pid)
         .await
         .map_err(ApiError::gateway)?;
+    app.recheck(&m.name);
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -1395,7 +1464,7 @@ async fn move_to_tmux(
         .stop_pid(&m, pid)
         .await
         .map_err(ApiError::gateway)?;
-    let name = app
+    let created = app
         .sessions
         .create(
             &m,
@@ -1408,13 +1477,14 @@ async fn move_to_tmux(
                 mcp_config: mcp_config(&cfg, &m, &agent).as_deref(),
             },
         )
-        .await
-        .map_err(|e| {
-            ApiError::gateway(format!(
-                "{e}. {} was stopped; start it again from its folder.",
-                agent.display()
-            ))
-        })?;
+        .await;
+    app.recheck(&m.name);
+    let name = created.map_err(|e| {
+        ApiError::gateway(format!(
+            "{e}. {} was stopped; start it again from its folder.",
+            agent.display()
+        ))
+    })?;
     Ok(Json(json!({ "name": name, "path": s.cwd })).into_response())
 }
 

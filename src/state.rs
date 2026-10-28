@@ -19,9 +19,19 @@ struct Inner {
     ended: BTreeMap<String, Session>,
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct State {
     inner: Arc<RwLock<Inner>>,
+    changes: tokio::sync::watch::Sender<u64>,
+}
+
+impl Default for State {
+    fn default() -> State {
+        State {
+            inner: Arc::default(),
+            changes: tokio::sync::watch::Sender::new(0),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -104,6 +114,15 @@ pub struct ServerView {
 }
 
 impl State {
+    // Open pages wait on this counter and fetch /state when it moves, instead of on a timer.
+    pub fn changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    pub fn touch(&self) {
+        self.changes.send_modify(|n| *n = n.wrapping_add(1));
+    }
+
     pub fn update(&self, st: MachineStatus) {
         let mut inner = self.inner.write().expect("state lock");
         if let Some(snap) = &st.snapshot {
@@ -132,6 +151,8 @@ impl State {
             inner.last_seen.insert(st.name.clone(), st.checked_at);
         }
         inner.statuses.insert(st.name.clone(), st);
+        drop(inner);
+        self.touch();
     }
 
     pub fn status(&self, name: &str) -> Option<MachineStatus> {
@@ -154,6 +175,7 @@ impl State {
 
     pub fn forget(&self, id: &str) {
         self.inner.write().expect("state lock").ended.remove(id);
+        self.touch();
     }
 
     pub fn ended(&self) -> Vec<Session> {
@@ -181,6 +203,8 @@ impl State {
         inner.snapshots.remove(name);
         inner.last_seen.remove(name);
         inner.ended.retain(|_, s| s.machine != name);
+        drop(inner);
+        self.touch();
     }
 
     pub fn ports(&self, name: &str) -> Vec<Port> {
@@ -495,6 +519,21 @@ mod tests {
         state.update(up("hp", vec![]));
         state.forget("hp:hp-eng-1301");
         assert!(state.ended().is_empty());
+    }
+
+    #[test]
+    fn every_change_moves_the_counter_pages_watch() {
+        let state = State::default();
+        let mut changes = state.changes();
+        assert!(!changes.has_changed().unwrap());
+        state.update(up("hp", vec![]));
+        assert!(changes.has_changed().unwrap());
+        changes.borrow_and_update();
+        state.forget("hp:hp-x");
+        assert!(changes.has_changed().unwrap());
+        changes.borrow_and_update();
+        state.remove_machine("hp");
+        assert!(changes.has_changed().unwrap());
     }
 
     #[test]

@@ -628,7 +628,7 @@ $("save-as-task").addEventListener("click", () => {
   editTask(null, text);
 });
 
-setInterval(() => catchUp(true), 5000);
+window.YardbellLive.follow(() => catchUp(true), 5000);
 
 function scroller() {
   const main = document.querySelector(".main");

@@ -4,6 +4,7 @@ import { repeat } from "/vendor/lit-html/directives/repeat.js";
 const $ = (id) => document.getElementById(id);
 const onHost = ["localhost", "127.0.0.1"].includes(location.hostname);
 const Nav = window.YardbellNav;
+const Live = window.YardbellLive;
 const NewSession = window.YardbellNewSession;
 let current = null;
 let lastJson = "";
@@ -355,6 +356,25 @@ function render(state) {
   renderGroups(state);
 }
 
+// A stopped session leaves the list as soon as the stop succeeds. A state fetched before the
+// server checked its machine again still lists it, so it stays out until a state without it.
+const LEAVING_FOR = 15000;
+const leaving = new Map();
+let fetched = null;
+
+function withoutLeaving(state) {
+  const now = Date.now();
+  const listed = new Set(state.sessions.map((s) => s.id));
+  for (const [id, at] of leaving) if (now - at > LEAVING_FOR || !listed.has(id)) leaving.delete(id);
+  if (!leaving.size) return state;
+  return { ...state, sessions: state.sessions.filter((s) => !leaving.has(s.id)) };
+}
+
+function leave(id) {
+  leaving.set(id, Date.now());
+  if (fetched) render((current = withoutLeaving(fetched)));
+}
+
 async function refresh() {
   try {
     const res = await fetch("/state", { headers: { Accept: "application/json" } });
@@ -367,7 +387,8 @@ async function refresh() {
     if (text !== lastJson || Date.now() - lastRender > 30000) {
       lastJson = text;
       lastRender = Date.now();
-      current = JSON.parse(text);
+      fetched = JSON.parse(text);
+      current = withoutLeaving(fetched);
       render(current);
     }
   } catch {
@@ -473,19 +494,13 @@ document.querySelector(".segmented").addEventListener("click", (e) => {
   applyFilters();
 });
 
-// /state is the server's last machine check, which can be poll_seconds old, so after an action
-// that changes sessions the machines are checked again before the list is drawn.
-async function checkNow() {
-  await api("POST", "/refresh");
-  await refresh();
-}
-
 $("refresh-btn").addEventListener("click", async (e) => {
   const b = e.currentTarget;
   b.disabled = true;
   b.classList.add("spinning");
   try {
-    await checkNow();
+    await api("POST", "/refresh");
+    await refresh();
   } catch (err) {
     toast(err.message);
   } finally {
@@ -616,7 +631,7 @@ function openNew(machine) {
     defaultAgent: current?.default_agent,
     onError: toast,
     onStart: (body) => startAndOpen(body)
-      .then(() => checkNow().catch(() => refresh()))
+      .then(() => Live.soon())
       .catch((err) => toast(err.message)),
   });
 }
@@ -691,7 +706,7 @@ document.addEventListener("click", async (e) => {
       const url = `/term/${encodeURIComponent(machine)}/${encodeURIComponent(res.name)}`;
       if (tab) tab.location.href = url; else location.href = url;
       toast(`Moved ${folder} into tmux`, "ok");
-      checkNow().catch(() => refresh());
+      Live.soon();
     } catch (err) {
       if (tab) tab.close();
       toast(err.message);
@@ -704,9 +719,11 @@ document.addEventListener("click", async (e) => {
   try {
     if (act === "stop") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}/stop`);
+      leave(`${machine}:${name}`);
       toast(`Stopped ${name}`, "ok");
     } else if (act === "stop-pid") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(pid)}/stop-process`);
+      leave(`${machine}:${pid}`);
       toast(`Stopped ${agentLabel(agent)} in ${folder}`, "ok");
     } else if (act === "host") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}/host-terminal`);
@@ -715,7 +732,7 @@ document.addEventListener("click", async (e) => {
     } else if (act === "forget") {
       await api("POST", `/ended/${encodeURIComponent(id)}/forget`);
     }
-    checkNow().catch(() => refresh());
+    Live.soon();
   } catch (err) {
     toast(err.message);
   } finally {
@@ -739,5 +756,5 @@ if (window.__TAURI__) {
 }
 
 refresh();
-setInterval(refresh, 5000);
+Live.follow(refresh, 5000);
 setInterval(tick, 1000);

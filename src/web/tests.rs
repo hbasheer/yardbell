@@ -25,7 +25,7 @@ impl PortStatus for FakePorts {
 struct Rig {
     app: Arc<AppState>,
     fake: Arc<FakeRunner>,
-    refreshes: Arc<std::sync::atomic::AtomicUsize>,
+    refreshes: Arc<std::sync::Mutex<Vec<Option<String>>>>,
     now: Arc<std::sync::Mutex<std::time::Instant>>,
     _dir: tempfile::TempDir,
 }
@@ -33,6 +33,20 @@ struct Rig {
 impl Rig {
     fn advance(&self, secs: u64) {
         *self.now.lock().unwrap() += std::time::Duration::from_secs(secs);
+    }
+
+    fn refreshed(&self) -> Vec<Option<String>> {
+        self.refreshes.lock().unwrap().clone()
+    }
+
+    async fn rechecked(&self) -> Vec<Option<String>> {
+        for _ in 0..20 {
+            if !self.refreshed().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        self.refreshed()
     }
 }
 
@@ -109,7 +123,7 @@ fn rig() -> Rig {
         state.clone(),
         dir.path().join("id_ed25519"),
     ));
-    let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let refreshes = Arc::new(std::sync::Mutex::new(Vec::new()));
     let services = Services {
         state,
         ports: Arc::new(FakePorts),
@@ -129,9 +143,9 @@ fn rig() -> Rig {
         )),
         refresh: {
             let refreshes = refreshes.clone();
-            Arc::new(move || {
-                refreshes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Box::pin(async {})
+            Arc::new(move |machine: Option<String>| {
+                let refreshes = refreshes.clone();
+                Box::pin(async move { refreshes.lock().unwrap().push(machine) })
             })
         },
     };
@@ -231,6 +245,37 @@ async fn shared_nav_script_is_served_to_logged_in_pages() {
             "{page}"
         );
         assert!(html.contains(r#"id="nav-machines""#), "{page}");
+    }
+}
+
+#[tokio::test]
+async fn pages_that_show_the_state_load_the_live_script_first() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/live.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellLive"));
+    for (page, user) in [
+        ("dashboard.html", "/nav.js"),
+        ("dispatch.html", "/nav.js"),
+        ("settings.html", "/nav.js"),
+        ("add.html", "/nav.js"),
+        ("workspace.html", "/workspace.js"),
+    ] {
+        let html = String::from_utf8(Assets::get(page).unwrap().data.into_owned()).unwrap();
+        let live = html
+            .find(r#"<script src="/live.js"></script>"#)
+            .unwrap_or_else(|| panic!("{page} does not load live.js"));
+        let later = html.find(&format!(r#"<script src="{user}"></script>"#));
+        assert!(later.is_some_and(|at| live < at), "{page}");
     }
 }
 
@@ -1084,14 +1129,14 @@ async fn refresh_runs_a_check_of_every_machine_now() {
         .unwrap();
     let (status, _, body) = send(&r.app, req).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(r.refreshed(), [None]);
     let (status, _, _) = send(
         &r.app,
         Request::post("/refresh").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(r.refreshed(), [None]);
 }
 
 #[tokio::test]
@@ -1480,7 +1525,7 @@ async fn mcp_start_session_passes_the_task_and_refreshes() {
     assert_eq!(started["name"], "hp-eng-1301");
     let call = r.fake.calls().pop().unwrap();
     assert!(call.last().unwrap().contains("fix the inbox"), "{call:?}");
-    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(r.refreshed(), [Some("hp".to_string())]);
 }
 
 #[tokio::test]
@@ -1711,7 +1756,7 @@ async fn dispatch_steps_wait_for_approval_then_run_once() {
     assert_eq!(done["result"]["ok"], true);
     assert_eq!(done["result"]["session"]["name"], "hp-eng-1301");
     assert!(ran(&r, "fix the inbox"));
-    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(r.refreshed(), [Some("hp".to_string())]);
     assert_eq!(
         r.app.dispatch.get(&id).unwrap()["sessions"][0]["name"],
         "hp-eng-1301"
@@ -2203,4 +2248,133 @@ async fn stop_process_ends_only_agents_outside_tmux() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn actions_check_their_machine_again_without_waiting_for_it() {
+    let r = rig();
+    r.fake.stub("kill-session", Output::ok_with(""));
+    let c = cookie(&r.app).await;
+    let stop = Request::post("/sessions/hp/hp-eng-1301/stop")
+        .header(header::COOKIE, &c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&r.app, stop).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(r.rechecked().await, [Some("hp".to_string())]);
+
+    let r = rig();
+    r.fake.stub("send-keys", Output::ok_with(""));
+    let c = cookie(&r.app).await;
+    let keys = Request::post("/sessions/hp/hp-eng-1301/keys")
+        .header(header::COOKIE, &c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"keys":"1"}"#))
+        .unwrap();
+    let (status, _, body) = send(&r.app, keys).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(r.rechecked().await, [Some("hp".to_string())]);
+}
+
+#[tokio::test]
+async fn a_failed_stop_checks_nothing() {
+    let r = rig();
+    r.fake
+        .stub("kill-session", Output::failed(1, "can't find session"));
+    let c = cookie(&r.app).await;
+    let req = Request::post("/sessions/hp/hp-x/stop")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(r.rechecked().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_new_session_can_wait_until_its_machine_was_checked() {
+    let r = rig();
+    r.fake.stub("tmux new", Output::ok_with(""));
+    let (status, body) = post_session(&r, r#"{"machine":"hp","folder":"slot2","wait":true}"#).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(r.refreshed(), [Some("hp".to_string())], "answered first");
+
+    let r = rig();
+    r.fake.stub("tmux new", Output::ok_with(""));
+    let (status, body) = post_session(&r, r#"{"machine":"hp","folder":"slot2"}"#).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(r.rechecked().await, [Some("hp".to_string())]);
+}
+
+#[tokio::test]
+async fn forgetting_an_ended_session_tells_open_pages() {
+    let r = rig();
+    let changes = r.app.state.changes();
+    let c = cookie(&r.app).await;
+    let req = Request::post("/ended/hp:hp-x/forget")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changes.has_changed().unwrap());
+}
+
+async fn serve(r: &Rig) -> SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let svc = router(r.app.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, svc).await });
+    addr
+}
+
+async fn open_live(
+    addr: SocketAddr,
+    cookie: &str,
+    origin: &str,
+) -> (String, tokio::net::TcpStream) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!(
+        "GET /state/live HTTP/1.1\r\nHost: {addr}\r\nOrigin: {origin}\r\nCookie: {cookie}\r\n\
+         Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    );
+    socket.write_all(req.as_bytes()).await.unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        socket.read_exact(&mut byte).await.unwrap();
+        head.push(byte[0]);
+    }
+    (String::from_utf8_lossy(&head).into_owned(), socket)
+}
+
+async fn next_text(socket: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut head = [0u8; 2];
+    socket.read_exact(&mut head).await.unwrap();
+    assert_eq!(head[0], 0x81, "a whole text frame");
+    let mut body = vec![0u8; (head[1] & 0x7f) as usize];
+    socket.read_exact(&mut body).await.unwrap();
+    String::from_utf8(body).unwrap()
+}
+
+#[tokio::test]
+async fn open_pages_hear_about_changes_on_a_socket() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let addr = serve(&r).await;
+    let page = format!("http://{addr}");
+    let (head, _) = open_live(addr, "", &page).await;
+    assert!(!head.starts_with("HTTP/1.1 101"), "{head}");
+    let (head, _) = open_live(addr, &c, "http://elsewhere.example").await;
+    assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+    let (head, mut socket) = open_live(addr, &c, &page).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    r.app.state.forget("hp:hp-x");
+    let text = tokio::time::timeout(Duration::from_secs(2), next_text(&mut socket))
+        .await
+        .expect("no message after the state changed");
+    assert!(text.parse::<u64>().is_ok(), "{text}");
 }

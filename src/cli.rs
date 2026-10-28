@@ -162,7 +162,11 @@ pub async fn serve(
             let Some(m) = cfg.machine(&change.machine).cloned() else {
                 continue;
             };
-            let (dispatch, sessions) = (after_dispatch.clone(), after_sessions.clone());
+            let (dispatch, sessions, state) = (
+                after_dispatch.clone(),
+                after_sessions.clone(),
+                after_state.clone(),
+            );
             // A reviewer's report can run long, and it is read from the screen.
             let lines = if change.review.is_some() { 400 } else { 60 };
             tokio::spawn(async move {
@@ -171,6 +175,9 @@ pub async fn serve(
                     .await
                     .unwrap_or_default();
                 dispatch.report(&change, &screen);
+                // The session card lands after the check that found the change, so open
+                // Dispatch pages are told again.
+                state.touch();
             });
         }
     });
@@ -206,10 +213,15 @@ pub async fn serve(
         ),
         phone,
         dispatch,
-        refresh: Arc::new(move || {
+        refresh: Arc::new(move |machine: Option<String>| {
             let poller = poller.clone();
             Box::pin(async move {
-                poller.tick().await;
+                match machine {
+                    Some(name) => poller.check_machine(&name).await,
+                    None => {
+                        poller.tick().await;
+                    }
+                }
             })
         }),
     };

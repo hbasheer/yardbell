@@ -489,8 +489,9 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
         }
         "start_session" => {
             let req: NewSession = arg(args)?;
+            let machine = req.machine.clone();
             let started = start_session(app, req).await?;
-            app.refresh().await;
+            app.check(&machine).await;
             Ok(started)
         }
         "review_session" => {
@@ -513,14 +514,14 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
                 "send_to_session" if r.text.is_empty() => {
                     return Err(ApiError(StatusCode::BAD_REQUEST, "text is empty".into()))
                 }
-                "send_to_session" => app
-                    .sessions
-                    .send(&m, &r.name, &r.text)
-                    .await
-                    .map(|_| json!({ "sent": true })),
+                "send_to_session" => {
+                    let sent = app.sessions.send(&m, &r.name, &r.text).await;
+                    app.recheck(&m.name);
+                    sent.map(|_| json!({ "sent": true }))
+                }
                 _ => {
                     let stopped = app.sessions.stop(&m, &r.name).await;
-                    app.refresh().await;
+                    app.check(&m.name).await;
                     stopped.map(|_| json!({ "stopped": true }))
                 }
             };

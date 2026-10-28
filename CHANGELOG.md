@@ -60,6 +60,20 @@ and the project uses [Semantic Versioning](https://semver.org).
   in the sidebar says how many steps wait for you.
 - Conversations from earlier versions open as before, with the sessions they started shown as
   steps that ran without asking.
+- Open pages update as soon as Yardbell has checked a machine. The server tells each page over a
+  websocket when something changed, so a session that starts, ends or waits for you shows within
+  a moment of the check, instead of on the page's own 3 to 10 second timer on top of it. A page
+  that cannot open the websocket polls as before.
+- After you start, stop, answer or move a session, Yardbell checks that machine again right away
+  and every open page and device shows the result. A stopped session leaves the dashboard as soon
+  as the stop succeeds. Before, each page asked for a check of every machine and waited for the
+  slowest one.
+- Each machine is shown as soon as its own check finishes, so a slow or unreachable machine no
+  longer holds up the others.
+- A page in a hidden browser tab, or behind another tab in the desktop app, stops fetching and
+  catches up the moment it is shown again.
+- The sidebar's machine list, and the Workspace sidebar, are only redrawn when they change, so a
+  click or hover there is no longer lost to a refresh every few seconds.
 
 ## [0.6.7] - 2026-10-27
 

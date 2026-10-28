@@ -22,6 +22,11 @@ machine. It reports agent processes and their folders, tmux sessions, git branch
 ports, memory, load and mesh addresses as JSON. Everything Yardbell changes on another machine is
 limited to `tmux new`, `tmux kill-session` and `git worktree add`.
 
+Open pages keep a websocket to Yardbell, which says when a machine's check has finished, and the
+page then fetches the new state. After you start, stop or answer a session, only that machine is
+checked again, right away. A page that cannot keep the websocket polls instead, and a hidden page
+does neither until it is shown.
+
 ## Requirements
 
 - **Host** (where Yardbell runs): macOS or Linux, Rust stable to build, `ssh`.
@@ -120,7 +125,7 @@ Anyone who logs in to Yardbell gets a full shell on every machine it manages. Tr
 ssh key.
 
 - Yardbell listens only on `127.0.0.1` and the host's mesh address, never on all interfaces.
-- Every page, API call and terminal websocket requires the login cookie (signed, `HttpOnly`,
+- Every page, API call and websocket requires the login cookie (signed, `HttpOnly`,
   `SameSite=Strict`, 30 days). Five wrong passcodes in a minute lock that address out for five
   minutes.
 - Requests that change anything must come from Yardbell's own page (Origin check). The one

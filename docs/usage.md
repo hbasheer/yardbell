@@ -12,7 +12,8 @@ the whole machine, split into your agents (blue), your other processes (light bl
 and free, so on a server shared without per-account limits you can see whose memory it is. Where
 your account has a memory limit, the bar shows that limit instead, and all of it is yours.
 The sidebar lists the machines, problems first, with a session count; click one to show only that
-machine.
+machine. Every page updates by itself as soon as Yardbell has checked a machine, and a session you
+stop leaves the list at once.
 
 - **Top bar:** search sessions by folder, branch, ticket or agent (press `/`), show All, Working or
   Idle sessions (an agent waiting for you shows **Needs you** and counts as idle), **Refresh** to check every machine right away, Add machine and New session.
