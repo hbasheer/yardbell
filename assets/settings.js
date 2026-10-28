@@ -136,8 +136,32 @@ function renderDispatch() {
   f.elements.instructions.value = d.instructions || "";
   f.elements.agent.value = d.agent || "";
   f.elements.model.value = d.model || "";
-  f.elements.approval.value = d.approval || "ask";
+  f.elements.approval.value = { ask: "prompt", auto: "allow" }[d.approval] || d.approval || "prompt";
+  rules = (d.rules || []).map((r) => ({ action: "any", machine: "any", folder: "", ...r }));
+  renderRules();
   loadInstalled();
+}
+
+const RULE_STEPS = { any: "Any step", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review" };
+const RULE_APPROVALS = { allow: "Allow", prompt: "Ask me", deny: "Deny" };
+let rules = [];
+const CROSS = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`;
+
+function options(choices, selected) {
+  return Object.entries(choices).map(([v, l]) => `<option value="${esc(v)}"${v === selected ? " selected" : ""}>${esc(l)}</option>`).join("");
+}
+
+function renderRules() {
+  const machines = { any: "Any machine", ...Object.fromEntries((data.machines || []).map((m) => [m.name, m.name])) };
+  $("rule-rows").innerHTML = rules.length
+    ? rules.map((r, i) => `<li class="row rule-row" data-rule="${i}">
+      <select data-key="action" aria-label="Step">${options(RULE_STEPS, r.action)}</select>
+      <select data-key="machine" aria-label="Machine">${options(machines, r.machine)}</select>
+      <input type="text" data-key="folder" aria-label="Folder" value="${esc(r.folder)}" placeholder="Any folder" autocapitalize="off" spellcheck="false">
+      <select data-key="approval" aria-label="Then">${options(RULE_APPROVALS, r.approval)}</select>
+      <button class="btn quiet danger" type="button" data-remove-rule="${i}" aria-label="Remove rule" title="Remove rule">${CROSS}</button>
+    </li>`).join("")
+    : `<li class="row rule-empty">No rules. Every step follows the setting above.</li>`;
 }
 
 let editing = null;
@@ -375,6 +399,7 @@ $("dispatch-form").addEventListener("submit", async (e) => {
       agent: f.elements.agent.value,
       model: f.elements.model.value,
       approval: f.elements.approval.value,
+      rules: rules.map((r) => ({ ...r, folder: r.folder.trim() })),
     });
     saved("Dispatch settings saved. They apply from the next message.");
     await load();
@@ -383,6 +408,24 @@ $("dispatch-form").addEventListener("submit", async (e) => {
   } finally {
     button.disabled = false;
   }
+});
+
+$("rule-add").addEventListener("click", () => {
+  rules.push({ action: "stop_session", machine: "any", folder: "", approval: "deny" });
+  renderRules();
+  $("rule-rows").querySelector("li:last-child select")?.focus();
+});
+
+$("rule-rows").addEventListener("input", (e) => {
+  const row = e.target.closest("[data-rule]");
+  if (row && e.target.dataset.key) rules[Number(row.dataset.rule)][e.target.dataset.key] = e.target.value;
+});
+
+$("rule-rows").addEventListener("click", (e) => {
+  const remove = e.target.closest("[data-remove-rule]");
+  if (!remove) return;
+  rules.splice(Number(remove.dataset.removeRule), 1);
+  renderRules();
 });
 
 let pairTimer = 0;

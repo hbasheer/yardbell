@@ -1,5 +1,5 @@
 use crate::config::{Approval, Config};
-use crate::dispatch::{By, ReviewOf};
+use crate::dispatch::{By, ReviewOf, Rule, Step};
 use crate::web::{find_machine, start_session, ApiError, AppState, NewSession};
 use axum::extract::State as AxState;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -253,9 +253,9 @@ user's next message starts with what happened to it."
     )
 }
 
-// Dispatch's steps that change something wait for the person unless Settings lets it act on its
-// own. Either way the step is checked first, so a mistake goes back to Dispatch to correct
-// instead of to the person to approve.
+// Dispatch's steps that change something run, wait for the person or are refused, as the
+// approval setting and its rules say. Either way the step is checked first, so a mistake goes back
+// to Dispatch to correct instead of to the person to approve.
 async fn dispatch_step(
     app: &AppState,
     conversation: Option<&str>,
@@ -264,28 +264,97 @@ async fn dispatch_step(
 ) -> Result<String, ApiError> {
     let cfg = app.config()?;
     let (tool, input, review) = plan(app, &cfg, name, args)?;
-    match (cfg.dispatch.approval, conversation) {
-        (Approval::Ask, None) => Err(ApiError(
+    let step = step_of(app, name, &input);
+    let verdict = crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);
+    match (verdict.approval, conversation) {
+        (Approval::Deny, _) => Err(ApiError(
+            StatusCode::FORBIDDEN,
+            refusal(verdict.rule, &step),
+        )),
+        (Approval::Prompt, None) => Err(ApiError(
             StatusCode::BAD_REQUEST,
             "Yardbell cannot tell which Dispatch conversation this came from, so it did not run it"
                 .into(),
         )),
-        (Approval::Ask, Some(conversation)) => {
+        (Approval::Prompt, Some(conversation)) => {
             let event = app
                 .dispatch
-                .propose(conversation, &tool, input, By::Dispatch, review)
+                .propose(
+                    conversation,
+                    &tool,
+                    input,
+                    By::Dispatch,
+                    review,
+                    verdict.rule,
+                )
                 .map_err(|e| ApiError(StatusCode::NOT_FOUND, e.message().to_string()))?;
             Ok(proposal_note(event["id"].as_str().unwrap_or_default()))
         }
-        (Approval::Auto, conversation) => {
+        (Approval::Allow, conversation) => {
             let outcome = perform(app, &tool, input.clone()).await;
             if let Some(conversation) = conversation {
                 let recorded = outcome.as_ref().map(Value::clone).map_err(|e| e.1.clone());
                 app.dispatch
-                    .record(conversation, &tool, input, review, &recorded);
+                    .record(conversation, &tool, input, review, verdict.rule, &recorded);
             }
             outcome.map(|value| serde_json::to_string_pretty(&value).unwrap_or_default())
         }
+    }
+}
+
+fn refusal(rule: Option<&Rule>, step: &Step) -> String {
+    let why = match rule {
+        Some(rule) if step.folders.is_none() && !rule.folder.is_empty() => format!(
+            "the user's Dispatch rule \"{}\" refuses it, because Yardbell cannot tell which folder \
+the session is in",
+            rule.describe()
+        ),
+        Some(rule) => format!(
+            "the user's Dispatch rule \"{}\" refuses it",
+            rule.describe()
+        ),
+        None => "the user's Dispatch settings refuse steps that change something unless a rule \
+allows them, and no rule allows this one"
+            .into(),
+    };
+    format!(
+        "Refused, not run: {why}. Tell the user which rule stopped it; they can change it in \
+Yardbell's Settings, under Dispatch. Do not try it again or reach the same result another way."
+    )
+}
+
+// What the rules match a step on. The folder is the one the step works in: the folder it starts
+// in, the folder of the session it reviews, or the folder of the session it stops or types into.
+fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
+    let machine = input["machine"].as_str().unwrap_or_default().to_string();
+    let snap = app.state.snapshot(&machine).unwrap_or_default();
+    let text = |key: &str| input[key].as_str().unwrap_or_default().trim().to_string();
+    let folders = match called {
+        "start_session" | "review_session" => {
+            let path = match text("path") {
+                path if path.is_empty() => snap.folder_paths.get(&text("folder")).cloned(),
+                path => Some(path),
+            };
+            path.map(|path| {
+                let label = snap
+                    .folder_paths
+                    .iter()
+                    .filter(|(_, p)| path == **p || path.starts_with(&format!("{p}/")))
+                    .max_by_key(|(_, p)| p.len())
+                    .map(|(label, _)| label.clone());
+                label.into_iter().chain([path]).collect()
+            })
+        }
+        _ => snap
+            .sessions
+            .iter()
+            .find(|s| s.tmux.as_deref() == Some(text("name").as_str()))
+            .map(|s| vec![s.folder.clone(), s.cwd.clone()]),
+    };
+    Step {
+        action: called.to_string(),
+        machine,
+        folders,
     }
 }
 

@@ -186,11 +186,18 @@
       </div>
       <label>Before Dispatch starts, stops or types into a session
         <select name="approval">
-          <option value="ask">Ask me to approve each step</option>
-          <option value="auto">Go ahead without asking</option>
+          <option value="prompt">Ask me to approve each step</option>
+          <option value="allow">Go ahead without asking</option>
+          <option value="deny">Refuse, unless a rule allows it</option>
         </select>
       </label>
       <p class="help dispatch-help">Each step shows up in the conversation as a card. When Dispatch asks, you can approve it, edit it first or reject it, and nothing runs until you approve.</p>
+      <div class="rules-head">
+        <h3>Rules</h3>
+        <button class="btn" type="button" id="rule-add">Add rule</button>
+      </div>
+      <p class="help dispatch-help">A rule decides the steps it matches instead of the setting above. Deny always wins. Otherwise the rule that names the most of step, machine and folder wins, so their order does not matter. A folder is a name from the folder list, like acme/web, or a path, and covers the folders inside it. Use * for any part of a name.</p>
+      <ul class="rows rule-rows" id="rule-rows"></ul>
       <div class="form-foot">
         <p class="help">Dispatch runs Claude Code on this machine. The agent it starts can be any of yours.</p>
         <button class="btn primary" type="submit">Save</button>

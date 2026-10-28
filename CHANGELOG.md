@@ -5,6 +5,18 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Dispatch has rules for what it may do. Each rule matches a step (starting, stopping or typing
+  into a session, or starting a review, or any of them), a machine or any, and optionally a folder
+  pattern like `acme/*`, and then allows the step, asks you first, or denies it. A deny always
+  wins; otherwise the rule that names the most wins, so the order of the list does not matter, and
+  steps no rule matches follow the setting you already had. A denied step never becomes a card:
+  Dispatch gets an error naming the rule and tells you. A card that a rule decided names the rule.
+  Edit them in Settings, under Dispatch, or as `dispatch.rules` in `yardbell.yml`.
+- The Dispatch setting can now also refuse every step unless a rule allows it. In `yardbell.yml`
+  its values are `prompt`, `allow` and `deny`. `ask` and `auto` still work, and Yardbell keeps
+  writing them, so a config saved without rules or a deny is the same as 0.7.0 writes and 0.7.0
+  can still read it.
+
 ## [0.7.0] - 2026-10-28
 
 - Security: the tokens of the MCP servers for sessions, such as a Linear API key, no longer appear

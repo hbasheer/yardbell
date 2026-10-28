@@ -175,7 +175,16 @@ another. Sending a new message withdraws the steps you have not decided on, so D
 propose again with what you wrote, and every message tells Dispatch what happened to its steps
 since its last reply. A conversation in the list says how many steps wait for you. To let Dispatch
 go ahead without asking, as earlier versions did, change **Before Dispatch starts, stops or types
-into a session** in Settings; its steps still show up as cards, marked as run without asking.
+into a session** in Settings; its steps still show up as cards, marked as run without asking. The
+same setting can refuse every step unless a rule allows it.
+
+**Rules** under that setting decide some steps differently, for example "Stop a session, Any
+machine, Deny" or "Start a session, devbox, acme/*, Allow". Each rule picks a step, a machine and
+optionally a folder (a name from the folder list or a path, with `*` for any part of a name), and
+then allows it, asks you, or denies it. Deny always wins. Otherwise the rule that names the most of
+step, machine and folder wins, so the order of the list does not matter. A card that a rule
+decided says so at the bottom, like "Your rule: start sessions on devbox in acme/*". A denied step
+never becomes a card: Dispatch is told which rule refused it and says so in its reply.
 Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
 conversation never stops the sessions it started. Claude Code must be installed and signed in on
@@ -232,4 +241,5 @@ The **Dispatch** section of Settings adds your own instructions to its prompt (w
 repositories live, which machine suits which work, how you name branches), picks the agent it
 starts in new sessions from the ones installed on your machines, picks the Claude model that
 runs Dispatch itself (Haiku is the fastest), and chooses whether Dispatch asks you to approve each
-step or goes ahead without asking.
+step, goes ahead without asking or is refused, with rules for the steps that should be decided
+differently.
