@@ -191,9 +191,10 @@ if [ -r /proc/meminfo ]; then
   mem_total=$(awk '/^MemTotal:/ {print $2}' /proc/meminfo)
   avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
   [ -n "$mem_total" ] && [ -n "$avail" ] && mem_used=$((mem_total - avail))
-  # On a shared server each account gets a cgroup memory limit, and that limit is what runs out,
-  # not the machine's RAM. As in MemAvailable, page cache (active too, it is reclaimed under the
-  # limit) and reclaimable slab are not counted as used. tmpfs is in "file" but cannot be dropped.
+  # On a shared server each account can have a cgroup memory limit, which runs out before the
+  # machine's RAM does, so it is reported beside the machine's figures. As in MemAvailable, page
+  # cache (active too, it is reclaimed under the limit) and reclaimable slab are not counted as
+  # used. tmpfs is in "file" but cannot be dropped.
   cg_path=$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null)
   cg_dir="/sys/fs/cgroup${cg_path%/}"
   cg_limit=""
@@ -211,9 +212,8 @@ if [ -r /proc/meminfo ]; then
     current=$(cat "$cg_limit_dir/memory.current" 2>/dev/null || true)
     reclaimable=$(awk '$1 == "file" || $1 == "slab_reclaimable" {n += $2} $1 == "shmem" {n -= $2} END {print n + 0}' "$cg_limit_dir/memory.stat" 2>/dev/null)
     if [ -n "$current" ]; then
-      mem_total=$((cg_limit / 1024))
-      mem_used=$(((current - ${reclaimable:-0}) / 1024))
-      mem_scope=account
+      limit_kb=$((cg_limit / 1024))
+      limit_used_kb=$(((current - ${reclaimable:-0}) / 1024))
     fi
   fi
   load1=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
@@ -247,14 +247,48 @@ for a in $(printf '%s\n' "$addrs" | awk -F. '$1 == 100 && $2 >= 64 && $2 <= 127'
   printf '"%s"' "$a"
 done
 printf ']'
-# Within an account's cgroup limit everything counted is the account's own, page cache included.
-if [ "${mem_scope:-}" = account ]; then
-  user_kb=$mem_used
-else
-  user_kb=$(ps -o rss= -U "$(id -u)" 2>/dev/null | awk '{n += $1} END {print n + 0}')
-fi
+me=$(id -u)
+me_name=$(id -nu)
+# The people's accounts on the machine (not the system's), by the memory of their processes.
+# Rootless containers run as uids from their owner's range in /etc/subuid, so they count as the
+# owner's, and as yours when the owner is you.
+uid_min=1000
+[ "$(uname -s)" = Darwin ] && uid_min=501
+login_min=$(awk '$1 == "UID_MIN" {print $2}' /etc/login.defs 2>/dev/null)
+[ -n "$login_min" ] && uid_min=$login_min
+owners=$(ps -A -o uid=,rss= 2>/dev/null |
+  awk -v min="$uid_min" '$1 >= min {kb[$1] += $2} END {for (u in kb) print u, kb[u]}' |
+  while read -r uid kb; do
+    if name=$(id -nu "$uid" 2>/dev/null); then
+      printf '%s\t%s\t0\n' "$name" "$kb"
+    else
+      owner=$(awk -F: -v u="$uid" '$2 <= u && u < $2 + $3 {print $1; exit}' /etc/subuid 2>/dev/null)
+      if [ -n "$owner" ]; then
+        printf '%s\t%s\t%s\n' "$owner" "$kb" "$kb"
+      else
+        printf 'uid %s\t%s\t0\n' "$uid" "$kb"
+      fi
+    fi
+  done |
+  awk -F'\t' '{kb[$1] += $2; c[$1] += $3} END {for (n in kb) printf "%s\t%s\t%s\n", kb[n], c[n], n}' |
+  sort -rn)
+user_kb=$(printf '%s\n' "$owners" | awk -F'\t' -v me="$me_name" '$3 == me {print $1}')
+[ -n "$user_kb" ] || user_kb=$(ps -o rss= -U "$me" 2>/dev/null | awk '{n += $1} END {print n + 0}')
+printf ',"accounts":['
+printf '%s\n' "$owners" | head -8 | {
+  first=1
+  while IFS=$'\t' read -r kb containers name; do
+    [ -n "$name" ] || continue
+    you=false
+    [ "$name" = "$me_name" ] && you=true
+    [ $first -eq 0 ] && printf ','
+    first=0
+    printf '{"name":%s,"kb":%s,"containers_kb":%s,"you":%s}' "$(esc "$name")" "$kb" "$containers" "$you"
+  done
+}
+printf ']'
 if [ -n "$mem_total" ] && [ -n "$mem_used" ]; then
-  printf ',"health":{"mem_total_kb":%s,"mem_used_kb":%s,"agent_kb":%s,"user_kb":%s,"load1":%s,"cpus":%s,"disk_total_kb":%s,"disk_used_kb":%s}' \
-    "$mem_total" "$mem_used" "$agent_kb" "${user_kb:-0}" "${load1:-0}" "${cpus:-0}" "${disk_total:-0}" "${disk_used:-0}"
+  printf ',"health":{"mem_total_kb":%s,"mem_used_kb":%s,"agent_kb":%s,"user_kb":%s,"limit_kb":%s,"limit_used_kb":%s,"load1":%s,"cpus":%s,"disk_total_kb":%s,"disk_used_kb":%s}' \
+    "$mem_total" "$mem_used" "$agent_kb" "${user_kb:-0}" "${limit_kb:-0}" "${limit_used_kb:-0}" "${load1:-0}" "${cpus:-0}" "${disk_total:-0}" "${disk_used:-0}"
 fi
 printf '}\n'

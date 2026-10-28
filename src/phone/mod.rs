@@ -226,6 +226,7 @@ mod tests {
             last_seen: None,
             local: false,
             health: None,
+            accounts: Vec::new(),
             mesh_on: None,
         }
     }
@@ -237,6 +238,8 @@ mod tests {
                 mem_used_kb: percent * 10,
                 agent_kb: 0,
                 user_kb: 0,
+                limit_kb: 0,
+                limit_used_kb: 0,
                 load1: 0.0,
                 cpus: 4,
                 disk_total_kb: 0,

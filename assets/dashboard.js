@@ -141,7 +141,25 @@ function memory(m) {
     <div class="mem-legend">
       ${parts.map(([key, name, kb]) => html`<span><i class="key ${key}"></i>${name} ${gb(kb)} GB</span>`)}
     </div>
+    ${accounts(m)}${limit(m)}
   </div>`;
+}
+
+// Only on a machine shared with other people: on your own machine the legend already says it all.
+function accounts(m) {
+  const list = m.accounts || [];
+  if (!list.some((a) => !a.you)) return "";
+  return html`<div class="mem-accounts">
+    ${list.slice(0, 6).map((a) => html`<span class=${a.you ? "you" : ""} title=${a.containers_kb ? `${gb(a.containers_kb)} GB of it in containers` : ""}>${a.name}${a.you ? " (you)" : ""} <b>${gb(a.kb)} GB</b></span>`)}
+  </div>`;
+}
+
+function limit(m) {
+  const h = m.health;
+  const pct = Nav.limitPct(m);
+  if (pct === null) return "";
+  const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
+  return html`<div class="mem-limit${level}">Your account's limit: <b>${gb(h.limit_used_kb)} of ${gb(h.limit_kb)} GB</b>, ${pct}%</div>`;
 }
 
 function disk(m) {

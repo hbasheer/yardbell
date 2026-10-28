@@ -10,15 +10,22 @@
     return m.up && h && h.mem_total_kb ? Math.round((h.mem_used_kb / h.mem_total_kb) * 100) : null;
   }
 
+  function limitPct(m) {
+    const h = m.health;
+    return m.up && h && h.limit_kb ? Math.round((h.limit_used_kb / h.limit_kb) * 100) : null;
+  }
+
+  // An account's own memory limit can run out on a machine with plenty free, so it counts too.
   function tone(m) {
     if (!m.up) return "bad";
-    const pct = memPct(m);
-    return pct !== null && pct >= RATED ? "warn" : "ok";
+    return Math.max(memPct(m) ?? 0, limitPct(m) ?? 0) >= RATED ? "warn" : "ok";
   }
 
   function word(m) {
     const t = tone(m);
-    return t === "bad" ? "down" : t === "warn" ? `memory at ${memPct(m)}%` : "connected";
+    if (t !== "warn") return t === "bad" ? "down" : "connected";
+    const limit = limitPct(m);
+    return limit !== null && limit > (memPct(m) ?? 0) ? `your memory limit at ${limit}%` : `memory at ${memPct(m)}%`;
   }
 
   function order(machines) {
@@ -220,7 +227,7 @@
     });
   }
 
-  window.YardbellNav = { loadUsage, render, order, memPct, RATED, appKey, tabKey, confirm: ask, checkBuild };
+  window.YardbellNav = { loadUsage, render, order, memPct, limitPct, RATED, appKey, tabKey, confirm: ask, checkBuild };
   if (document.documentElement.classList.contains("embedded")) return;
   if (page !== "dashboard") {
     load();

@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- The memory bar always shows the whole machine. On a server where your account has its own memory
+  limit it showed only that limit (48 GB on a 125 GB machine), all of it as yours. Now a line under
+  the bar lists the accounts using the most memory, such as `risal 24.9 GB · hasan (you) 7.3 GB`,
+  with rootless containers counted toward the person who runs them instead of an unnamed uid, and
+  another shows your account's use of its limit. The memory warning still goes by whichever is
+  fuller, and Dispatch still counts only the room your limit leaves when it picks a machine.
+
 ## [0.6.8] - 2026-10-28
 
 - The memory bar splits what is used into your agents, your other processes and other accounts, so

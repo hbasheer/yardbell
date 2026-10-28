@@ -1,6 +1,6 @@
 use crate::config::{Config, HostTerminal, Machine};
 use crate::probe::MachineStatus;
-use crate::snapshot::{Activity, Health, Port, Session, Snapshot};
+use crate::snapshot::{Account, Activity, Health, Port, Session, Snapshot};
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashMap};
@@ -42,6 +42,8 @@ pub struct MachineView {
     pub last_seen: Option<String>,
     pub local: bool,
     pub health: Option<Health>,
+    #[serde(default)]
+    pub accounts: Vec<Account>,
     pub mesh_on: Option<bool>,
 }
 
@@ -258,6 +260,10 @@ impl State {
                 health: up
                     .then(|| inner.snapshots.get(&m.name).and_then(|s| s.health))
                     .flatten(),
+                accounts: up
+                    .then(|| inner.snapshots.get(&m.name).map(|s| s.accounts.clone()))
+                    .flatten()
+                    .unwrap_or_default(),
                 mesh_on: up
                     .then(|| {
                         inner
@@ -429,6 +435,8 @@ mod tests {
             mem_used_kb: 13_000_000,
             agent_kb: 900_000,
             user_kb: 0,
+            limit_kb: 0,
+            limit_used_kb: 0,
             load1: 1.5,
             cpus: 8,
             disk_total_kb: 0,

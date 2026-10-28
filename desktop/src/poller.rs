@@ -91,6 +91,7 @@ mod tests {
             last_seen: None,
             local: false,
             health: None,
+            accounts: Vec::new(),
             mesh_on: None,
         }
     }
