@@ -449,6 +449,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/settings", get(|| async { asset("settings.html") }))
         .route("/settings.js", get(|| async { asset("settings.js") }))
         .merge(settings_api::routes())
+        .merge(review_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -1101,7 +1102,7 @@ async fn dispatch_review_outcome(
                     "pick the findings to send".into(),
                 ));
             }
-            let chosen: Vec<Value> = picked.iter().map(|i| all[*i].clone()).collect();
+            let chosen = crate::dispatch::review_picked(&review, &picked);
             let of = &review["of"];
             let (machine, name) = (
                 of["machine"].as_str().unwrap_or_default(),
@@ -1819,6 +1820,7 @@ async fn remove_machine(
     Json(app.onboarding.remove(&name).await).into_response()
 }
 
+mod review_api;
 mod settings_api;
 
 #[cfg(test)]

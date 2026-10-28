@@ -455,10 +455,11 @@ pub fn review_plan(
     } else {
         agent.to_string()
     };
+    let shots = screenshots(&snap, running.map(|s| s.folder.as_str()), &path);
     let mut input = json!({
         "machine": m.name,
         "path": path,
-        "prompt": crate::dispatch::review_prompt(&branch, focus),
+        "prompt": crate::dispatch::review_prompt(&branch, focus, shots.as_ref()),
     });
     if !agent.is_empty() {
         input["agent"] = json!(agent);
@@ -468,8 +469,37 @@ pub fn review_plan(
         name: name.to_string(),
         path,
         branch,
+        evidence: shots.map(|s| s.folder).unwrap_or_default(),
     };
     Ok((input, of))
+}
+
+// The reviewer runs on the reviewed session's machine, so it opens the app's ports there.
+fn screenshots(
+    snap: &crate::snapshot::Snapshot,
+    folder: Option<&str>,
+    path: &str,
+) -> Option<crate::dispatch::Screenshots> {
+    let folder = folder.map(str::to_string).or_else(|| {
+        snap.folder_paths
+            .iter()
+            .find(|(_, p)| **p == path)
+            .map(|(label, _)| label.clone())
+    })?;
+    let apps: Vec<String> = snap
+        .ports
+        .get(&folder)?
+        .iter()
+        .filter(|p| p.listening)
+        .map(|p| {
+            let host = p.host.as_deref().unwrap_or("localhost");
+            format!("http://{host}:{} ({})", p.remote_port, p.service)
+        })
+        .collect();
+    (!apps.is_empty()).then(|| crate::dispatch::Screenshots {
+        folder: crate::dispatch::evidence_folder(),
+        apps,
+    })
 }
 
 pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, ApiError> {

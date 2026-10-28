@@ -205,6 +205,26 @@ to the session that did the work, which gets them as one request to fix them and
 **Dismiss** the review. Asking Dispatch to review a session proposes the same reviewer. A list at
 the top of the conversation shows every session it started and what each is doing now.
 
+A review card also has **Changes**, the branch's diff against the base the reviewer compared with.
+The reviewer names that base in its report; when it does not, Yardbell uses the same rule the
+reviewer is given (the branch it was made from, usually `main`, or `origin/main` on `main` itself)
+and diffs from the commit the branch shares with it. Changes not yet committed and new files are
+included, because the reviewer sees them too. Open it for the list of changed files with their
+added and removed lines, and open a file to read its diff, loaded one file at a time. Long diffs
+show 400 lines at a time with **Show more**, a diff over 2 MB is cut, binary files and renames are
+named rather than drawn, and at most 500 files (100 of them new) are listed. A finding's
+`file:line` is a link that opens that file at that line. The diff is read with `git` on the
+session's machine when you open it, never changes anything there, and shows the folder as it is
+now: when the branch has new commits since the review, it says so.
+
+When the reviewed folder has an app running on one of its ports, the reviewer is told where it is
+and that it may attach screenshots: it saves PNG files in a folder inside `.git` (so the branch does
+not change) and names them on a finding's line. When the review finishes, Yardbell copies them
+into its own state, at most 6 per review, 2 MB each and 24 MB per conversation, and the finding
+shows a thumbnail that opens full size. A screenshot that could not be kept says why. The copies
+stay with the conversation after a restart, or after the worktree is gone, and are deleted with
+it. Findings you send back carry the screenshot's path, so the session can open the same file.
+
 A task with independent parts, such as two repositories or several tickets, gets one session per
 part. Ask it to work through tickets and it reads them first, proposes a numbered plan (machine,
 folder, agent and branch for each) and starts nothing until you agree. Dispatch can use the MCP

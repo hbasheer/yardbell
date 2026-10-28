@@ -2145,15 +2145,21 @@ async fn a_review_is_requested_approved_and_its_findings_sent_back() {
         (&step["by"], &step["status"]),
         (&json!("you"), &json!("pending"))
     );
+    let folder = step["review"]["evidence"].as_str().unwrap().to_string();
+    assert_eq!(
+        folder.len(),
+        12,
+        "slot2 has a running app, so screenshots are offered"
+    );
     assert_eq!(
         step["review"],
-        json!({ "machine": "hp", "name": "hp-eng-1301", "path": "/r/slots/slot2", "branch": "eng-1301-inbox" })
+        json!({ "machine": "hp", "name": "hp-eng-1301", "path": "/r/slots/slot2", "branch": "eng-1301-inbox", "evidence": folder })
     );
     assert_eq!(step["input"]["path"], "/r/slots/slot2");
-    assert!(step["input"]["prompt"]
-        .as_str()
-        .unwrap()
-        .starts_with("Review the work on branch eng-1301-inbox in this folder"));
+    let prompt = step["input"]["prompt"].as_str().unwrap();
+    assert!(prompt.starts_with("Review the work on branch eng-1301-inbox in this folder"));
+    assert!(prompt.contains("The app is running at http://localhost:3020 (rails)."));
+    assert!(prompt.contains(&format!("yardbell-review/{folder}")));
     let (status, _) = step_post(
         &r,
         &c,
@@ -2214,6 +2220,154 @@ async fn a_review_is_requested_approved_and_its_findings_sent_back() {
     assert!(!typed.contains("Mention the new flag"), "{typed}");
     let (status, _) = step_post(&r, &c, &url, json!({ "decision": "dismiss" })).await;
     assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn a_review_card_shows_its_diff_and_screenshots() {
+    const MB: &str = "1111111111111111111111111111111111111111";
+    const HEAD: &str = "2222222222222222222222222222222222222222";
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let mut image = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR".to_vec();
+    image.extend(320u32.to_be_bytes());
+    image.extend(200u32.to_be_bytes());
+    image.extend([0u8; 32]);
+    let encoded = base64::engine::general_purpose::STANDARD.encode(&image);
+    r.fake.stub(
+        "yardbell-review/abcdef123456",
+        Output::ok_with(&format!(
+            "HEAD\t{HEAD}\nBASE\tmain\nMB\t{MB}\nDIR\t/r/.git/yardbell-review/abcdef123456\nFILE\tlogin.png\n{encoded}\nEND\n"
+        )),
+    );
+    let of = crate::dispatch::ReviewOf {
+        machine: "hp".into(),
+        name: "hp-eng-1301".into(),
+        path: "/r/slots/slot2".into(),
+        branch: "eng-1301-inbox".into(),
+        evidence: "abcdef123456".into(),
+    };
+    let screen = "⏺ YARDBELL REVIEW\n  verdict: changes needed\n  base: main\n  summary: One.\n  - high: src/inbox.rs:2: The count is wrong. [screenshot: login.png]\n  END REVIEW";
+    let cfg = r.app.config().unwrap();
+    let m = cfg.machine("hp").unwrap().clone();
+    let change = crate::dispatch::Change {
+        conversation: id.clone(),
+        machine: "hp".into(),
+        name: "hp-eng-1301-2".into(),
+        path: "/r/slots/slot2".into(),
+        state: "idle",
+        review: Some(of),
+    };
+    r.app
+        .dispatch
+        .report_from(&change, screen, &r.app.folders, &m)
+        .await;
+    let review = last_event(&r, &id);
+    let card = r.app.dispatch.get(&id).unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .len()
+        - 1;
+    assert_eq!(
+        review["diff"],
+        json!({ "base": "main", "merge_base": MB, "head": HEAD })
+    );
+    let file = review["evidence"][0]["file"].as_str().unwrap().to_string();
+    assert_eq!(review["evidence"][0]["width"], 320);
+
+    let get = |url: String, cookie: Option<&str>| {
+        let mut req = Request::get(url).header(header::ACCEPT, "application/json");
+        if let Some(cookie) = cookie {
+            req = req.header(header::COOKIE, cookie);
+        }
+        send(&r.app, req.body(Body::empty()).unwrap())
+    };
+    let base = format!("/dispatch/conversations/{id}/reviews/{card}");
+    let (status, headers, body) = get(format!("{base}/evidence/{file}"), Some(&c)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(body.len(), String::from_utf8_lossy(&image).len());
+    let (status, _, _) = get(format!("{base}/evidence/{file}"), None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "behind the login");
+    for other in ["aaaaaaaaaaaaaaaa.png", "..%2F..%2Fconversations", "x"] {
+        let (status, _, _) = get(format!("{base}/evidence/{other}"), Some(&c)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{other}");
+    }
+
+    let listing = format!(
+        "HEAD\t{HEAD}\nBASE\tmain\nMB\t{MB}\n@@YB-TRACKED@@\n:100644 100644 a b M\0src/inbox.rs\x003\t1\tsrc/inbox.rs\0\n@@YB-UNTRACKED@@\nU\t1\t0\tnotes.md\n"
+    );
+    r.fake.stub("@@YB-TRACKED@@", Output::ok_with(&listing));
+    r.fake.stub(
+        "--no-textconv -M",
+        Output::ok_with("@@ -1,2 +1,2 @@\n a\n-b\n+c\n"),
+    );
+    let (status, _, body) = get(format!("{base}/diff"), Some(&c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list["files"][0]["path"], "src/inbox.rs");
+    assert_eq!(list["files"][0]["added"], 3);
+    assert_eq!(list["files"][1]["untracked"], true);
+    assert_eq!(
+        (&list["moved"], &list["merge_base"]),
+        (&json!(false), &json!(MB))
+    );
+    assert!(
+        ran(&r, &format!("mb='{MB}'")),
+        "the diff starts where the review did"
+    );
+
+    let calls = r.fake.calls().len();
+    for bad in ["..%2F..%2Fetc%2Fpasswd", "%2Fetc%2Fpasswd", "a%0Ab"] {
+        let (status, _, _) = get(format!("{base}/diff?file={bad}"), Some(&c)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad}");
+    }
+    assert_eq!(r.fake.calls().len(), calls, "nothing ran for a bad path");
+    let (status, _, body) = get(format!("{base}/diff?file=src%2Fother.rs"), Some(&c)).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(
+        body.contains("src/other.rs is not in this review's changes"),
+        "{body}"
+    );
+    let (status, _, body) = get(format!("{base}/diff?file=src%2Finbox.rs&line=2"), Some(&c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let page: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        page["lines"][3],
+        json!({ "k": "add", "o": null, "n": 2, "t": "c" })
+    );
+    assert!(ran(&r, &format!("-M {MB} -- 'src/inbox.rs'")));
+    let (status, _, _) = get(
+        format!("/dispatch/conversations/{id}/reviews/0/diff"),
+        Some(&c),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "event 0 is not a review");
+
+    r.fake.stub("load-buffer", Output::ok_with(""));
+    let (status, sent) = step_post(
+        &r,
+        &c,
+        &base,
+        json!({ "decision": "send", "findings": [0] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    let at = r
+        .fake
+        .calls()
+        .iter()
+        .position(|c| c.join(" ").contains("load-buffer"))
+        .unwrap();
+    let typed = r.fake.inputs()[at].clone().unwrap();
+    assert!(
+        typed.contains("(screenshot: /r/.git/yardbell-review/abcdef123456/login.png)"),
+        "{typed}"
+    );
+
+    r.app.dispatch.delete(&id).unwrap();
+    assert!(!r._dir.path().join("dispatch/evidence").join(&id).exists());
 }
 
 #[tokio::test]

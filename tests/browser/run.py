@@ -10,6 +10,7 @@ import tempfile
 import time
 import traceback
 import urllib.request
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bidi import Browser, Failure, free_port  # noqa: E402
@@ -21,6 +22,8 @@ SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 MACHINE = "hp"
 SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
+REVIEW_CHAT = "browserreview001"
+SHOT_FILE = "shotbrowsertest1.png"
 PAGES = ["/", "/workspace", "/dispatch", "/settings", "/add"]
 
 
@@ -36,6 +39,81 @@ def git(*args, cwd):
 def tail(path):
     with open(path) as f:
         return f.read()[-3000:]
+
+
+def png(width, height):
+    rows = []
+    for y in range(height):
+        row = bytearray([0])
+        for x in range(width):
+            if y < 48:
+                pixel = (48, 48, 48)
+            elif 300 < y < 344 and 40 < x < 240:
+                pixel = (31, 147, 255)
+            elif y > height - 60:
+                pixel = (220, 38, 38)
+            else:
+                pixel = (247, 247, 247)
+            row += bytes(pixel)
+        rows.append(bytes(row))
+
+    def chunk(kind, data):
+        body = kind + data
+        return len(data).to_bytes(4, "big") + body + zlib.crc32(body).to_bytes(4, "big")
+
+    header = width.to_bytes(4, "big") + height.to_bytes(4, "big") + bytes([8, 2, 0, 0, 0])
+    return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", header) + chunk(b"IDAT", zlib.compress(b"".join(rows))) + chunk(b"IEND", b"")
+
+
+def write(path, text):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        f.write(text)
+
+
+# A branch with commits, a rename, a binary, a long file, a change not yet committed and a new
+# file, the shapes a review's diff has to show.
+def review_branch(repo):
+    write(os.path.join(repo, "docs", "old-name.md"), "# Notes\n")
+    git("add", ".", cwd=repo)
+    git("commit", "-q", "-m", "notes", cwd=repo)
+    git("checkout", "-q", "-b", "fix-login", cwd=repo)
+    write(os.path.join(repo, "src", "login.js"), "".join(f"const step{i} = {i};\n" for i in range(1, 60)))
+    write(os.path.join(repo, "src", "big.txt"), "".join(f"line {i}\n" for i in range(1, 1201)))
+    with open(os.path.join(repo, "logo.png"), "wb") as f:
+        f.write(png(4, 4))
+    git("mv", "docs/old-name.md", "docs/new-name.md", cwd=repo)
+    git("add", ".", cwd=repo)
+    git("commit", "-q", "-m", "login", cwd=repo)
+    with open(os.path.join(repo, "README.md"), "a") as f:
+        f.write("Log in with a passkey.\n")
+    write(os.path.join(repo, "notes.txt"), "not committed\n")
+    out = lambda *a: subprocess.run(["git", *a], cwd=repo, check=True, capture_output=True, text=True).stdout.strip()
+    return {"base": "main", "merge_base": out("merge-base", "HEAD", "main"), "head": out("rev-parse", "HEAD")}
+
+
+def review_card(repo, anchor):
+    return {
+        "role": "review",
+        "machine": MACHINE,
+        "name": "hp-demo-app-2",
+        "path": repo,
+        "of": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login", "evidence": "browsershots"},
+        "at": "2026-01-01T10:05:00+00:00",
+        "verdict": "changes",
+        "base": "main",
+        "summary": "The login button is hidden on a phone, and one step is off by one.",
+        "findings": [
+            {"severity": "high", "place": "src/login.js:42", "text": "step42 should be 41.", "shots": ["login.png"]},
+            {"severity": "medium", "place": "docs/missing.md:3", "text": "This file is not in the change.", "shots": ["gone.png"]},
+            {"severity": "low", "place": "", "text": "Mention passkeys in the changelog."},
+        ],
+        "diff": anchor,
+        "evidence": [
+            {"finding": 0, "name": "login.png", "file": SHOT_FILE, "bytes": 1, "width": 640, "height": 400, "source": "/x/login.png"},
+            {"finding": 1, "name": "gone.png", "error": "not found in the review folder"},
+        ],
+    }
 
 
 def conversation(id, title, events):
@@ -138,7 +216,17 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             events.append({"role": "assistant", "text": f"Answer {i}: " + "Nothing new is running on hp. " * 6})
         events.append({"role": "assistant", "text": "The last answer in this conversation."})
         long = conversation(LONG_CHAT, "A long conversation", events)
-        for chat in (short, long):
+        repo = os.path.join(self.root, "demo-app")
+        review = conversation(
+            REVIEW_CHAT,
+            "Review the login fix",
+            [{"role": "user", "text": "Review the login fix"}, review_card(repo, review_branch(repo))],
+        )
+        evidence = os.path.join(self.state, "dispatch", "evidence", REVIEW_CHAT)
+        os.makedirs(evidence)
+        with open(os.path.join(evidence, SHOT_FILE), "wb") as f:
+            f.write(png(640, 400))
+        for chat in (short, long, review):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -302,6 +390,45 @@ class Suite:
         b.wait("document.querySelector('#dispatch-log .msg.user')?.textContent.includes('Fix the login redirect')", "the saved user message")
         b.wait("document.querySelector('#dispatch-log .msg.md strong')?.textContent === 'hp-demo-app'", "the saved answer with its markdown")
         b.wait("document.getElementById('convo-list').textContent.includes('A long conversation')", "the conversation list")
+
+    def test_dispatch_review_card_diff_and_evidence(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={REVIEW_CHAT}"))
+        card = "#dispatch-log .step-card.review"
+        b.wait(f"document.querySelector('{card}')?.textContent.includes('Review of')", "the seeded review card")
+        b.wait(f"(() => {{ const i = document.querySelector('{card} .finding-shots img'); return i && i.complete && i.naturalWidth === 640; }})()", "the screenshot thumbnail")
+        b.wait(f"document.querySelector('{card} .finding-shot-error')?.textContent.includes('gone.png was not attached')", "the screenshot that was not kept")
+        b.click(f"{card} .review-diff-toggle")
+        b.wait(
+            f"""(() => {{
+              const files = [...document.querySelectorAll('{card} .diff-file .diff-path')].map((p) => p.textContent.trim());
+              return ['README.md', 'docs/old-name.md → docs/new-name.md', 'logo.png', 'notes.txt', 'src/big.txt', 'src/login.js'].every((f) => files.includes(f));
+            }})()""",
+            "the changed files: committed, renamed, binary, not committed and new",
+        )
+        if b.js(f"document.querySelector('{card} .finding-place.link')?.textContent") != "src/login.js:42":
+            raise Failure("the finding's place in the diff is not a link")
+        if b.js(f"[...document.querySelectorAll('{card} code.finding-place')].map((c) => c.textContent).join()") != "docs/missing.md:3":
+            raise Failure("a place outside the diff is still a link")
+        b.click(f"{card} .finding-place.link")
+        b.wait(
+            f"""(() => {{
+              const hit = document.querySelector('{card} .diff-table tr.hit');
+              return hit && hit.id.endsWith('-L42') && hit.textContent.includes('const step42 = 42;');
+            }})()""",
+            "the diff opened at src/login.js:42",
+        )
+        b.click(f"{card} .diff-file-head[id$='logo.png']")
+        b.wait(f"document.querySelector('{card} .diff-file.open .diff-file-head[id$=\"logo.png\"]')?.closest('li').textContent.includes('A binary file')", "the binary file's note")
+        b.click(f"{card} .diff-file-head[id$='big.txt']")
+        rows = "document.querySelectorAll('" + card + " .diff-file-head[id$=\"big.txt\"] + .diff-file-body tr').length"
+        b.wait(f"{rows} === 400", "the first page of the long file")
+        b.click(f"{card} .diff-file-head[id$='big.txt'] + .diff-file-body .diff-more")
+        b.wait(f"{rows} === 800", "Show more to add the next page")
+        b.click(f"{card} .shot")
+        b.wait("(() => { const i = document.querySelector('dialog.shot-view[open] img'); return i && i.complete && i.naturalWidth === 640; })()", "the screenshot full size")
+        b.click("dialog.shot-view .btn")
+        b.wait("!document.querySelector('dialog.shot-view[open]')", "the screenshot to close")
 
     def test_dispatch_composer_on_a_phone(self):
         b = self.b

@@ -151,6 +151,7 @@ pub async fn serve(
     });
     let after_dispatch = dispatch.clone();
     let after_sessions = Arc::new(Sessions::new(runner.clone(), ssh.clone()));
+    let after_folders = Arc::new(crate::folders::Folders::new(runner.clone(), ssh.clone()));
     let after_state = state.clone();
     let after_tunnels = tunnels.clone();
     let after_phone = phone.clone();
@@ -173,9 +174,10 @@ pub async fn serve(
             let Some(m) = cfg.machine(&change.machine).cloned() else {
                 continue;
             };
-            let (dispatch, sessions, state) = (
+            let (dispatch, sessions, folders, state) = (
                 after_dispatch.clone(),
                 after_sessions.clone(),
+                after_folders.clone(),
                 after_state.clone(),
             );
             // A reviewer's report can run long, and it is read from the screen.
@@ -185,7 +187,7 @@ pub async fn serve(
                     .read(&m, &change.name, lines)
                     .await
                     .unwrap_or_default();
-                dispatch.report(&change, &screen);
+                dispatch.report_from(&change, &screen, &folders, &m).await;
                 // The session card lands after the check that found the change, so open
                 // Dispatch pages are told again.
                 state.touch();
