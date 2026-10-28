@@ -190,6 +190,7 @@ mod tests {
                     tmux: Some(name.into()),
                     stale: false,
                     ports: vec![],
+                    pull: None,
                 })
                 .collect(),
             ended: vec![],

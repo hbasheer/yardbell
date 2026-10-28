@@ -341,6 +341,7 @@ pub fn untold(events: &mut [Value]) -> Vec<String> {
                     e["outcome"]["told"] = json!(true);
                 }
             }
+            "pull" => lines.extend(super::pull::untold(e)),
             "session" => {
                 if let Some(line) = answer_outcome(e) {
                     e["answer"]["told"] = json!(true);

@@ -24,6 +24,24 @@ SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
 REVIEW_CHAT = "browserreview001"
 SHOT_FILE = "shotbrowsertest1.png"
+PULL_CHAT = "browsertestpull0"
+PULL_SESSION = "hp-pull-test"
+FAKE_PR = {
+    "number": 12,
+    "url": "https://github.com/acme/demo-app/pull/12",
+    "title": "Fix the login redirect",
+    "state": "OPEN",
+    "isDraft": False,
+    "reviewDecision": "REVIEW_REQUIRED",
+    "headRefOid": "abc123",
+    "author": {"login": "hb"},
+    "statusCheckRollup": [
+        {"__typename": "CheckRun", "name": "test", "workflowName": "CI", "status": "COMPLETED", "conclusion": "FAILURE",
+         "detailsUrl": "https://github.com/acme/demo-app/actions/runs/111/job/222"},
+    ],
+    "comments": [],
+    "reviews": [],
+}
 PAGES = ["/", "/workspace", "/dispatch", "/settings", "/add"]
 
 
@@ -141,6 +159,12 @@ class Yardbell:
             git("add", "README.md", cwd=path)
             git("commit", "-q", "-m", "init", cwd=path)
         self.seed_dispatch()
+        # gh on the server's PATH answers for every branch with one failing pull request.
+        fake_bin = os.path.join(tmp, "bin")
+        os.makedirs(fake_bin)
+        with open(os.path.join(fake_bin, "gh"), "w") as f:
+            f.write(f"#!/bin/sh\nif [ \"$1 $2\" = \"pr view\" ]; then\ncat <<'EOF'\n{json.dumps(FAKE_PR)}\nEOF\nexit 0\nfi\nexit 1\n")
+        os.chmod(os.path.join(fake_bin, "gh"), 0o755)
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self.config = os.path.join(tmp, "yardbell.yml")
@@ -167,7 +191,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         # `claude`, out of reach: Dispatch looks Claude Code up through a login shell.
         self.env = {
             "HOME": home,
-            "PATH": SYSTEM_PATH,
+            "PATH": f"{fake_bin}:{SYSTEM_PATH}",
             "SHELL": "/bin/bash",
             "LANG": "C.UTF-8",
             "USER": os.environ.get("USER", "runner"),
@@ -226,7 +250,19 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         os.makedirs(evidence)
         with open(os.path.join(evidence, SHOT_FILE), "wb") as f:
             f.write(png(640, 400))
-        for chat in (short, long, review):
+        card = {
+            "role": "pull", "kind": "ci", "key": "ci:browser",
+            "machine": MACHINE, "name": PULL_SESSION, "path": os.path.join(self.root, "demo-app"), "branch": "main",
+            "pull": {"forge": "github", "number": 12, "url": FAKE_PR["url"], "title": FAKE_PR["title"], "state": "open",
+                     "draft": False, "review": "", "ci": "failing", "failed": ["CI / test"]},
+            "checks": [{"name": "CI / test", "url": FAKE_PR["statusCheckRollup"][0]["detailsUrl"],
+                        "log": "running 3 tests\ntest login::redirects ... FAILED\nerror: test failed"}],
+            "notes": [],
+            "instruction": "echo pull''-sent",
+            "at": "2026-01-01T10:00:00+00:00",
+        }
+        pull = conversation(PULL_CHAT, "Pull request #12: Fix the login redirect", [card])
+        for chat in (short, long, review, pull):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -451,6 +487,60 @@ class Suite:
                 raise Failure(f"the composer ends at {box['bottom']}px, not at the bottom of the {box['height']}px screen")
         finally:
             b.viewport(1280, 800)
+
+    def pull_session(self):
+        r = self.y.tmux("has-session", "-t", f"={PULL_SESSION}")
+        if r.returncode:
+            r = self.y.tmux("new", "-d", "-s", PULL_SESSION, "-c", os.path.join(self.y.root, "demo-app"), self.y.shell)
+            if r.returncode:
+                raise Failure(f"tmux new failed: {r.stderr}")
+        self.api("POST", "/refresh")
+
+    def test_pull_request_badges_on_session_rows(self):
+        b = self.b
+        self.pull_session()
+        b.goto(self.url("/"))
+        b.wait(
+            f"(async () => (await (await fetch('/state')).json()).sessions.find((s) => s.tmux === {json.dumps(PULL_SESSION)})?.pull?.ci === 'failing')()",
+            "the failing pull request in /state",
+            timeout=20,
+        )
+        badge = b.wait(
+            f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]')?.closest('.s-row').querySelector('.pr-badge.bad')?.textContent",
+            "the CI failing badge on the dashboard row",
+        )
+        if "#12" not in badge or "CI failing" not in badge:
+            raise Failure(f"the dashboard badge says {badge!r}")
+        title = b.js(f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]').closest('.s-row').querySelector('.pr-badge').title")
+        if title != "Pull request #12: Fix the login redirect. CI failing on CI / test. Review required.":
+            raise Failure(f"the badge title says {title!r}")
+        b.goto(self.url("/workspace"))
+        b.wait("document.querySelector('#tree .ws-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace sidebar")
+
+    def test_pull_request_card_sends_to_the_session(self):
+        b = self.b
+        self.pull_session()
+        b.goto(self.url(f"/dispatch?c={PULL_CHAT}"))
+        b.wait("document.querySelector('#dispatch-log .pull-card .badge.failed')?.textContent === 'CI failed'", "the CI failed card")
+        text = b.js("document.querySelector('#dispatch-log .pull-card').innerText")
+        for expected in ("#12", "Fix the login redirect", "CI / test", "login::redirects ... FAILED", "echo pull''-sent"):
+            if expected not in text:
+                raise Failure(f"the card does not show {expected!r}:\n{text}")
+        b.click("#dispatch-log .pull-card .btn.primary")
+        b.wait("document.querySelector('#dispatch-log article.step-card.pending')", "the send step waiting for approval")
+        if b.js("document.querySelector('#dispatch-log article.step-card.pending .btn.primary').textContent.trim()") != "Send":
+            raise Failure("the step does not offer Send")
+        b.wait("document.querySelector('#dispatch-log .pull-card').innerText.includes('Waiting for your approval below')", "the card to point at the step")
+        b.click("#dispatch-log article.step-card.pending .btn.primary")
+        deadline = time.time() + 10
+        while True:
+            screen = self.y.tmux("capture-pane", "-p", "-t", f"={PULL_SESSION}:").stdout
+            if any(line.strip() == "pull-sent" for line in screen.splitlines()):
+                break
+            if time.time() > deadline:
+                raise Failure(f"the instruction did not reach the session:\n{screen}")
+            b.pump(0.3)
+        b.wait("/Sent( at|\\.)/.test(document.querySelector('#dispatch-log .pull-card').innerText)", "the card to say it was sent")
 
     def test_settings_saves_dispatch_rules(self):
         b = self.b

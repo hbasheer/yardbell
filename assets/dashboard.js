@@ -236,12 +236,18 @@ function agentLabel(name) {
   return (current?.agents || []).find((a) => a.name === name)?.label || name;
 }
 
+function pullBadge(p) {
+  if (!p) return "";
+  const { word, tone } = window.YardbellPull.status(p);
+  return html`<a class="pr-badge ${tone}" href=${p.url} target="_blank" rel="noopener" title=${window.YardbellPull.describe(p)}><span class="pr-num">#${p.number}</span>${word}</a>`;
+}
+
 function identity(s, extra = "") {
   const ticket = s.ticket !== "-" ? html`<span class="ticket">${s.ticket}</span>` : "";
   const branch = s.branch ? html`<span class="branch">${s.branch}</span>` : "";
   const agent = s.agent ? html`<span class="agent">${agentLabel(s.agent)}</span>` : "";
   return html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}${extra}</div>
-    <div class="s-sub">${branch}${agent}</div>`;
+    <div class="s-sub">${branch}${pullBadge(s.pull)}${agent}</div>`;
 }
 
 function sessionRow(s) {

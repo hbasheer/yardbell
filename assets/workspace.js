@@ -240,6 +240,12 @@ function projects() {
   return names.filter((n) => n.includes(SEP)).sort((a, b) => machineOf(a).localeCompare(machineOf(b)) || folderOf(a).localeCompare(folderOf(b)));
 }
 
+function pullMark(p) {
+  if (!p) return "";
+  const { word, tone } = window.YardbellPull.status(p);
+  return `<span class="ws-pr ${tone}" title="${esc(window.YardbellPull.describe(p))}" aria-label="Pull request #${esc(p.number)}, ${esc(word)}">#${esc(p.number)}</span>`;
+}
+
 function dot(st) {
   return `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
 }
@@ -272,7 +278,7 @@ function renderSide() {
     const where = n && !phone.matches ? `<span class="ws-pane-no" title="In pane ${n}">${n}</span>` : "";
     return `<li><button type="button" class="ws-item${n && key === focusedLeaf()?.key ? " current" : ""}${s.stale ? " stale" : ""}" data-key="${esc(key)}"${s.stale ? " disabled" : ""}>
       ${dot(st)}
-      <span class="ws-item-main"><span class="ws-item-title">${esc(title(s))}</span><span class="ws-item-sub">${esc([agentLabel(s.agent), s.branch].filter(Boolean).join(" · "))}</span></span>
+      <span class="ws-item-main"><span class="ws-item-title">${esc(title(s))}</span><span class="ws-item-sub">${pullMark(s.pull)}${esc([agentLabel(s.agent), s.branch].filter(Boolean).join(" · "))}</span></span>
       <span class="ws-item-word ${st}">${esc(WORD[st] || "last known")}</span>${where}
     </button></li>`;
   };

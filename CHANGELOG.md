@@ -15,6 +15,19 @@ and the project uses [Semantic Versioning](https://semver.org).
   ports. It saves PNG files in a folder inside `.git` and names them in its report; Yardbell copies
   them into the conversation (up to 6 per review, 2 MB each, 24 MB per conversation), shows them
   as thumbnails that open full size, and passes their paths on when you send the findings back.
+- Pull requests and CI: a session whose branch has a pull request on GitHub shows it on the
+  dashboard and in the Workspace sidebar, with its number and the most urgent of CI failing,
+  changes requested, CI running, approved, CI passing, merged or closed. Yardbell asks the GitHub
+  CLI `gh` on the session's machine, at most every two minutes per branch and apart from the
+  machine check. A machine without `gh`, or with `gh` logged out, and a branch without a pull
+  request show nothing.
+- Dispatch posts a card when a session's CI starts failing, with the failed checks and the last
+  lines of the failed log, or when a reviewer comments or asks for changes, with each comment and
+  its file and line. It goes to the conversation that follows the session, or to a new one named
+  after the pull request. **Send to session** types a short instruction such as "CI failed on test:
+  ... Fix it and push." and follows your Dispatch rules for typing into sessions. Each failure and
+  each comment gets one card, also after a restart. Turn it off, or keep only the badges, with
+  `pull_requests` in `yardbell.yml`.
 
 ## [0.7.1] - 2026-10-28
 

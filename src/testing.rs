@@ -17,6 +17,11 @@ impl FakeRunner {
         self.stubs.lock().unwrap().push((pattern.into(), out));
     }
 
+    pub fn restub(&self, pattern: &str, out: Output) {
+        self.stubs.lock().unwrap().retain(|(p, _)| p != pattern);
+        self.stub(pattern, out);
+    }
+
     pub fn calls(&self) -> Vec<Vec<String>> {
         self.calls.lock().unwrap().clone()
     }

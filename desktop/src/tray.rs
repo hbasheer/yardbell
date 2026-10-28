@@ -1068,6 +1068,7 @@ mod tests {
             tmux: tmux.map(str::to_string),
             stale: false,
             ports: vec![],
+            pull: None,
         }
     }
 

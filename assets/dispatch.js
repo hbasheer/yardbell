@@ -1,5 +1,6 @@
 import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 import * as steps from "/dispatch-review.js";
+import * as pulls from "/dispatch-pull.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
 
@@ -314,6 +315,8 @@ function block(b) {
       return steps.reviewCard(b.event, b.key);
     case "session":
       return sessionCard(b.event, b.key);
+    case "pull":
+      return pulls.pullCard(b.event, b.key);
     case "user":
       return html`<p class="msg user">${b.event.text}</p>`;
     case "assistant":
@@ -524,6 +527,25 @@ async function renderTracked() {
   const state = await loadState();
   render(html`<span class="dispatch-sessions-label">Sessions</span>${repeat(tracked, (t) => `${t.machine}/${t.name}`, (t) => trackedItem(t, state))}`, box);
 }
+
+pulls.setup({
+  api,
+  toast,
+  draw,
+  termUrl,
+  conversation: () => current,
+  events: () => events,
+  reload: () => catchUp(false),
+  replaceAt(index, event) {
+    events[index] = event;
+  },
+  addStep(step) {
+    const i = events.findIndex((e) => e.role === "action" && e.id === step.id);
+    if (i >= 0) events[i] = step;
+    else events.push(step);
+    shownEvents = Math.max(shownEvents, events.length);
+  },
+});
 
 steps.setup({
   api,

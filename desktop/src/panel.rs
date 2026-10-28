@@ -400,6 +400,7 @@ mod tests {
             tmux: Some(tmux.into()),
             stale: false,
             ports: vec![],
+            pull: None,
         }
     }
 

@@ -129,6 +129,32 @@ impl PhoneNotifications {
     }
 }
 
+pub const PULL_POLL_MIN: u64 = 30;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct PullRequests {
+    pub enabled: bool,
+    pub poll_seconds: u64,
+    pub cards: bool,
+}
+
+impl Default for PullRequests {
+    fn default() -> Self {
+        PullRequests {
+            enabled: true,
+            poll_seconds: 120,
+            cards: true,
+        }
+    }
+}
+
+impl PullRequests {
+    pub fn is_default(&self) -> bool {
+        *self == PullRequests::default()
+    }
+}
+
 pub const DISPATCH_MODELS: [&str; 3] = ["sonnet", "opus", "haiku"];
 const DISPATCH_INSTRUCTIONS_MAX: usize = 4000;
 
@@ -313,6 +339,8 @@ pub struct Config {
     pub mcp_servers: Vec<McpServer>,
     #[serde(default, skip_serializing_if = "DispatchSettings::is_default")]
     pub dispatch: DispatchSettings,
+    #[serde(default, skip_serializing_if = "PullRequests::is_default")]
+    pub pull_requests: PullRequests,
     pub machines: Vec<Machine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen_ip: Option<String>,
@@ -435,6 +463,11 @@ impl Config {
         }
         if self.phone_notifications.wait_minutes > 60 {
             return invalid("phone_notifications.wait_minutes must be from 0 to 60".into());
+        }
+        if self.pull_requests.poll_seconds < PULL_POLL_MIN {
+            return invalid(format!(
+                "pull_requests.poll_seconds must be at least {PULL_POLL_MIN}"
+            ));
         }
         self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
         self.validate_dispatch().map_err(ConfigError::Invalid)
@@ -938,6 +971,21 @@ mod tests {
         for minutes in [0, 60] {
             let yaml = format!("{BASE}phone_notifications:\n  wait_minutes: {minutes}\n");
             assert!(load_str(&yaml).is_ok(), "refused: {minutes}");
+        }
+    }
+
+    #[test]
+    fn pull_requests_default_on_and_poll_is_checked() {
+        let cfg = load_str(BASE).unwrap();
+        assert!(cfg.pull_requests.enabled && cfg.pull_requests.cards);
+        assert_eq!(cfg.pull_requests.poll_seconds, 120);
+        let off = load_str(&format!("{BASE}pull_requests:\n  cards: false\n")).unwrap();
+        assert!(off.pull_requests.enabled && !off.pull_requests.cards);
+        match load_str(&format!("{BASE}pull_requests:\n  poll_seconds: 5\n")) {
+            Err(ConfigError::Invalid(got)) => {
+                assert_eq!(got, "pull_requests.poll_seconds must be at least 30")
+            }
+            other => panic!("5 seconds was not refused: {other:?}"),
         }
     }
 
