@@ -21,6 +21,7 @@ pub use review::{
 pub use rules::{decide as decide_step, validate as validate_rules, Rule, Step, Verdict};
 pub use store::valid_id;
 pub use tasks::SavedTask;
+pub use turn::Opening;
 
 use crate::shell::Runner;
 use serde_json::{json, Value};
@@ -92,6 +93,7 @@ impl Dispatch {
                 "updated": c.stored.updated,
                 "busy": c.busy,
                 "waiting": actions::pending(&c.stored.events).count(),
+                "trigger": c.stored.trigger.as_ref().map(|t| &t["name"]),
             }))
             .collect::<Vec<_>>())
     }
@@ -106,7 +108,18 @@ impl Dispatch {
             "events": c.stored.events,
             "sessions": c.stored.sessions,
             "busy": c.busy,
+            "trigger": c.stored.trigger,
         }))
+    }
+
+    pub fn triggered_busy(&self, trigger: &str) -> bool {
+        self.shared.lock().values().any(|c| {
+            c.busy
+                && c.stored
+                    .trigger
+                    .as_ref()
+                    .is_some_and(|t| t["name"] == trigger)
+        })
     }
 
     pub fn event(&self, id: &str, index: usize) -> Option<Value> {

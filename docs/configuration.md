@@ -358,6 +358,73 @@ Every key is optional. The values above are the defaults. A branch is asked at m
 branches of one machine are asked one after another. What has already been posted is kept in
 `pulls.json` in the state folder, so a restart never posts a card twice.
 
+### `triggers` (optional)
+
+Start a saved Dispatch task on a schedule, or when a Linear or GitHub ticket comes your way. The
+**Triggers** section of the Settings page edits the list. See [Triggers](usage.md#triggers).
+
+```yaml
+triggers:
+  - name: Morning summary         # shown in Settings and on the conversation, unique
+    task: What's going on?        # the name of a task in Dispatch
+    schedule: weekdays 08:30
+  - name: Every few hours
+    task: Who needs me?
+    schedule: every 4h
+    enabled: false                # off; on is the default
+  - name: Linear tickets
+    task: Start a ticket
+    linear:
+      assigned: true              # a ticket is assigned to you
+      states: [In Progress]       # or one of your tickets moves into one of these states
+  - name: Reviews
+    task: Review a pull request
+    github:
+      assigned: true              # an issue is assigned to you
+      review_requested: true      # a pull request asks for your review
+```
+
+Each trigger has a `name`, a `task` and exactly one of `schedule`, `linear` or `github`.
+
+`schedule` is one of:
+
+| Form | Runs |
+|---|---|
+| `daily 09:00` | every day at 09:00 |
+| `weekdays 08:30` | Monday to Friday at 08:30 |
+| `every 4h` | every 4 hours from midnight: 00:00, 04:00, 08:00 and so on (1 to 23) |
+| `cron 30 9 * * 1-5` | a five-field cron expression: minute, hour, day of the month, month, day of the week |
+
+Cron fields take numbers, `*`, ranges (`1-5`), lists (`1,15`) and steps (`*/15`, `10-50/20`). Day
+of the week runs from 0 to 7, where 0 and 7 are Sunday. Names like `MON` are not read. When both
+the day of the month and the day of the week name days, either one is enough, as in cron. A
+schedule that can never run, like `cron 0 0 31 2 *`, is refused.
+
+Times are in the local time zone of the machine Yardbell runs on. A time that the clocks skip
+(spring forward) runs when they jump, and a time they repeat (fall back) runs the first time only.
+
+**Catch-up:** when Yardbell was not running at one or more scheduled times, the trigger runs once
+as soon as it is back, however many times it missed. A new trigger, a changed schedule, or a
+trigger turned back on counts from that moment and does not catch up.
+
+**No stacking:** while a trigger's last conversation is still working, its scheduled time is
+skipped (and not run later), and new tickets wait for the next check.
+
+`linear` reads the open tickets assigned to you through Linear's GraphQL API, every 3 minutes, with
+the API key in the secret named `linear` (see [Secrets](#secrets); make a personal API key under
+Linear's Settings, Security & access). It needs `assigned: true`, a list of `states`, or both.
+State names are matched without regard to case.
+
+`github` runs `gh search issues --assignee=@me` and `gh search prs --review-requested=@me` with the
+GitHub CLI on the machine Yardbell runs on, every 3 minutes, as the account `gh` is logged in with.
+It needs `assigned`, `review_requested`, or both.
+
+A ticket trigger starts one conversation per ticket and event: a ticket assigned to you once, and
+again only when it moves into a state you named. The tickets that already match when a trigger
+starts watching are left alone. What each trigger has seen and done is kept in `triggers.json` in
+the state folder, so a restart never starts the same ticket twice. When a check fails, it is tried
+again after 10 minutes, and the trigger's row in Settings says why.
+
 ### `listen_ip` (optional)
 
 The address Yardbell listens on besides `127.0.0.1`. By default it uses the `mesh_ip` of the
@@ -424,7 +491,7 @@ yourself keeps its mode until Yardbell first saves it, so run `chmod 600` on it.
 
 | Change | Takes effect |
 |---|---|
-| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications`, `pull_requests` | on the next check, a few seconds |
+| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications`, `pull_requests`, `triggers` | on the next check, a few seconds |
 | passcode, "Log out everywhere" (from Settings) | immediately |
 | `port`, `listen_ip`, the host machine's `mesh_ip` | after restarting Yardbell |
 
@@ -449,6 +516,9 @@ Yardbell refuses to start or save an invalid file and says why:
 | `phone_notifications.topic may only use letters, digits, - and _ (at most 64)` | rename the topic, or leave it empty to turn notifications off |
 | `phone_notifications.wait_minutes must be from 0 to 60` | use a whole number of minutes from 0 to 60 |
 | `pull_requests.poll_seconds must be at least 30` | ask GitHub less often, 120 is the default |
+| `trigger "x" needs exactly one of schedule, linear or github` | give each trigger one source |
+| `trigger "x": schedule "daily 9am" has a time that is not HH:MM...` | write the schedule as `daily 09:00`, `weekdays 09:00`, `every 4h` or `cron 30 9 * * 1-5` |
+| `trigger "x" is listed twice` | trigger names must be unique |
 | `phone_notifications.token must be at most 200 characters without spaces` | paste the token again, with no spaces or line breaks |
 | `cannot read ...yardbell.yml` | the file is missing; Yardbell prints an example to start from |
 

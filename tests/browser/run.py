@@ -43,6 +43,13 @@ FAKE_PR = {
     "reviews": [],
 }
 PAGES = ["/", "/workspace", "/dispatch", "/settings", "/add"]
+TRIGGER = "Morning summary"
+# Dispatch runs this instead of Claude Code: canned stream-json, the shape `claude -p` prints.
+FAKE_CLAUDE = """#!/bin/sh
+echo '{"type":"system","subtype":"init","session_id":"fake-session"}'
+echo '{"type":"assistant","message":{"content":[{"type":"text","text":"Nothing needs you right now."}]}}'
+echo '{"type":"result","is_error":false,"result":"Nothing needs you right now."}'
+"""
 
 
 def git(*args, cwd):
@@ -165,6 +172,10 @@ class Yardbell:
         with open(os.path.join(fake_bin, "gh"), "w") as f:
             f.write(f"#!/bin/sh\nif [ \"$1 $2\" = \"pr view\" ]; then\ncat <<'EOF'\n{json.dumps(FAKE_PR)}\nEOF\nexit 0\nfi\nexit 1\n")
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
+        self.fake_claude = os.path.join(fake_bin, "claude")
+        with open(self.fake_claude, "w") as f:
+            f.write(FAKE_CLAUDE)
+        os.chmod(self.fake_claude, 0o755)
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self.config = os.path.join(tmp, "yardbell.yml")
@@ -188,7 +199,8 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
 """
             )
         # A clean HOME and the system PATH keep the user's shell setup, and with it any real
-        # `claude`, out of reach: Dispatch looks Claude Code up through a login shell.
+        # `claude`, out of reach: Dispatch looks Claude Code up through a login shell and must
+        # find only the fake one.
         self.env = {
             "HOME": home,
             "PATH": f"{fake_bin}:{SYSTEM_PATH}",
@@ -201,8 +213,8 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         }
         out = subprocess.run(["bash", "-lic", "command -v claude"], env=self.env, capture_output=True, text=True)
         found = [line for line in out.stdout.splitlines() if line.startswith("/")]
-        if found:
-            raise SystemExit(f"refusing to start: the test server would find a real claude at {found[-1]}")
+        if found != [self.fake_claude]:
+            raise SystemExit(f"refusing to start: the test server would find claude at {found}, not only the fake one")
         self.log = open(os.path.join(tmp, "server.log"), "w")
         self.proc = subprocess.Popen(
             [binary, "serve", "--no-open", "--config", self.config],
@@ -503,7 +515,9 @@ class Suite:
         b.wait(
             f"(async () => (await (await fetch('/state')).json()).sessions.find((s) => s.tmux === {json.dumps(PULL_SESSION)})?.pull?.ci === 'failing')()",
             "the failing pull request in /state",
-            timeout=20,
+            # The first check follows a snapshot (every 2 s) and a pull round (every 5 s); a busy
+            # CI runner can stretch both, so leave room well past the usual 7 s.
+            timeout=45,
         )
         badge = b.wait(
             f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]')?.closest('.s-row').querySelector('.pr-badge.bad')?.textContent",
@@ -625,6 +639,63 @@ class Suite:
         b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('github uses it')", "the delete confirmation naming its server")
         b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("!document.querySelector('#secret-rows [data-replace=github]') && !document.getElementById('secrets-missing').hidden", "github deleted and missing again")
+
+    def test_settings_trigger_runs_now_and_marks_its_conversation(self):
+        b = self.b
+        b.goto(self.url("/settings#triggers"))
+        # An MCP server whose secret is missing stops a triggered run, as it stops a typed one.
+        self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+        b.goto(self.url("/settings#triggers"))
+        b.wait("!document.getElementById('triggers-empty').hidden", "the empty trigger list")
+        b.wait("document.getElementById('trigger-zone').textContent.includes('UTC')", "the server's time zone")
+        b.click("#trigger-add")
+        b.wait("!document.getElementById('trigger-form').hidden", "the trigger form")
+        b.click("#trigger-form input[name=name]")
+        b.type(TRIGGER)
+        b.js(
+            """(() => {
+              const f = document.getElementById('trigger-form');
+              f.elements.task.value = "What's going on?";
+              f.elements.repeat.value = 'weekdays';
+              f.elements.repeat.dispatchEvent(new Event('change'));
+              f.elements.at.value = '08:30';
+            })()"""
+        )
+        if b.js("document.querySelector('#trigger-form [name=cron]').disabled") is not True:
+            raise Failure("the cron field is sent although Weekdays is picked")
+        b.click("#trigger-form button[type=submit]")
+        b.wait(
+            "document.querySelector('#trigger-rows .trigger-row')?.innerText.includes('Weekdays at 08:30') && document.getElementById('trigger-form').hidden",
+            "the saved trigger in the list",
+        )
+        row = b.js("document.querySelector('#trigger-rows .trigger-row').innerText")
+        for expected in (TRIGGER, "What's going on?", "Next "):
+            if expected not in row:
+                raise Failure(f"the trigger row does not show {expected!r}:\n{row}")
+        with open(self.y.config) as f:
+            config = f.read()
+        if f"- name: {TRIGGER}\n  task: What's going on?\n  schedule: weekdays 08:30\n" not in config:
+            raise Failure(f"yardbell.yml does not hold the trigger:\n{config}")
+        b.click("#trigger-rows [data-run='0']")
+        b.wait("document.querySelector('#trigger-rows .trigger-last[data-outcome=started] a')", "the last run with a link to its conversation", timeout=15)
+        b.click("#trigger-rows .trigger-last a")
+        b.wait("location.pathname === '/dispatch' && new URLSearchParams(location.search).get('c')", "Dispatch with the conversation")
+        b.wait(
+            f"document.querySelector('#dispatch-log .trigger-head')?.innerText.includes('Started by the trigger {TRIGGER}')",
+            "the header that says which trigger started it",
+        )
+        b.wait("[...document.querySelectorAll('#dispatch-log .msg.md')].some((m) => m.textContent.includes('Nothing needs you right now.'))", "the fake Claude's answer", timeout=15)
+        head = b.js("document.querySelector('#dispatch-log .trigger-head').innerText")
+        if "Weekdays at 08:30" not in head:
+            raise Failure(f"the header does not say the schedule:\n{head}")
+        if b.js("document.querySelector('#dispatch-log .msg.user')?.textContent") != "What's going on? Summarise every machine and session.":
+            raise Failure("the conversation does not start with the task's text")
+        b.wait("document.querySelector('#convo-list .selected .convo-trigger')", "the trigger mark in the conversation list")
+        b.click("#dispatch-log .trigger-head .btn:last-child")
+        b.wait("document.querySelector('#dispatch-log .trigger-head.off')?.innerText.includes('Turn on')", "the trigger turned off from the conversation")
+        with open(self.y.config) as f:
+            if "  enabled: false\n" not in f.read():
+                raise Failure("turning the trigger off did not reach yardbell.yml")
 
     def check_errors(self, where):
         if self.b.errors:

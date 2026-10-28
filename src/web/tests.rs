@@ -143,6 +143,10 @@ fn rig() -> Rig {
             fake.clone(),
             dir.path().join("dispatch"),
         )),
+        triggers: Arc::new(crate::triggers::Triggers::new(
+            Arc::new(crate::triggers::Live::new(fake.clone())),
+            dir.path().join("triggers.json"),
+        )),
         refresh: {
             let refreshes = refreshes.clone();
             Arc::new(move |machine: Option<String>| {
@@ -3130,4 +3134,90 @@ async fn send_to_session_on_a_pull_request_card_follows_the_dispatch_rules() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn triggers_are_saved_checked_and_turned_off_from_settings() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let get = || {
+        Request::get("/api/triggers")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, get()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert!(v["zone"].as_str().unwrap().contains("UTC"), "{body}");
+    assert!(v["tasks"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("What's going on?")));
+    assert_eq!(v["triggers"], json!([]));
+
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/triggers",
+        r#"{"triggers":[{"name":"Morning","task":"No such task","schedule":"daily 09:00"}]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("which is not one of your tasks"), "{body}");
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/triggers",
+        r#"{"triggers":[{"name":"Morning","task":"What's going on?","schedule":"daily 9am"}]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains(r#"invalid config: trigger \"Morning\": schedule \"daily 9am\""#),
+        "{body}"
+    );
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/triggers",
+        r#"{"triggers":[{"name":" Morning ","task":"What's going on?","schedule":"daily  09:00"},
+            {"name":"Tickets","task":"Plan my Linear tickets","linear":{"assigned":false,"states":[" Todo ",""]}}]}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(v["triggers"][0]["trigger"]["name"], "Morning");
+    assert_eq!(v["triggers"][0]["describe"], "Daily at 09:00");
+    assert!(v["triggers"][0]["next"].is_string());
+    assert_eq!(
+        v["triggers"][1]["trigger"]["linear"]["states"],
+        json!(["Todo"])
+    );
+    assert!(
+        v["triggers"][1]["problem"]
+            .as_str()
+            .unwrap()
+            .contains("the secret linear is not set"),
+        "{body}"
+    );
+    assert!(r.app.settings.can_undo());
+
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/triggers/enable",
+        r#"{"name":"Morning","enabled":false}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let cfg = r.app.config().unwrap();
+    assert!(!cfg.triggers[0].enabled);
+    assert!(cfg.triggers[1].enabled);
+    let (status, _, body) =
+        post_json(&r.app, &c, "/api/triggers/run", r#"{"name":"Tickets"}"#).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(body.contains("the secret linear is not set"), "{body}");
+    let (status, _, _) = post_json(&r.app, &c, "/api/triggers/run", r#"{"name":"Nope"}"#).await;
+    assert_eq!(status, StatusCode::CONFLICT);
 }

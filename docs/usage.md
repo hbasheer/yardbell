@@ -141,6 +141,8 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   [Phone notifications](apps.md#phone-notifications).
 - **Dispatch:** your own instructions for Dispatch, the agent it starts, the model it runs on and
   whether it asks before each step, see [Dispatch](#dispatch).
+- **Triggers:** start a saved task on a schedule, or for a Linear or GitHub ticket that comes your
+  way, see [Triggers](#triggers).
 - **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
   servers for the sessions it starts, see [Agent tools (MCP)](agents.md#agent-tools-mcp). Their
   tokens go in **Secrets** under the list: add, replace or delete one by name, and refer to it as
@@ -210,6 +212,41 @@ card before you send it. It is a step like Dispatch's own, so your rules for typ
 apply: it is sent at once, waits below for you to approve or edit it, or is refused. Each failure
 (one commit) and each comment gets one card, also after a restart, and a pull request seen for the
 first time only sets what is known, so old comments never turn into cards.
+
+#### Triggers
+
+A trigger starts a Dispatch conversation from one of your saved tasks without you typing it. Add
+one under **Triggers** in Settings: give it a name, pick the task, and pick when it starts.
+
+- **On a schedule:** every day or on weekdays at a time, every few hours (counted from midnight,
+  so every 4 hours runs at 00:00, 04:00, 08:00 and so on), or a cron expression. Times are in the
+  time zone of the machine Yardbell runs on, which the section names. A time the clocks skip in
+  spring runs when they jump, and a time they repeat in autumn runs once.
+- **For Linear tickets:** when a ticket is assigned to you, or one of your tickets moves into a
+  state you name, like In Progress. Yardbell reads your open tickets every 3 minutes through
+  Linear's API, with your API key saved as the secret `linear`.
+- **For GitHub issues and reviews:** when an issue is assigned to you, or a pull request asks for
+  your review. Yardbell asks the GitHub CLI `gh` on its own machine every 3 minutes, as the
+  account `gh` is logged in with.
+
+A ticket trigger fills the ticket into the task: write `{ticket}`, `{title}`, `{url}`, `{state}`
+or `{repo}` where each goes, for example "Start a session for {ticket} ({title}) on a branch named
+after it. {url}". A task without them gets the ticket added at the end. Each ticket starts one
+conversation per event, also after a restart, and the tickets that already match when a trigger
+starts watching (when you add it, change what it watches, or turn it back on) are left alone.
+
+A triggered conversation runs like one you typed: each step follows your Dispatch rules, so nothing
+starts, stops or types into a session unless the rules allow it, and steps that ask wait for you.
+It is named after the task, marked with a clock in the list, and opens with **Started by the
+trigger** and its name, what set it off and when, with **Turn off** to stop the trigger from there.
+
+A trigger never stacks runs: while its last conversation is still working, a scheduled time is
+skipped and new tickets wait for the next check after it finishes, one ticket at a time. When
+Yardbell was not running at one or more scheduled times, it runs the task once when it is back,
+and the conversation says which time it is late for. Each trigger's row in Settings shows the next
+run, the last run with a link to its conversation, and anything wrong, such as a missing secret or
+`gh` not logged in. **Run now** starts a scheduled task at once, and **Check now** asks Linear or
+GitHub at once. The switch turns a trigger off or on.
 
 Dispatch follows the sessions it starts. When one finishes, stops to wait for an answer, or ends,
 the conversation gets a card with the last lines of its screen. A waiting agent's choices, such as

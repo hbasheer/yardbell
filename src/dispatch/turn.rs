@@ -25,6 +25,14 @@ const TOOLS: [&str; 8] = [
     "review_session",
 ];
 
+// A conversation that a trigger starts, rather than the person: its title, the trigger's mark,
+// and a note for Claude that nobody typed the message.
+pub struct Opening<'a> {
+    pub title: &'a str,
+    pub trigger: Value,
+    pub note: &'a str,
+}
+
 impl Dispatch {
     async fn claude(&self) -> Result<Vec<String>, String> {
         if let Some(argv) = self.command.lock().expect("dispatch lock").clone() {
@@ -55,6 +63,7 @@ impl Dispatch {
     fn begin(
         &self,
         id: Option<&str>,
+        opening: Option<&Opening>,
         text: &str,
         cancel: Arc<Notify>,
         live: mpsc::Sender<Value>,
@@ -75,9 +84,10 @@ impl Dispatch {
                     id.clone(),
                     Conversation::new(Stored {
                         id: id.clone(),
-                        title: title_of(text),
+                        title: title_of(opening.map_or(text, |o| o.title)),
                         created: stamp.clone(),
                         updated: stamp,
+                        trigger: opening.map(|o| o.trigger.clone()),
                         ..Stored::default()
                     }),
                 );
@@ -95,16 +105,45 @@ impl Dispatch {
             .events
             .push(json!({ "role": "user", "text": text }));
         c.stored.updated = stamp;
+        let prompt = actions::with_news(&news, text);
         Ok((
             id,
             c.stored.claude_session.clone(),
-            actions::with_news(&news, text),
+            match opening {
+                Some(o) => format!("{}\n\n{prompt}", o.note),
+                None => prompt,
+            },
         ))
     }
 
     pub async fn ask(
         &self,
         conversation: Option<&str>,
+        text: &str,
+        port: u16,
+        settings: &DispatchSettings,
+        extra: Option<&str>,
+    ) -> Result<(String, mpsc::Receiver<Value>), String> {
+        self.turn(conversation, None, text, port, settings, extra)
+            .await
+    }
+
+    pub async fn ask_triggered(
+        &self,
+        opening: Opening<'_>,
+        text: &str,
+        port: u16,
+        settings: &DispatchSettings,
+        extra: Option<&str>,
+    ) -> Result<(String, mpsc::Receiver<Value>), String> {
+        self.turn(None, Some(&opening), text, port, settings, extra)
+            .await
+    }
+
+    async fn turn(
+        &self,
+        conversation: Option<&str>,
+        opening: Option<&Opening<'_>>,
         text: &str,
         port: u16,
         settings: &DispatchSettings,
@@ -117,7 +156,8 @@ impl Dispatch {
         let mut argv = self.claude().await?;
         let cancel = Arc::new(Notify::new());
         let (tx, rx) = mpsc::channel(64);
-        let (id, resume, prompt) = self.begin(conversation, text, cancel.clone(), tx.clone())?;
+        let (id, resume, prompt) =
+            self.begin(conversation, opening, text, cancel.clone(), tx.clone())?;
         let config = match self.write_mcp_config(port, extra, &id) {
             Ok(config) => config,
             Err(e) => {

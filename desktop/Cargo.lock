@@ -6599,6 +6599,7 @@ dependencies = [
  "chrono",
  "clap",
  "futures",
+ "iana-time-zone",
  "libc",
  "portable-pty",
  "qrcode",

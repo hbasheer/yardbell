@@ -109,11 +109,17 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
 // Names and dates only: a secret's value never leaves the server once it is set.
 fn secrets_view(cfg: &crate::config::Config, store: &Secrets) -> serde_json::Value {
     let used_by = |name: &str| -> Vec<&str> {
-        cfg.mcp_servers
+        let mut users: Vec<&str> = cfg
+            .mcp_servers
             .iter()
             .filter(|s| s.secret_names().iter().any(|n| n == name))
             .map(|s| s.name.as_str())
-            .collect()
+            .collect();
+        if name == crate::triggers::LINEAR_SECRET && cfg.triggers.iter().any(|t| t.linear.is_some())
+        {
+            users.push("Linear triggers");
+        }
+        users
     };
     let list: Vec<_> = store
         .list()

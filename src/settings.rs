@@ -555,6 +555,26 @@ impl Settings {
         self.save(&cfg, backup, None)
     }
 
+    pub fn set_triggers(&self, triggers: Vec<crate::triggers::Trigger>) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.triggers = triggers;
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
+    pub fn set_trigger_enabled(&self, name: &str, enabled: bool) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        let t = cfg
+            .triggers
+            .iter_mut()
+            .find(|t| t.name == name)
+            .ok_or("no such trigger")?;
+        t.enabled = enabled;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
     pub fn set_mcp_token(&self, token: Option<String>) -> Result<(), String> {
         let mut cfg = self.load()?;
         self.store_own(&mut cfg, secrets::MCP_TOKEN, token.as_deref())

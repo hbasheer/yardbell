@@ -199,6 +199,13 @@ pub async fn serve(
         dir.join("pulls.json"),
     ))
     .start(path.clone(), state.clone(), dispatch.clone());
+    let triggers = Arc::new(crate::triggers::Triggers::new(
+        Arc::new(crate::triggers::Live::new(runner.clone())),
+        dir.join("triggers.json"),
+    ));
+    triggers
+        .clone()
+        .start_loop(path.clone(), state.clone(), dispatch.clone());
     let poller = Arc::new(Poller::new(
         path.clone(),
         Arc::new(Probe::new(runner.clone(), ssh.clone())),
@@ -231,6 +238,7 @@ pub async fn serve(
         ),
         phone,
         dispatch,
+        triggers,
         releases: crate::about::github(),
         refresh: Arc::new(move |machine: Option<String>| {
             let poller = poller.clone();

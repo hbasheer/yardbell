@@ -2628,6 +2628,7 @@ dependencies = [
  "clap",
  "futures",
  "http-body-util",
+ "iana-time-zone",
  "libc",
  "portable-pty",
  "qrcode",
