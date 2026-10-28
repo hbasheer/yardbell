@@ -212,6 +212,7 @@ if [ -r /proc/meminfo ]; then
     if [ -n "$current" ]; then
       mem_total=$((cg_limit / 1024))
       mem_used=$(((current - ${inactive:-0}) / 1024))
+      mem_scope=account
     fi
   fi
   load1=$(cut -d' ' -f1 /proc/loadavg 2>/dev/null)
@@ -245,8 +246,14 @@ for a in $(printf '%s\n' "$addrs" | awk -F. '$1 == 100 && $2 >= 64 && $2 <= 127'
   printf '"%s"' "$a"
 done
 printf ']'
+# Within an account's cgroup limit everything counted is the account's own, page cache included.
+if [ "${mem_scope:-}" = account ]; then
+  user_kb=$mem_used
+else
+  user_kb=$(ps -o rss= -U "$(id -u)" 2>/dev/null | awk '{n += $1} END {print n + 0}')
+fi
 if [ -n "$mem_total" ] && [ -n "$mem_used" ]; then
-  printf ',"health":{"mem_total_kb":%s,"mem_used_kb":%s,"agent_kb":%s,"load1":%s,"cpus":%s,"disk_total_kb":%s,"disk_used_kb":%s}' \
-    "$mem_total" "$mem_used" "$agent_kb" "${load1:-0}" "${cpus:-0}" "${disk_total:-0}" "${disk_used:-0}"
+  printf ',"health":{"mem_total_kb":%s,"mem_used_kb":%s,"agent_kb":%s,"user_kb":%s,"load1":%s,"cpus":%s,"disk_total_kb":%s,"disk_used_kb":%s}' \
+    "$mem_total" "$mem_used" "$agent_kb" "${user_kb:-0}" "${load1:-0}" "${cpus:-0}" "${disk_total:-0}" "${disk_used:-0}"
 fi
 printf '}\n'

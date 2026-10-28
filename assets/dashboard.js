@@ -114,23 +114,31 @@ function renderMeshBanner(mesh) {
 function memory(m) {
   const h = m.health;
   if (!m.up || !h || !h.mem_total_kb) return "";
-  const used = Math.min(h.mem_used_kb / h.mem_total_kb, 1);
-  const agents = Math.min(h.agent_kb / h.mem_total_kb, used);
-  const otherKb = Math.max(h.mem_used_kb - h.agent_kb, 0);
-  const freeKb = Math.max(h.mem_total_kb - h.mem_used_kb, 0);
+  // RSS counts shared pages once per process, so the per-account sums can exceed what is in use.
+  const usedKb = Math.min(h.mem_used_kb, h.mem_total_kb);
+  const agentKb = Math.min(h.agent_kb, usedKb);
+  const split = h.user_kb > 0;
+  const mineKb = split ? Math.min(Math.max(h.user_kb, agentKb), usedKb) : agentKb;
+  const yoursKb = mineKb - agentKb;
+  const othersKb = usedKb - mineKb;
+  const freeKb = Math.max(h.mem_total_kb - usedKb, 0);
+  const share = (kb) => ((kb / h.mem_total_kb) * 100).toFixed(1);
   const pct = Nav.memPct(m);
   const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
-  const label = `Memory ${pct}% used of ${gb(h.mem_total_kb)} GB: agents ${gb(h.agent_kb)} GB, other ${gb(otherKb)} GB, free ${gb(freeKb)} GB`;
+  const parts = [["agents", "Agents", agentKb]];
+  if (split) parts.push(["mine", "Your other processes", yoursKb]);
+  if (!split || othersKb > 0) parts.push(["other", split ? "Other accounts" : "Other", othersKb]);
+  parts.push(["free", "Free", freeKb]);
+  const label = `Memory ${pct}% used of ${gb(h.mem_total_kb)} GB: ` + parts.map(([, name, kb]) => `${name.toLowerCase()} ${gb(kb)} GB`).join(", ");
   return html`<div class="mem${level}">
     <div class="mem-head"><span>Memory <span class="mem-pct">${pct}% used</span> of ${gb(h.mem_total_kb)} GB</span></div>
     <div class="mem-bar" role="img" aria-label=${label}>
-      <span class="mem-agents" style="width:${(agents * 100).toFixed(1)}%"></span>
-      <span class="mem-other" style="width:${((used - agents) * 100).toFixed(1)}%"></span>
+      <span class="mem-agents" style="width:${share(agentKb)}%"></span>
+      ${split ? html`<span class="mem-mine" style="width:${share(yoursKb)}%"></span>` : ""}
+      <span class="mem-other" style="width:${share(othersKb)}%"></span>
     </div>
     <div class="mem-legend">
-      <span><i class="key agents"></i>Agents ${gb(h.agent_kb)} GB</span>
-      <span><i class="key other"></i>Other ${gb(otherKb)} GB</span>
-      <span><i class="key free"></i>Free ${gb(freeKb)} GB</span>
+      ${parts.map(([key, name, kb]) => html`<span><i class="key ${key}"></i>${name} ${gb(kb)} GB</span>`)}
     </div>
   </div>`;
 }

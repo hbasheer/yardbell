@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- The memory bar splits what is used into your agents, your other processes and other accounts, so
+  on a server shared without per-account memory limits you can see that the memory is someone
+  else's. The percentage and the memory alert still cover the whole machine.
+
 ## [0.6.7] - 2026-10-27
 
 - On a machine shared with other people, only your own agent sessions are listed. Other accounts'

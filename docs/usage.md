@@ -7,9 +7,12 @@ A tour of the pages: dashboard, new sessions, Workspace, the terminal, adding ma
 ### Dashboard
 
 The page is grouped by machine. Each machine gets a section: its health on top (connection, load,
-memory drawn to scale with the agents' share in blue, amber from 85% and red from 95%), its sessions
-below. The sidebar lists the machines, problems first, with a session count; click one to show only
-that machine.
+memory drawn to scale, amber from 85% and red from 95%), its sessions below. The memory bar covers
+the whole machine, split into your agents (blue), your other processes (light blue), other accounts
+and free, so on a server shared without per-account limits you can see whose memory it is. Where
+your account has a memory limit, the bar shows that limit instead, and all of it is yours.
+The sidebar lists the machines, problems first, with a session count; click one to show only that
+machine.
 
 - **Top bar:** search sessions by folder, branch, ticket or agent (press `/`), show All, Working or
   Idle sessions (an agent waiting for you shows **Needs you** and counts as idle), **Refresh** to check every machine right away, Add machine and New session.

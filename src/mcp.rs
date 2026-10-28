@@ -246,6 +246,7 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
                     "mem_total_gb": m.health.as_ref().map(|h| gb(h.mem_total_kb)),
                     "mem_free_gb": m.health.as_ref().map(|h| gb(h.mem_total_kb.saturating_sub(h.mem_used_kb))),
                     "mem_agents_gb": m.health.as_ref().map(|h| gb(h.agent_kb)),
+                    "mem_mine_gb": m.health.as_ref().map(|h| gb(h.user_kb.max(h.agent_kb))),
                     "load1": m.health.as_ref().map(|h| h.load1),
                     "cpus": m.health.as_ref().map(|h| h.cpus),
                     "disk_total_gb": m.health.as_ref().map(|h| gb(h.disk_total_kb)),

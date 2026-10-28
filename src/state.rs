@@ -404,6 +404,7 @@ mod tests {
             mem_total_kb: 16_000_000,
             mem_used_kb: 13_000_000,
             agent_kb: 900_000,
+            user_kb: 0,
             load1: 1.5,
             cpus: 8,
             disk_total_kb: 0,

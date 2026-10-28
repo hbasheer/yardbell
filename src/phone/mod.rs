@@ -236,6 +236,7 @@ mod tests {
                 mem_total_kb: 1000,
                 mem_used_kb: percent * 10,
                 agent_kb: 0,
+                user_kb: 0,
                 load1: 0.0,
                 cpus: 4,
                 disk_total_kb: 0,
