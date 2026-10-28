@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- A Mac with a container port bound to a loopback address it does not have, such as `127.0.1.3`,
+  no longer stalls each check for 75 seconds per port and shows as down. Each port check now
+  gives up after a second.
+
 ## [0.7.3] - 2026-10-28
 
 - Triggers start a saved Dispatch task without you typing it: on a schedule (daily or on weekdays

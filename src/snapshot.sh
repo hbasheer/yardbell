@@ -23,6 +23,19 @@ esc() {
 
 has() { command -v "$1" >/dev/null 2>&1; }
 
+# A port bound to a loopback address the machine does not have (macOS has only 127.0.0.1) makes
+# the connect wait out the system's 75 s timeout, so each probe gets a second.
+probe() {
+  (echo >"/dev/tcp/$1/$2") 2>/dev/null &
+  local pid=$!
+  { sleep 1; kill "$pid"; } 2>/dev/null &
+  local guard=$!
+  wait "$pid" 2>/dev/null
+  local ok=$?
+  kill "$guard" 2>/dev/null
+  return $ok
+}
+
 # Screen text as a JSON string body: tabs become spaces, other control characters go, and lines
 # are joined with a literal \n.
 json_text() {
@@ -174,7 +187,7 @@ if has docker; then
       [ $first -eq 0 ] && printf ','
       first=0
       listening=false
-      (echo >"/dev/tcp/${addr:-127.0.0.1}/$hp") 2>/dev/null && listening=true
+      probe "${addr:-127.0.0.1}" "$hp" && listening=true
       host=""
       [ -n "$addr" ] && host=",\"host\":$(esc "$addr")"
       printf '{"workdir":%s,"service":%s,"host_port":%s,"listening":%s%s}' "$(esc "$workdir")" "$(esc "$service")" "$hp" "$listening" "$host"
