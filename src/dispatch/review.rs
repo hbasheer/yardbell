@@ -146,7 +146,7 @@ impl Report {
 
 // What the agent's terminal adds around its reply: Claude Code's reply marker, the frame of the
 // input box and the margin.
-fn unframed(line: &str) -> &str {
+pub(super) fn unframed(line: &str) -> &str {
     line.trim()
         .trim_start_matches(|c: char| {
             matches!(c, '⏺' | '●' | '▌' | '▐') || ('\u{2500}'..='\u{257f}').contains(&c)
@@ -155,11 +155,11 @@ fn unframed(line: &str) -> &str {
         .trim()
 }
 
-fn bare(text: &str) -> &str {
+pub(super) fn bare(text: &str) -> &str {
     text.trim_matches(|c: char| matches!(c, '*' | '_' | '`' | '#') || c.is_whitespace())
 }
 
-fn value_of<'a>(line: &'a str, key: &str) -> Option<&'a str> {
+pub(super) fn value_of<'a>(line: &'a str, key: &str) -> Option<&'a str> {
     let line = bare(line);
     let (name, rest) = line.split_once(':')?;
     bare(name)
@@ -167,7 +167,7 @@ fn value_of<'a>(line: &'a str, key: &str) -> Option<&'a str> {
         .then(|| bare(rest.trim_start_matches(['*', '_'])))
 }
 
-fn bullet(line: &str) -> Option<&str> {
+pub(super) fn bullet(line: &str) -> Option<&str> {
     for mark in ["- ", "* ", "• ", "◦ ", "– "] {
         if let Some(rest) = line.strip_prefix(mark) {
             return Some(rest.trim());
@@ -190,7 +190,7 @@ fn severity(word: &str) -> Option<&'static str> {
     }
 }
 
-fn clip(text: &str) -> String {
+pub(super) fn clip(text: &str) -> String {
     if text.chars().count() <= MAX_TEXT {
         return text.to_string();
     }
@@ -250,7 +250,7 @@ fn take_shots(finding: &mut Finding) {
     );
 }
 
-fn is_marker(line: &str, marker: &str) -> bool {
+pub(super) fn is_marker(line: &str, marker: &str) -> bool {
     bare(bullet(line).unwrap_or(line)).eq_ignore_ascii_case(marker)
 }
 

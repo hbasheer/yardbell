@@ -1212,7 +1212,35 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .pr-badge.ok::after { background: var(--ok); }
 .pr-badge.done::after { background: var(--accent); }
 .pr-badge.pending::after { background: var(--warn); opacity: 0.6; }
+.group-children { list-style: none; display: grid; min-width: 0; margin: 10px 14px 0 52px; padding: 0; overflow: hidden; border: 1px solid var(--line); border-radius: 8px; }
+.group-child { display: grid; gap: 6px; min-width: 0; padding: 10px 12px; }
+.group-child + .group-child { border-top: 1px solid var(--line); }
+.group-child.pending { background: color-mix(in srgb, var(--warn) 6%, transparent); }
+.group-child-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 10px; min-width: 0; }
+.group-child-id { display: grid; gap: 1px; min-width: 0; }
+.group-child-id strong { color: var(--ink); font-size: 13.5px; font-weight: 600; overflow-wrap: anywhere; }
+.group-child-head .badge { flex: none; }
+.group-child .step-card-text { font-size: 13px; }
+.group-child .step-card-text.clamped { -webkit-line-clamp: 3; }
+.group-child .link-btn { justify-self: start; }
+.group-child .step-card-form { padding: 0; }
+.group-child-note { margin: 0; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.group-child-note strong { color: var(--ink-2); font-weight: 600; }
+.group-child-note.bad { color: var(--bad-text); }
+.group-child-rule { margin: 0; color: var(--muted); font-size: 12px; }
+.group-child-actions { display: flex; flex-wrap: wrap; gap: 6px; min-width: 0; }
+.group-child-actions .btn { max-width: 100%; min-width: 0; }
+.group-child-actions .btn .icon { width: 14px; height: 14px; }
+.group-child .session-screen { margin: 6px 0 0; max-height: 240px; overflow: auto; padding: 10px 12px; border-radius: 6px; background: var(--side); color: var(--ink-2); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.group-details { display: grid; gap: 2px; margin: 0; padding-left: 18px; color: var(--ink-2); font-size: 13px; line-height: 1.5; overflow-wrap: anywhere; }
+.group-gather { margin: 8px 14px 0 52px; color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
+.msg.user.by-yardbell { display: grid; gap: 2px; border: 1px dashed var(--line-strong); background: var(--side); }
+.msg-by { color: var(--muted); font-size: 12px; }
 @container (max-width: 560px) {
+  .group-children, .group-gather { margin-left: 14px; }
+  .group-child-head { display: grid; }
+  .group-child-head .badge { justify-self: start; }
+  .group-child-actions .btn { flex: 1 1 auto; }
   .step-card-head { display: grid; grid-template-columns: 28px minmax(0, 1fr); }
   .step-card-head .badge { grid-column: 2; justify-self: start; margin-top: 0; }
   .step-card-body, .step-card-form { padding-left: 14px; }
@@ -1228,7 +1256,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
   .step-card-actions .btn { flex: 1 1 auto; }
 }
 @media (max-width: 760px) {
-  .step-card-actions .btn, .steps-bar .btn { height: 38px; }
+  .step-card-actions .btn, .steps-bar .btn, .group-child-actions .btn { height: 38px; }
 }
 
 .rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); }

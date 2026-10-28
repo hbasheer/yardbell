@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, Notify};
 const TURN_LIMIT: Duration = Duration::from_secs(900);
 const RESULT_PREVIEW: usize = 4000;
 const TOOL_PREFIX: &str = "mcp__yardbell__";
-const TOOLS: [&str; 9] = [
+const TOOLS: [&str; 10] = [
     "list_machines",
     "list_sessions",
     "list_folders",
@@ -24,6 +24,7 @@ const TOOLS: [&str; 9] = [
     "stop_session",
     "review_session",
     "scan_folder",
+    "start_group",
 ];
 
 // A conversation that a trigger starts, rather than the person: its title, the trigger's mark,
@@ -32,6 +33,32 @@ pub struct Opening<'a> {
     pub title: &'a str,
     pub trigger: Value,
     pub note: &'a str,
+}
+
+// Who sends a turn's message: the person, a trigger that opens a conversation, or Yardbell in a
+// conversation that exists, with a note for Claude that nobody typed it.
+#[derive(Clone, Copy)]
+enum Author<'a> {
+    Person,
+    Trigger(&'a Opening<'a>),
+    Yardbell(&'a str),
+}
+
+impl Author<'_> {
+    fn note(&self) -> Option<&str> {
+        match self {
+            Author::Person => None,
+            Author::Trigger(o) => Some(o.note),
+            Author::Yardbell(note) => Some(note),
+        }
+    }
+
+    fn opening(&self) -> Option<&Opening<'_>> {
+        match self {
+            Author::Trigger(o) => Some(o),
+            _ => None,
+        }
+    }
 }
 
 impl Dispatch {
@@ -64,7 +91,7 @@ impl Dispatch {
     fn begin(
         &self,
         id: Option<&str>,
-        opening: Option<&Opening>,
+        sender: Author,
         text: &str,
         cancel: Arc<Notify>,
         live: mpsc::Sender<Value>,
@@ -85,10 +112,10 @@ impl Dispatch {
                     id.clone(),
                     Conversation::new(Stored {
                         id: id.clone(),
-                        title: title_of(opening.map_or(text, |o| o.title)),
+                        title: title_of(sender.opening().map_or(text, |o| o.title)),
                         created: stamp.clone(),
                         updated: stamp,
-                        trigger: opening.map(|o| o.trigger.clone()),
+                        trigger: sender.opening().map(|o| o.trigger.clone()),
                         ..Stored::default()
                     }),
                 );
@@ -102,16 +129,18 @@ impl Dispatch {
         c.live = Some(live);
         actions::withdraw(&mut c.stored.events, &stamp);
         let news = actions::untold(&mut c.stored.events);
-        c.stored
-            .events
-            .push(json!({ "role": "user", "text": text }));
+        let mut message = json!({ "role": "user", "text": text });
+        if matches!(sender, Author::Yardbell(_)) {
+            message["by"] = json!("yardbell");
+        }
+        c.stored.events.push(message);
         c.stored.updated = stamp;
         let prompt = actions::with_news(&news, text);
         Ok((
             id,
             c.stored.claude_session.clone(),
-            match opening {
-                Some(o) => format!("{}\n\n{prompt}", o.note),
+            match sender.note() {
+                Some(note) => format!("{note}\n\n{prompt}"),
                 None => prompt,
             },
         ))
@@ -125,8 +154,30 @@ impl Dispatch {
         settings: &DispatchSettings,
         extra: Option<&str>,
     ) -> Result<(String, mpsc::Receiver<Value>), String> {
-        self.turn(conversation, None, text, port, settings, extra)
+        self.turn(conversation, Author::Person, text, port, settings, extra)
             .await
+    }
+
+    // A message Yardbell sends in an existing conversation, with a note for Claude that nobody
+    // typed it.
+    pub(super) async fn follow_turn(
+        &self,
+        id: &str,
+        note: &str,
+        text: &str,
+        port: u16,
+        settings: &DispatchSettings,
+        extra: Option<&str>,
+    ) -> Result<(String, mpsc::Receiver<Value>), String> {
+        self.turn(
+            Some(id),
+            Author::Yardbell(note),
+            text,
+            port,
+            settings,
+            extra,
+        )
+        .await
     }
 
     pub async fn ask_triggered(
@@ -137,14 +188,14 @@ impl Dispatch {
         settings: &DispatchSettings,
         extra: Option<&str>,
     ) -> Result<(String, mpsc::Receiver<Value>), String> {
-        self.turn(None, Some(&opening), text, port, settings, extra)
+        self.turn(None, Author::Trigger(&opening), text, port, settings, extra)
             .await
     }
 
     async fn turn(
         &self,
         conversation: Option<&str>,
-        opening: Option<&Opening<'_>>,
+        sender: Author<'_>,
         text: &str,
         port: u16,
         settings: &DispatchSettings,
@@ -158,7 +209,7 @@ impl Dispatch {
         let cancel = Arc::new(Notify::new());
         let (tx, rx) = mpsc::channel(64);
         let (id, resume, prompt) =
-            self.begin(conversation, opening, text, cancel.clone(), tx.clone())?;
+            self.begin(conversation, sender, text, cancel.clone(), tx.clone())?;
         let config = match self.write_mcp_config(port, extra, &id) {
             Ok(config) => config,
             Err(e) => {

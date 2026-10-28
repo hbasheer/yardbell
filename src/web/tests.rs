@@ -1587,7 +1587,8 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "send_to_session",
             "stop_session",
             "review_session",
-            "scan_folder"
+            "scan_folder",
+            "start_group"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;
@@ -2112,6 +2113,213 @@ async fn dispatch_rules_allow_prompt_or_deny_a_step() {
         .as_str()
         .unwrap()
         .contains("refuse steps that change something unless a rule allows them"));
+}
+
+fn group_args(children: serde_json::Value) -> serde_json::Value {
+    json!({ "title": "Fix the inbox three ways", "children": children })
+}
+
+#[tokio::test]
+async fn a_group_starts_each_child_as_the_rules_say() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    set_rules(
+        &r,
+        "ask",
+        json!([
+            { "action": "start_session", "machine": "hp", "folder": "slot*", "approval": "allow" },
+            { "action": "start_session", "machine": "pro", "approval": "deny" },
+        ]),
+    );
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301\n"));
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "start_group",
+        group_args(json!([
+            { "label": "Slot", "machine": "hp", "folder": "slot2", "prompt": "fix the inbox in slot2" },
+            { "label": "App", "machine": "hp", "path": "/r/app", "prompt": "fix the inbox in app" },
+            { "label": "Pro", "machine": "pro", "path": "/r/app", "prompt": "fix the inbox on pro" },
+        ])),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let note = result["content"][0]["text"].as_str().unwrap();
+    assert!(
+        note.contains("1) Slot: started as hp-eng-1301 on hp."),
+        "{note}"
+    );
+    assert!(note.contains("2) App: proposal "), "{note}");
+    assert!(
+        note.contains("3) Pro: refused, not run: the user's Dispatch rule \"deny start_session on pro\" refuses it."),
+        "{note}"
+    );
+    assert!(note.contains("You hear the results with the user's next message."));
+    assert!(
+        ran(&r, "fix the inbox in slot2"),
+        "the allowed child runs at once"
+    );
+    assert!(
+        ran(&r, "YARDBELL RESULT"),
+        "with the result block asked for"
+    );
+    assert!(!ran(&r, "fix the inbox in app") && !ran(&r, "fix the inbox on pro"));
+
+    let events = r.app.dispatch.get(&id).unwrap()["events"].clone();
+    let group = events
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|e| e["role"] == "group")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        group["children"][2]["refused"],
+        "the user's Dispatch rule \"deny start_session on pro\" refuses it"
+    );
+    assert_eq!(group["children"][2]["rule"]["machine"], "pro");
+    let slot = r
+        .app
+        .dispatch
+        .step(&id, group["children"][0]["step"].as_str().unwrap())
+        .unwrap();
+    assert_eq!(
+        (
+            &slot["status"],
+            &slot["rule"]["folder"],
+            &slot["result"]["ok"]
+        ),
+        (&json!("auto"), &json!("slot*"), &json!(true))
+    );
+    assert_eq!(
+        slot["input"]["prompt"], "fix the inbox in slot2",
+        "the card shows the task as given"
+    );
+    let app_step = group["children"][1]["step"].as_str().unwrap().to_string();
+    assert_eq!(r.app.dispatch.pending(&id), std::slice::from_ref(&app_step));
+
+    let url = |step: &str| format!("/dispatch/conversations/{id}/actions/{step}");
+    let (status, body) = step_post(
+        &r,
+        &c,
+        &url(&app_step),
+        json!({ "decision": "approve", "input": { "machine": "hp", "folder": "slot2", "prompt": "fix the inbox in app" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["error"],
+        "another child of this group already works in /r/slots/slot2 on hp on its current branch, give this one its own branch"
+    );
+    let group_id = group["id"].as_str().unwrap();
+    let (status, decided) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/groups/{group_id}"),
+        json!({ "decision": "approve" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{decided}");
+    assert_eq!(decided.as_array().unwrap().len(), 1);
+    assert_eq!(decided[0]["id"], json!(app_step));
+    assert!(ran(&r, "fix the inbox in app"));
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/groups/zzzzzzzz"),
+        json!({ "decision": "approve" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+
+    let cfg = r.app.config().unwrap();
+    let view = r.app.state.view(&cfg, r.app.ports.as_ref(), "localhost");
+    let late = chrono::Local::now() + chrono::Duration::minutes(61);
+    assert!(r
+        .app
+        .dispatch
+        .due_at(&view, chrono::Local::now())
+        .is_empty());
+    let due = r.app.dispatch.due_at(&view, late);
+    assert_eq!(due.len(), 1);
+    assert!(!r.app.dispatch.gathered(&due[0], &[None, None]));
+    let results = last_event(&r, &id);
+    assert_eq!(results["role"], "results");
+    let card = event_count(&r, &id) - 1;
+    let (status, review) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/reviews"),
+        json!({ "card": card, "child": 0 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{review}");
+    assert_eq!(review["review"]["name"], "hp-eng-1301");
+    assert_eq!(review["status"], "pending");
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/reviews"),
+        json!({ "card": card, "child": 2 }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "a child that did not start has nothing to review"
+    );
+}
+
+#[tokio::test]
+async fn a_group_is_checked_before_anything_starts() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let before = event_count(&r, &id);
+    let error = |result: serde_json::Value| {
+        assert_eq!(result["isError"], true, "{result}");
+        result["content"][0]["text"].as_str().unwrap().to_string()
+    };
+    let same = group_args(json!([
+        { "label": "One", "machine": "hp", "folder": "slot2", "prompt": "a" },
+        { "label": "Two", "machine": "hp", "path": "/r/slots/slot2/", "prompt": "b" },
+    ]));
+    assert_eq!(
+        error(dispatch_tool(&r, Some(&id), "start_group", same).await),
+        "children 1 and 2 would both work in /r/slots/slot2 on hp on its current branch, give each its own branch"
+    );
+    let nope = group_args(json!([
+        { "label": "One", "machine": "hp", "folder": "slot2", "prompt": "a" },
+        { "label": "Two", "machine": "hp", "folder": "nope", "prompt": "b" },
+    ]));
+    assert_eq!(
+        error(dispatch_tool(&r, Some(&id), "start_group", nope).await),
+        "child 2 (Two): hp has no folder nope"
+    );
+    let one = group_args(json!([{ "machine": "hp", "folder": "slot2" }]));
+    assert!(
+        error(dispatch_tool(&r, Some(&id), "start_group", one).await)
+            .starts_with("a group has 2 to 6 children")
+    );
+    let fine = group_args(json!([
+        { "label": "One", "machine": "hp", "folder": "slot2", "prompt": "a" },
+        { "label": "Two", "machine": "hp", "path": "/r/app", "prompt": "b" },
+    ]));
+    assert!(
+        error(dispatch_tool(&r, None, "start_group", fine.clone()).await)
+            .starts_with("Yardbell cannot tell which Dispatch conversation")
+    );
+    set_rules(&r, "deny", json!([]));
+    let refused = error(dispatch_tool(&r, Some(&id), "start_group", fine).await);
+    assert!(
+        refused.starts_with("Refused, not run: the user's rules refuse every child of this group. 1) One: the user's Dispatch settings refuse steps"),
+        "{refused}"
+    );
+    assert_eq!(event_count(&r, &id), before, "nothing became a card");
+    mcp_on(&r);
+    let other = tool_call(&r, "start_group", group_args(json!([]))).await;
+    assert!(error(other).starts_with("only Dispatch can start a group"));
+    assert!(!ran(&r, "tmux new"));
 }
 
 #[tokio::test]

@@ -1,5 +1,6 @@
 mod actions;
 mod follow;
+mod group;
 mod mcp_config;
 mod prompt;
 mod pull;
@@ -13,6 +14,11 @@ mod usage;
 
 pub use actions::{changes_something, valid_id as valid_action_id, By};
 pub use follow::Change;
+pub use group::{
+    clash as group_clash, clash_message as group_clash_message, plan as plan_group, ChildStart,
+    Due as GroupDue, Opened as GroupOpened, Place as GroupPlace, Plan as GroupPlan,
+    MAX_CHILDREN as GROUP_MAX, MAX_MINUTES as GROUP_MAX_MINUTES, MIN_CHILDREN as GROUP_MIN,
+};
 pub use mcp_config::CONVERSATION_HEADER;
 pub use review::{
     changed_file as review_file, changed_files as review_files, evidence_folder, file_view,
@@ -332,6 +338,9 @@ impl Dispatch {
     }
 
     pub fn report(&self, change: &Change, screen: &str) {
+        if self.group_report(change, screen) {
+            return;
+        }
         let event = self
             .review_result(change, screen)
             .unwrap_or_else(|| follow::event(change, screen));
@@ -348,6 +357,9 @@ impl Dispatch {
         folders: &crate::folders::Folders,
         m: &crate::config::Machine,
     ) {
+        if self.group_report(change, screen) {
+            return;
+        }
         let event = match self.review_result(change, screen) {
             Some(scan) if scan["of"]["scan"].is_string() => scan,
             Some(review) => {

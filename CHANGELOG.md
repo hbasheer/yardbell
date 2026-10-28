@@ -8,6 +8,19 @@ and the project uses [Semantic Versioning](https://semver.org).
 - A Mac with a container port bound to a loopback address it does not have, such as `127.0.1.3`,
   no longer stalls each check for 75 seconds per port and shows as down. Each port check now
   gives up after a second.
+- Dispatch can start several sessions as one group, for example three approaches to the same bug
+  or the same task in two repositories, with its new `start_group` tool. The group is one card with
+  a row per child (its label, machine, folder, branch, agent and task) and **Approve all**, and
+  each child can be rejected, edited or approved on its own. Your rules decide every child on its
+  own: a refused child stays in the card with the rule that refused it while the others go on, and
+  two children in the same checkout need their own branches.
+- When every child is done, or after the group's time limit (60 minutes unless Dispatch sets
+  another), Yardbell reads each child's result and posts one **Results** card with each child's
+  status, summary, branch, **Open** and **Review branch**. A child's task asks it to end with a
+  `YARDBELL RESULT` block; a child that wrote none shows the end of its screen, and one waiting for
+  an answer shows as **Needs you** without holding up the results. Dispatch hears the results with
+  your next message, or, when it said what it would do with them, in one turn Yardbell starts for
+  it once they are in. Groups carry on after a restart.
 
 ## [0.7.3] - 2026-10-28
 

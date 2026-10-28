@@ -48,6 +48,22 @@ export function setup(context) {
   ctx = context;
 }
 
+export const isWorking = (id) => working.has(id);
+export const isEditing = (id) => drafts.has(id);
+export function stopEditing(id) {
+  drafts.delete(id);
+  ctx.draw();
+}
+export function editorFor(e) {
+  return editor(e);
+}
+export function markWorking(ids, decision) {
+  for (const id of ids) {
+    if (decision) working.set(id, decision);
+    else working.delete(id);
+  }
+}
+
 export function reset() {
   drafts.clear();
   working.clear();
@@ -58,7 +74,7 @@ export function reset() {
   targets.clear();
 }
 
-function clock(stamp) {
+export function clock(stamp) {
   if (!stamp) return "";
   const at = new Date(stamp);
   if (Number.isNaN(at.getTime())) return "";
@@ -66,7 +82,7 @@ function clock(stamp) {
   return at.toDateString() === new Date().toDateString() ? time : `${at.toLocaleDateString()} ${time}`;
 }
 
-function agentLabel(name) {
+export function agentLabel(name) {
   const agents = ctx.state()?.agents || [];
   if (!name) {
     const fallback = agents.find((a) => a.name === ctx.state()?.default_agent);
@@ -219,7 +235,7 @@ function edited(e) {
   return draft;
 }
 
-async function decide(e, decision) {
+export async function decide(e, decision) {
   const input = decision === "approve" && drafts.has(e.id) ? edited(e) : null;
   working.set(e.id, decision);
   ctx.draw();
@@ -255,7 +271,7 @@ async function decideAll(decision, pending) {
   }
 }
 
-function startEditing(e) {
+export function startEditing(e) {
   drafts.set(e.id, { ...e.input });
   if (!ctx.state()) ctx.loadState().then(() => ctx.draw());
   ctx.draw();
@@ -276,7 +292,7 @@ function outcome(e, state) {
 
 const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans" };
 
-function ruleText(r) {
+export function ruleText(r) {
   const machine = !r.machine || r.machine === "any" ? "any machine" : r.machine;
   return `${RULE_STEPS[r.action] || "any step"} on ${machine}${r.folder ? ` in ${r.folder}` : ""}`;
 }

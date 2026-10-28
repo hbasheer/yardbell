@@ -41,7 +41,7 @@ pub fn started(v: &Value) -> Option<Tracked> {
     })
 }
 
-fn state_now(t: &Tracked, view: &StateView) -> Option<&'static str> {
+pub(super) fn state_now(t: &Tracked, view: &StateView) -> Option<&'static str> {
     let session = view
         .sessions
         .iter()

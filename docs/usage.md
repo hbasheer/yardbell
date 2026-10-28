@@ -196,6 +196,30 @@ then allows it, asks you, or denies it. Deny always wins. Otherwise the rule tha
 step, machine and folder wins, so the order of the list does not matter. A card that a rule
 decided says so at the bottom, like "Your rule: start sessions on devbox in acme/*". A denied step
 never becomes a card: Dispatch is told which rule refused it and says so in its reply.
+**Groups** start several sessions as one step, for example "try three approaches to this bug" or
+"run the same task in api and web". Dispatch proposes them with its `start_group` tool, and they
+appear as one card: each child has its own label, machine, folder, branch, agent and task. Your
+rules decide each child on its own, so one can start at once, another wait for you and a third be
+refused, with the rule that refused it shown in its row while the others go on. Each waiting child
+has its own **Reject**, **Edit** and **Approve**, and **Approve all** or **Reject all** at the
+bottom of the card decide every child still waiting. Two children in the same checkout must work
+on different branches.
+
+Each child's task ends with a request for a short result block (`YARDBELL RESULT`, then `status:`
+done, partial or failed, `summary:`, `branch:` and a line per detail, then `END RESULT`). The card
+shows each child's state as it runs: working, needs you, done or ended. A child that asks a
+question also gets a session card, so you can answer it from Dispatch. When every child that
+started is done (it went quiet after working, or it ended), or when the group's time is up (60
+minutes by default, counted from when the last child was decided), Yardbell reads each child's
+screen and posts one **Results** card: per child the status, summary, details and branch, the end
+of its screen when it wrote no result block, and **Open** and **Review branch**. A child still
+waiting for an answer shows as **Needs you** and does not hold the results past the time limit.
+Dispatch hears the results with your next message. When Dispatch said what it will do with them
+(say, compare them and recommend one), Yardbell starts that one turn as soon as the results are
+in, shown as a message sent by Yardbell, unless the conversation is answering or has steps waiting
+for you. A group started in such a turn never starts another turn on its own. Groups keep going
+after a restart.
+
 Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
 conversation never stops the sessions it started. Claude Code must be installed and signed in on

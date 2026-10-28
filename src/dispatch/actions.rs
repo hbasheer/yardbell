@@ -22,7 +22,7 @@ pub fn valid_id(id: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit())
 }
 
-fn new_id() -> String {
+pub(super) fn new_id() -> String {
     rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(ID_LEN)
@@ -109,7 +109,7 @@ pub fn withdraw(events: &mut [Value], at: &str) {
 pub fn interrupted(events: &mut [Value]) {
     for e in events.iter_mut().filter(|e| {
         e["role"] == "action"
-            && (e["status"] == "approved" || e["status"] == "edited")
+            && matches!(e["status"].as_str(), Some("approved" | "edited" | "auto"))
             && e["result"].is_null()
     }) {
         e["result"] = json!({
@@ -133,6 +133,12 @@ fn what(action: &Value) -> String {
     let machine = text(input, "machine");
     let session = text(input, "name");
     match text(action, "tool") {
+        "start_session" if action["group"].is_string() => {
+            format!(
+                "starting the session \"{}\" of a group on {machine}",
+                text(action, "label")
+            )
+        }
         "start_session" if action["review"].is_object() => {
             format!("starting {} on {machine}", work(&action["review"], "a"))
         }
@@ -364,6 +370,7 @@ pub fn untold(events: &mut [Value]) -> Vec<String> {
                 }
             }
             "pull" => lines.extend(super::pull::untold(e)),
+            "results" => lines.extend(super::group::untold(e)),
             "session" => {
                 if let Some(line) = answer_outcome(e) {
                     e["answer"]["told"] = json!(true);

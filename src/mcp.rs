@@ -1,5 +1,5 @@
 use crate::config::{Approval, Config};
-use crate::dispatch::{By, ReviewOf, Rule, Step};
+use crate::dispatch::{By, ChildStart, ReviewOf, Rule, Step};
 use crate::web::{find_machine, start_session, ApiError, AppState, NewSession};
 use axum::extract::State as AxState;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -17,7 +17,8 @@ Use list_machines to see which machines are up and how much memory and load they
 list_folders to see which git checkouts each machine has, and start_session to start an agent \
 in a folder with a task. read_session shows what a session's terminal shows now, \
 send_to_session types a reply into it, review_session starts a reviewer for a session's work, \
-and scan_folder starts a read-only scan of a folder for dead code, test gaps or security problems.";
+scan_folder starts a read-only scan of a folder for dead code, test gaps or security problems, \
+and start_group starts several sessions as one group whose results Dispatch gathers.";
 
 pub fn token_matches(expected: &str, given: &str) -> bool {
     let (a, b) = (expected.as_bytes(), given.as_bytes());
@@ -245,6 +246,36 @@ fn tools() -> Vec<Value> {
             }),
             &["machine", "kind"],
         ),
+        tool(
+            "start_group",
+            "Start several sessions as one group, for example three approaches to the same bug, or the same task in two repositories. Each child is what start_session takes (machine, folder or path, branch, new_branch, base, agent, prompt) plus a short label. Children in the same checkout need different branches. The user's rules decide each child's start on its own, so some may run at once, wait for approval or be refused. Each child's task is told to end with a YARDBELL RESULT block. When every child that started is done (idle after working, or ended), or timeout_minutes after the last one was decided, Yardbell reads each child's result and posts them together as one Results card. gather is what you will do with the combined results, like comparing them and recommending one: when given, Yardbell starts one more turn of yours as soon as the results are in. Leave it empty when the user only wants to see the results; you then hear them with the user's next message. Only Dispatch can start a group.",
+            json!({
+                "title": { "type": "string", "description": "What the group is for, shown on its card" },
+                "children": {
+                    "type": "array",
+                    "minItems": crate::dispatch::GROUP_MIN,
+                    "maxItems": crate::dispatch::GROUP_MAX,
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "label": { "type": "string", "description": "A few words that tell this child from the others, like \"Patch the guard\"" },
+                            "machine": machine,
+                            "folder": { "type": "string", "description": "Folder label from list_folders" },
+                            "path": { "type": "string", "description": "Absolute path on the machine, instead of folder" },
+                            "branch": { "type": "string", "description": "Branch to work on; empty keeps the current one" },
+                            "new_branch": { "type": "boolean", "description": "Create branch from base" },
+                            "base": { "type": "string", "description": "Base branch for a new branch" },
+                            "agent": { "type": "string", "description": "Agent name; empty uses the default" },
+                            "prompt": { "type": "string", "description": "The task this child starts with" },
+                        },
+                        "required": ["label", "machine", "prompt"],
+                    },
+                },
+                "gather": { "type": "string", "description": "What you will do with the combined results; starts a turn of yours when they are in. Empty waits for the user's next message" },
+                "timeout_minutes": { "type": "integer", "minimum": 1, "maximum": crate::dispatch::GROUP_MAX_MINUTES, "description": "Gather after this long even if some children are not done, default 60" },
+            }),
+            &["children"],
+        ),
     ]
 }
 
@@ -255,6 +286,9 @@ async fn call(app: &AppState, params: &Value, caller: &Caller) -> Value {
         .cloned()
         .unwrap_or_else(|| json!({}));
     let outcome = match caller {
+        Caller::Dispatch(conversation) if name == "start_group" => {
+            dispatch_group(app, conversation.as_deref(), args).await
+        }
         Caller::Dispatch(conversation) if crate::dispatch::changes_something(name) => {
             dispatch_step(app, conversation.as_deref(), name, args).await
         }
@@ -328,7 +362,15 @@ async fn dispatch_step(
 }
 
 fn refusal(rule: Option<&Rule>, step: &Step) -> String {
-    let why = match rule {
+    format!(
+        "Refused, not run: {}. Tell the user which rule stopped it; they can change it in \
+Yardbell's Settings, under Dispatch. Do not try it again or reach the same result another way.",
+        why_refused(rule, step)
+    )
+}
+
+fn why_refused(rule: Option<&Rule>, step: &Step) -> String {
+    match rule {
         Some(rule) if step.folders.is_none() && !rule.folder.is_empty() => format!(
             "the user's Dispatch rule \"{}\" refuses it, because Yardbell cannot tell which folder \
 the session is in",
@@ -341,11 +383,168 @@ the session is in",
         None => "the user's Dispatch settings refuse steps that change something unless a rule \
 allows them, and no rule allows this one"
             .into(),
+    }
+}
+
+// Where each child would work, as the clash check compares them: a folder is its path on the
+// machine, when Yardbell knows it.
+pub fn group_places(app: &AppState, inputs: &[Value]) -> Vec<crate::dispatch::GroupPlace> {
+    inputs
+        .iter()
+        .map(|input| {
+            let text = |key: &str| input[key].as_str().unwrap_or_default().trim().to_string();
+            let machine = text("machine");
+            let repo = match text("path") {
+                path if path.is_empty() => {
+                    let folder = text("folder");
+                    app.state
+                        .snapshot(&machine)
+                        .and_then(|snap| snap.folder_paths.get(&folder).cloned())
+                        .unwrap_or(folder)
+                }
+                path => path.trim_end_matches('/').to_string(),
+            };
+            crate::dispatch::GroupPlace {
+                machine,
+                repo,
+                branch: text("branch"),
+            }
+        })
+        .collect()
+}
+
+pub fn group_clash(app: &AppState, inputs: &[Value]) -> Result<(), ApiError> {
+    let places = group_places(app, inputs);
+    match crate::dispatch::group_clash(&places) {
+        Some(pair) => Err(bad(crate::dispatch::group_clash_message(&places, pair))),
+        None => Ok(()),
+    }
+}
+
+// A group is checked as a whole first, then each child's start is decided by the rules on its
+// own: the ones allowed start now, one after another, the ones that ask wait in the group's card,
+// and a refused one stays there with the reason while the others go on.
+async fn dispatch_group(
+    app: &AppState,
+    conversation: Option<&str>,
+    args: Value,
+) -> Result<String, ApiError> {
+    let cfg = app.config()?;
+    let plan = crate::dispatch::plan_group(args).map_err(bad)?;
+    for (i, child) in plan.children.iter().enumerate() {
+        check(app, &cfg, "start_session", &child.input).map_err(|ApiError(status, m)| {
+            ApiError(status, format!("child {} ({}): {m}", i + 1, child.label))
+        })?;
+    }
+    let inputs: Vec<Value> = plan.children.iter().map(|c| c.input.clone()).collect();
+    group_clash(app, &inputs)?;
+    let Some(conversation) = conversation else {
+        return Err(bad(
+            "Yardbell cannot tell which Dispatch conversation this came from, so it started nothing"
+                .into(),
+        ));
     };
-    format!(
-        "Refused, not run: {why}. Tell the user which rule stopped it; they can change it in \
-Yardbell's Settings, under Dispatch. Do not try it again or reach the same result another way."
-    )
+    let starts: Vec<ChildStart> = plan
+        .children
+        .iter()
+        .map(|child| {
+            let step = step_of(app, "start_session", &child.input);
+            let verdict =
+                crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);
+            let rule = verdict.rule.cloned();
+            match verdict.approval {
+                Approval::Deny => ChildStart::Refuse {
+                    reason: why_refused(verdict.rule, &step),
+                    rule,
+                },
+                Approval::Prompt => ChildStart::Ask(rule),
+                Approval::Allow => ChildStart::Run(rule),
+            }
+        })
+        .collect();
+    if starts
+        .iter()
+        .all(|s| matches!(s, ChildStart::Refuse { .. }))
+    {
+        let why: Vec<String> = plan
+            .children
+            .iter()
+            .zip(&starts)
+            .enumerate()
+            .filter_map(|(i, (child, start))| match start {
+                ChildStart::Refuse { reason, .. } => {
+                    Some(format!("{}) {}: {reason}.", i + 1, child.label))
+                }
+                _ => None,
+            })
+            .collect();
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            format!(
+                "Refused, not run: the user's rules refuse every child of this group. {} Tell the \
+user which rules stopped them; they can change them in Yardbell's Settings, under Dispatch. Do not \
+try again or reach the same result another way.",
+                why.join(" ")
+            ),
+        ));
+    }
+    let crate::dispatch::GroupOpened {
+        group,
+        steps,
+        follows,
+    } = app
+        .dispatch
+        .open_group(conversation, &plan, &starts)
+        .map_err(|e| ApiError(StatusCode::NOT_FOUND, e.message().to_string()))?;
+    let mut lines = Vec::new();
+    for (i, ((child, start), step)) in plan.children.iter().zip(&starts).zip(&steps).enumerate() {
+        let n = i + 1;
+        let label = &child.label;
+        let line = match (start, step) {
+            (ChildStart::Refuse { reason, .. }, _) => {
+                format!("{n}) {label}: refused, not run: {reason}. Tell the user.")
+            }
+            (ChildStart::Ask(_), Some(step)) => {
+                format!("{n}) {label}: proposal {step}, waiting for the user's approval.")
+            }
+            (ChildStart::Run(_), Some(step)) => {
+                let input = app
+                    .dispatch
+                    .run_input(conversation, step, child.input.clone());
+                let outcome = perform(app, "start_session", input)
+                    .await
+                    .map_err(|ApiError(_, message)| message);
+                let _ = app.dispatch.ran(conversation, step, &outcome);
+                match outcome {
+                    Ok(v) => format!(
+                        "{n}) {label}: started as {} on {}.",
+                        v["name"].as_str().unwrap_or_default(),
+                        v["machine"].as_str().unwrap_or_default()
+                    ),
+                    Err(e) => format!("{n}) {label}: failed to start: {e}"),
+                }
+            }
+            (_, None) => continue,
+        };
+        lines.push(line);
+    }
+    let then = match (follows, plan.gather.is_empty()) {
+        (true, _) => "Yardbell then starts a turn of yours with them and your gather instruction.",
+        (false, true) => "You hear the results with the user's next message.",
+        (false, false) => {
+            "This group was started in a turn Yardbell sent, so it starts no turn of its own: you \
+hear the results, and act on your gather instruction, with the user's next message."
+        }
+    };
+    Ok(format!(
+        "Group {group} \"{}\":\n{}\n\nDo not call start_group or start_session again for these \
+children. When every child that started is done, or {} minutes after the last one was decided, \
+Yardbell posts their results in one card. {then} End your reply with a sentence on what you \
+started or proposed.",
+        plan.title,
+        lines.join("\n"),
+        plan.minutes
+    ))
 }
 
 // What the rules match a step on. The folder is the one the step works in: the folder it starts
@@ -779,6 +978,11 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
             };
             result.map_err(ApiError::gateway)
         }
+        "start_group" => Err(bad(
+            "only Dispatch can start a group, since it gathers the results; start each session \
+with start_session"
+                .into(),
+        )),
         other => Err(ApiError(
             StatusCode::BAD_REQUEST,
             format!("unknown tool {other}"),

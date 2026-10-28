@@ -26,6 +26,9 @@ REVIEW_CHAT = "browserreview001"
 SCAN_CHAT = "browserscan00001"
 SHOT_FILE = "shotbrowsertest1.png"
 PULL_CHAT = "browsertestpull0"
+GROUP_CHAT = "browsergroup0001"
+RESULTS_CHAT = "browserresults01"
+REFUSED = "the user's Dispatch rule \"deny start_session on pro\" refuses it"
 PULL_SESSION = "hp-pull-test"
 FAKE_PR = {
     "number": 12,
@@ -160,6 +163,62 @@ def scan_card(repo):
             {"severity": "low", "place": "/etc/passwd:1", "text": "Not a place in the folder."},
         ],
     }
+
+
+def child_step(id, group, label, inp, status="pending", result=None):
+    step = {"role": "action", "id": id, "tool": "start_session", "input": inp, "by": "dispatch", "status": status,
+            "at": "2026-01-01T10:00:00+00:00", "group": group, "label": label}
+    if result:
+        step["result"] = result
+    return step
+
+
+# A group waiting for approval: two plain-shell children in different checkouts, and one the rules
+# refused. A shell takes no task, so the children have none.
+def group_chat(root):
+    refused = {"label": "Pro", "input": {"machine": "pro", "folder": "demo-app", "prompt": "Fix it on pro."},
+               "refused": REFUSED, "rule": {"action": "start_session", "machine": "pro", "approval": "deny"}}
+    group = {"role": "group", "id": "grp00001", "title": "Try the login fix in both repos", "gather": "", "minutes": 30,
+             "status": "waiting", "by": "dispatch", "at": "2026-01-01T10:00:00+00:00",
+             "children": [{"label": "App", "step": "chldapp1"}, {"label": "Api", "step": "chldapi1"}, refused]}
+    return conversation(GROUP_CHAT, "Try the login fix in both repos", [
+        {"role": "user", "text": "Try the login fix in demo-app and demo-api"},
+        group,
+        child_step("chldapp1", "grp00001", "App", {"machine": MACHINE, "path": os.path.join(root, "demo-app")}),
+        child_step("chldapi1", "grp00001", "Api", {"machine": MACHINE, "path": os.path.join(root, "demo-api")}),
+    ])
+
+
+# A group that timed out: one child reported a result, one waits for an answer, one never started.
+def results_chat(root):
+    repo = os.path.join(root, "demo-app")
+    started = lambda name, branch: {"ok": True, "text": "{}", "at": "2026-01-01T10:01:00+00:00",
+                                    "session": {"machine": MACHINE, "name": name, "path": repo}}
+    group = {"role": "group", "id": "grp00002", "title": "Three ways to fix the redirect", "gather": "pick the smallest fix",
+             "follow": True, "minutes": 30, "status": "gathered", "by": "dispatch", "at": "2026-01-01T10:00:00+00:00",
+             "started": "2026-01-01T10:01:00+00:00", "gathered": "2026-01-01T10:31:00+00:00",
+             "children": [{"label": "Guard", "step": "chldgrd1", "state": "ended"}, {"label": "Router", "step": "chldrtr1", "state": "ended"},
+                          {"label": "Pro", "input": {"machine": "pro", "folder": "demo-app"}, "refused": REFUSED}]}
+    results = {"role": "results", "group": "grp00002", "title": "Three ways to fix the redirect", "why": "timeout", "minutes": 30,
+               "gather": "pick the smallest fix", "follow": True, "at": "2026-01-01T10:31:00+00:00", "children": [
+                   {"label": "Guard", "started": True, "machine": MACHINE, "name": "hp-demo-app-7", "path": repo, "branch": "fix-guard",
+                    "state": "finished", "screen": "YARDBELL RESULT\nstatus: done\nEND RESULT",
+                    "result": {"status": "done", "summary": "Moved the redirect into the guard.", "branch": "fix-guard",
+                               "details": ["12 tests pass", "Touches the session middleware"]}},
+                   {"label": "Router", "started": True, "machine": MACHINE, "name": "hp-demo-app-8", "path": repo, "branch": "fix-router",
+                    "state": "needs input", "screen": "Run the migration?\n ❯ 1. Yes\n   2. No"},
+                   {"label": "Pro", "started": False, "note": f"refused: {REFUSED}"},
+               ]}
+    return conversation(RESULTS_CHAT, "Three ways to fix the redirect", [
+        {"role": "user", "text": "Try three ways to fix the redirect"},
+        group,
+        child_step("chldgrd1", "grp00002", "Guard", {"machine": MACHINE, "path": repo, "branch": "fix-guard", "prompt": "Fix it in the guard."},
+                   "approved", started("hp-demo-app-7", "fix-guard")),
+        child_step("chldrtr1", "grp00002", "Router", {"machine": MACHINE, "path": repo, "branch": "fix-router", "prompt": "Fix it in the router."},
+                   "approved", started("hp-demo-app-8", "fix-router")),
+        results,
+        {"role": "user", "text": "pick the smallest fix", "by": "yardbell"},
+    ])
 
 
 def conversation(id, title, events):
@@ -304,7 +363,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "at": "2026-01-01T10:00:00+00:00",
         }
         pull = conversation(PULL_CHAT, "Pull request #12: Fix the login redirect", [card])
-        for chat in (short, long, review, pull, scan):
+        for chat in (short, long, review, pull, scan, group_chat(self.root), results_chat(self.root)):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -800,6 +859,76 @@ class Suite:
         with open(self.y.config) as f:
             if "  enabled: false\n" not in f.read():
                 raise Failure("turning the trigger off did not reach yardbell.yml")
+
+    # Last, since the children it starts are shell sessions in demo-app and demo-api, which the
+    # scan test above counts.
+    def test_dispatch_results_card_shows_each_child(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={RESULTS_CHAT}"))
+        card = "#dispatch-log .results-card"
+        b.wait(f"document.querySelector('{card}')?.textContent.includes('Results of Three ways to fix the redirect')", "the seeded results card")
+        badges = b.js(f"[...document.querySelectorAll('{card} .group-child .badge')].map((x) => x.textContent).join()")
+        if badges != "Done,Needs you,Did not start":
+            raise Failure(f"the children's badges are {badges!r}")
+        text = b.js(f"document.querySelector('{card}').innerText")
+        for expected in ("Timed out", "Gathered after 30 min, 1 of 2 sessions finished", "Moved the redirect into the guard.",
+                         "12 tests pass", "fix-guard", "hp-demo-app-8 on hp", "Run the migration?", REFUSED, "pick the smallest fix"):
+            if expected not in text:
+                raise Failure(f"the results card does not show {expected!r}:\n{text}")
+        if b.js(f"document.querySelectorAll('{card} .group-child-actions .btn').length") != 2:
+            raise Failure("each child that started has Review branch, and only those")
+        if b.js("document.querySelector('#dispatch-log .group-card .step-card-head .badge').textContent") != "Results below":
+            raise Failure("the group card does not point at its results")
+        if b.js("document.querySelectorAll('#dispatch-log article.step-card:not(.group-card):not(.results-card)').length"):
+            raise Failure("a child's step is drawn outside its group's card")
+        if not b.js("document.querySelector('#dispatch-log .msg.user.by-yardbell')?.textContent.startsWith('Sent by Yardbell')"):
+            raise Failure("the follow-up message does not say Yardbell sent it")
+        b.click(f"{card} .group-child:first-child .group-child-actions .btn")
+        b.wait(
+            """(() => {
+              const step = [...document.querySelectorAll('#dispatch-log .step-card.pending')].at(-1);
+              return step && step.querySelector('.step-card-title strong').textContent === 'Start a review' && step.textContent.includes('hp-demo-app-7');
+            })()""",
+            "a review of the child's branch, waiting to be started",
+        )
+
+    def test_dispatch_group_card_approves_all_its_children(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={GROUP_CHAT}"))
+        card = "#dispatch-log .group-card"
+        b.wait(f"document.querySelectorAll('{card} .group-child').length === 3", "the seeded group with three children")
+        if b.js(f"document.querySelector('{card} .step-card-head .badge').textContent") != "2 wait for you":
+            raise Failure("the group's badge does not count the children waiting")
+        if REFUSED not in b.js(f"document.querySelector('{card} .group-child.refused .group-child-note').textContent"):
+            raise Failure("the refused child does not say why")
+        b.click(f"{card} .group-child.pending:first-child .group-child-actions .btn:nth-child(2)")
+        b.wait(f"document.querySelector('{card} .group-child:first-child .step-card-form textarea')", "the child's editor")
+        b.click(f"{card} .group-child:first-child .group-child-actions .btn.quiet")
+        b.wait(f"!document.querySelector('{card} .step-card-form')", "the editor to close")
+        b.click(f"{card} .step-card-foot .btn.primary")
+        b.wait(
+            f"[...document.querySelectorAll('{card} .group-child-note')].filter((n) => n.textContent.startsWith('Running as')).length === 2",
+            "both children running",
+            # The children start one after another, each followed by a check of the machine,
+            # which the sessions earlier tests left behind make slower.
+            timeout=40,
+        )
+        convo = self.api("GET", f"/dispatch/conversations/{GROUP_CHAT}")
+        names = {e["label"]: e["result"]["session"]["name"] for e in convo["events"] if e["role"] == "action"}
+        if set(names) != {"App", "Api"}:
+            raise Failure(f"the children started as {names}")
+        b.wait(
+            f"""(async () => {{
+              const sessions = (await (await fetch('/state')).json()).sessions;
+              return [[{json.dumps(names["App"])}, 'demo-app'], [{json.dumps(names["Api"])}, 'demo-api']]
+                .every(([name, folder]) => sessions.some((s) => s.tmux === name && s.folder === folder && s.agent === 'shell'));
+            }})()""",
+            "both shell sessions in /state, each in its own folder",
+            timeout=15,
+        )
+        if b.js("document.querySelector('#dispatch-log .steps-bar')"):
+            raise Failure("a step still waits after Approve all")
+        b.wait(f"document.querySelector('{card} .step-card-head .badge').textContent === '0 of 2 done'", "the group running")
 
     def check_errors(self, where):
         if self.b.errors:
