@@ -140,6 +140,14 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 - **Appearance:** same as the device, light or dark, like the theme button in the sidebar.
   **Terminal** picks light or dark for terminals on its own, or follows the theme.
 - **Security:** change the passcode (takes effect immediately) and log out every other device.
+- **About:** which Yardbell the server runs: its version and build, the machine, system and
+  architecture it runs on, how long it has been running, and where its config and state live, with
+  links to this version's release notes, the changelog and the docs. Opening it asks GitHub for the
+  latest release (at most once an hour) and says **Up to date** or which version is available.
+  Nothing is installed for you. In the desktop app it also shows the app's own version, with a
+  warning when the app and the server it is connected to run different releases. The version next
+  to "Running on" at the bottom of the sidebar opens this section, and so does **About Yardbell**
+  in the desktop app's tray menu.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
 ### Dispatch

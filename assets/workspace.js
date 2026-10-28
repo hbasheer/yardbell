@@ -21,6 +21,8 @@ function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
 
+const version = (server) => (server.version ? ` <a class="server-version" href="/settings#about" title="About Yardbell">v${esc(server.version)}</a>` : "");
+
 function short(path) {
   return String(path ?? "").replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
 }
@@ -257,7 +259,7 @@ function renderSide() {
   const counts = {};
   for (const s of all) counts[stateOf(s)] = (counts[stateOf(s)] || 0) + 1;
   const server = state.server;
-  paint($("server"), server ? `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>` : "");
+  paint($("server"), server ? `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>${version(server)}` : "");
   const summary = ["blocked", "done", "working", "idle"]
     .filter((k) => counts[k]).map((k) => `${counts[k]} ${WORD[k]}`).join(" · ") || "No agents running";
   if ($("summary").textContent !== summary) $("summary").textContent = summary;

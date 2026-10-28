@@ -38,6 +38,7 @@ const NOTIFY_SESSION_ENDED: &str = "notify-session-ended";
 const NOTIFY_MACHINE: &str = "notify-machine";
 const NOTIFY_MEMORY: &str = "notify-memory";
 const AUTOSTART: &str = "autostart";
+const ABOUT: &str = "about";
 const DISCONNECT: &str = "disconnect";
 const QUIT: &str = "quit";
 
@@ -538,6 +539,13 @@ fn menu(
     menu.append(&PredefinedMenuItem::separator(app)?)?;
     menu.append(&MenuItem::with_id(
         app,
+        ABOUT,
+        "About Yardbell",
+        true,
+        None::<&str>,
+    )?)?;
+    menu.append(&MenuItem::with_id(
+        app,
         DISCONNECT,
         "Sign out",
         true,
@@ -621,6 +629,7 @@ fn on_menu_event(app: &AppHandle, event: MenuEvent) {
             tauri::async_runtime::spawn(async move { crate::sign_out_by_user(&app).await });
         }
         QUIT => crate::quit(app),
+        ABOUT => open_page(app, "/settings#about"),
         SERVER_STATUS => report("show the window", main_window::reveal(app)),
         ALL_SESSIONS => {
             report("show the window", main_window::reveal(app));
@@ -679,6 +688,20 @@ pub fn open_machine(app: &AppHandle, name: &str) {
     if let Err(e) = main_window::navigate_dashboard(app, &url) {
         eprintln!("yardbell: can't open {url}: {e}");
     }
+}
+
+fn open_page(app: &AppHandle, page: &str) {
+    report("show the window", main_window::reveal(app));
+    let Some(url) = windows::live_server(app).and_then(|server| page_url(&server, page)) else {
+        return;
+    };
+    if let Err(e) = main_window::navigate_dashboard(app, &url) {
+        eprintln!("yardbell: can't open {url}: {e}");
+    }
+}
+
+fn page_url(server: &str, page: &str) -> Option<String> {
+    Url::parse(server).ok()?.join(page).ok().map(String::from)
 }
 
 fn report(action: &str, result: tauri::Result<()>) {
@@ -954,6 +977,19 @@ mod tests {
     fn menu_text_escapes_ampersands() {
         assert_eq!(menu_text("a&b · up"), "a&&b · up");
         assert_eq!(menu_text("devbox · up"), "devbox · up");
+    }
+
+    #[test]
+    fn about_opens_settings_on_the_connected_server() {
+        assert_eq!(
+            page_url("http://100.101.7.20:4100", "/settings#about").as_deref(),
+            Some("http://100.101.7.20:4100/settings#about")
+        );
+        assert_eq!(
+            page_url("http://hp.lan:4000/workspace?x=1", "/settings#about").as_deref(),
+            Some("http://hp.lan:4000/settings#about")
+        );
+        assert_eq!(page_url("not a url", "/settings#about"), None);
     }
 
     #[test]

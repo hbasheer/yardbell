@@ -512,6 +512,96 @@ $("restart-btn").addEventListener("click", async () => {
   }
 });
 
+const EXTERNAL = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 3H13v3.5M13 3 7.5 8.5M11 9.5V13H3V5h3.5"/></svg>`;
+let updatesAsked = false;
+
+function plural(n, word) {
+  return `${n} ${word}${n === 1 ? "" : "s"}`;
+}
+
+function uptime(secs) {
+  const days = Math.floor(secs / 86400);
+  const hours = Math.floor((secs % 86400) / 3600);
+  const mins = Math.floor((secs % 3600) / 60);
+  if (days) return hours ? `${plural(days, "day")}, ${plural(hours, "hour")}` : plural(days, "day");
+  if (hours) return mins ? `${plural(hours, "hour")}, ${plural(mins, "minute")}` : plural(hours, "hour");
+  return mins ? plural(mins, "minute") : "less than a minute";
+}
+
+function versionParts(v) {
+  return String(v || "").split(/[-+]/)[0].split(".").map(Number);
+}
+
+function olderThan(a, b) {
+  const [x, y] = [versionParts(a), versionParts(b)];
+  for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) < (y[i] || 0);
+  return false;
+}
+
+async function appVersion() {
+  try { return (await window.__TAURI__?.app?.getVersion?.()) || null; } catch { return null; }
+}
+
+function renderAbout(a, app) {
+  $("about-version").textContent = a.version;
+  const since = new Date(a.started_at * 1000).toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+  const system = `${esc(a.os)} · ${esc(a.arch)}${a.container ? ` <span class="note">in a container</span>` : ""}`;
+  const facts = [
+    app && ["This app", app === a.version ? `${esc(app)}, the same as the server` : esc(app)],
+    ["Build", `<code>${esc(a.build)}</code>`],
+    ["Machine", `${esc(a.machine)} <code>${esc(a.address)}</code>`],
+    ["System", system],
+    ["Running for", `<span title="Since ${esc(since)}">${uptime(a.uptime_secs)}</span>`],
+    ["Config", `<code>${esc(a.config)}</code>`],
+    ["State", `<code>${esc(a.state)}</code>`],
+  ].filter(Boolean);
+  $("about-facts").innerHTML = facts.map(([k, v]) => `<dt>${k}</dt><dd>${v}</dd>`).join("");
+  const link = (href, text) => `<a href="${esc(href)}" target="_blank" rel="noopener">${text}${EXTERNAL}</a>`;
+  $("about-links").innerHTML = [
+    link(a.links.release, `Release notes for ${esc(a.version)}`),
+    link(a.links.changelog, "Changelog"),
+    link(a.links.docs, "Documentation"),
+  ].join("");
+  const mismatch = Boolean(app) && app !== a.version;
+  $("about-mismatch").hidden = !mismatch;
+  if (mismatch) {
+    const older = olderThan(app, a.version) ? "this app" : `the server on ${a.machine}`;
+    $("about-mismatch-title").textContent = `This app is ${app}, the server on ${a.machine} is ${a.version}.`;
+    $("about-mismatch-text").textContent = `Update ${older} so both run the same release. Until then, parts of the app may not match the server.`;
+  }
+}
+
+function showUpdate(kind, markup) {
+  const el = $("about-update");
+  el.className = `about-update${kind ? ` ${kind}` : ""}`;
+  el.innerHTML = markup;
+  $("about-retry").hidden = kind !== "unknown";
+}
+
+async function checkUpdates() {
+  updatesAsked = true;
+  showUpdate("", "Checking for updates…");
+  try {
+    const u = await api("GET", "/app/about/updates");
+    if (u.state === "available") {
+      showUpdate("available", `<a href="${esc(u.url)}" target="_blank" rel="noopener">${esc(u.latest)} is available</a>`);
+    } else if (u.state === "up_to_date") {
+      showUpdate("ok", `<span class="dot ok"></span>Up to date`);
+    } else {
+      throw new Error(u.reason);
+    }
+  } catch (err) {
+    showUpdate("unknown", `<span title="${esc(err.message)}">Couldn't check for updates</span>`);
+  }
+}
+
+async function loadAbout() {
+  const [a, app] = await Promise.all([api("GET", "/app/about"), appVersion()]);
+  renderAbout(a, app);
+}
+
+$("about-retry").addEventListener("click", checkUpdates);
+
 load()
   .then(() => {
     if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
@@ -525,6 +615,7 @@ function showSection() {
   const order = [...document.querySelectorAll(".settings-nav a")].map((a) => a.hash.slice(1));
   const pick = sections.find((sec) => sec.id === wanted) || sections.find((sec) => sec.id === order[0]);
   sections.forEach((sec) => { sec.hidden = sec !== pick; });
+  if (pick.id === "about" && !updatesAsked) checkUpdates();
   document.querySelectorAll(".settings-nav a").forEach((a) => {
     if (a.hash === `#${pick.id}`) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
@@ -538,3 +629,4 @@ window.addEventListener("hashchange", () => {
   window.scrollTo({ top: 0 });
 });
 showSection();
+loadAbout().catch((err) => toast(err.message));

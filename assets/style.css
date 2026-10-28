@@ -286,6 +286,8 @@ h1, h2 { text-wrap: balance; }
 .server-line b { color: var(--ink-2); font-weight: 600; }
 .server-line code { font: 11.5px var(--mono); color: var(--ink-2); }
 .server-line:empty { display: none; }
+.server-version { color: var(--muted); text-decoration: none; font-variant-numeric: tabular-nums; }
+.server-version:hover { color: var(--ink-2); text-decoration: underline; }
 .ws-server { grid-column: 1 / -1; margin: 0; padding: 0; }
 
 .banner {
@@ -1193,6 +1195,26 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .phone-wait { color: var(--ink-2); }
 .phone-wait input { width: 64px; height: 32px; font-variant-numeric: tabular-nums; }
 #phone-status.ok { color: var(--ok-text); }
+#about-mismatch { margin-bottom: 10px; }
+.about-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.about-head p { margin: 0; }
+.about-version { font-size: 15px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.about-update { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.about-update.ok { color: var(--ok-text); }
+.about-update a { color: var(--accent-text); font-weight: 500; }
+.about-head .btn { margin-left: auto; }
+.facts { display: grid; grid-template-columns: 112px minmax(0, 1fr); gap: 8px 16px; margin: 14px 0 0; font-size: 13px; }
+.facts dt { color: var(--muted); }
+.facts dd { margin: 0; color: var(--ink); overflow-wrap: anywhere; font-variant-numeric: tabular-nums; }
+.facts code { font-size: 12.5px; }
+.facts .note { font-size: 12.5px; }
+.about-links { display: flex; flex-wrap: wrap; gap: 4px 16px; margin: 16px 0 0; padding-top: 14px; border-top: 1px solid var(--line); font-size: 13px; }
+.about-links a { display: inline-flex; align-items: center; gap: 4px; color: var(--accent-text); }
+.about-links .icon { width: 13px; height: 13px; }
+@media (max-width: 760px) {
+  .facts { grid-template-columns: minmax(0, 1fr); gap: 2px; }
+  .facts dd + dt { margin-top: 8px; }
+}
 
 /* workspace */
 

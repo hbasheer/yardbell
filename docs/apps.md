@@ -85,7 +85,8 @@ the dashboard), then every
 session you can open under **Sessions**, named like its tab, with **working** after the ones whose
 agent is busy. Click a session to bring the window forward on its tab. Past 15 sessions,
 **All sessions…** opens the dashboard. After that come **Open Yardbell**, **New session**, **Notifications**, **Start at
-login**, **Sign out** and **Quit**. **Sign out**, also at the right end of the window's tab bar
+login**, **About Yardbell** (Settings, About: the server's and the app's versions and whether a
+newer release exists), **Sign out** and **Quit**. **Sign out**, also at the right end of the window's tab bar
 (click it twice), forgets the login and shows the connect screen, where you can connect to another
 server or run one on this machine. A server the app runs itself stops and no longer starts with the
 app; its config and passcode stay, so running it again only asks for the passcode. Closing the

@@ -16,6 +16,13 @@ and the project uses [Semantic Versioning](https://semver.org).
   MCP servers' tokens.
 - Desktop app: it takes tokio 1.54.1, which fixes a timer race that could crash it, and
   rustls-webpki 0.103.16, which stops trusting a CA that browsers distrust.
+- Settings has an About section: the server's version and build, the machine and system it runs
+  on, how long it has been up and where its config and state are, with links to the release notes,
+  the changelog and the docs. It checks GitHub for a newer release, at most once an hour, and says
+  "Up to date" or "0.7.1 is available" with a link; it never installs anything. In the desktop app
+  it also shows the app's version and warns when it differs from the server's. The sidebar's
+  "Running on" line now ends with the version, which opens About, and the desktop app's tray menu
+  has **About Yardbell**.
 
 ## [0.6.9] - 2026-10-28
 

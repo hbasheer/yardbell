@@ -82,6 +82,9 @@ pub struct AppState {
     installed: std::sync::Mutex<HashMap<String, (Instant, Vec<String>)>>,
     servers: tokio::sync::Mutex<Option<(Instant, Vec<crate::discover::Found>)>>,
     refresh: Refresh,
+    updates: crate::about::Updates,
+    started: Instant,
+    started_at: u64,
     clock: Clock,
 }
 
@@ -100,6 +103,7 @@ pub struct Services {
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
     pub refresh: Refresh,
+    pub releases: crate::about::Fetch,
 }
 
 impl AppState {
@@ -115,6 +119,7 @@ impl AppState {
             phone,
             dispatch,
             refresh,
+            releases,
         } = services;
         AppState {
             cfg_path,
@@ -135,6 +140,9 @@ impl AppState {
             installed: std::sync::Mutex::new(HashMap::new()),
             servers: tokio::sync::Mutex::new(None),
             refresh,
+            updates: crate::about::Updates::new(releases, clock.clone()),
+            started: clock(),
+            started_at: now_secs(),
             clock,
         }
     }
@@ -315,6 +323,8 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/app/notifications", get(app_notifications))
         .route("/app/hello", get(app_hello))
         .route("/app/servers", get(app_servers))
+        .route("/app/about", get(app_about))
+        .route("/app/about/updates", get(app_updates))
         .route("/style.css", get(|| async { asset("style.css") }))
         .route("/theme.js", get(|| async { asset("theme.js") }))
         .route("/side.js", get(|| async { asset("side.js") }))
@@ -612,6 +622,34 @@ async fn app_hello(AxState(app): AxState<Arc<AppState>>) -> Result<Response, Api
     )
 }
 
+async fn app_about(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let server = server_view(&app.config()?);
+    let version = crate::about::VERSION;
+    Ok(Json(json!({
+        "version": version,
+        "build": page_build(),
+        "machine": server.machine,
+        "address": server.address,
+        "os": crate::about::os_name(),
+        "arch": std::env::consts::ARCH,
+        "container": crate::about::in_container(),
+        "started_at": app.started_at,
+        "uptime_secs": (app.clock)().saturating_duration_since(app.started).as_secs(),
+        "config": app.cfg_path,
+        "state": crate::cli::state_dir(),
+        "links": {
+            "release": crate::about::release_notes(version),
+            "changelog": crate::about::changelog(),
+            "docs": crate::about::docs(version),
+        },
+    }))
+    .into_response())
+}
+
+async fn app_updates(AxState(app): AxState<Arc<AppState>>) -> Response {
+    Json(app.updates.check(crate::about::VERSION).await).into_response()
+}
+
 const SERVERS_FOR: Duration = Duration::from_secs(60);
 
 // Lets the apps offer the servers on the mesh, so signing in takes only the passcode. Each
@@ -652,7 +690,11 @@ fn server_view(cfg: &Config) -> crate::state::ServerView {
         .and_then(|url| url.strip_prefix("http://").map(str::to_string))
         .unwrap_or_else(|| format!("localhost:{}", cfg.port));
     let machine = cfg.host().map(|m| m.name.clone()).unwrap_or_else(hostname);
-    crate::state::ServerView { machine, address }
+    crate::state::ServerView {
+        machine,
+        address,
+        version: crate::about::VERSION.into(),
+    }
 }
 
 fn hostname() -> String {
