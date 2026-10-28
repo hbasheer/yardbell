@@ -4,6 +4,7 @@ version = "0.6.9"
 edition = "2021"
 description = "One page for AI coding agent sessions across all your machines: health, sessions, ports, and a terminal from any device."
 license = "MIT"
+repository = "https://github.com/hbasheer/yardbell"
 readme = "README.md"
 keywords = ["ai-agents", "claude", "tmux", "ssh", "dashboard"]
 categories = ["command-line-utilities", "development-tools"]

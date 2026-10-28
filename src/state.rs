@@ -113,6 +113,8 @@ pub struct StateView {
 pub struct ServerView {
     pub machine: String,
     pub address: String,
+    #[serde(default)]
+    pub version: String,
 }
 
 impl State {

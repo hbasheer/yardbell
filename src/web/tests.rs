@@ -27,6 +27,7 @@ struct Rig {
     fake: Arc<FakeRunner>,
     refreshes: Arc<std::sync::Mutex<Vec<Option<String>>>>,
     now: Arc<std::sync::Mutex<std::time::Instant>>,
+    releases_asked: Arc<std::sync::atomic::AtomicUsize>,
     _dir: tempfile::TempDir,
 }
 
@@ -124,6 +125,7 @@ fn rig() -> Rig {
         dir.path().join("id_ed25519"),
     ));
     let refreshes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    let releases_asked = Arc::new(std::sync::atomic::AtomicUsize::new(0));
     let services = Services {
         state,
         ports: Arc::new(FakePorts),
@@ -148,6 +150,18 @@ fn rig() -> Rig {
                 Box::pin(async move { refreshes.lock().unwrap().push(machine) })
             })
         },
+        releases: {
+            let asked = releases_asked.clone();
+            Arc::new(move || {
+                asked.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Box::pin(async {
+                    Ok(json!({
+                        "tag_name": "v99.0.0",
+                        "html_url": "https://github.com/hbasheer/yardbell/releases/tag/v99.0.0",
+                    }))
+                })
+            })
+        },
     };
     let now = Arc::new(std::sync::Mutex::new(std::time::Instant::now()));
     let clock_now = now.clone();
@@ -162,6 +176,7 @@ fn rig() -> Rig {
         fake,
         refreshes,
         now,
+        releases_asked,
         _dir: dir,
     }
 }
@@ -423,6 +438,86 @@ async fn state_says_where_the_server_runs() {
         server["address"].as_str().is_some_and(|a| a.contains(':')),
         "{server}"
     );
+    assert_eq!(server["version"], env!("CARGO_PKG_VERSION"));
+}
+
+#[tokio::test]
+async fn about_needs_a_login() {
+    let r = rig();
+    for path in ["/app/about", "/app/about/updates"] {
+        let req = Request::get(path)
+            .header(header::ACCEPT, "application/json")
+            .body(Body::empty())
+            .unwrap();
+        let (status, _, _) = send(&r.app, req).await;
+        assert_eq!(status, StatusCode::UNAUTHORIZED, "{path}");
+    }
+    assert_eq!(
+        r.releases_asked.load(std::sync::atomic::Ordering::SeqCst),
+        0
+    );
+}
+
+#[tokio::test]
+async fn about_says_which_yardbell_runs_where_and_for_how_long() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    r.advance(90_061);
+    let req = Request::get("/app/about")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    let about: Value = serde_json::from_str(&body).unwrap();
+    let version = env!("CARGO_PKG_VERSION");
+    assert_eq!(about["version"], version);
+    assert_eq!(about["build"], page_build());
+    assert_eq!(about["uptime_secs"], 90_061);
+    assert_eq!(about["arch"], std::env::consts::ARCH);
+    assert!(about["os"].as_str().is_some_and(|os| !os.is_empty()));
+    assert!(about["machine"].as_str().is_some_and(|m| !m.is_empty()));
+    assert!(about["config"]
+        .as_str()
+        .is_some_and(|p| p.ends_with("yardbell.yml")));
+    assert_eq!(
+        about["links"]["release"],
+        format!("https://github.com/hbasheer/yardbell/releases/tag/v{version}")
+    );
+    assert_eq!(
+        r.releases_asked.load(std::sync::atomic::Ordering::SeqCst),
+        0,
+        "the figures never wait on GitHub"
+    );
+}
+
+#[tokio::test]
+async fn the_update_check_asks_github_once_an_hour() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let check = || {
+        Request::get("/app/about/updates")
+            .header(header::COOKIE, c.clone())
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, check()).await;
+    assert_eq!(status, StatusCode::OK);
+    let answer: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        answer,
+        json!({
+            "state": "available",
+            "latest": "99.0.0",
+            "url": "https://github.com/hbasheer/yardbell/releases/tag/v99.0.0",
+        })
+    );
+    send(&r.app, check()).await;
+    let asked = || r.releases_asked.load(std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(asked(), 1);
+    r.advance(3600);
+    send(&r.app, check()).await;
+    assert_eq!(asked(), 2);
 }
 
 #[tokio::test]

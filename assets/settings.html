@@ -67,6 +67,7 @@
       <p class="nav-label">General</p>
       <a href="#appearance">Appearance</a>
       <a href="#security">Security</a>
+      <a href="#about">About</a>
     </nav>
     <div class="page-body">
   <div id="undo-bar" class="banner info" hidden>
@@ -251,6 +252,22 @@
     <div class="panel danger-zone">
       <div class="banner-text"><strong>Log out everywhere</strong><span>Signs out every phone and browser, except this one.</span></div>
       <button class="btn danger-solid" type="button" id="logout-all">Log out everywhere</button>
+    </div>
+  </section>
+
+  <section id="about">
+    <div class="section-head"><h2>About Yardbell</h2></div>
+    <div class="banner warn" id="about-mismatch" hidden>
+      <div class="banner-text"><strong id="about-mismatch-title"></strong><span id="about-mismatch-text"></span></div>
+    </div>
+    <div class="panel about">
+      <div class="about-head">
+        <p class="about-version">Yardbell <span id="about-version"></span></p>
+        <p class="about-update" id="about-update" role="status"></p>
+        <button class="btn quiet" type="button" id="about-retry" hidden>Try again</button>
+      </div>
+      <dl class="facts" id="about-facts"></dl>
+      <p class="about-links" id="about-links"></p>
     </div>
   </section>
     </div>

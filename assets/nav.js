@@ -4,6 +4,7 @@
   const app = window.__TAURI__;
   const mac = /Mac/.test(navigator.platform);
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+  const version = (server) => (server.version ? ` <a class="server-version" href="/settings#about" title="About Yardbell">v${esc(server.version)}</a>` : "");
 
   function memPct(m) {
     const h = m.health;
@@ -95,7 +96,7 @@
       nav.after(line);
     }
     line.title = `Yardbell runs on ${server.machine}. Phones and other machines reach it at ${server.address}.`;
-    paint(line, `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>`);
+    paint(line, `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>${version(server)}`);
   }
 
   function resetsIn(epoch) {

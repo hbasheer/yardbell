@@ -226,6 +226,7 @@ pub async fn serve(
         ),
         phone,
         dispatch,
+        releases: crate::about::github(),
         refresh: Arc::new(move |machine: Option<String>| {
             let poller = poller.clone();
             Box::pin(async move {
