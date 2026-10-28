@@ -1,4 +1,5 @@
 use super::{actions, follow, missing, Refusal};
+use crate::config::RunsOn;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -17,8 +18,14 @@ pub(super) struct Stored {
     pub(super) title: String,
     pub(super) created: String,
     pub(super) updated: String,
-    #[serde(default)]
-    pub(super) claude_session: Option<String>,
+    // A conversation stays on the agent it started on, since one's session means nothing to the
+    // other. Conversations from before Codex ran on Claude Code.
+    #[serde(default, skip_serializing_if = "RunsOn::is_default")]
+    pub(super) backend: RunsOn,
+    #[serde(default, alias = "claude_session")]
+    pub(super) session: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) instructions: Option<String>,
     #[serde(default)]
     pub(super) events: Vec<Value>,
     #[serde(default)]
@@ -32,6 +39,8 @@ pub(super) struct Conversation {
     pub(super) busy: bool,
     pub(super) cancel: Option<Arc<Notify>>,
     pub(super) live: Option<mpsc::Sender<Value>>,
+    // Whether the agent reached Yardbell's MCP server during the turn now running.
+    pub(super) reached: bool,
 }
 
 impl Conversation {
@@ -41,6 +50,7 @@ impl Conversation {
             busy: false,
             cancel: None,
             live: None,
+            reached: false,
         }
     }
 }
@@ -49,6 +59,8 @@ pub(super) struct Shared {
     pub(super) dir: PathBuf,
     pub(super) chats: Mutex<HashMap<String, Conversation>>,
     pub(super) usage: Mutex<Option<Value>>,
+    pub(super) codex_usage: Mutex<Option<Value>>,
+    pub(super) codex_home: Option<PathBuf>,
 }
 
 impl Shared {
@@ -79,18 +91,29 @@ impl Shared {
         }
     }
 
-    fn usage_file(&self) -> PathBuf {
-        self.dir.join("usage.json")
+    pub(super) fn usage_file(dir: &Path, runs_on: RunsOn) -> PathBuf {
+        dir.join(match runs_on {
+            RunsOn::Claude => "usage.json",
+            RunsOn::Codex => "usage-codex.json",
+        })
     }
 
     pub(super) fn set_usage(&self, usage: Value) {
+        self.keep_usage(RunsOn::Claude, usage);
+    }
+
+    pub(super) fn keep_usage(&self, runs_on: RunsOn, usage: Value) {
         if let Err(e) = write_private(
-            &self.usage_file(),
+            &Shared::usage_file(&self.dir, runs_on),
             &serde_json::to_vec(&usage).unwrap_or_default(),
         ) {
-            tracing::warn!(error = %e, "could not save the Claude usage");
+            tracing::warn!(error = %e, "could not save the {} usage", runs_on.label());
         }
-        *self.usage.lock().expect("dispatch lock") = Some(usage);
+        let slot = match runs_on {
+            RunsOn::Claude => &self.usage,
+            RunsOn::Codex => &self.codex_usage,
+        };
+        *slot.lock().expect("dispatch lock") = Some(usage);
     }
 
     pub(super) fn finish(&self, id: &str) {
@@ -98,6 +121,7 @@ impl Shared {
             c.busy = false;
             c.cancel = None;
             c.live = None;
+            c.reached = false;
         }
         self.save(id);
     }

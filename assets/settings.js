@@ -120,6 +120,20 @@ function dispatchAgents() {
   f.elements.agent.value = current;
 }
 
+// Dispatch itself runs on the machine Yardbell runs on, whichever agent the sessions use.
+function dispatchRunsOn() {
+  const f = $("dispatch-form");
+  const codex = f.elements.runs_on.value === "codex";
+  for (const label of f.querySelectorAll("[data-runs-on]")) label.hidden = label.dataset.runsOn !== (codex ? "codex" : "claude");
+  const name = codex ? "Codex" : "Claude Code";
+  const here = (data.machines || []).find((m) => m.local);
+  const missing = here && installedOn?.[here.name] && !installedOn[here.name].includes(codex ? "codex" : "claude");
+  $("dispatch-foot").textContent = missing
+    ? `${name} is not installed on ${here.name}, where Dispatch runs, so Dispatch cannot answer until it is.`
+    : `Dispatch runs ${name} on this machine. The agent it starts can be any of yours.`;
+  $("codex-models").innerHTML = (data.codex_models || []).map((m) => `<option value="${esc(m)}"></option>`).join("");
+}
+
 async function loadInstalled() {
   const names = (data.machines || []).map((m) => m.name);
   const answers = await Promise.all(names.map((name) =>
@@ -128,6 +142,7 @@ async function loadInstalled() {
   if (!found.length) return;
   installedOn = Object.fromEntries(found);
   dispatchAgents();
+  dispatchRunsOn();
 }
 
 function renderDispatch() {
@@ -137,7 +152,10 @@ function renderDispatch() {
   dispatchAgents();
   f.elements.instructions.value = d.instructions || "";
   f.elements.agent.value = d.agent || "";
+  f.elements.runs_on.value = d.runs_on || "claude";
   f.elements.model.value = d.model || "";
+  f.elements.codex_model.value = d.codex_model || "";
+  dispatchRunsOn();
   f.elements.approval.value = { ask: "prompt", auto: "allow" }[d.approval] || d.approval || "prompt";
   rules = (d.rules || []).map((r) => ({ action: "any", machine: "any", folder: "", ...r }));
   renderRules();
@@ -490,11 +508,17 @@ $("dispatch-form").addEventListener("submit", async (e) => {
     await api("POST", "/api/settings/dispatch", {
       instructions: f.elements.instructions.value,
       agent: f.elements.agent.value,
+      runs_on: f.elements.runs_on.value,
       model: f.elements.model.value,
+      codex_model: f.elements.codex_model.value.trim(),
       approval: f.elements.approval.value,
       rules: rules.map((r) => ({ ...r, folder: r.folder.trim() })),
     });
-    saved("Dispatch settings saved. They apply from the next message.");
+    const before = (data.dispatch || {}).runs_on || "claude";
+    const now = f.elements.runs_on.value;
+    saved(now === before
+      ? "Dispatch settings saved. They apply from the next message."
+      : `Dispatch settings saved. New conversations start on ${now === "codex" ? "Codex" : "Claude Code"}, and open ones carry on where they started.`);
     await load();
   } catch (err) {
     toast(err.message);
@@ -502,6 +526,8 @@ $("dispatch-form").addEventListener("submit", async (e) => {
     button.disabled = false;
   }
 });
+
+$("dispatch-form").elements.runs_on.addEventListener("change", dispatchRunsOn);
 
 $("rule-add").addEventListener("click", () => {
   rules.push({ action: "stop_session", machine: "any", folder: "", approval: "deny" });

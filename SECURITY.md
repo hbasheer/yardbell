@@ -12,7 +12,16 @@ same care as an ssh key.
 - Secrets, such as the tokens of the MCP servers given to sessions, never go on a command line, where
   every account on a shared machine can read them with `ps`. They travel over ssh's standard input
   into files only your account can read. Text typed into a session, by Dispatch, a review or the
-  MCP `send_to_session` tool, travels the same way.
+  MCP `send_to_session` tool, travels the same way. When Dispatch runs on Codex, it gets its token
+  for Yardbell's MCP server, and the headers and environment of your MCP servers, from environment
+  variables and its message on standard input, never as arguments. A server whose URL carries a
+  query or a login is refused there, since Codex takes the URL as an argument.
+- Dispatch can only act through Yardbell's MCP server, whose approval setting and rules decide
+  every step. On Claude Code it is allowed only Yardbell's tools and the MCP servers set in
+  Settings. On Codex the same holds: Codex's own shell, browser and other tools that act outside its
+  sandbox are turned off, it runs in a read-only sandbox, so its file edits and sub-agents cannot
+  write anything, and it never reads your `~/.codex/config.toml`, so servers and approval settings
+  there play no part.
 - Tokens live in `secrets.yml`, mode 600 in a mode 700 folder, and `yardbell.yml` (also mode 600)
   refers to them by name as `${secret:NAME}`, so the config can be read or shared without them.
   Yardbell fills a reference in only where the value is used and never writes it back to the

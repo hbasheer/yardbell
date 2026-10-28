@@ -86,6 +86,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "mcp_servers": cfg.mcp_servers,
         "secrets": secrets,
         "dispatch": cfg.dispatch,
+        "codex_models": app.dispatch.codex_models(),
         "agents": cfg
             .agents()
             .iter()

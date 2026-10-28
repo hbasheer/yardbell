@@ -145,11 +145,37 @@
     }
   }
 
+  function usageRows(windows, who) {
+    return windows.map((w) => {
+      // Past its reset time the stored figure is from the previous window, so it is not shown.
+      const reset = w.resets_at && w.resets_at * 1000 <= Date.now();
+      const pct = reset ? 0 : Math.round(w.used * 100);
+      const tone = !reset && (w.status !== "allowed" || pct >= 90) ? "bad" : pct >= 70 ? "warn" : "ok";
+      return `<div class="usage-row">
+        <div class="usage-line"><span>${esc(w.label)}</span><span class="usage-pct">${reset ? "reset" : `${pct}%`}</span></div>
+        <div class="usage-track" role="progressbar" aria-label="${esc(`${who} ${w.label}`)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="usage-fill ${tone}" style="width: ${Math.max(pct, 1)}%"></span></div>
+        <div class="usage-reset">${esc(reset ? "new figures on the next check" : resetsIn(w.resets_at))}</div>
+      </div>`;
+    }).join("");
+  }
+
+  // Codex reports its limits only in its own records of a thread, so these are as of Dispatch's
+  // last reply on Codex, with nothing to refresh.
+  function codexUsage(usage) {
+    const codex = usage?.codex?.windows?.length ? usage.codex : null;
+    if (!codex && usage?.runs_on !== "codex") return "";
+    const age = codex?.seen ? `Dispatch, ${checkedAgo(codex.seen)}` : "";
+    const head = `<div class="usage-head" title="From Codex's own record of Dispatch's last reply"><span>Codex usage</span><span class="usage-tools"><span class="usage-age">${esc(age)}</span></span></div>`;
+    return head + (codex ? usageRows(codex.windows, "Codex") : `<p class="usage-none">Not available for Codex.</p>`);
+  }
+
   function renderUsage(usage) {
     const foot = document.querySelector(".side .side-foot");
     if (!foot) return;
     let card = document.getElementById("nav-usage");
-    if (!usage?.windows?.length) {
+    const claude = usage?.windows?.length ? usage : null;
+    const codex = codexUsage(usage);
+    if (!claude && !codex) {
       card?.remove();
       return;
     }
@@ -157,30 +183,27 @@
       card = document.createElement("section");
       card.id = "nav-usage";
       card.className = "usage-card";
-      card.setAttribute("aria-label", "Claude usage");
+      card.setAttribute("aria-label", "Usage");
       card.addEventListener("click", (e) => {
         const button = e.target.closest(".usage-refresh");
         if (button) refreshUsage(button);
       });
       foot.before(card);
     }
-    const live = usage.source === "account";
+    if (!claude) {
+      card.removeAttribute("title");
+      card.innerHTML = codex;
+      return;
+    }
+    const live = claude.source === "account";
     card.title = live
       ? "From your Claude account, checked every 5 minutes"
       : "From Dispatch's last reply. Live figures need Claude Code signed in on the machine running Yardbell.";
-    const age = usage.seen ? `${live ? "" : "Dispatch, "}${checkedAgo(usage.seen)}` : "";
+    const age = claude.seen ? `${live ? "" : "Dispatch, "}${checkedAgo(claude.seen)}` : "";
     const refresh = `<button class="usage-refresh" type="button" aria-label="Check Claude usage now" title="Check now"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 3.5v3h-3M3 12.5v-3h3M12.4 6.5A5 5 0 0 0 3.6 5.2M3.6 9.5a5 5 0 0 0 8.8 1.3"/></svg></button>`;
-    card.innerHTML = `<div class="usage-head"><span>Claude usage</span><span class="usage-tools"><span class="usage-age">${esc(age)}</span>${refresh}</span></div>` + usage.windows.map((w) => {
-      // Past its reset time the stored figure is from the previous window, so it is not shown.
-      const reset = w.resets_at && w.resets_at * 1000 <= Date.now();
-      const pct = reset ? 0 : Math.round(w.used * 100);
-      const tone = !reset && (w.status !== "allowed" || pct >= 90) ? "bad" : pct >= 70 ? "warn" : "ok";
-      return `<div class="usage-row">
-        <div class="usage-line"><span>${esc(w.label)}</span><span class="usage-pct">${reset ? "reset" : `${pct}%`}</span></div>
-        <div class="usage-track" role="progressbar" aria-label="${esc(w.label)}" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct}"><span class="usage-fill ${tone}" style="width: ${Math.max(pct, 1)}%"></span></div>
-        <div class="usage-reset">${esc(reset ? "new figures on the next check" : resetsIn(w.resets_at))}</div>
-      </div>`;
-    }).join("");
+    card.innerHTML = `<div class="usage-head"><span>Claude usage</span><span class="usage-tools"><span class="usage-age">${esc(age)}</span>${refresh}</span></div>`
+      + usageRows(claude.windows, "Claude")
+      + codex;
   }
 
   let build = "";

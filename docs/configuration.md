@@ -286,7 +286,9 @@ dispatch:
     acme/web work goes to devbox unless it is down.
     Branch names look like eng-1234-short-name.
   agent: codex                    # agent it starts in new sessions; empty uses default_agent
+  runs_on: codex                  # claude (the default) or codex: what Dispatch itself runs on
   model: haiku                    # sonnet, opus or haiku; empty uses Claude Code's default
+  codex_model: gpt-6.1-sol        # the Codex model when runs_on is codex; empty uses Codex's default
   approval: prompt                # prompt (the default), allow or deny
   rules:                          # optional, see below
     - action: stop_session
@@ -299,8 +301,13 @@ dispatch:
       approval: allow
 ```
 
-`instructions` is at most 4000 characters. Dispatch itself always runs Claude Code on the host;
-`agent` only chooses what it starts on the machines.
+`instructions` is at most 4000 characters. `runs_on` chooses the agent Dispatch itself runs on the
+host, `claude` or `codex`; `agent` only chooses what it starts on the machines. `model` stays the
+Claude Code model whichever `runs_on` says, so switching never leaves an invalid model behind.
+`codex_model` is any Codex model name, up to 64 letters, digits, dots, dashes and underscores, and
+Settings suggests the ones in Codex's own list. Either one only applies to new conversations; a
+conversation stays on the agent it started on. With both at their defaults neither is written to
+`yardbell.yml`, so 0.7.5 still reads it.
 
 `approval` decides what happens when Dispatch starts, stops, types into or reviews a session:
 `prompt` makes it a step that waits for you to approve, edit or reject it, `allow` runs it at once

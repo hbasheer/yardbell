@@ -114,6 +114,9 @@ pub async fn handle(
             .and_then(|v| v.to_str().ok())
             .filter(|id| crate::dispatch::valid_id(id))
             .map(str::to_string);
+        if let Some(id) = &conversation {
+            app.dispatch.reached(id);
+        }
         Caller::Dispatch(conversation)
     } else {
         Caller::Client

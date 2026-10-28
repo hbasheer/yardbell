@@ -1,4 +1,5 @@
 mod actions;
+mod backend;
 mod diff;
 mod follow;
 mod group;
@@ -39,8 +40,10 @@ pub use store::write_private;
 pub use tasks::{History as TaskHistory, SavedTask, Version as TaskVersion, MAX_VERSIONS};
 pub use turn::Opening;
 
+use crate::config::RunsOn;
 use crate::shell::Runner;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use store::{load, now, Conversation, Shared, Stored};
@@ -72,7 +75,7 @@ fn missing(what: &str) -> Refusal {
 
 pub struct Dispatch {
     runner: Arc<dyn Runner>,
-    command: Mutex<Option<Vec<String>>>,
+    commands: Mutex<HashMap<RunsOn, Vec<String>>>,
     token: String,
     shared: Arc<Shared>,
     memory: Memory,
@@ -81,25 +84,60 @@ pub struct Dispatch {
 impl Dispatch {
     pub fn new(runner: Arc<dyn Runner>, dir: PathBuf) -> Dispatch {
         let chats = Mutex::new(load(&dir));
-        let usage = std::fs::read(dir.join("usage.json"))
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+        let usage = |runs_on| {
+            std::fs::read(Shared::usage_file(&dir, runs_on))
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok())
+        };
+        let (claude_usage, codex_usage) = (usage(RunsOn::Claude), usage(RunsOn::Codex));
         Dispatch {
             runner,
-            command: Mutex::new(None),
+            commands: Mutex::new(HashMap::new()),
             token: crate::mcp::new_token(),
             memory: Memory::new(&dir),
             shared: Arc::new(Shared {
                 dir,
                 chats,
-                usage: Mutex::new(usage),
+                usage: Mutex::new(claude_usage),
+                codex_usage: Mutex::new(codex_usage),
+                codex_home: backend::codex::home(),
             }),
         }
     }
 
     pub fn with_command(self, argv: Vec<String>) -> Dispatch {
-        *self.command.lock().expect("dispatch lock") = Some(argv);
+        self.with_agent(RunsOn::Claude, argv)
+    }
+
+    pub fn with_agent(self, runs_on: RunsOn, argv: Vec<String>) -> Dispatch {
+        self.commands
+            .lock()
+            .expect("dispatch lock")
+            .insert(runs_on, argv);
         self
+    }
+
+    pub fn with_codex_home(mut self, home: PathBuf) -> Dispatch {
+        if let Some(shared) = Arc::get_mut(&mut self.shared) {
+            shared.codex_home = Some(home);
+        }
+        self
+    }
+
+    // The MCP server saw a request from this conversation's agent, so the agent reached
+    // Yardbell's tools.
+    pub fn reached(&self, id: &str) {
+        if let Some(c) = self.shared.lock().get_mut(id) {
+            c.reached = true;
+        }
+    }
+
+    pub fn codex_models(&self) -> Vec<String> {
+        self.shared
+            .codex_home
+            .as_deref()
+            .map(backend::codex::models)
+            .unwrap_or_default()
     }
 
     pub fn token(&self) -> &str {
@@ -123,6 +161,7 @@ impl Dispatch {
                 "busy": c.busy,
                 "waiting": actions::pending(&c.stored.events).count(),
                 "trigger": c.stored.trigger.as_ref().map(|t| &t["name"]),
+                "backend": c.stored.backend,
             }))
             .collect::<Vec<_>>())
     }
@@ -138,6 +177,7 @@ impl Dispatch {
             "sessions": c.stored.sessions,
             "busy": c.busy,
             "trigger": c.stored.trigger,
+            "backend": c.stored.backend,
         }))
     }
 
@@ -573,15 +613,19 @@ mod tests {
     use std::path::Path;
     use tokio::sync::mpsc;
 
-    pub(super) fn fake_claude(dir: &Path, script: &str) -> Dispatch {
+    pub(super) fn fake_script(dir: &Path, name: &str, shell: &str, script: &str) -> String {
         static COUNT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let n = COUNT.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        let path = dir.join(format!("claude-{n}"));
-        std::fs::write(&path, format!("#!/bin/sh\n{script}\n")).unwrap();
+        let path = dir.join(format!("{name}-{n}"));
+        std::fs::write(&path, format!("#!{shell}\n{script}\n")).unwrap();
         std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o755))
             .unwrap();
+        path.display().to_string()
+    }
+
+    pub(super) fn fake_claude(dir: &Path, script: &str) -> Dispatch {
         Dispatch::new(Arc::new(FakeRunner::default()), dir.join("dispatch"))
-            .with_command(vec![path.display().to_string()])
+            .with_command(vec![fake_script(dir, "claude", "/bin/sh", script)])
     }
 
     pub(super) async fn drain(mut rx: mpsc::Receiver<Value>) -> Vec<Value> {

@@ -25,6 +25,10 @@ let answers = new Map();
 let view = 0;
 let trigger = null;
 let triggerInfo = null;
+let backend = "claude";
+let runsOn = null;
+
+const AGENTS = { claude: "Claude Code", codex: "Codex" };
 
 let editingTask = null;
 
@@ -34,10 +38,10 @@ const SESSION_STATES = {
   ended: { badge: "", word: "Ended", hint: "The session is gone." },
 };
 
-const INTRO = html`<div class="dispatch-intro">
+const intro = () => html`<div class="dispatch-intro">
   <h2>What should your agents work on?</h2>
   <p>Describe a task in plain words. Dispatch finds the machine that has the repository and the most room, and offers to start an agent there. You approve each step before it runs, unless Settings lets Dispatch go ahead on its own.</p>
-  <p class="help">Dispatch runs Claude Code on this machine with Yardbell's own tools. It can start, read and answer sessions, but never edits files itself.</p>
+  <p class="help">Dispatch runs ${runsOn?.label || "Claude Code"} on this machine with Yardbell's own tools. It can start, read and answer sessions, but never edits files itself.</p>
   <p class="help">Type <kbd>/</kbd> to use one of your tasks, or <kbd>@</kbd> to name a machine, session or folder.</p>
 </div>`;
 
@@ -387,10 +391,23 @@ async function setTrigger(enabled) {
   draw();
 }
 
+// A conversation keeps the agent it started on, since one agent cannot pick up the other's.
+function backendNote() {
+  if (!current || !runsOn || backend === runsOn.runs_on) return nothing;
+  const was = AGENTS[backend] || backend;
+  return html`<p class="backend-note" role="note">This conversation runs on ${was}, so it carries on there. New conversations start on ${runsOn.label}. To switch, start a new conversation.</p>`;
+}
+
 function draw() {
   render(!current && !events.length
-    ? INTRO
-    : html`${triggerHead()}${repeat(blocks(events), (b) => `${view}:${b.key}`, block)}${steps.waitingBar(events)}`, log);
+    ? intro()
+    : html`${triggerHead()}${backendNote()}${repeat(blocks(events), (b) => `${view}:${b.key}`, block)}${steps.waitingBar(events)}`, log);
+}
+
+async function loadRunsOn() {
+  runsOn = await api("GET", "/dispatch/runs-on").catch(() => runsOn);
+  if (!current) backend = runsOn?.runs_on || backend;
+  draw();
 }
 
 function show(event) {
@@ -471,6 +488,8 @@ async function open(id) {
   setUrl();
   events = [];
   trigger = null;
+  backend = runsOn?.runs_on || "claude";
+  if (!id) loadRunsOn();
   answers = new Map();
   steps.reset();
   groups.reset();
@@ -492,6 +511,7 @@ async function open(id) {
     events = convo.events.slice();
     shownEvents = convo.events.length;
     shownUpdated = convo.updated;
+    backend = convo.backend || "claude";
     trigger = convo.trigger || null;
     if (trigger) loadTriggerInfo();
     tracked = convo.sessions || [];
@@ -944,6 +964,7 @@ for (const id of ["convos", "tasks"]) {
   });
 }
 const handedOver = window.YardbellInsights.takeOver();
+loadRunsOn();
 loadTasks();
 loadState().then(() => draw());
 loadList()
