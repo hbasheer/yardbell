@@ -19,6 +19,13 @@ and the project uses [Semantic Versioning](https://semver.org).
   using no longer takes it. When copying fails, a message says how to copy instead.
 - Fixed: closing, reloading or reconnecting a terminal could type a newline and Ctrl-D into its
   session, which ended a plain shell and sent stray keys to an agent.
+- Workspace: tabs that do not fit in the row are no longer out of reach. The row scrolls sideways
+  with the mouse wheel, a trackpad or a swipe, fades at an edge that has more tabs behind it, and
+  gets a button at its end that lists every open tab with its state, so you can jump to any of
+  them. The tab you switch to always scrolls into view, whether you click it, pick it from the
+  sidebar or the list, start a new session, press Alt+[ or Alt+], or reload the page.
+- Workspace: tabs are 140 to 220px wide, and a long name ends in an ellipsis with the full name in
+  its tooltip. Enter or Space opens the tab that has keyboard focus.
 
 ## [0.6.7] - 2026-10-27
 

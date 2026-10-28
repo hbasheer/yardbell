@@ -55,7 +55,10 @@ to switch to it and a session to open it in the focused pane. Hover a session fo
 which opens it to the right of or below the focused pane, or in a new tab. Each workspace has tabs: **+** opens the New
 session dialog in that folder and the new session in a tab of its own, and closing a tab with
 sessions in it asks whether to stop them or keep them running. Double-click a tab to rename it, or
-right-click it for Rename tab and Close tab. An empty pane offers to start an
+right-click it for Rename tab and Close tab. When the tabs do not fit, scroll the row with the mouse
+wheel, a trackpad or a swipe, or click the arrow button at its end for a list of every tab. The tab
+you switch to always scrolls into view, and a tab's tooltip shows its full name.
+An empty pane offers to start an
 agent there or to open one of the workspace's sessions. Panes split right or down and resize by
 dragging the border between them; **Keyboard shortcuts** in the sidebar lists the keys. On a phone
 the sidebar comes first and a session opens full screen.

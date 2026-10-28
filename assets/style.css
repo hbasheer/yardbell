@@ -1136,14 +1136,28 @@ body.resizing iframe { pointer-events: none; }
 .ws-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
 .ws-head { display: flex; align-items: center; gap: 4px; min-height: 40px; padding: 4px 8px; padding-top: max(4px, env(safe-area-inset-top)); background: var(--side); }
 .ws-back { display: none; }
-.ws-tabs { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
-.ws-tab { display: inline-flex; align-items: center; gap: 6px; height: 30px; padding: 0 6px 0 10px; border-radius: 6px; color: var(--muted); font-size: 13px; white-space: nowrap; cursor: pointer; user-select: none; }
+.ws-tabs { display: flex; gap: 2px; min-width: 0; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.ws-tabs::-webkit-scrollbar { display: none; }
+.ws-tabs.more-left, .ws-tabs.more-right {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 var(--fade-left, 0px), #000 calc(100% - var(--fade-right, 0px)), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 var(--fade-left, 0px), #000 calc(100% - var(--fade-right, 0px)), transparent);
+}
+.ws-tabs.more-left { --fade-left: 24px; }
+.ws-tabs.more-right { --fade-right: 24px; }
+.ws-tab { flex: 0 1 auto; display: inline-flex; align-items: center; gap: 6px; min-width: 140px; max-width: 220px; height: 30px; padding: 0 6px 0 10px; border-radius: 6px; color: var(--muted); font-size: 13px; white-space: nowrap; cursor: pointer; user-select: none; }
 .ws-tab:hover { background: var(--hover); color: var(--ink); }
+.ws-tab:focus-visible { outline-offset: -2px; }
 .ws-tab.current { background: var(--selected); color: var(--ink); font-weight: 550; }
-.ws-tab-close { display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); }
+.ws-tab-name { flex: 1 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.ws-tab-close { flex: none; display: inline-grid; place-items: center; width: 18px; height: 18px; border-radius: 4px; color: var(--muted); }
 .ws-tab-close:hover { background: var(--line); color: var(--ink); }
 .ws-tab-input { width: 12ch; height: 22px; padding: 0 6px; border: 1px solid var(--accent); border-radius: 4px; background: var(--surface); color: var(--ink); font: inherit; font-size: 13px; }
-.ws-new-tab { flex: none; }
+.ws-tab-list, .ws-new-tab { flex: none; }
+.ws-tab-list[aria-expanded="true"] { background: var(--selected); color: var(--ink); }
+.ws-menu { grid-template-columns: minmax(0, 1fr); max-width: min(360px, calc(100vw - 16px)); max-height: calc(100dvh - 56px); overflow: hidden auto; }
+.ws-menu [role="menuitem"] { gap: 8px; }
+.ws-menu [role="menuitem"][aria-current="true"] { font-weight: 600; }
+.menu-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ws-panes { position: relative; flex: 1; min-height: 0; background: var(--side); }
 .ws-panes.dragging { cursor: col-resize; user-select: none; }
 .ws-panes.dragging iframe { pointer-events: none; }
