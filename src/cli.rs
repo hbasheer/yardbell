@@ -155,6 +155,7 @@ pub async fn serve(
     let after_state = state.clone();
     let after_tunnels = tunnels.clone();
     let after_phone = phone.clone();
+    let after_path = path.clone();
     let after: AfterTick = Arc::new(move |cfg: &Config| {
         let base = base_url(cfg);
         let host = base
@@ -190,6 +191,51 @@ pub async fn serve(
                 dispatch.report_from(&change, &screen, &folders, &m).await;
                 // The session card lands after the check that found the change, so open
                 // Dispatch pages are told again.
+                state.touch();
+            });
+        }
+        for due in after_dispatch.due(&view) {
+            let (dispatch, sessions, state) = (
+                after_dispatch.clone(),
+                after_sessions.clone(),
+                after_state.clone(),
+            );
+            let (cfg, path) = (cfg.clone(), after_path.clone());
+            tokio::spawn(async move {
+                let mut screens = Vec::new();
+                for child in &due.children {
+                    screens.push(match cfg.machine(&child.machine) {
+                        Some(m) if child.live => sessions.read(m, &child.name, 400).await.ok(),
+                        _ => None,
+                    });
+                }
+                let follow = dispatch.gathered(&due, &screens);
+                state.touch();
+                if !follow {
+                    return;
+                }
+                let extra = match (crate::secrets::Secrets::for_config(&path), cfg.host()) {
+                    (Ok(s), Some(m)) => cfg.mcp_config_for(&m.name, &s),
+                    (Err(e), Some(_)) if !cfg.mcp_servers.is_empty() => Err(e.to_string()),
+                    _ => Ok(None),
+                };
+                let started = match extra {
+                    Ok(extra) => {
+                        dispatch
+                            .follow_up(
+                                &due.conversation,
+                                &due.group,
+                                cfg.port,
+                                &cfg.dispatch,
+                                extra.as_deref(),
+                            )
+                            .await
+                    }
+                    Err(e) => Err(e),
+                };
+                if let Err(e) = started {
+                    tracing::warn!(error = %e, "Dispatch did not follow up on a gathered group");
+                }
                 state.touch();
             });
         }

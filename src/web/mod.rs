@@ -401,6 +401,10 @@ pub fn router(app: Arc<AppState>) -> Router {
             post(dispatch_decide),
         )
         .route(
+            "/dispatch/conversations/{id}/groups/{group}",
+            post(dispatch_decide_group),
+        )
+        .route(
             "/dispatch/conversations/{id}/reviews",
             post(dispatch_request_review),
         )
@@ -415,6 +419,10 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route(
             "/dispatch-review.js",
             get(|| async { asset("dispatch-review.js") }),
+        )
+        .route(
+            "/dispatch-group.js",
+            get(|| async { asset("dispatch-group.js") }),
         )
         .route("/sessions/{machine}/{name}/keys", post(session_keys))
         .route("/dispatch/ask", post(dispatch_ask))
@@ -973,6 +981,24 @@ async fn decide(
                     .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such step".into()))?;
                 let tool = step["tool"].as_str().unwrap_or_default();
                 crate::mcp::check(app, &app.config()?, tool, input)?;
+                if let Some(mut inputs) = app.dispatch.siblings(id, action) {
+                    inputs.insert(0, input.clone());
+                    let places = crate::mcp::group_places(app, &inputs);
+                    if places[1..].contains(&places[0]) {
+                        let p = &places[0];
+                        let on = match p.branch.as_str() {
+                            "" => "on its current branch".to_string(),
+                            branch => format!("on branch {branch}"),
+                        };
+                        return Err(ApiError(
+                            StatusCode::BAD_REQUEST,
+                            format!(
+                                "another child of this group already works in {} on {} {on}, give this one its own branch",
+                                p.repo, p.machine
+                            ),
+                        ));
+                    }
+                }
             }
             let (tool, mut input) = app
                 .dispatch
@@ -986,6 +1012,7 @@ async fn decide(
             {
                 input["read_only"] = json!(true);
             }
+            let input = app.dispatch.run_input(id, action, input);
             let (app, id, action) = (app.clone(), id.to_string(), action.to_string());
             detached(async move {
                 let outcome = crate::mcp::perform(&app, &tool, input)
@@ -1036,11 +1063,39 @@ async fn dispatch_decide_all(
     Ok(Json(decided).into_response())
 }
 
+// Approve all or Reject all on a group's card: its children that still wait, in their order.
+async fn dispatch_decide_group(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((id, group)): UrlPath<(String, String)>,
+    Json(req): Json<Decision>,
+) -> Result<Response, ApiError> {
+    let id = conversation_id(&id)?;
+    let group = step_id(&group)?;
+    if req.input.is_some() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "edit children one at a time".into(),
+        ));
+    }
+    let mut decided = Vec::new();
+    for action in app.dispatch.group_pending(id, group).map_err(refused)? {
+        match decide(&app, id, &action, &req).await {
+            Ok(event) => decided.push(event),
+            Err(ApiError(StatusCode::CONFLICT, _)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(Json(decided).into_response())
+}
+
 #[derive(Deserialize)]
 struct CardInput {
     card: usize,
     #[serde(default)]
     key: String,
+    // A child of a Results card.
+    #[serde(default)]
+    child: Option<usize>,
 }
 
 fn card_of(app: &AppState, id: &str, index: usize, role: &str) -> Result<Value, ApiError> {
@@ -1058,7 +1113,19 @@ async fn dispatch_request_review(
     Json(req): Json<CardInput>,
 ) -> Result<Response, ApiError> {
     let id = conversation_id(&id)?;
-    let card = card_of(&app, id, req.card, "session")?;
+    let card = match req.child {
+        None => card_of(&app, id, req.card, "session")?,
+        Some(child) => card_of(&app, id, req.card, "results")?["children"]
+            .get(child)
+            .filter(|c| c["started"] == true)
+            .cloned()
+            .ok_or_else(|| {
+                ApiError(
+                    StatusCode::NOT_FOUND,
+                    "no such session in the results".into(),
+                )
+            })?,
+    };
     let text = |k: &str| card[k].as_str().unwrap_or_default().to_string();
     let cfg = app.config()?;
     let (input, of) = crate::mcp::review_plan(

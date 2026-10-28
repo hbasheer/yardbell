@@ -2,6 +2,7 @@ import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 import * as steps from "/dispatch-review.js";
 import * as pulls from "/dispatch-pull.js";
 import * as scans from "/dispatch-scan.js";
+import * as groups from "/dispatch-group.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
 
@@ -271,6 +272,8 @@ function blocks(list) {
       return;
     }
     group = null;
+    // A group's children are steps of their own, drawn inside the group's card.
+    if (e.role === "action" && e.group) return;
     out.push({ kind: e.role, key: i, event: e });
   });
   return out;
@@ -322,8 +325,14 @@ function block(b) {
       return sessionCard(b.event, b.key);
     case "pull":
       return pulls.pullCard(b.event, b.key);
+    case "group":
+      return groups.groupCard(b.event);
+    case "results":
+      return groups.resultsCard(b.event, b.key);
     case "user":
-      return html`<p class="msg user">${b.event.text}</p>`;
+      return b.event.by === "yardbell"
+        ? html`<div class="msg user by-yardbell"><span class="msg-by">Sent by Yardbell once the results were in</span>${b.event.text}</div>`
+        : html`<p class="msg user">${b.event.text}</p>`;
     case "assistant":
       return html`<div class="msg md">${markdown(b.event.text)}</div>`;
     case "error":
@@ -461,6 +470,7 @@ async function open(id) {
   trigger = null;
   answers = new Map();
   steps.reset();
+  groups.reset();
   setBusy(false);
   renderList();
   if (narrow.matches) $("convos").open = false;
@@ -600,6 +610,7 @@ async function renderTracked() {
   box.hidden = !tracked.length;
   if (!tracked.length) { render(nothing, box); return; }
   const state = await loadState();
+  if (events.some((e) => e.role === "group")) draw();
   render(html`<span class="dispatch-sessions-label">Sessions</span>${repeat(tracked, (t) => `${t.machine}/${t.name}`, (t) => trackedItem(t, state))}`, box);
 }
 
@@ -644,6 +655,28 @@ steps.setup({
   },
   replaceAt(index, event) {
     events[index] = event;
+  },
+});
+
+groups.setup({
+  api,
+  toast,
+  draw,
+  termUrl,
+  short,
+  conversation: () => current,
+  events: () => events,
+  state: () => lastState,
+  reload: () => catchUp(false),
+  decided: () => loadList().catch(() => {}),
+  addStep(step) {
+    events.push(step);
+    shownEvents = Math.max(shownEvents, events.length);
+    requestAnimationFrame(scrollDown);
+  },
+  replaceStep(step) {
+    const i = events.findIndex((e) => e.role === "action" && e.id === step.id);
+    if (i >= 0) events[i] = step;
   },
 });
 

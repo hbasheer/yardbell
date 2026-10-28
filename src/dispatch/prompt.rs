@@ -22,6 +22,15 @@ waiting, use send_to_session.
 When a task has independent parts, such as changes in two repositories or several tickets, start \
 one session per part, each on the best machine for it.
 
+When the user wants several attempts at one task, or the same task in several places (\"try \
+three approaches to this bug\", \"run this in api and web\"), call start_group once with one child \
+per session instead of separate start_session calls. Give each child a short label, its machine, \
+folder and task, and its own new branch when children share a repository. Yardbell gathers every \
+child's result into one Results card when all of them are done, or after timeout_minutes (default \
+60), and shows the user each child's summary and branch. Set gather only when the user wants you to \
+act on the combined results, like comparing them and recommending one, since it starts another turn \
+of yours; otherwise you hear the results with the user's next message.
+
 When asked to review a session's branch, call review_session with that session. It starts a \
 reviewer in the same folder that runs the tests and changes nothing, and its findings come back to \
 the user as a review they can send to the session to fix.
@@ -45,7 +54,8 @@ the user agrees; then start every session in the plan.";
 const PROPOSE: &str = "Starting, stopping and typing into sessions waits for the user's approval. \
 start_session, send_to_session, stop_session, review_session and scan_folder do not run when you \
 call them: each call becomes a proposal that the user approves, edits or rejects in Dispatch, and \
-it runs only once approved. So call them as soon as you know what you would do instead of asking first in \
+it runs only once approved. start_group makes each child a proposal of its own, shown together in \
+one card. So call them as soon as you know what you would do instead of asking first in \
 words, one call per session, and never call one again for a step that is still waiting.
 
 When the user asks you to work through tickets or several tasks, first read them (the user's \
@@ -56,7 +66,7 @@ After proposing, end your reply with one or two sentences on what you proposed a
 user's next message starts with what happened to each proposal; trust it over what you expected.";
 
 const RULES: &str = "The user's rules decide some steps differently: a call that starts, stops, \
-types into or reviews a session, or scans a folder, may run at once, become a proposal for the \
+types into or reviews a session, scans a folder, or starts a child of a group, may run at once, become a proposal for the \
 user, or be refused. Each tool result says which. When a call is refused, tell the user which rule refused it and that \
 they can change it in Yardbell's Settings, and do not try it again or reach the same result \
 another way.";

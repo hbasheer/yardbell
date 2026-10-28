@@ -186,6 +186,7 @@ pub(super) fn load(dir: &Path) -> HashMap<String, Conversation> {
                 .ok()?;
             valid_id(&stored.id).then_some(())?;
             actions::interrupted(&mut stored.events);
+            super::group::resumed(&mut stored.events);
             Some((stored.id.clone(), Conversation::new(stored)))
         })
         .collect()
