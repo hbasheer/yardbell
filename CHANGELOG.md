@@ -5,6 +5,19 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Dispatch has a memory: short entries such as where your repositories live, how you name
+  branches, your conventions and your corrections ("always use the shared docker stack on hp").
+  It reads them at the start of every turn, in a section of its prompt apart from your own
+  instructions, which still win. Dispatch proposes a change with its new `remember` tool, to add,
+  replace or forget an entry with the reason, after you correct it or tell it something that
+  lasts. Each change is a card with the change as a diff, which you approve, edit or reject, and
+  nothing is saved before you decide, even when Dispatch goes ahead without asking. A rule for
+  **Change Dispatch's memory** can allow or deny them.
+- **Memory**, under Dispatch in Settings, lists the entries to add, edit or delete, shows how much
+  of its 8 KB cap is used and keeps the history of changes with dates. A change that would go
+  over the cap is refused with a note to forget or shorten an entry. The memory is
+  `dispatch/memory.md` in the state folder, readable only by your account.
+
 ## [0.7.4] - 2026-10-28
 
 - A Mac with a container port bound to a loopback address it does not have, such as `127.0.1.3`,

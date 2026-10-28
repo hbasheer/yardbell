@@ -193,7 +193,7 @@
           <option value="deny">Refuse, unless a rule allows it</option>
         </select>
       </label>
-      <p class="help dispatch-help">Each step shows up in the conversation as a card. When Dispatch asks, you can approve it, edit it first or reject it, and nothing runs until you approve.</p>
+      <p class="help dispatch-help">Each step shows up in the conversation as a card. When Dispatch asks, you can approve it, edit it first or reject it, and nothing runs until you approve. A change to Dispatch's memory always asks, even when this is set to go ahead, unless a rule for it says otherwise.</p>
       <div class="rules-head">
         <h3>Rules</h3>
         <button class="btn" type="button" id="rule-add">Add rule</button>
@@ -205,6 +205,27 @@
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
+
+    <div class="section-head sub-head" id="dispatch-memory"><h3>Memory</h3><button class="btn small-link" type="button" id="memory-add">Add entry</button></div>
+    <p class="help">What Dispatch has learned to keep: where repositories live, branch naming, conventions and your corrections. It reads this at the start of every turn, apart from your instructions above, which win when the two disagree. Dispatch proposes each change as a step you approve, edit or reject, and you can change it here at any time. It is kept in <code id="memory-file">memory.md</code>, which only your account can read.</p>
+    <div class="memory-meter"><div class="usage-track" id="memory-meter" role="progressbar" aria-labelledby="memory-size" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0"><span class="usage-fill" id="memory-fill"></span></div><span id="memory-size"></span></div>
+    <div class="banner warn" id="memory-over" hidden>
+      <div class="banner-text"><strong>The memory is over its size cap</strong><span id="memory-over-text"></span></div>
+    </div>
+    <ul class="rows memory-rows" id="memory-rows" hidden></ul>
+    <p class="help" id="memory-empty">Nothing remembered yet. When you correct Dispatch or tell it something that lasts, it may propose an entry.</p>
+    <form class="panel" id="memory-form" hidden>
+      <label><span id="memory-form-label">New entry</span><textarea name="entry" rows="2" maxlength="500" placeholder="Always use the shared docker stack on hp." required></textarea></label>
+      <div class="form-foot">
+        <p class="help">One short sentence each. Up to 500 characters.</p>
+        <button class="btn quiet" type="button" id="memory-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Save entry</button>
+      </div>
+    </form>
+    <details class="memory-history" id="memory-history" hidden>
+      <summary id="memory-history-summary">History</summary>
+      <ol id="memory-history-list"></ol>
+    </details>
   </section>
 
   <section id="triggers">

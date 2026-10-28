@@ -3,7 +3,8 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
-const ACTIONS: [&str; 9] = [
+pub const REMEMBER: &str = "remember";
+const ACTIONS: [&str; 10] = [
     "start_session",
     "stop_session",
     "send_to_session",
@@ -13,6 +14,7 @@ const ACTIONS: [&str; 9] = [
     "integrate_branches",
     "push_branch",
     "move_session",
+    REMEMBER,
 ];
 
 fn any() -> String {
@@ -100,6 +102,9 @@ impl Rule {
     }
 
     pub fn describe(&self) -> String {
+        if self.action == REMEMBER {
+            return format!("{} {REMEMBER}", word(self.approval));
+        }
         let action = if self.action == ANY {
             "any step"
         } else {
@@ -142,6 +147,28 @@ pub fn decide<'a>(default: Approval, rules: &'a [Rule], step: &Step) -> Verdict<
         },
         None => Verdict {
             approval: default,
+            rule: None,
+        },
+    }
+}
+
+// Memory outlasts the conversation that changed it, so only a rule that names remember decides a
+// change to it, and without one it waits for the person, unless they refuse every step.
+pub fn decide_memory(default: Approval, rules: &[Rule]) -> Verdict<'_> {
+    match rules
+        .iter()
+        .filter(|r| r.action == REMEMBER)
+        .max_by_key(|r| caution(r.approval))
+    {
+        Some(rule) => Verdict {
+            approval: rule.approval,
+            rule: Some(rule),
+        },
+        None => Verdict {
+            approval: match default {
+                Approval::Deny => Approval::Deny,
+                Approval::Allow | Approval::Prompt => Approval::Prompt,
+            },
             rule: None,
         },
     }
@@ -195,6 +222,11 @@ pub fn validate(rules: &[Rule], known_machine: impl Fn(&str) -> bool) -> Result<
                 "dispatch rule {n}: action {:?} must be one of {}, or any",
                 r.action,
                 ACTIONS.join(", ")
+            ));
+        }
+        if r.action == REMEMBER && (r.machine != ANY || !r.folder.is_empty()) {
+            return Err(format!(
+                "dispatch rule {n}: a remember rule is for Dispatch's memory, which is on no machine or folder, so leave both as any"
             ));
         }
         if r.machine != ANY && !known_machine(&r.machine) {
@@ -399,6 +431,10 @@ mod tests {
             rule("stop_session", "hp", "", Approval::Prompt).describe(),
             "prompt stop_session on hp"
         );
+        assert_eq!(
+            rule("remember", "any", "", Approval::Allow).describe(),
+            "allow remember"
+        );
     }
 
     #[test]
@@ -415,7 +451,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, remember, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],
@@ -441,9 +477,48 @@ mod tests {
                 ],
                 "dispatch rules 1 and 3 match the same steps, keep one",
             ),
+            (
+                vec![rule("remember", "hp", "", Approval::Allow)],
+                "dispatch rule 1: a remember rule is for Dispatch's memory, which is on no machine or folder, so leave both as any",
+            ),
         ];
         for (rules, message) in cases {
             assert_eq!(validate(&rules, known), Err(message.to_string()));
         }
+    }
+
+    #[test]
+    fn only_a_remember_rule_decides_memory_and_it_asks_by_default() {
+        let broad = [
+            rule("any", "hp", "", Approval::Allow),
+            rule("start_session", "any", "", Approval::Allow),
+        ];
+        for default in [Approval::Prompt, Approval::Allow] {
+            assert_eq!(
+                decide_memory(default, &broad),
+                Verdict {
+                    approval: Approval::Prompt,
+                    rule: None
+                }
+            );
+        }
+        assert_eq!(
+            decide_memory(Approval::Deny, &broad).approval,
+            Approval::Deny
+        );
+        let allowed = [rule("remember", "any", "", Approval::Allow)];
+        assert_eq!(
+            decide_memory(Approval::Deny, &allowed),
+            Verdict {
+                approval: Approval::Allow,
+                rule: Some(&allowed[0])
+            }
+        );
+        let denied = [rule("remember", "any", "", Approval::Deny)];
+        assert_eq!(
+            decide_memory(Approval::Allow, &denied).approval,
+            Approval::Deny
+        );
+        assert!(validate(&allowed, |_| true).is_ok());
     }
 }

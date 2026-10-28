@@ -3,7 +3,7 @@ import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 // Dispatch's steps that change something (start, stop or type into a session) and the results of
 // reviews, drawn as cards the person approves, edits, rejects or acts on.
 
-export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session"]);
+export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember"]);
 
 const ICONS = {
   start_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
@@ -13,6 +13,7 @@ const ICONS = {
   integrate_branches: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="12.5" r="1.5"/><path d="M4.5 5v6M4.5 5c0 3 7 3 7 6"/></svg>`,
   push_branch: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7M3.5 13.5h9"/></svg>`,
   move_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8h10M9 4.5 12.5 8 9 11.5"/></svg>`,
+  remember: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.5h7v11L8 11l-3.5 2.5z"/></svg>`,
   review: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg>`,
   scan: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3M2.5 8h11"/></svg>`,
   file: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg>`,
@@ -30,6 +31,8 @@ const TITLES = {
   push_branch: "Push a branch",
   move_session: "Move a session",
 };
+
+const MEMORY_TITLES = { add: "Remember this", replace: "Change a memory", forget: "Forget a memory" };
 
 const SEVERITY = { high: "High", medium: "Medium", low: "Low" };
 
@@ -152,6 +155,7 @@ function where(e) {
   }
   if (e.tool === "push_branch") return html`<code>${i.branch}</code> on ${i.machine} to ${i.remote || "origin"}`;
   if (e.tool === "move_session") return html`<strong>${i.name}</strong> from ${i.machine} to ${i.to || "the machine with the most room"}`;
+  if (e.tool === "remember") return "Dispatch's memory, read at the start of every turn";
   if (e.tool === "start_session") {
     const folder = i.folder || ctx.short(i.path);
     const branch = i.branch ? html` · <code>${i.branch}</code>${i.new_branch ? ` new${i.base ? ` from ${i.base}` : ""}` : ""}` : nothing;
@@ -209,12 +213,27 @@ function body(e) {
         <p class="step-card-text muted">It stops at the first conflict and pushes nothing.</p></div>`;
     case "push_branch":
       return html`<div class="step-card-body"><p class="step-card-text muted">Every commit it would push is checked for keys, tokens and your saved secrets first, and a hit stops it. Never forced.</p></div>`;
+    case "remember":
+      return memoryBody(i);
     case "move_session":
       return html`<div class="step-card-body"><p class="step-card-text muted">The branch and its uncommitted changes go over ssh; nothing is committed or pushed. The same agent starts there with the task${i.stop_original ? ", and the original stops" : ""}.</p>
         ${i.task ? html`<p class="step-card-label">Task</p>${longText(e.id || i.task, i.task)}` : nothing}</div>`;
     default:
       return nothing;
   }
+}
+
+// The change as a diff of the memory: the entry it removes and the one it adds.
+function memoryBody(i) {
+  const removed = i.change === "add" ? "" : i.old;
+  const added = i.change === "forget" ? "" : i.entry;
+  return html`<div class="step-card-body">
+    <div class="memory-diff" role="group" aria-label="Change to the memory">
+      ${removed ? html`<del class="memory-diff-line"><span class="memory-diff-mark" aria-hidden="true">-</span><span>${removed}</span></del>` : nothing}
+      ${added ? html`<ins class="memory-diff-line"><span class="memory-diff-mark" aria-hidden="true">+</span><span>${added}</span></ins>` : nothing}
+    </div>
+    ${i.reason ? html`<p class="step-card-label">Why</p><p class="step-card-text">${i.reason}</p>` : nothing}
+  </div>`;
 }
 
 function field(draft, key, label, attrs = {}) {
@@ -227,6 +246,12 @@ function editor(e) {
   if (e.tool === "send_to_session") {
     return html`<div class="step-card-form">
       <label>Text<textarea rows="3" .value=${draft.text ?? ""} @input=${(ev) => { draft.text = ev.target.value; }}></textarea></label>
+    </div>`;
+  }
+  if (e.tool === "remember") {
+    return html`<div class="step-card-form">
+      ${draft.old ? html`<div class="memory-diff"><del class="memory-diff-line"><span class="memory-diff-mark" aria-hidden="true">-</span><span>${draft.old}</span></del></div>` : nothing}
+      <label>${draft.change === "replace" ? "Becomes" : "Entry"}<textarea rows="3" maxlength="500" .value=${draft.entry ?? ""} @input=${(ev) => { draft.entry = ev.target.value; }}></textarea></label>
     </div>`;
   }
   const machines = state?.machines?.map((m) => m.name) || [draft.machine];
@@ -319,6 +344,9 @@ function outcome(e, state) {
   const said = worktreeOutcome(e.tool, r.text);
   if (said?.stopped) return html`<p class="step-card-outcome step-card-warn">${said.text}</p>`;
   if (said) return html`<p class="step-card-outcome">${ICONS.check}<span class="step-card-said">${said.text}</span>${s ? html`<a class="btn" href=${ctx.termUrl(s.machine, s.name)} target="_blank" rel="noopener" title="Open ${s.name}"><span class="btn-label">Open</span></a>` : nothing}</p>`;
+  if (e.tool === "remember") {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>${e.input.change === "forget" ? "Forgotten" : "Saved to memory"}</span><a class="btn" href="/settings#dispatch-memory"><span class="btn-label">See memory</span></a></p>`;
+  }
   const word = { send_to_session: "Sent", stop_session: "Stopped" }[e.tool] || "Done";
   return html`<p class="step-card-outcome">${ICONS.check}<span>${word}</span></p>`;
 }
@@ -337,9 +365,10 @@ function worktreeOutcome(tool, text) {
   }
 }
 
-const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions" };
+const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory" };
 
 export function ruleText(r) {
+  if (r.action === "remember") return RULE_STEPS.remember;
   const machine = !r.machine || r.machine === "any" ? "any machine" : r.machine;
   return `${RULE_STEPS[r.action] || "any step"} on ${machine}${r.folder ? ` in ${r.folder}` : ""}`;
 }
@@ -380,7 +409,7 @@ function actions(e, state) {
       <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve with changes"}</button>
     </div>`;
   }
-  const editable = e.tool === "start_session" || e.tool === "send_to_session";
+  const editable = e.tool === "start_session" || e.tool === "send_to_session" || (e.tool === "remember" && e.input?.change !== "forget");
   return html`<div class="step-card-actions">
     <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => decide(e, "reject")}>${mine ? "Cancel" : "Reject"}</button>
     ${editable ? html`<button class="btn" type="button" ?disabled=${busy} @click=${() => startEditing(e)}>${ICONS.edit}Edit</button>` : nothing}
@@ -391,6 +420,7 @@ function actions(e, state) {
 function stepTitle(e) {
   const scan = scanOf(e.review);
   if (scan) return `Start a ${SCANS[scan].toLowerCase()}`;
+  if (e.tool === "remember") return MEMORY_TITLES[e.input?.change] || MEMORY_TITLES.add;
   return e.review ? "Start a review" : TITLES[e.tool] || e.tool;
 }
 
@@ -426,14 +456,15 @@ function changes(e) {
   if (was("agent") !== (e.input.agent || "")) fields.push(`agent (was ${agentLabel(was("agent"))})`);
   if (was("prompt") !== (e.input.prompt || "")) fields.push(e.review ? "instructions" : "task");
   if (was("text") !== (e.input.text || "")) fields.push("text");
+  if (was("entry") !== (e.input.entry || "")) fields.push("entry");
   return fields.length > 1 ? `${fields.slice(0, -1).join(", ")} and ${fields.at(-1)}` : fields[0] || "";
 }
 
 function editNote(e) {
   if (e.status !== "edited" || !e.original) return nothing;
   const what = changes(e);
-  const proposed = e.original.prompt ?? e.original.text;
-  const differs = proposed !== undefined && proposed !== (e.input.prompt ?? e.input.text);
+  const proposed = e.original.prompt ?? e.original.text ?? e.original.entry;
+  const differs = proposed !== undefined && proposed !== (e.input.prompt ?? e.input.text ?? e.input.entry);
   return html`<div class="step-card-note">
     <p>Edited before it ran${what ? `: you changed the ${what}` : ""}.</p>
     ${differs ? html`<details class="step-card-more"><summary>${e.by === "you" ? "What it started with" : "What Dispatch proposed"}</summary><p class="step-card-text step-card-mono">${proposed}</p></details>` : nothing}

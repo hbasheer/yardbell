@@ -1,5 +1,5 @@
 use super::mcp_config::extra_servers;
-use super::prompt::system_prompt;
+use super::prompt::{memory_section, system_prompt};
 use super::store::{new_id, now, title_of, Conversation, Shared, Stored};
 use super::{actions, usage, Dispatch};
 use crate::config::DispatchSettings;
@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, Notify};
 const TURN_LIMIT: Duration = Duration::from_secs(900);
 const RESULT_PREVIEW: usize = 4000;
 const TOOL_PREFIX: &str = "mcp__yardbell__";
-const TOOLS: [&str; 14] = [
+const TOOLS: [&str; 15] = [
     "list_machines",
     "list_sessions",
     "list_folders",
@@ -29,6 +29,7 @@ const TOOLS: [&str; 14] = [
     "integrate_branches",
     "push_branch",
     "move_session",
+    "remember",
 ];
 
 // A conversation that a trigger starts, rather than the person: its title, the trigger's mark,
@@ -222,6 +223,8 @@ impl Dispatch {
             }
         };
         self.shared.save(&id);
+        let (remembered, omitted) = self.memory.for_prompt();
+        let memory = memory_section(&remembered, omitted);
         let mut allowed: Vec<String> = TOOLS.iter().map(|t| format!("{TOOL_PREFIX}{t}")).collect();
         allowed.extend(
             extra_servers(extra)
@@ -241,7 +244,7 @@ impl Dispatch {
                 "--allowedTools",
                 &allowed.join(","),
                 "--append-system-prompt",
-                &system_prompt(settings),
+                &system_prompt(settings, &memory),
             ]
             .map(String::from),
         );
@@ -672,6 +675,46 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
         assert!(std::fs::read_to_string(&args)
             .unwrap()
             .ends_with("--model\nhaiku\n"));
+    }
+
+    #[tokio::test]
+    async fn every_turn_reads_the_memory_as_it_is_then() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = dir.path().join("args");
+        let dispatch = fake_claude(
+            dir.path(),
+            &format!(r#"printf '%s\n' "$@" > {}"#, args.display()),
+        );
+        let prompt_of = || {
+            let text = std::fs::read_to_string(&args).unwrap();
+            let after = text.split("--append-system-prompt\n").nth(1).unwrap();
+            after.to_string()
+        };
+        let (id, rx) = dispatch
+            .ask(None, "hi", 4000, &DispatchSettings::default(), None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        assert!(prompt_of().contains("<dispatch_memory>\n(empty)\n</dispatch_memory>"));
+        dispatch
+            .memory()
+            .apply(
+                &crate::dispatch::MemoryChange {
+                    change: crate::dispatch::memory::Kind::Add,
+                    entry: "Never open PRs on Fridays".into(),
+                    old: String::new(),
+                    reason: "the user said so".into(),
+                },
+                crate::dispatch::By::You,
+            )
+            .unwrap();
+        let (_, rx) = dispatch
+            .ask(Some(&id), "again", 4000, &DispatchSettings::default(), None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        assert!(prompt_of()
+            .contains("<dispatch_memory>\n- Never open PRs on Fridays\n</dispatch_memory>"));
     }
 
     #[tokio::test]

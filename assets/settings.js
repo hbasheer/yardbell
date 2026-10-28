@@ -144,7 +144,7 @@ function renderDispatch() {
   loadInstalled();
 }
 
-const RULE_STEPS = { any: "Any step", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session" };
+const RULE_STEPS = { any: "Any step", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session", remember: "Change Dispatch's memory" };
 const RULE_APPROVALS = { allow: "Allow", prompt: "Ask me", deny: "Deny" };
 let rules = [];
 const CROSS = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`;
@@ -158,8 +158,8 @@ function renderRules() {
   $("rule-rows").innerHTML = rules.length
     ? rules.map((r, i) => `<li class="row rule-row" data-rule="${i}">
       <select data-key="action" aria-label="Step">${options(RULE_STEPS, r.action)}</select>
-      <select data-key="machine" aria-label="Machine">${options(machines, r.machine)}</select>
-      <input type="text" data-key="folder" aria-label="Folder" value="${esc(r.folder)}" placeholder="Any folder" autocapitalize="off" spellcheck="false">
+      <select data-key="machine" aria-label="Machine"${r.action === "remember" ? " disabled" : ""}>${options(machines, r.machine)}</select>
+      <input type="text" data-key="folder" aria-label="Folder" value="${esc(r.folder)}" placeholder="Any folder" autocapitalize="off" spellcheck="false"${r.action === "remember" ? " disabled" : ""}>
       <select data-key="approval" aria-label="Then">${options(RULE_APPROVALS, r.approval)}</select>
       <button class="btn quiet danger" type="button" data-remove-rule="${i}" aria-label="Remove rule" title="Remove rule">${CROSS}</button>
     </li>`).join("")
@@ -199,6 +199,61 @@ function renderSecrets() {
   $("secrets-missing-text").textContent = `${s.missing.map((x) => `${x.server} uses \${secret:${x.name}}, which is not set.`).join(" ")} New Claude Code sessions that get it do not start until it is. Add it below.`;
   $("secrets-inline").hidden = !s.inline.some((x) => x.secret);
   $("inline-picks").innerHTML = s.inline.map((x, i) => `<label class="choice"><input type="checkbox" data-inline="${i}"${x.secret ? " checked" : ""}>${esc(x.label)}</label>`).join("");
+}
+
+let memory = { entries: [], history: [], bytes: 0, max_bytes: 8192, omitted: 0 };
+let memoryEditing = null;
+
+function kb(bytes) {
+  return `${(bytes / 1024).toFixed(1)} KB`;
+}
+
+const MEMORY_DID = { add: "Added", replace: "Changed", forget: "Forgot" };
+
+function memoryChange(h) {
+  const removed = h.change === "add" ? "" : h.old;
+  const added = h.change === "forget" ? "" : h.entry;
+  return `<div class="memory-diff">${removed ? `<del class="memory-diff-line"><span class="memory-diff-mark" aria-hidden="true">-</span><span>${esc(removed)}</span></del>` : ""}${added ? `<ins class="memory-diff-line"><span class="memory-diff-mark" aria-hidden="true">+</span><span>${esc(added)}</span></ins>` : ""}</div>`;
+}
+
+function renderMemory() {
+  const m = memory;
+  if (m.error) toast(m.error);
+  $("memory-file").textContent = m.file || "memory.md";
+  const pct = Math.min(100, Math.round((m.bytes / m.max_bytes) * 100));
+  $("memory-meter").setAttribute("aria-valuenow", String(pct));
+  $("memory-fill").style.width = `${Math.max(pct, 1)}%`;
+  $("memory-fill").className = `usage-fill${pct >= 100 ? " bad" : pct >= 80 ? " warn" : ""}`;
+  $("memory-size").textContent = `${kb(m.bytes)} of ${kb(m.max_bytes)} used`;
+  $("memory-over").hidden = !m.omitted;
+  $("memory-over-text").textContent = `Dispatch reads only the first entries that fit, and leaves out the last ${m.omitted === 1 ? "one" : m.omitted}. Delete or shorten some.`;
+  $("memory-rows").hidden = !m.entries.length;
+  $("memory-empty").hidden = Boolean(m.entries.length);
+  $("memory-rows").innerHTML = m.entries.map((entry, i) => `<li class="row">
+    <div class="row-main"><div class="row-title">${esc(entry)}</div></div>
+    <div class="row-actions"><button class="btn" type="button" data-memory-edit="${i}">Edit</button><button class="btn quiet danger" type="button" data-memory-delete="${i}">Delete</button></div></li>`).join("");
+  $("memory-history").hidden = !m.history.length;
+  $("memory-history-summary").textContent = `History of changes (${m.history.length})`;
+  $("memory-history-list").innerHTML = m.history.map((h) => `<li>
+    <p class="help">${MEMORY_DID[h.change] || "Changed"} ${esc(new Date(h.at).toLocaleString([], { dateStyle: "medium", timeStyle: "short" }))} · ${h.by === "you" ? "by you, here" : "proposed by Dispatch, approved by you"}</p>
+    ${memoryChange(h)}
+    ${h.reason ? `<p class="help">${esc(h.reason)}</p>` : ""}
+  </li>`).join("");
+}
+
+async function loadMemory() {
+  memory = await api("GET", "/dispatch/memory");
+  renderMemory();
+}
+
+function openMemoryForm(index) {
+  const f = $("memory-form");
+  f.reset();
+  memoryEditing = index === null ? null : memory.entries[index];
+  $("memory-form-label").textContent = memoryEditing === null ? "New entry" : "Entry";
+  f.elements.entry.value = memoryEditing ?? "";
+  f.hidden = false;
+  f.elements.entry.focus();
 }
 
 function openSecretForm(name) {
@@ -296,6 +351,7 @@ async function load() {
   renderDispatch();
   await loadTriggers().catch((err) => toast(err.message));
   await loadSetups();
+  await loadMemory().catch((err) => toast(err.message));
   if (!data.can_undo) $("undo-btn").hidden = true;
 }
 
@@ -455,7 +511,14 @@ $("rule-add").addEventListener("click", () => {
 
 $("rule-rows").addEventListener("input", (e) => {
   const row = e.target.closest("[data-rule]");
-  if (row && e.target.dataset.key) rules[Number(row.dataset.rule)][e.target.dataset.key] = e.target.value;
+  if (!row || !e.target.dataset.key) return;
+  const rule = rules[Number(row.dataset.rule)];
+  rule[e.target.dataset.key] = e.target.value;
+  if (e.target.dataset.key === "action" && (e.target.value === "remember") !== row.querySelector("[data-key=folder]").disabled) {
+    if (rule.action === "remember") Object.assign(rule, { machine: "any", folder: "" });
+    renderRules();
+    $("rule-rows").querySelector(`[data-rule="${row.dataset.rule}"] [data-key=action]`)?.focus();
+  }
 });
 
 $("rule-rows").addEventListener("click", (e) => {
@@ -732,6 +795,48 @@ $("mcp-token-copy").addEventListener("click", () => {
   else toast("Couldn't copy the token.");
 });
 
+$("memory-add").addEventListener("click", () => openMemoryForm(null));
+$("memory-cancel").addEventListener("click", () => { $("memory-form").reset(); $("memory-form").hidden = true; memoryEditing = null; });
+
+async function changeMemory(change, done) {
+  memory = await api("POST", "/dispatch/memory", change);
+  renderMemory();
+  toast(done, "ok");
+}
+
+$("memory-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const entry = f.elements.entry.value.trim();
+  const button = f.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    const change = memoryEditing === null ? { change: "add", entry } : { change: "replace", old: memoryEditing, entry };
+    await changeMemory(change, "Saved. Dispatch reads it from the next message.");
+    f.reset();
+    f.hidden = true;
+    memoryEditing = null;
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("memory-rows").addEventListener("click", async (e) => {
+  const edit = e.target.closest("[data-memory-edit]");
+  if (edit) { openMemoryForm(Number(edit.dataset.memoryEdit)); return; }
+  const del = e.target.closest("[data-memory-delete]");
+  if (!del) return;
+  const entry = memory.entries[Number(del.dataset.memoryDelete)];
+  if (!(await Nav.confirm("Delete this entry?", `Dispatch stops reading "${entry}" from the next message. The history keeps a record of it.`, { confirm: "Delete", danger: true }))) return;
+  try {
+    await changeMemory({ change: "forget", old: entry }, "Deleted.");
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
 $("secret-add").addEventListener("click", () => openSecretForm(null));
 $("secret-cancel").addEventListener("click", () => { $("secret-form").reset(); $("secret-form").hidden = true; });
 
@@ -944,8 +1049,9 @@ load()
 function showSection() {
   const sections = [...document.querySelectorAll(".page-body > section")];
   const wanted = location.hash.slice(1);
+  const target = wanted ? document.getElementById(wanted) : null;
   const order = [...document.querySelectorAll(".settings-nav a")].map((a) => a.hash.slice(1));
-  const pick = sections.find((sec) => sec.id === wanted) || sections.find((sec) => sec.id === order[0]);
+  const pick = sections.find((sec) => sec.contains(target)) || sections.find((sec) => sec.id === order[0]);
   sections.forEach((sec) => { sec.hidden = sec !== pick; });
   if (pick.id === "about" && !updatesAsked) checkUpdates();
   document.querySelectorAll(".settings-nav a").forEach((a) => {
@@ -957,6 +1063,8 @@ function showSection() {
 
 window.addEventListener("hashchange", () => {
   showSection();
+  const target = document.getElementById(location.hash.slice(1));
+  if (target && target.tagName !== "SECTION") { target.scrollIntoView({ block: "start" }); return; }
   document.querySelector(".main")?.scrollTo({ top: 0 });
   window.scrollTo({ top: 0 });
 });
