@@ -175,8 +175,17 @@ async fn dispatch(
     AxState(app): AxState<Arc<AppState>>,
     Json(req): Json<crate::config::DispatchSettings>,
 ) -> Result<Response, ApiError> {
+    let rules = req
+        .rules
+        .into_iter()
+        .map(|rule| crate::dispatch::Rule {
+            folder: rule.folder.trim().to_string(),
+            ..rule
+        })
+        .collect();
     let settings = crate::config::DispatchSettings {
         instructions: req.instructions.trim().to_string(),
+        rules,
         ..req
     };
     app.settings.set_dispatch(settings).map_err(bad)?;

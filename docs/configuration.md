@@ -242,10 +242,55 @@ dispatch:
     Branch names look like eng-1234-short-name.
   agent: codex                    # agent it starts in new sessions; empty uses default_agent
   model: haiku                    # sonnet, opus or haiku; empty uses Claude Code's default
+  approval: prompt                # prompt (the default), allow or deny
+  rules:                          # optional, see below
+    - action: stop_session
+      approval: deny
+    - action: start_session
+      machine: devbox
+      folder: acme/*
+      approval: allow
 ```
 
 `instructions` is at most 4000 characters. Dispatch itself always runs Claude Code on the host;
 `agent` only chooses what it starts on the machines.
+
+`approval` decides what happens when Dispatch starts, stops, types into or reviews a session:
+`prompt` makes it a step that waits for you to approve, edit or reject it, `allow` runs it at once
+(it still shows up as a card), and `deny` refuses it. `prompt` and `allow` are the names to use.
+`ask` and `auto`, the names earlier versions used, mean the same, and Yardbell writes `approval`
+with them when it saves, so a config stays readable by Yardbell 0.7.0. Rules use `allow`, `prompt`
+and `deny`.
+
+`rules` decide some steps differently from `approval`. Each rule has:
+
+| Key | Required | Meaning |
+|---|---|---|
+| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, or `any` (the default). |
+| `machine` | no | A machine name, or `any` (the default). |
+| `folder` | no | A folder pattern. Empty matches every folder. |
+| `approval` | yes | `allow`, `prompt` or `deny`. |
+
+A folder pattern is a folder's name as the folder list shows it, relative to the machine's `root`
+(like `acme/web`), or an absolute path (like `/srv/apps/**`), and it covers the folders inside it.
+`*` matches any part of one folder name, `**` matches across folders and `?` matches one character.
+For a new session the folder is the one it starts in, for a review the folder of the session it
+reviews, and for stopping or typing into a session that session's folder.
+
+Which rule decides:
+
+1. A matching rule with `deny` always wins.
+2. Otherwise the matching rule that names the most of `action`, `machine` and `folder` wins. Between
+   two that name as many, the one with the longer folder pattern wins, and if they still tie,
+   `prompt` beats `allow`. The order of the list never matters.
+3. When no rule matches, `approval` decides.
+
+When Yardbell cannot tell which folder a session is in, for example a session it does not see, a
+rule with a `folder` only matches it if that rule denies. A refused step never becomes a card:
+Dispatch gets an error that names the rule and tells you about it. A step that a rule made wait or
+run says which rule on its card. Yardbell refuses to load rules with an unknown action or machine,
+a folder starting with `~`, a rule that names nothing (set `approval` instead) or two rules for the
+same steps, and says which rule is wrong.
 
 ### `listen_ip` (optional)
 

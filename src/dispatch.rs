@@ -3,6 +3,7 @@ mod follow;
 mod mcp_config;
 mod prompt;
 mod review;
+mod rules;
 mod store;
 mod tasks;
 mod turn;
@@ -12,6 +13,7 @@ pub use actions::{changes_something, valid_id as valid_action_id, By};
 pub use follow::Change;
 pub use mcp_config::CONVERSATION_HEADER;
 pub use review::{fix_request, prompt as review_prompt, ReviewOf};
+pub use rules::{decide as decide_step, validate as validate_rules, Rule, Step, Verdict};
 pub use store::valid_id;
 pub use tasks::SavedTask;
 
@@ -136,8 +138,12 @@ impl Dispatch {
         input: Value,
         by: By,
         review: Option<ReviewOf>,
+        rule: Option<&Rule>,
     ) -> Result<Value, Refusal> {
-        let event = actions::event(tool, input, by, review.as_ref(), "pending", &now());
+        let mut event = actions::event(tool, input, by, review.as_ref(), "pending", &now());
+        if let Some(rule) = rule {
+            event["rule"] = json!(rule);
+        }
         self.shared.edit(id, |s| {
             s.events.push(event.clone());
             Ok(())
@@ -153,10 +159,14 @@ impl Dispatch {
         tool: &str,
         input: Value,
         review: Option<ReviewOf>,
+        rule: Option<&Rule>,
         outcome: &Result<Value, String>,
     ) {
         let at = now();
         let mut event = actions::event(tool, input, By::Dispatch, review.as_ref(), "auto", &at);
+        if let Some(rule) = rule {
+            event["rule"] = json!(rule);
+        }
         event["result"] = actions::result(outcome, &at);
         event["told"] = json!(true);
         let recorded = self.shared.edit(id, |s| {
@@ -517,7 +527,14 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             .contains("mcp__linear"));
 
         let step = dispatch
-            .propose(&id, "start_session", start_input(), By::Dispatch, None)
+            .propose(
+                &id,
+                "start_session",
+                start_input(),
+                By::Dispatch,
+                None,
+                None,
+            )
             .unwrap();
         let step_id = step["id"].as_str().unwrap();
         assert_eq!(step["status"], "pending");
@@ -574,10 +591,10 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         let id = conversation(&dispatch, "stop the old ones").await;
         let stop = json!({ "machine": "hp", "name": "hp-old" });
         let first = dispatch
-            .propose(&id, "stop_session", stop.clone(), By::Dispatch, None)
+            .propose(&id, "stop_session", stop.clone(), By::Dispatch, None, None)
             .unwrap();
         let second = dispatch
-            .propose(&id, "stop_session", stop, By::Dispatch, None)
+            .propose(&id, "stop_session", stop, By::Dispatch, None, None)
             .unwrap();
         let (first, second) = (
             first["id"].as_str().unwrap(),
@@ -611,7 +628,14 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         let dispatch = fake_claude(dir.path(), "true");
         let id = conversation(&dispatch, "fix it").await;
         let step = dispatch
-            .propose(&id, "start_session", start_input(), By::Dispatch, None)
+            .propose(
+                &id,
+                "start_session",
+                start_input(),
+                By::Dispatch,
+                None,
+                None,
+            )
             .unwrap();
         let mut edited = start_input();
         edited["prompt"] = json!("fix it, and add a test");
@@ -623,7 +647,14 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         assert_eq!(stored["status"], "edited");
         assert_eq!(stored["original"], start_input());
         let same = dispatch
-            .propose(&id, "start_session", start_input(), By::Dispatch, None)
+            .propose(
+                &id,
+                "start_session",
+                start_input(),
+                By::Dispatch,
+                None,
+                None,
+            )
             .unwrap();
         dispatch
             .approve(&id, same["id"].as_str().unwrap(), Some(start_input()))
@@ -647,7 +678,14 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             .await
             .unwrap();
         let step = dispatch
-            .propose(&id, "start_session", start_input(), By::Dispatch, None)
+            .propose(
+                &id,
+                "start_session",
+                start_input(),
+                By::Dispatch,
+                None,
+                None,
+            )
             .unwrap();
         let streamed = drain(rx).await;
         assert_eq!(streamed[0], step);
@@ -664,12 +702,14 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             "start_session",
             start_input(),
             None,
+            None,
             &Ok(json!({ "machine": "hp", "name": "hp-eng-1", "path": "/r/app" })),
         );
         dispatch.record(
             &id,
             "stop_session",
             json!({ "machine": "hp", "name": "gone" }),
+            None,
             None,
             &Err("can't find session: gone".into()),
         );
@@ -704,6 +744,7 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
                 json!({ "machine": "hp", "path": "/r/app", "prompt": review_prompt("eng-1", "") }),
                 By::You,
                 Some(of.clone()),
+                None,
             )
             .unwrap();
         let step = step["id"].as_str().unwrap();

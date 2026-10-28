@@ -235,12 +235,20 @@ function outcome(e, state) {
   return html`<p class="step-card-outcome">${ICONS.check}<span>${word}</span></p>`;
 }
 
+const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews" };
+
+function ruleText(r) {
+  const machine = !r.machine || r.machine === "any" ? "any machine" : r.machine;
+  return `${RULE_STEPS[r.action] || "any step"} on ${machine}${r.folder ? ` in ${r.folder}` : ""}`;
+}
+
 function trail(e, state) {
   if (e.legacy) return "Ran without asking";
   const parts = [];
   const mine = e.by === "you";
   if (e.status === "auto") parts.push(`Ran without asking ${clock(e.at)}`);
   else parts.push(`${mine ? "You asked for this" : "Proposed by Dispatch"} ${clock(e.at)}`);
+  if (e.rule) parts.push(`Your rule: ${ruleText(e.rule)}`);
   if (e.status === "approved") parts.push(`${mine ? "Started" : "Approved"} ${clock(e.decided)}`);
   if (e.status === "edited") parts.push(`Edited and ${mine ? "started" : "approved"} ${clock(e.decided)}`);
   if (e.status === "rejected") parts.push(`${mine ? "Cancelled" : "Rejected"} ${clock(e.decided)}`);

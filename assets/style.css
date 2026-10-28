@@ -1178,6 +1178,23 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 #servers > .help { margin: 0 0 12px; }
 #dispatch-form textarea { font-family: var(--sans); font-size: 14px; }
 .dispatch-help { margin: -6px 0 14px; }
+.rules-head { display: flex; align-items: center; gap: 10px; margin: 4px 0 6px; }
+.rules-head h3 { flex: 1; margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
+.rules-head + .dispatch-help { margin: 0 0 10px; }
+.rule-rows { margin-bottom: 4px; }
+.rule-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 0.8fr) 32px; align-items: center; gap: 8px; padding: 8px 10px; }
+.rule-row select, .rule-row input[type=text] { height: 32px; }
+.rule-row .btn { width: 32px; padding: 0; }
+.rule-empty { color: var(--muted); font-size: 13px; }
+@media (max-width: 760px) {
+  .rule-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 36px; grid-template-areas: "action action remove" "machine approval approval" "folder folder folder"; }
+  .rule-row [data-key=action] { grid-area: action; }
+  .rule-row [data-key=approval] { grid-area: approval; }
+  .rule-row [data-key=machine] { grid-area: machine; }
+  .rule-row [data-key=folder] { grid-area: folder; }
+  .rule-row .btn { grid-area: remove; width: 36px; height: 36px; }
+  .rule-row select, .rule-row input[type=text] { height: 36px; }
+}
 .pair-panel { display: flex; gap: 24px; align-items: center; }
 .pair-text { flex: 1; display: grid; gap: 10px; justify-items: start; }
 .pair-text p { margin: 0; }

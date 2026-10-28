@@ -134,14 +134,26 @@ const DISPATCH_INSTRUCTIONS_MAX: usize = 4000;
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Approval {
+    #[serde(alias = "auto")]
+    Allow,
     #[default]
-    Ask,
-    Auto,
+    #[serde(alias = "ask")]
+    Prompt,
+    Deny,
 }
 
 impl Approval {
     fn is_default(&self) -> bool {
         *self == Approval::default()
+    }
+
+    // The default is written with the names 0.7.0 reads, so a config stays readable by it.
+    fn write_as_before<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(match self {
+            Approval::Allow => "auto",
+            Approval::Prompt => "ask",
+            Approval::Deny => "deny",
+        })
     }
 }
 
@@ -153,8 +165,14 @@ pub struct DispatchSettings {
     pub agent: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
-    #[serde(default, skip_serializing_if = "Approval::is_default")]
+    #[serde(
+        default,
+        skip_serializing_if = "Approval::is_default",
+        serialize_with = "Approval::write_as_before"
+    )]
     pub approval: Approval,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<crate::dispatch::Rule>,
 }
 
 impl DispatchSettings {
@@ -364,7 +382,7 @@ impl Config {
                 DISPATCH_MODELS.join(", ")
             ));
         }
-        Ok(())
+        crate::dispatch::validate_rules(&d.rules, |m| self.machine(m).is_some())
     }
 
     fn validate_mcp_servers(&self) -> Result<(), String> {
@@ -797,13 +815,26 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(ok.dispatch.agent, "codex");
-        assert_eq!(ok.dispatch.approval, Approval::Ask, "asking is the default");
+        assert_eq!(
+            ok.dispatch.approval,
+            Approval::Prompt,
+            "asking is the default"
+        );
         assert_eq!(
             load_str(BASE).unwrap().dispatch,
             DispatchSettings::default()
         );
-        let auto = load_str(&format!("dispatch:\n  approval: auto\n{BASE}")).unwrap();
-        assert_eq!(auto.dispatch.approval, Approval::Auto);
+        for (value, approval) in [
+            ("ask", Approval::Prompt),
+            ("auto", Approval::Allow),
+            ("prompt", Approval::Prompt),
+            ("allow", Approval::Allow),
+            ("deny", Approval::Deny),
+        ] {
+            let cfg = load_str(&format!("dispatch:\n  approval: {value}\n{BASE}")).unwrap();
+            assert_eq!(cfg.dispatch.approval, approval, "{value}");
+            assert!(cfg.dispatch.rules.is_empty());
+        }
         assert!(load_str(&format!("dispatch:\n  approval: maybe\n{BASE}")).is_err());
         let cases = [
             ("agent: nope", "dispatch.agent \"nope\" is not a built-in agent or one listed under agents"),
@@ -817,6 +848,96 @@ mod tests {
         }
         let long = format!("dispatch:\n  instructions: {}\n{BASE}", "a".repeat(4001));
         assert!(load_str(&long).is_err());
+    }
+
+    #[test]
+    fn a_config_without_rules_saves_as_0_7_0_wrote_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        for (approval, written) in [
+            (Approval::Prompt, None),
+            (Approval::Allow, Some("auto")),
+            (Approval::Deny, Some("deny")),
+        ] {
+            let mut cfg = fixture();
+            cfg.dispatch.model = "haiku".into();
+            cfg.dispatch.approval = approval;
+            cfg.save(&path).unwrap();
+            let text = std::fs::read_to_string(&path).unwrap();
+            let expected = match written {
+                Some(name) => format!("dispatch:\n  model: haiku\n  approval: {name}\n"),
+                None => "dispatch:\n  model: haiku\n".to_string(),
+            };
+            assert!(text.contains(&expected), "{approval:?}: {text}");
+            assert!(!text.contains("rules"), "{text}");
+            assert_eq!(Config::load(&path).unwrap().dispatch.approval, approval);
+        }
+        let ask = serde_yaml::to_string(&DispatchSettings {
+            approval: Approval::Prompt,
+            instructions: "x".into(),
+            ..DispatchSettings::default()
+        })
+        .unwrap();
+        assert_eq!(
+            ask, "instructions: x\n",
+            "asking is the default and not written"
+        );
+    }
+
+    #[test]
+    fn dispatch_rules_load_save_and_are_checked() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        let yaml = format!(
+            "dispatch:\n  approval: auto\n  rules:\n    - {{action: stop_session, approval: deny}}\n    - {{action: start_session, machine: mini, folder: 'acme/*', approval: ask}}\n{BASE}"
+        );
+        std::fs::write(&path, yaml).unwrap();
+        let cfg = Config::load(&path).unwrap();
+        let rules = &cfg.dispatch.rules;
+        assert_eq!(cfg.dispatch.approval, Approval::Allow);
+        assert_eq!(
+            (rules[0].action.as_str(), rules[0].machine.as_str()),
+            ("stop_session", "any")
+        );
+        assert_eq!(
+            (rules[1].folder.as_str(), rules[1].approval),
+            ("acme/*", Approval::Prompt)
+        );
+        cfg.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            text.contains("  approval: auto\n") && text.contains("    approval: prompt\n"),
+            "{text}"
+        );
+        assert_eq!(Config::load(&path).unwrap().dispatch, cfg.dispatch);
+
+        let cases = [
+            (
+                "{action: start_session, machine: hp, approval: deny}",
+                "dispatch rule 1: machine \"hp\" is not in Yardbell",
+            ),
+            (
+                "{approval: deny}",
+                "dispatch rule 1 matches every step, set dispatch.approval to deny instead",
+            ),
+        ];
+        for (rule, message) in cases {
+            match load_str(&format!("dispatch:\n  rules:\n    - {rule}\n{BASE}")) {
+                Err(ConfigError::Invalid(got)) => assert_eq!(got, message, "{rule}"),
+                other => panic!("{rule}: {other:?}"),
+            }
+        }
+        for rule in [
+            "{action: stop_session}",
+            "{action: stop_session, approval: never}",
+            "{action: stop_session, machines: [mini], approval: deny}",
+        ] {
+            let yaml = format!("dispatch:\n  rules:\n    - {rule}\n{BASE}");
+            assert!(
+                matches!(load_str(&yaml), Err(ConfigError::Parse { .. })),
+                "accepted: {rule}"
+            );
+        }
     }
 
     #[test]

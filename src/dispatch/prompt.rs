@@ -50,13 +50,23 @@ each one, with the machine, folder, agent and branch name, and the task.
 After proposing, end your reply with one or two sentences on what you proposed and why. The \
 user's next message starts with what happened to each proposal; trust it over what you expected.";
 
+const RULES: &str = "The user's rules decide some steps differently: a call that starts, stops, \
+types into or reviews a session may run at once, become a proposal for the user, or be refused. \
+Each tool result says which. When a call is refused, tell the user which rule refused it and that \
+they can change it in Yardbell's Settings, and do not try it again or reach the same result \
+another way.";
+
 pub(super) fn system_prompt(settings: &DispatchSettings) -> String {
     let mut prompt = PROMPT.to_string();
     prompt.push_str("\n\n");
     prompt.push_str(match settings.approval {
-        Approval::Ask => PROPOSE,
-        Approval::Auto => ACT,
+        Approval::Prompt => PROPOSE,
+        Approval::Allow | Approval::Deny => ACT,
     });
+    if !settings.rules.is_empty() || settings.approval == Approval::Deny {
+        prompt.push_str("\n\n");
+        prompt.push_str(RULES);
+    }
     if !settings.agent.is_empty() {
         prompt.push_str(&format!(
             "\n\nStart sessions with agent \"{}\" unless the user asks for another.",
@@ -83,15 +93,31 @@ mod tests {
         assert_eq!(asking, format!("{PROMPT}\n\n{PROPOSE}"));
         assert!(!asking.contains("Start nothing until the user agrees"));
         let acting = system_prompt(&DispatchSettings {
-            approval: Approval::Auto,
+            approval: Approval::Allow,
             ..DispatchSettings::default()
         });
         assert_eq!(acting, format!("{PROMPT}\n\n{ACT}"));
+        let ruled = system_prompt(&DispatchSettings {
+            rules: vec![crate::dispatch::Rule {
+                action: "stop_session".into(),
+                machine: "any".into(),
+                folder: String::new(),
+                approval: Approval::Deny,
+            }],
+            ..DispatchSettings::default()
+        });
+        assert_eq!(ruled, format!("{PROMPT}\n\n{PROPOSE}\n\n{RULES}"));
+        let refusing = system_prompt(&DispatchSettings {
+            approval: Approval::Deny,
+            ..DispatchSettings::default()
+        });
+        assert_eq!(refusing, format!("{PROMPT}\n\n{ACT}\n\n{RULES}"));
         let prompt = system_prompt(&DispatchSettings {
             instructions: "  acme/web work goes to devbox \n".into(),
             agent: "codex".into(),
             model: String::new(),
-            approval: Approval::Ask,
+            approval: Approval::Prompt,
+            rules: Vec::new(),
         });
         assert!(prompt.starts_with(PROMPT));
         assert!(prompt.contains("Start sessions with agent \"codex\""));

@@ -388,7 +388,14 @@ echo '{{"type":"system","subtype":"init","session_id":"s1"}}'"#,
         );
         let id = conversation(&dispatch, "fix it on hp").await;
         let started = dispatch
-            .propose(&id, "start_session", start_input(), By::Dispatch, None)
+            .propose(
+                &id,
+                "start_session",
+                start_input(),
+                By::Dispatch,
+                None,
+                None,
+            )
             .unwrap();
         let started = started["id"].as_str().unwrap();
         let waiting = dispatch
@@ -397,6 +404,7 @@ echo '{{"type":"system","subtype":"init","session_id":"s1"}}'"#,
                 "send_to_session",
                 json!({ "machine": "hp", "name": "hp-app", "text": "yes" }),
                 By::Dispatch,
+                None,
                 None,
             )
             .unwrap();

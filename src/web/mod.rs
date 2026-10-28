@@ -1038,6 +1038,7 @@ async fn dispatch_request_review(
             input,
             crate::dispatch::By::You,
             Some(of),
+            None,
         )
         .map_err(refused)?;
     Ok(Json(event).into_response())

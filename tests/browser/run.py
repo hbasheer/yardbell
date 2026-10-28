@@ -325,6 +325,40 @@ class Suite:
         finally:
             b.viewport(1280, 800)
 
+    def test_settings_saves_dispatch_rules(self):
+        b = self.b
+        b.goto(self.url("/settings#dispatch"))
+        b.wait("document.querySelector('#rule-rows .rule-empty')", "the empty rule list")
+        b.click("#rule-add")
+        b.click("#rule-add")
+        b.wait("document.querySelectorAll('#rule-rows .rule-row').length === 2", "two new rules")
+        b.click("#rule-rows .rule-row:last-child [data-key=folder]")
+        b.type("demo-*")
+        b.js(
+            f"""(() => {{
+              const row = document.querySelector('#rule-rows .rule-row:last-child');
+              for (const [key, value] of [['action', 'start_session'], ['machine', {json.dumps(MACHINE)}], ['approval', 'allow']]) {{
+                const el = row.querySelector(`[data-key=${{key}}]`);
+                el.value = value;
+                el.dispatchEvent(new Event('input', {{ bubbles: true }}));
+              }}
+            }})()"""
+        )
+        b.click("#dispatch-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the rules to save")
+        rules = self.api("GET", "/api/settings")["dispatch"]["rules"]
+        expected = [
+            {"action": "stop_session", "machine": "any", "approval": "deny"},
+            {"action": "start_session", "machine": MACHINE, "folder": "demo-*", "approval": "allow"},
+        ]
+        if rules != expected:
+            raise Failure(f"saved {rules}, expected {expected}")
+        b.goto(self.url("/settings#dispatch"))
+        b.wait("document.querySelector('#rule-rows .rule-row:last-child [data-key=folder]')?.value === 'demo-*'", "the saved rules after a reload")
+        b.click("#rule-rows .rule-row:first-child [data-remove-rule]")
+        b.click("#dispatch-form button[type=submit]")
+        b.wait("(async () => (await (await fetch('/api/settings')).json()).dispatch.rules?.length === 1)()", "one rule saved after removing the other")
+
     def check_errors(self, where):
         if self.b.errors:
             errors, self.b.errors = self.b.errors, []

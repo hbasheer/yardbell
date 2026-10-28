@@ -267,7 +267,14 @@ mod tests {
         let dispatch = fake_claude(dir.path(), "true");
         let id = conversation(&dispatch, "fix it").await;
         let step = dispatch
-            .propose(&id, "start_session", start_input(), By::Dispatch, None)
+            .propose(
+                &id,
+                "start_session",
+                start_input(),
+                By::Dispatch,
+                None,
+                None,
+            )
             .unwrap();
         let step = step["id"].as_str().unwrap().to_string();
         dispatch.approve(&id, &step, None).unwrap();

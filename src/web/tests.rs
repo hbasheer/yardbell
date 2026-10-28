@@ -1965,7 +1965,7 @@ async fn with_approval_off_dispatch_steps_run_at_once_and_are_recorded() {
     r.app
         .settings
         .set_dispatch(crate::config::DispatchSettings {
-            approval: crate::config::Approval::Auto,
+            approval: crate::config::Approval::Allow,
             ..Default::default()
         })
         .unwrap();
@@ -1988,6 +1988,125 @@ async fn with_approval_off_dispatch_steps_run_at_once_and_are_recorded() {
     );
     assert_eq!(step["result"]["session"]["name"], "hp-eng-1301");
     assert!(r.app.dispatch.pending(&id).is_empty());
+}
+
+fn set_rules(r: &Rig, approval: &str, rules: serde_json::Value) {
+    let settings = serde_json::from_value(json!({ "approval": approval, "rules": rules })).unwrap();
+    r.app.settings.set_dispatch(settings).unwrap();
+}
+
+fn event_count(r: &Rig, id: &str) -> usize {
+    r.app.dispatch.get(id).unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .len()
+}
+
+#[tokio::test]
+async fn dispatch_rules_allow_prompt_or_deny_a_step() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    set_rules(
+        &r,
+        "ask",
+        json!([
+            { "action": "start_session", "machine": "hp", "folder": "slot*", "approval": "allow" },
+            { "action": "stop_session", "approval": "deny" },
+        ]),
+    );
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301\n"));
+    let start = json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox" });
+    let allowed = dispatch_tool(&r, Some(&id), "start_session", start).await;
+    assert_eq!(allowed["isError"], false, "{allowed}");
+    assert!(ran(&r, "fix the inbox"), "an allowed step runs at once");
+    let step = last_event(&r, &id);
+    assert_eq!(
+        (&step["status"], &step["result"]["ok"]),
+        (&json!("auto"), &json!(true))
+    );
+    assert_eq!(step["rule"]["folder"], "slot*");
+
+    let before = event_count(&r, &id);
+    let stop = json!({ "machine": "hp", "name": "hp-eng-1301" });
+    let denied = dispatch_tool(&r, Some(&id), "stop_session", stop).await;
+    assert_eq!(denied["isError"], true);
+    let text = denied["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.starts_with(
+            "Refused, not run: the user's Dispatch rule \"deny stop_session on any machine\" refuses it."
+        ),
+        "{text}"
+    );
+    assert!(!ran(&r, "kill-session"), "a denied step never runs");
+    assert_eq!(event_count(&r, &id), before, "a denied step is no step");
+
+    let answer = json!({ "machine": "hp", "name": "hp-eng-1301", "text": "yes" });
+    let asked = dispatch_tool(&r, Some(&id), "send_to_session", answer.clone()).await;
+    assert!(asked["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .starts_with("Not run yet."));
+    let step = last_event(&r, &id);
+    assert_eq!(step["status"], "pending");
+    assert!(step.get("rule").is_none(), "the default asked, not a rule");
+
+    set_rules(
+        &r,
+        "auto",
+        json!([
+            { "action": "send_to_session", "folder": "/r/slots/slot2", "approval": "prompt" },
+            { "action": "stop_session", "folder": "slot2", "approval": "deny" },
+            { "action": "review_session", "machine": "hp", "approval": "deny" },
+        ]),
+    );
+    dispatch_tool(&r, Some(&id), "send_to_session", answer).await;
+    let step = last_event(&r, &id);
+    assert_eq!(step["status"], "pending");
+    assert_eq!(
+        step["rule"],
+        json!({ "action": "send_to_session", "machine": "any", "folder": "/r/slots/slot2", "approval": "prompt" })
+    );
+    assert!(!ran(&r, "send-keys"));
+
+    let before = event_count(&r, &id);
+    let unknown = dispatch_tool(
+        &r,
+        Some(&id),
+        "stop_session",
+        json!({ "machine": "hp", "name": "hp-gone" }),
+    )
+    .await;
+    assert_eq!(unknown["isError"], true);
+    assert!(unknown["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("because Yardbell cannot tell which folder the session is in"));
+    let review = dispatch_tool(
+        &r,
+        Some(&id),
+        "review_session",
+        json!({ "machine": "hp", "name": "hp-eng-1301" }),
+    )
+    .await;
+    assert!(review["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("\"deny review_session on hp\""));
+    assert_eq!(event_count(&r, &id), before);
+    assert!(!ran(&r, "kill-session"));
+
+    set_rules(&r, "deny", json!([]));
+    let refused = dispatch_tool(
+        &r,
+        None,
+        "start_session",
+        json!({ "machine": "hp", "folder": "slot2" }),
+    )
+    .await;
+    assert!(refused["content"][0]["text"]
+        .as_str()
+        .unwrap()
+        .contains("refuse steps that change something unless a rule allows them"));
 }
 
 #[tokio::test]
