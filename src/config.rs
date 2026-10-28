@@ -2,7 +2,11 @@ use crate::agents::{self, Agent};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
+use std::io::Write;
+use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
+
+pub const PRIVATE_FILE: u32 = 0o600;
 
 const EXAMPLE: &str = include_str!("../yardbell.example.yml");
 
@@ -246,11 +250,19 @@ impl Config {
             source,
         })?;
         let tmp = path.with_extension("yml.tmp");
+        // It holds the cookie key, the passcode hash and MCP tokens.
         let write = || -> std::io::Result<()> {
             if let Some(dir) = path.parent() {
                 std::fs::create_dir_all(dir)?;
             }
-            std::fs::write(&tmp, text)?;
+            let mut file = std::fs::OpenOptions::new()
+                .create(true)
+                .write(true)
+                .truncate(true)
+                .mode(PRIVATE_FILE)
+                .open(&tmp)?;
+            file.set_permissions(std::fs::Permissions::from_mode(PRIVATE_FILE))?;
+            file.write_all(text.as_bytes())?;
             std::fs::rename(&tmp, path)
         };
         write().map_err(|source| ConfigError::Read {

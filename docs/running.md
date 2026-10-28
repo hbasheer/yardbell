@@ -133,7 +133,11 @@ ssh key.
   request whose Origin is another site.
 - The MCP token can start and type into sessions on every machine, like a login. It is off until
   you turn it on in Settings, and making a new one stops the old one at once. Dispatch uses its own
-  token, made fresh each time Yardbell starts and never written to disk.
+  token, made fresh each time Yardbell starts and written only to Dispatch's MCP config, a file only
+  your account can read.
+- Secrets never go on a command line, where every account on a machine can read them with `ps`.
+  The MCP servers for sessions reach each machine over ssh's standard input and land in a file only
+  your account can read, and `yardbell.yml` is saved readable only by your account.
 - The desktop app signs its window in with a one-time code. Making a code needs a login, and the code
   works once, within 30 seconds. The window's login ends when the app quits; the app keeps its own
   login in the system keychain.

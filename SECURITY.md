@@ -9,6 +9,9 @@ same care as an ssh key.
 - Every page, API call and websocket requires the passcode cookie. Five wrong passcodes in
   a minute lock that address out for five minutes.
 - Requests that change anything must come from Yardbell's own origin.
+- Secrets, such as the tokens of the MCP servers given to sessions, never go on a command line, where
+  every account on a shared machine can read them with `ps`. They travel over ssh's standard input
+  into files only your account can read, and `yardbell.yml` is saved with mode 600.
 - Do not expose Yardbell to the public internet, a shared LAN, or through a reverse proxy you do not
   control.
 

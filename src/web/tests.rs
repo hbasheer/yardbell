@@ -2083,13 +2083,17 @@ async fn mcp_servers_are_saved_from_settings_and_reach_new_sessions() {
     assert!(body.contains("needs either a command or a URL"), "{body}");
     let (status, _, body) = send(
         &r.app,
-        save(r#"{"servers":[{"name":"gh","command":"npx gh-mcp","env":{"GITHUB_TOKEN":"t"}}]}"#),
+        save(r#"{"servers":[{"name":"gh","command":"npx gh-mcp","env":{"GITHUB_TOKEN":"ghp_secret"}}]}"#),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(r.app.settings.can_undo());
 
     r.fake.stub("tmux new", Output::ok_with(""));
+    r.fake.stub(
+        "yardbell/mcp",
+        Output::ok_with("/home/u/.cache/yardbell/mcp/mcp-1.json\n"),
+    );
     let (status, _, body) = send(
         &r.app,
         Request::post("/sessions")
@@ -2101,8 +2105,21 @@ async fn mcp_servers_are_saved_from_settings_and_reach_new_sessions() {
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
     let call = r.fake.calls().pop().unwrap();
-    assert!(call.last().unwrap().contains("--mcp-config"), "{call:?}");
-    assert!(call.last().unwrap().contains("gh-mcp"), "{call:?}");
+    let start = call.last().unwrap();
+    assert!(start.contains("--mcp-config"), "{start}");
+    assert!(
+        start.contains("/home/u/.cache/yardbell/mcp/mcp-1.json"),
+        "{start}"
+    );
+    for call in r.fake.calls() {
+        assert!(!call.join(" ").contains("ghp_secret"), "{call:?}");
+    }
+    assert!(r
+        .fake
+        .inputs()
+        .iter()
+        .flatten()
+        .any(|input| input.contains("gh-mcp") && input.contains("ghp_secret")));
 }
 
 #[tokio::test]
