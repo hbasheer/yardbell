@@ -8,6 +8,9 @@ and the project uses [Semantic Versioning](https://semver.org).
 - The memory bar splits what is used into your agents, your other processes and other accounts, so
   on a server shared without per-account memory limits you can see that the memory is someone
   else's. The percentage and the memory alert still cover the whole machine.
+- Under an account memory limit, file cache and reclaimable kernel memory no longer count as used.
+  The kernel drops them when the limit is reached, so a shared dev server showed 40% when your
+  processes used 12%.
 
 ## [0.6.7] - 2026-10-27
 

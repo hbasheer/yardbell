@@ -192,7 +192,8 @@ if [ -r /proc/meminfo ]; then
   avail=$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo)
   [ -n "$mem_total" ] && [ -n "$avail" ] && mem_used=$((mem_total - avail))
   # On a shared server each account gets a cgroup memory limit, and that limit is what runs out,
-  # not the machine's RAM. Page cache the kernel can drop is not counted as used, as in MemAvailable.
+  # not the machine's RAM. As in MemAvailable, page cache (active too, it is reclaimed under the
+  # limit) and reclaimable slab are not counted as used. tmpfs is in "file" but cannot be dropped.
   cg_path=$(sed -n 's/^0:://p' /proc/self/cgroup 2>/dev/null)
   cg_dir="/sys/fs/cgroup${cg_path%/}"
   cg_limit=""
@@ -208,10 +209,10 @@ if [ -r /proc/meminfo ]; then
   done
   if [ -n "$cg_limit" ] && [ -n "$mem_total" ] && [ $((cg_limit / 1024)) -lt "$mem_total" ]; then
     current=$(cat "$cg_limit_dir/memory.current" 2>/dev/null || true)
-    inactive=$(awk '$1 == "inactive_file" {print $2}' "$cg_limit_dir/memory.stat" 2>/dev/null)
+    reclaimable=$(awk '$1 == "file" || $1 == "slab_reclaimable" {n += $2} $1 == "shmem" {n -= $2} END {print n + 0}' "$cg_limit_dir/memory.stat" 2>/dev/null)
     if [ -n "$current" ]; then
       mem_total=$((cg_limit / 1024))
-      mem_used=$(((current - ${inactive:-0}) / 1024))
+      mem_used=$(((current - ${reclaimable:-0}) / 1024))
       mem_scope=account
     fi
   fi
