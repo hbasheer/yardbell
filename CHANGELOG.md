@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.5] - 2026-10-28
+
 - Dispatch has a memory: short entries such as where your repositories live, how you name
   branches, your conventions and your corrections ("always use the shared docker stack on hp").
   It reads them at the start of every turn, in a section of its prompt apart from your own
