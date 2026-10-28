@@ -437,6 +437,21 @@ mod tests {
             .unwrap();
     }
 
+    async fn shown(
+        rx: &mut futures::channel::mpsc::UnboundedReceiver<Message>,
+        output: &mut String,
+        want: &str,
+    ) {
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !output.contains(want) {
+            match tokio::time::timeout_at(deadline, rx.next()).await {
+                Ok(Some(Message::Binary(b))) => output.push_str(&String::from_utf8_lossy(&b)),
+                Ok(Some(_)) => {}
+                _ => panic!("the terminal never showed {want:?}: {output:?}"),
+            }
+        }
+    }
+
     #[tokio::test]
     async fn bridge_close_types_nothing_more_into_the_terminal() {
         let dir = tempfile::tempdir().unwrap();
@@ -444,11 +459,12 @@ mod tests {
         let (mut client_tx, server_rx) = futures::channel::mpsc::unbounded::<Message>();
         let (server_tx, mut client_rx) = futures::channel::mpsc::unbounded::<Message>();
         // Like a tmux client, it takes raw keys and still reads them for a moment after the hangup.
+        // It shows each key it gets, so the page closes only after "abc" has arrived.
         let pty = spawn(
             &argv(&[
                 "bash",
                 "-c",
-                r#"trap '' HUP; stty raw -echo; printf ready; while IFS= read -r -d '' -n 1 -t 1 c; do printf '%s' "$c" >> "$0"; done"#,
+                r#"trap '' HUP; stty raw -echo; printf ready; while IFS= read -r -d '' -n 1 -t 1 c; do printf '%s' "$c" >> "$0"; printf '[%s]' "$c"; done"#,
                 typed.to_str().unwrap(),
             ]),
             24,
@@ -458,25 +474,19 @@ mod tests {
         let pid = pty.pid().unwrap();
         let task = tokio::spawn(bridge(server_tx, server_rx, pty, EXIT_MESSAGE, None));
         let mut output = String::new();
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-        while !output.contains("ready") {
-            match tokio::time::timeout_at(deadline, client_rx.next()).await {
-                Ok(Some(Message::Binary(b))) => output.push_str(&String::from_utf8_lossy(&b)),
-                Ok(Some(_)) => {}
-                _ => panic!("the terminal never got ready: {output:?}"),
-            }
-        }
+        shown(&mut client_rx, &mut output, "ready").await;
         client_tx
             .send(Message::Text(r#"{"t":"in","d":"abc"}"#.into()))
             .await
             .unwrap();
+        shown(&mut client_rx, &mut output, "[a][b][c]").await;
         drop(client_tx);
         tokio::time::timeout(Duration::from_secs(3), task)
             .await
             .unwrap()
             .unwrap();
         let deadline = Instant::now() + Duration::from_secs(5);
-        while std::path::Path::new(&format!("/proc/{pid}")).exists() && Instant::now() < deadline {
+        while unsafe { libc::kill(pid as libc::pid_t, 0) } == 0 && Instant::now() < deadline {
             std::thread::sleep(Duration::from_millis(50));
         }
         assert_eq!(
