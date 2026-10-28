@@ -17,6 +17,10 @@ and the project uses [Semantic Versioning](https://semver.org).
   of its 8 KB cap is used and keeps the history of changes with dates. A change that would go
   over the cap is refused with a note to forget or shorten an entry. The memory is
   `dispatch/memory.md` in the state folder, readable only by your account.
+- Quitting the desktop app stops the SSH tunnels its server opened. They used to keep running
+  after the app quit and held their ports, so the next start could not forward that machine
+  (the tunnel log showed "Address already in use"). Signing out no longer lets the next machine
+  check start a tunnel again either.
 
 ## [0.7.4] - 2026-10-28
 
