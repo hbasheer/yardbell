@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.6.9] - 2026-10-28
+
 - The memory bar always shows the whole machine. On a server where your account has its own memory
   limit it showed only that limit (48 GB on a 125 GB machine), all of it as yours. Now a line under
   the bar lists the accounts using the most memory, such as `risal 24.9 GB · hasan (you) 7.3 GB`,
