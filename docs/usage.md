@@ -130,8 +130,8 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 - **Connect a phone:** shows a pairing code for the Android app.
 - **Notifications:** which notifications the Android app shows, and whether it is connected, see
   [Phone notifications](apps.md#phone-notifications).
-- **Dispatch:** your own instructions for Dispatch, the agent it starts and the model it runs on,
-  see [Dispatch](#dispatch).
+- **Dispatch:** your own instructions for Dispatch, the agent it starts, the model it runs on and
+  whether it asks before each step, see [Dispatch](#dispatch).
 - **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
   servers for the sessions it starts, see [Agent tools (MCP)](agents.md#agent-tools-mcp).
 - **Appearance:** same as the device, light or dark, like the theme button in the sidebar.
@@ -147,9 +147,24 @@ The **Dispatch** page takes a task in plain words, like "fix the flaky checkout 
 new branch eng-1234-checkout-flake". It runs Claude Code on the host (`claude -p`) with only
 Yardbell's own tools, so it can look at machines, folders and sessions and start, read and answer
 sessions, but cannot change files itself. It picks a machine that is up and has the repository,
-preferring the most free memory, the lowest load and the fewest running agents, then starts the
-default agent there with your task and links to the new session's terminal. Follow-up messages
-continue the same conversation, for example "what is that session doing now?" or "tell it yes".
+preferring the most free memory, the lowest load and the fewest running agents, then proposes
+starting the default agent there with your task. Follow-up messages continue the same
+conversation, for example "what is that session doing now?" or "tell it yes".
+
+Dispatch asks before it acts. Each step that starts, stops or types into a session appears as a
+card with the machine, folder, branch, agent and task (or the text to type), and waits for you:
+
+- **Approve** runs it. The card then says what happened, with **Open** for a session it started.
+- **Edit** lets you change the machine, folder, branch, agent and task, or the text, and then
+  approve it with your changes. The card keeps what Dispatch proposed.
+- **Reject** drops it.
+
+With several steps waiting, **Approve all** and **Reject all** decide them together, one after
+another. Sending a new message withdraws the steps you have not decided on, so Dispatch can
+propose again with what you wrote, and every message tells Dispatch what happened to its steps
+since its last reply. A conversation in the list says how many steps wait for you. To let Dispatch
+go ahead without asking, as earlier versions did, change **Before Dispatch starts, stops or types
+into a session** in Settings; its steps still show up as cards, marked as run without asking.
 Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
 conversation never stops the sessions it started. Claude Code must be installed and signed in on
@@ -157,10 +172,15 @@ the host.
 
 Dispatch follows the sessions it starts. When one finishes, stops to wait for an answer, or ends,
 the conversation gets a card with the last lines of its screen. A waiting agent's choices, such as
-Yes and No on a permission prompt, become buttons that answer it; a finished one has **Review
-branch**, which asks Dispatch to start a reviewer on the same folder that runs the tests and reports
-problems without changing files. A list at the top of the conversation shows every session it
-started and what each is doing now.
+Yes and No on a permission prompt, become buttons that answer it, and the card keeps the answer you
+picked. A finished or ended one has **Review branch**, which prepares a reviewer: a new session in
+the same folder that reviews the branch against the one it was made from, runs the tests and
+changes no files. Start it as it is, or edit its agent or instructions first. When the reviewer
+finishes, its findings come back as a review card with a verdict (ready, or changes needed), a
+summary, and each problem with its file and severity. Tick the ones that matter and **Send** them
+to the session that did the work, which gets them as one request to fix them and run the tests, or
+**Dismiss** the review. Asking Dispatch to review a session proposes the same reviewer. A list at
+the top of the conversation shows every session it started and what each is doing now.
 
 A task with independent parts, such as two repositories or several tickets, gets one session per
 part. Ask it to work through tickets and it reads them first, proposes a numbered plan (machine,
@@ -177,8 +197,8 @@ sessions using the same account count towards them too.
 The **Tasks** list in Dispatch's sidebar sends a task in one click. Five come with Yardbell:
 **What's going on?** summarises every machine and session, **Who needs me?** lists the sessions
 waiting for an answer, **Plan my Linear tickets** plans your open tickets, **Review finished
-branches** reviews the branches of idle and ended sessions, and **Tidy up sessions** suggests
-which sessions to stop. **New task** adds one of your own, which you can edit, rename or delete;
+branches** proposes a reviewer for each branch of an idle or ended session, and **Tidy up
+sessions** suggests which sessions to stop. **New task** adds one of your own, which you can edit, rename or delete;
 the copy button next to a default starts a task of your own from its text. Deleting a default
 only hides it, and **Restore default tasks** brings the defaults back. **Save as task** in the
 message box keeps whatever you typed.
@@ -196,5 +216,6 @@ and the sessions it started keep running.
 
 The **Dispatch** section of Settings adds your own instructions to its prompt (where your
 repositories live, which machine suits which work, how you name branches), picks the agent it
-starts in new sessions from the ones installed on your machines, and picks the Claude model that
-runs Dispatch itself; Haiku is the fastest.
+starts in new sessions from the ones installed on your machines, picks the Claude model that
+runs Dispatch itself (Haiku is the fastest), and chooses whether Dispatch asks you to approve each
+step or goes ahead without asking.

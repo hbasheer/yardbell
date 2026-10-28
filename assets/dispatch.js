@@ -1,4 +1,5 @@
 import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
+import * as steps from "/dispatch-review.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
 
@@ -12,7 +13,9 @@ let conversations = [];
 let busy = false;
 let events = [];
 let shownEvents = 0;
+let shownUpdated = "";
 let tracked = [];
+let lastState = null;
 let savedTasks = [];
 let answers = new Map();
 let view = 0;
@@ -27,7 +30,7 @@ const SESSION_STATES = {
 
 const INTRO = html`<div class="dispatch-intro">
   <h2>What should your agents work on?</h2>
-  <p>Describe a task in plain words. Dispatch finds the machine that has the repository and the most room, and starts an agent there.</p>
+  <p>Describe a task in plain words. Dispatch finds the machine that has the repository and the most room, and offers to start an agent there. You approve each step before it runs, unless Settings lets Dispatch go ahead on its own.</p>
   <p class="help">Dispatch runs Claude Code on this machine with Yardbell's own tools. It can start, read and answer sessions, but never edits files itself.</p>
   <p class="help">Type <kbd>/</kbd> to use one of your tasks, or <kbd>@</kbd> to name a machine, session or folder.</p>
 </div>`;
@@ -36,10 +39,7 @@ const LABELS = {
   list_machines: "Checked machines",
   list_sessions: "Checked sessions",
   list_folders: "Looked for the repository",
-  start_session: "Started a session",
   read_session: "Read a session",
-  send_to_session: "Answered a session",
-  stop_session: "Stopped a session",
 };
 
 const ICONS = {
@@ -158,7 +158,7 @@ function convoItem(c) {
   return html`<li class="convo ${selected ? "selected" : ""}">
     <a href="/dispatch?c=${c.id}" aria-current=${selected ? "true" : nothing} @click=${(e) => switchTo(e, c)}>
       <span class="convo-title">${c.title}</span>
-      <span class="convo-meta">${c.busy ? html`<span class="dot ok"></span>working` : ago(c.updated)}</span>
+      <span class="convo-meta">${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
     </a>
     <button class="btn quiet danger delete" type="button" aria-label="Delete ${c.title}" title="Delete" @click=${() => deleteConvo(c)}>${ICONS.close}</button>
   </li>`;
@@ -216,15 +216,6 @@ function termUrl(machine, name) {
   return `/term/${encodeURIComponent(machine)}/${encodeURIComponent(name)}`;
 }
 
-function started(text) {
-  try {
-    const s = JSON.parse(text);
-    return s.machine && s.name ? s : null;
-  } catch {
-    return null;
-  }
-}
-
 // A question with a preview draws the preview box beside the choices. Conversations saved before
 // the server cut labels there still carry the box, so it is cut here too.
 function optionLabel(label) {
@@ -244,12 +235,25 @@ function readable(screen) {
 }
 
 // Tool calls in a row share one line of small chips, like an agent's tool calls in a terminal,
-// and each result lands on the first chip of its name still waiting for one.
+// and each result lands on the first chip of its name still waiting for one. Steps that change
+// something are cards of their own, also the ones old conversations kept as plain tool calls.
 function blocks(list) {
   const out = [];
   const waiting = [];
+  const legacy = [];
   let group = null;
   list.forEach((e, i) => {
+    if ((e.role === "tool" || e.role === "tool_result") && steps.CHANGING.has(e.name)) {
+      let step = e.role === "tool_result" ? legacy.find((s) => s.tool === e.name && !s.result) : null;
+      if (!step) {
+        step = steps.legacyStep(e.name, e.role === "tool" ? e.input : null);
+        legacy.push(step);
+        out.push({ kind: "action", key: i, event: step });
+      }
+      if (e.role === "tool_result") steps.legacyResult(step, e);
+      group = null;
+      return;
+    }
     if (e.role === "tool" || e.role === "tool_result") {
       let chip = e.role === "tool_result" ? waiting.find((c) => c.name === e.name && !c.result) : null;
       if (!chip) {
@@ -258,14 +262,7 @@ function blocks(list) {
         group.chips.push(chip);
         waiting.push(chip);
       }
-      if (e.role === "tool_result") {
-        chip.result = e;
-        const s = e.name === "start_session" && !e.is_error ? started(e.text) : null;
-        if (s) {
-          out.push({ kind: "started", key: i, session: s });
-          group = null;
-        }
-      }
+      if (e.role === "tool_result") chip.result = e;
       return;
     }
     group = null;
@@ -279,14 +276,17 @@ function chip(c) {
   return html`<details class="tool ${tone}"><summary><span class="mark"></span>${LABELS[c.name] || c.name}${target(c.input)}</summary>${c.result ? html`<pre>${c.result.text}</pre>` : nothing}</details>`;
 }
 
-function sessionCard(e, key) {
-  const state = SESSION_STATES[e.state] || { badge: "", word: e.state, hint: "" };
-  const answer = answers.get(key);
+function sessionCard(e, index) {
+  const state = e.answer
+    ? { badge: "", word: "Answered", hint: "You answered its question here." }
+    : SESSION_STATES[e.state] || { badge: "", word: e.state, hint: "" };
+  const answer = e.answer || answers.get(`${view}:${index}`);
   const options = (e.options || []).map((o) => {
     const label = optionLabel(o.label);
-    return html`<button class="btn ${o.key === "1" ? "primary" : ""} ${answer?.key === o.key ? "picked" : ""}" type="button" title=${label} ?disabled=${Boolean(answer)} @click=${() => pick(e, key, o.key, label)}><span class="btn-label">${label}</span></button>`;
+    return html`<button class="btn ${o.key === "1" ? "primary" : ""} ${answer?.key === o.key ? "picked" : ""}" type="button" title=${label} ?disabled=${Boolean(answer)} @click=${() => pick(e, index, o.key, label)}><span class="btn-label">${label}</span></button>`;
   });
-  return html`<div class="session-card ${e.state}">
+  const reviewable = (e.state === "idle" || e.state === "ended") && !e.review;
+  return html`<div class="session-card ${e.answer ? "answered" : e.state}">
     <header class="session-card-head">
       <div class="session-card-id">
         <strong>${e.name}</strong>
@@ -297,8 +297,9 @@ function sessionCard(e, key) {
     ${e.screen ? html`<pre class="session-screen">${readable(e.screen)}</pre>` : nothing}
     <div class="session-card-actions">
       ${options}
-      ${e.state === "idle" ? html`<button class="btn" type="button" @click=${() => review(e)}>Review branch</button>` : nothing}
+      ${reviewable ? html`<button class="btn" type="button" title="Start a reviewer in the same folder that runs the tests and changes nothing" @click=${() => requestReview(index)}>Review branch</button>` : nothing}
       ${e.state === "ended" ? nothing : html`<a class="btn quiet" href=${termUrl(e.machine, e.name)} target="_blank" rel="noopener">Open</a>`}
+      ${e.answer ? html`<span class="session-card-answer">You answered ${optionLabel(e.answer.label)}${e.answer.at ? ` at ${new Date(e.answer.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</span>` : nothing}
     </div>
   </div>`;
 }
@@ -307,10 +308,12 @@ function block(b) {
   switch (b.kind) {
     case "tools":
       return html`<div class="tool-group">${b.chips.map(chip)}</div>`;
-    case "started":
-      return html`<div class="started"><a class="btn" href=${termUrl(b.session.machine, b.session.name)} target="_blank" rel="noopener" title="Open ${b.session.name}"><span class="btn-label">Open ${b.session.name}</span></a></div>`;
+    case "action":
+      return steps.stepCard(b.event);
+    case "review":
+      return steps.reviewCard(b.event, b.key);
     case "session":
-      return sessionCard(b.event, `${view}:${b.key}`);
+      return sessionCard(b.event, b.key);
     case "user":
       return html`<p class="msg user">${b.event.text}</p>`;
     case "assistant":
@@ -325,7 +328,7 @@ function block(b) {
 function draw() {
   render(!current && !events.length
     ? INTRO
-    : repeat(blocks(events), (b) => `${view}:${b.key}`, block), log);
+    : html`${repeat(blocks(events), (b) => `${view}:${b.key}`, block)}${steps.waitingBar(events)}`, log);
 }
 
 function show(event) {
@@ -334,23 +337,31 @@ function show(event) {
   scrollDown();
 }
 
-async function pick(e, key, keys, label) {
-  answers.set(key, { key: null });
+async function pick(e, index, key, label) {
+  const local = `${view}:${index}`;
+  answers.set(local, { key: null });
   draw();
   try {
-    await api("POST", `/sessions/${encodeURIComponent(e.machine)}/${encodeURIComponent(e.name)}/keys`, { keys });
-    answers.set(key, { key: keys });
+    events[index] = await api("POST", `/dispatch/conversations/${encodeURIComponent(current)}/answers`, { card: index, key });
     toast(`Answered "${label}"`, "ok");
   } catch (err) {
-    answers.delete(key);
     toast(err.message);
+    if (/already/.test(err.message)) catchUp();
   }
+  answers.delete(local);
   draw();
 }
 
-function review(e) {
-  if (busy) { toast("Dispatch is still working on the last message."); return; }
-  ask(`Review the branch that session ${e.name} on ${e.machine} worked on${e.path ? `, in ${e.path}` : ""}: start a review session as instructed and tell me what it finds.`);
+async function requestReview(index) {
+  try {
+    const step = await api("POST", `/dispatch/conversations/${encodeURIComponent(current)}/reviews`, { card: index });
+    events.push(step);
+    shownEvents = Math.max(shownEvents, events.length);
+    draw();
+    scrollDown();
+  } catch (err) {
+    toast(err.message);
+  }
 }
 
 function setBusy(on) {
@@ -373,11 +384,13 @@ async function open(id) {
   setUrl();
   events = [];
   answers = new Map();
+  steps.reset();
   setBusy(false);
   renderList();
   if (narrow.matches) $("convos").open = false;
   tracked = [];
   shownEvents = 0;
+  shownUpdated = "";
   renderTracked();
   compose.show(id);
   if (!id) {
@@ -389,6 +402,7 @@ async function open(id) {
     if (current !== id) return;
     events = convo.events.slice();
     shownEvents = convo.events.length;
+    shownUpdated = convo.updated;
     tracked = convo.sessions || [];
     renderTracked();
     setBusy(convo.busy);
@@ -412,6 +426,14 @@ async function watch(id) {
       await loadList();
       open(id);
       return;
+    }
+    if (convo.updated !== shownUpdated) {
+      const grew = convo.events.length > shownEvents;
+      events = convo.events.slice();
+      shownEvents = convo.events.length;
+      shownUpdated = convo.updated;
+      draw();
+      if (grew) scrollDown();
     }
   }
 }
@@ -462,18 +484,21 @@ async function ask(text) {
   }
 }
 
-// Session cards arrive between turns, as the sessions Dispatch started change.
+// Session cards and review results arrive between turns, as the sessions Dispatch started change,
+// and a step decided on another device changes in place.
 async function catchUp(showNew = true) {
   if (!current || busy) return;
   const id = current;
   const convo = await api("GET", `/dispatch/conversations/${encodeURIComponent(id)}`).catch(() => null);
   if (!convo || current !== id || busy) return;
-  if (showNew && convo.events.length > shownEvents) {
-    events.push(...convo.events.slice(shownEvents));
+  const grew = convo.events.length > shownEvents;
+  if (convo.updated !== shownUpdated || grew) {
+    events = convo.events.slice();
     draw();
-    scrollDown();
+    if (showNew && grew) scrollDown();
   }
   shownEvents = convo.events.length;
+  shownUpdated = convo.updated;
   tracked = convo.sessions || [];
   renderTracked();
 }
@@ -487,13 +512,38 @@ function trackedItem(t, state) {
     : t.name}<span class="muted">${t.machine} · ${word}</span></span>`;
 }
 
+async function loadState() {
+  lastState = await api("GET", "/state").catch(() => lastState);
+  return lastState;
+}
+
 async function renderTracked() {
   const box = $("dispatch-sessions");
   box.hidden = !tracked.length;
   if (!tracked.length) { render(nothing, box); return; }
-  const state = await api("GET", "/state").catch(() => null);
+  const state = await loadState();
   render(html`<span class="dispatch-sessions-label">Sessions</span>${repeat(tracked, (t) => `${t.machine}/${t.name}`, (t) => trackedItem(t, state))}`, box);
 }
+
+steps.setup({
+  api,
+  toast,
+  draw,
+  termUrl,
+  short,
+  conversation: () => current,
+  state: () => lastState,
+  loadState,
+  reload: () => catchUp(false),
+  decided: () => loadList().catch(() => {}),
+  replaceStep(step) {
+    const i = events.findIndex((e) => e.role === "action" && e.id === step.id);
+    if (i >= 0) events[i] = step;
+  },
+  replaceAt(index, event) {
+    events[index] = event;
+  },
+});
 
 function taskItem(t) {
   return html`<li class="convo task">
@@ -687,6 +737,7 @@ for (const id of ["convos", "tasks"]) {
   });
 }
 loadTasks();
+loadState().then(() => draw());
 loadList()
   .then(() => open(current && conversations.some((c) => c.id === current) ? current : null))
   .catch((err) => toast(err.message));

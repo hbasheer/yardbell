@@ -339,6 +339,30 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/dispatch/tasks/delete", post(dispatch_delete_task))
         .route("/dispatch/tasks/restore", post(dispatch_restore_tasks))
         .route("/dispatch/usage", get(dispatch_usage))
+        .route(
+            "/dispatch/conversations/{id}/actions",
+            post(dispatch_decide_all),
+        )
+        .route(
+            "/dispatch/conversations/{id}/actions/{action}",
+            post(dispatch_decide),
+        )
+        .route(
+            "/dispatch/conversations/{id}/reviews",
+            post(dispatch_request_review),
+        )
+        .route(
+            "/dispatch/conversations/{id}/reviews/{card}",
+            post(dispatch_review_outcome),
+        )
+        .route(
+            "/dispatch/conversations/{id}/answers",
+            post(dispatch_answer),
+        )
+        .route(
+            "/dispatch-review.js",
+            get(|| async { asset("dispatch-review.js") }),
+        )
         .route("/sessions/{machine}/{name}/keys", post(session_keys))
         .route("/dispatch/ask", post(dispatch_ask))
         .route(
@@ -635,18 +659,22 @@ struct KeysInput {
     keys: String,
 }
 
-async fn session_keys(
-    AxState(app): AxState<Arc<AppState>>,
-    UrlPath((machine, name)): UrlPath<(String, String)>,
-    Json(req): Json<KeysInput>,
-) -> Result<Response, ApiError> {
-    if req.keys.is_empty() || req.keys.chars().count() > 8 || req.keys.chars().any(char::is_control)
-    {
+fn plain_keys(keys: &str) -> Result<(), ApiError> {
+    if keys.is_empty() || keys.chars().count() > 8 || keys.chars().any(char::is_control) {
         return Err(ApiError(
             StatusCode::BAD_REQUEST,
             "keys must be up to 8 plain characters".into(),
         ));
     }
+    Ok(())
+}
+
+async fn session_keys(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((machine, name)): UrlPath<(String, String)>,
+    Json(req): Json<KeysInput>,
+) -> Result<Response, ApiError> {
+    plain_keys(&req.keys)?;
     let cfg = app.config()?;
     let m = find_machine(&cfg, &machine)?;
     app.sessions
@@ -753,6 +781,268 @@ async fn dispatch_clear(AxState(app): AxState<Arc<AppState>>) -> Result<Response
     Ok(Json(json!({ "kept": kept })).into_response())
 }
 
+fn refused(r: crate::dispatch::Refusal) -> ApiError {
+    match r {
+        crate::dispatch::Refusal::Missing(m) => ApiError(StatusCode::NOT_FOUND, m),
+        crate::dispatch::Refusal::Taken(m) => ApiError(StatusCode::CONFLICT, m),
+    }
+}
+
+fn step_id(id: &str) -> Result<&str, ApiError> {
+    if crate::dispatch::valid_action_id(id) {
+        return Ok(id);
+    }
+    Err(ApiError(StatusCode::NOT_FOUND, "no such step".into()))
+}
+
+#[derive(Deserialize)]
+struct Decision {
+    decision: String,
+    #[serde(default)]
+    input: Option<Value>,
+}
+
+// Work that must finish and be recorded even when the page that asked for it goes away, like a
+// phone losing its connection while a session starts.
+async fn detached<T: Send + 'static>(
+    work: impl std::future::Future<Output = Result<T, ApiError>> + Send + 'static,
+) -> Result<T, ApiError> {
+    tokio::spawn(work)
+        .await
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))?
+}
+
+async fn decide(
+    app: &Arc<AppState>,
+    id: &str,
+    action: &str,
+    req: &Decision,
+) -> Result<Value, ApiError> {
+    match req.decision.as_str() {
+        "reject" => app.dispatch.reject(id, action).map_err(refused),
+        "approve" => {
+            if let Some(input) = &req.input {
+                let step = app
+                    .dispatch
+                    .step(id, action)
+                    .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such step".into()))?;
+                let tool = step["tool"].as_str().unwrap_or_default();
+                crate::mcp::check(app, &app.config()?, tool, input)?;
+            }
+            let (tool, input) = app
+                .dispatch
+                .approve(id, action, req.input.clone())
+                .map_err(refused)?;
+            let (app, id, action) = (app.clone(), id.to_string(), action.to_string());
+            detached(async move {
+                let outcome = crate::mcp::perform(&app, &tool, input)
+                    .await
+                    .map_err(|ApiError(_, message)| message);
+                app.dispatch.ran(&id, &action, &outcome).map_err(refused)
+            })
+            .await
+        }
+        _ => Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "decision must be approve or reject".into(),
+        )),
+    }
+}
+
+async fn dispatch_decide(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((id, action)): UrlPath<(String, String)>,
+    Json(req): Json<Decision>,
+) -> Result<Response, ApiError> {
+    let event = decide(&app, conversation_id(&id)?, step_id(&action)?, &req).await?;
+    Ok(Json(event).into_response())
+}
+
+// One at a time, in the order they were proposed: two sessions in the same repository must not
+// set up their worktrees at once.
+async fn dispatch_decide_all(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<Decision>,
+) -> Result<Response, ApiError> {
+    let id = conversation_id(&id)?;
+    if req.input.is_some() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "edit steps one at a time".into(),
+        ));
+    }
+    let mut decided = Vec::new();
+    for action in app.dispatch.pending(id) {
+        match decide(&app, id, &action, &req).await {
+            Ok(event) => decided.push(event),
+            Err(ApiError(StatusCode::CONFLICT, _)) => {}
+            Err(e) => return Err(e),
+        }
+    }
+    Ok(Json(decided).into_response())
+}
+
+#[derive(Deserialize)]
+struct CardInput {
+    card: usize,
+    #[serde(default)]
+    key: String,
+}
+
+fn card_of(app: &AppState, id: &str, index: usize, role: &str) -> Result<Value, ApiError> {
+    app.dispatch
+        .event(id, index)
+        .filter(|e| e["role"] == role)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no such {role} card")))
+}
+
+// Review branch on a session card: the reviewer waits for the person to start it, so they can
+// pick its agent or change its instructions first.
+async fn dispatch_request_review(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<CardInput>,
+) -> Result<Response, ApiError> {
+    let id = conversation_id(&id)?;
+    let card = card_of(&app, id, req.card, "session")?;
+    let text = |k: &str| card[k].as_str().unwrap_or_default().to_string();
+    let cfg = app.config()?;
+    let (input, of) = crate::mcp::review_plan(
+        &app,
+        &cfg,
+        &text("machine"),
+        &text("name"),
+        &text("path"),
+        "",
+        "",
+    )?;
+    let event = app
+        .dispatch
+        .propose(
+            id,
+            "start_session",
+            input,
+            crate::dispatch::By::You,
+            Some(of),
+        )
+        .map_err(refused)?;
+    Ok(Json(event).into_response())
+}
+
+#[derive(Deserialize)]
+struct ReviewDecision {
+    decision: String,
+    #[serde(default)]
+    findings: Vec<usize>,
+}
+
+async fn dispatch_review_outcome(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((id, card)): UrlPath<(String, usize)>,
+    Json(req): Json<ReviewDecision>,
+) -> Result<Response, ApiError> {
+    let id = conversation_id(&id)?;
+    let review = card_of(&app, id, card, "review")?;
+    if review["outcome"].is_object() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            "this review was already handled".into(),
+        ));
+    }
+    let outcome = match req.decision.as_str() {
+        "dismiss" => json!({ "decision": "dismissed" }),
+        "send" => {
+            let all = review["findings"].as_array().cloned().unwrap_or_default();
+            let mut picked = req.findings.clone();
+            picked.sort_unstable();
+            picked.dedup();
+            if picked.is_empty() || picked.iter().any(|i| *i >= all.len()) {
+                return Err(ApiError(
+                    StatusCode::BAD_REQUEST,
+                    "pick the findings to send".into(),
+                ));
+            }
+            let chosen: Vec<Value> = picked.iter().map(|i| all[*i].clone()).collect();
+            let of = &review["of"];
+            let (machine, name) = (
+                of["machine"].as_str().unwrap_or_default(),
+                of["name"].as_str().unwrap_or_default(),
+            );
+            let cfg = app.config()?;
+            let m = find_machine(&cfg, machine)?;
+            let (app, id, name) = (app.clone(), id.to_string(), name.to_string());
+            let event = detached(async move {
+                app.sessions
+                    .send(&m, &name, &crate::dispatch::fix_request(&chosen))
+                    .await
+                    .map_err(|e| ApiError::gateway(format!("could not send to {name}: {e}")))?;
+                let outcome = json!({ "decision": "sent", "findings": picked, "to": name });
+                app.dispatch
+                    .review_outcome(&id, card, outcome)
+                    .map_err(refused)
+            })
+            .await?;
+            return Ok(Json(event).into_response());
+        }
+        _ => {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "decision must be send or dismiss".into(),
+            ))
+        }
+    };
+    let event = app
+        .dispatch
+        .review_outcome(id, card, outcome)
+        .map_err(refused)?;
+    Ok(Json(event).into_response())
+}
+
+// Picking a choice on a session card answers the session and keeps the answer in the
+// conversation, so the card still shows it after a reload or on another device.
+async fn dispatch_answer(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(id): UrlPath<String>,
+    Json(req): Json<CardInput>,
+) -> Result<Response, ApiError> {
+    let id = conversation_id(&id)?;
+    plain_keys(&req.key)?;
+    let card = card_of(&app, id, req.card, "session")?;
+    if let Some(earlier) = card["answer"]["label"].as_str() {
+        return Err(ApiError(
+            StatusCode::CONFLICT,
+            format!("it was already answered with {earlier}"),
+        ));
+    }
+    let label = card["options"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .find(|o| o["key"] == req.key.as_str())
+        .and_then(|o| o["label"].as_str())
+        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, "not one of its choices".into()))?
+        .to_string();
+    let (machine, name) = (
+        card["machine"].as_str().unwrap_or_default(),
+        card["name"].as_str().unwrap_or_default(),
+    );
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, machine)?;
+    let (name, id, card) = (name.to_string(), id.to_string(), req.card);
+    let event = detached(async move {
+        app.sessions
+            .send_keys(&m, &name, &req.key)
+            .await
+            .map_err(ApiError::gateway)?;
+        app.dispatch
+            .answered(&id, card, &req.key, &label)
+            .map_err(refused)
+    })
+    .await?;
+    Ok(Json(event).into_response())
+}
+
 pub fn find_machine(cfg: &Config, name: &str) -> Result<Machine, ApiError> {
     cfg.machine(name)
         .cloned()
@@ -778,6 +1068,31 @@ pub struct NewSession {
     agent: String,
     #[serde(default)]
     prompt: String,
+}
+
+impl NewSession {
+    // The mistakes worth catching before a person is asked to approve the step.
+    pub fn check(&self, app: &AppState, cfg: &Config) -> Result<(), ApiError> {
+        let m = find_machine(cfg, &self.machine)?;
+        let bad = |m: String| ApiError(StatusCode::BAD_REQUEST, m);
+        if !self.agent.is_empty() && cfg.agent(&self.agent).is_none() {
+            return Err(bad(format!("no agent named {}", self.agent)));
+        }
+        if self.new_branch && self.branch.trim().is_empty() {
+            return Err(bad("a new branch needs a name".into()));
+        }
+        if !self.path.trim().is_empty() {
+            return Ok(());
+        }
+        if self.folder.is_empty() {
+            return Err(bad("give a folder from list_folders, or a path".into()));
+        }
+        let snap = app.state.snapshot(&m.name).unwrap_or_default();
+        if !snap.folder_paths.contains_key(&self.folder) {
+            return Err(bad(format!("{} has no folder {}", m.name, self.folder)));
+        }
+        Ok(())
+    }
 }
 
 fn label_of(path: &str) -> String {

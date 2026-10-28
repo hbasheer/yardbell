@@ -1,3 +1,4 @@
+use super::review::ReviewOf;
 use crate::snapshot::Activity;
 use crate::state::StateView;
 use serde::{Deserialize, Serialize};
@@ -16,6 +17,8 @@ pub struct Tracked {
     pub path: String,
     #[serde(default)]
     pub last: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<ReviewOf>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -25,15 +28,16 @@ pub struct Change {
     pub name: String,
     pub path: String,
     pub state: &'static str,
+    pub review: Option<ReviewOf>,
 }
 
-pub fn started(result: &str) -> Option<Tracked> {
-    let v: Value = serde_json::from_str(result).ok()?;
+pub fn started(v: &Value) -> Option<Tracked> {
     Some(Tracked {
         machine: v["machine"].as_str()?.to_string(),
         name: v["name"].as_str()?.to_string(),
         path: v["path"].as_str().unwrap_or_default().to_string(),
         last: String::new(),
+        review: None,
     })
 }
 
@@ -78,6 +82,7 @@ pub fn changes(conversation: &str, tracked: &mut [Tracked], view: &StateView) ->
                 name: t.name.clone(),
                 path: t.path.clone(),
                 state: now,
+                review: t.review.clone(),
             });
         }
         t.last = now.to_string();
@@ -133,7 +138,7 @@ pub fn event(change: &Change, screen: &str) -> Value {
     } else {
         Vec::new()
     };
-    json!({
+    let mut card = json!({
         "role": "session",
         "machine": change.machine,
         "name": change.name,
@@ -142,7 +147,11 @@ pub fn event(change: &Change, screen: &str) -> Value {
         "screen": tail(screen, SCREEN_LINES),
         "options": options,
         "at": chrono::Local::now().to_rfc3339(),
-    })
+    });
+    if change.review.is_some() {
+        card["review"] = json!(true);
+    }
+    card
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -183,9 +192,8 @@ each. Wait for my go-ahead before starting anything.",
         ),
         builtin(
             "Review finished branches",
-            "For every session that is idle or ended on a branch other than main, review the \
-branch's diff against main. List real problems per branch and say which are ready for a pull \
-request.",
+            "For every session that is idle or ended on a branch other than main, start a review \
+of its branch. List the branches you are reviewing.",
         ),
         builtin(
             "Tidy up sessions",
@@ -245,6 +253,7 @@ mod tests {
             name: "hp-app".into(),
             path: "/r/app".into(),
             last: String::new(),
+            review: None,
         }]
     }
 
@@ -254,13 +263,13 @@ mod tests {
 
     #[test]
     fn a_start_result_is_tracked() {
-        let t = started(r#"{"machine":"hp","name":"hp-app","path":"/r/app"}"#).unwrap();
+        let t = started(&json!({ "machine": "hp", "name": "hp-app", "path": "/r/app" })).unwrap();
         assert_eq!(
             (t.machine.as_str(), t.name.as_str(), t.path.as_str()),
             ("hp", "hp-app", "/r/app")
         );
-        assert_eq!(started("not json"), None);
-        assert_eq!(started(r#"{"error":"x"}"#), None);
+        assert_eq!(started(&Value::Null), None);
+        assert_eq!(started(&json!({ "error": "x" })), None);
     }
 
     #[test]

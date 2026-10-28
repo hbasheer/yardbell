@@ -182,6 +182,13 @@
           </select>
         </label>
       </div>
+      <label>Before Dispatch starts, stops or types into a session
+        <select name="approval">
+          <option value="ask">Ask me to approve each step</option>
+          <option value="auto">Go ahead without asking</option>
+        </select>
+      </label>
+      <p class="help dispatch-help">Each step shows up in the conversation as a card. When Dispatch asks, you can approve it, edit it first or reject it, and nothing runs until you approve.</p>
       <div class="form-foot">
         <p class="help">Dispatch runs Claude Code on this machine. The agent it starts can be any of yours.</p>
         <button class="btn primary" type="submit">Save</button>

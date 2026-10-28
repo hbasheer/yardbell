@@ -1,3 +1,5 @@
+use crate::config::{Approval, Config};
+use crate::dispatch::{By, ReviewOf};
 use crate::web::{find_machine, start_session, ApiError, AppState, NewSession};
 use axum::extract::State as AxState;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -13,8 +15,8 @@ const MAX_READ_LINES: u32 = 2000;
 const INSTRUCTIONS: &str = "Yardbell runs AI coding agents in tmux sessions on several machines. \
 Use list_machines to see which machines are up and how much memory and load they have, \
 list_folders to see which git checkouts each machine has, and start_session to start an agent \
-in a folder with a task. read_session shows what a session's terminal shows now, and \
-send_to_session types a reply into it.";
+in a folder with a task. read_session shows what a session's terminal shows now, \
+send_to_session types a reply into it, and review_session starts a reviewer for a session's work.";
 
 pub fn token_matches(expected: &str, given: &str) -> bool {
     let (a, b) = (expected.as_bytes(), given.as_bytes());
@@ -32,6 +34,13 @@ pub fn new_token() -> String {
         .map(char::from)
         .collect();
     format!("yb_{suffix}")
+}
+
+// Dispatch's own Claude Code, which says which conversation it works for, or any other client
+// holding the MCP token.
+enum Caller {
+    Dispatch(Option<String>),
+    Client,
 }
 
 fn bearer(headers: &HeaderMap) -> &str {
@@ -83,11 +92,27 @@ pub async fn handle(
     let Some(id) = rpc.id else {
         return StatusCode::ACCEPTED.into_response();
     };
+    let caller = if dispatch {
+        let conversation = headers
+            .get(crate::dispatch::CONVERSATION_HEADER)
+            .and_then(|v| v.to_str().ok())
+            .filter(|id| crate::dispatch::valid_id(id))
+            .map(str::to_string);
+        Caller::Dispatch(conversation)
+    } else {
+        Caller::Client
+    };
     let result = match rpc.method.as_str() {
         "initialize" => Ok(initialize(&rpc.params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools() })),
-        "tools/call" => Ok(call(&app, &rpc.params).await),
+        // A call that changes something finishes, and is recorded, even when the caller hangs up.
+        "tools/call" => {
+            let app = app.clone();
+            tokio::spawn(async move { call(&app, &rpc.params, &caller).await })
+                .await
+                .map_err(|e| (-32603, e.to_string()))
+        }
         other => Err((-32601, format!("unknown method {other}"))),
     };
     reply(id, result)
@@ -184,23 +209,197 @@ fn tools() -> Vec<Value> {
             json!({ "machine": machine, "name": session }),
             &["machine", "name"],
         ),
+        tool(
+            "review_session",
+            "Start a reviewer for a session's work: a new session in the same folder that reviews its branch against the branch it was made from, runs the tests, changes no files, and ends with a report of findings. name is the session to review.",
+            json!({
+                "machine": machine,
+                "name": session,
+                "agent": { "type": "string", "description": "Agent for the reviewer; empty uses the default" },
+                "focus": { "type": "string", "description": "Anything the reviewer should look at closely" },
+            }),
+            &["machine", "name"],
+        ),
     ]
 }
 
-async fn call(app: &AppState, params: &Value) -> Value {
+async fn call(app: &AppState, params: &Value, caller: &Caller) -> Value {
     let name = params["name"].as_str().unwrap_or_default();
     let args = params
         .get("arguments")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let (text, is_error) = match run_tool(app, name, args).await {
-        Ok(value) => (
-            serde_json::to_string_pretty(&value).unwrap_or_default(),
-            false,
-        ),
+    let outcome = match caller {
+        Caller::Dispatch(conversation) if crate::dispatch::changes_something(name) => {
+            dispatch_step(app, conversation.as_deref(), name, args).await
+        }
+        _ => run_tool(app, name, args)
+            .await
+            .map(|value| serde_json::to_string_pretty(&value).unwrap_or_default()),
+    };
+    let (text, is_error) = match outcome {
+        Ok(text) => (text, false),
         Err(ApiError(_, message)) => (message, true),
     };
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+}
+
+fn proposal_note(id: &str) -> String {
+    format!(
+        "Not run yet. This is now proposal {id}, waiting in Dispatch for the user, who can \
+approve it, edit it first, or reject it. Do not call it again and do not assume it ran. Once you \
+have proposed everything you planned, end your reply with a sentence on what you proposed; the \
+user's next message starts with what happened to it."
+    )
+}
+
+// Dispatch's steps that change something wait for the person unless Settings lets it act on its
+// own. Either way the step is checked first, so a mistake goes back to Dispatch to correct
+// instead of to the person to approve.
+async fn dispatch_step(
+    app: &AppState,
+    conversation: Option<&str>,
+    name: &str,
+    args: Value,
+) -> Result<String, ApiError> {
+    let cfg = app.config()?;
+    let (tool, input, review) = plan(app, &cfg, name, args)?;
+    match (cfg.dispatch.approval, conversation) {
+        (Approval::Ask, None) => Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "Yardbell cannot tell which Dispatch conversation this came from, so it did not run it"
+                .into(),
+        )),
+        (Approval::Ask, Some(conversation)) => {
+            let event = app
+                .dispatch
+                .propose(conversation, &tool, input, By::Dispatch, review)
+                .map_err(|e| ApiError(StatusCode::NOT_FOUND, e.message().to_string()))?;
+            Ok(proposal_note(event["id"].as_str().unwrap_or_default()))
+        }
+        (Approval::Auto, conversation) => {
+            let outcome = perform(app, &tool, input.clone()).await;
+            if let Some(conversation) = conversation {
+                let recorded = outcome.as_ref().map(Value::clone).map_err(|e| e.1.clone());
+                app.dispatch
+                    .record(conversation, &tool, input, review, &recorded);
+            }
+            outcome.map(|value| serde_json::to_string_pretty(&value).unwrap_or_default())
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct ReviewArgs {
+    machine: String,
+    name: String,
+    #[serde(default)]
+    agent: String,
+    #[serde(default)]
+    focus: String,
+}
+
+// What a step will run: review_session becomes the start_session that starts the reviewer.
+fn plan(
+    app: &AppState,
+    cfg: &Config,
+    name: &str,
+    args: Value,
+) -> Result<(String, Value, Option<ReviewOf>), ApiError> {
+    if name == "review_session" {
+        let r: ReviewArgs = arg(args)?;
+        let (input, of) = review_plan(app, cfg, &r.machine, &r.name, "", &r.agent, &r.focus)?;
+        return Ok(("start_session".into(), input, Some(of)));
+    }
+    check(app, cfg, name, &args)?;
+    Ok((name.to_string(), args, None))
+}
+
+pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<(), ApiError> {
+    match tool {
+        "start_session" => arg::<NewSession>(input.clone())?.check(app, cfg),
+        "send_to_session" | "stop_session" => {
+            let r: SessionRef = arg(input.clone())?;
+            find_machine(cfg, &r.machine)?;
+            if r.name.trim().is_empty() {
+                return Err(ApiError(StatusCode::BAD_REQUEST, "name is empty".into()));
+            }
+            if tool == "send_to_session" && r.text.is_empty() {
+                return Err(ApiError(StatusCode::BAD_REQUEST, "text is empty".into()));
+            }
+            Ok(())
+        }
+        other => Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("{other} is not a step that changes anything"),
+        )),
+    }
+}
+
+// The reviewer runs in the reviewed session's own folder, so it sees the branch as that session
+// left it, uncommitted changes included. A session that has ended is found by its folder.
+pub fn review_plan(
+    app: &AppState,
+    cfg: &Config,
+    machine: &str,
+    name: &str,
+    path: &str,
+    agent: &str,
+    focus: &str,
+) -> Result<(Value, ReviewOf), ApiError> {
+    let m = find_machine(cfg, machine)?;
+    let snap = app.state.snapshot(&m.name).unwrap_or_default();
+    let running = snap
+        .sessions
+        .iter()
+        .find(|s| s.tmux.as_deref() == Some(name));
+    let path = running
+        .map(|s| s.cwd.clone())
+        .filter(|cwd| !cwd.is_empty())
+        .unwrap_or_else(|| path.to_string());
+    if path.is_empty() {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("no session named {name} on {machine}"),
+        ));
+    }
+    let branch = running.map(|s| s.branch.clone()).unwrap_or_else(|| {
+        snap.folder_paths
+            .iter()
+            .find(|(_, p)| **p == path)
+            .and_then(|(label, _)| snap.folders.get(label).cloned())
+            .unwrap_or_default()
+    });
+    let agent = if agent.is_empty() {
+        cfg.dispatch.agent.clone()
+    } else {
+        agent.to_string()
+    };
+    let mut input = json!({
+        "machine": m.name,
+        "path": path,
+        "prompt": crate::dispatch::review_prompt(&branch, focus),
+    });
+    if !agent.is_empty() {
+        input["agent"] = json!(agent);
+    }
+    let of = ReviewOf {
+        machine: m.name.clone(),
+        name: name.to_string(),
+        path,
+        branch,
+    };
+    Ok((input, of))
+}
+
+pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, ApiError> {
+    if !crate::dispatch::changes_something(tool) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("{tool} is not a step that changes anything"),
+        ));
+    }
+    run_tool(app, tool, input).await
 }
 
 fn arg<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ApiError> {
@@ -291,6 +490,12 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
         "start_session" => {
             let req: NewSession = arg(args)?;
             let started = start_session(app, req).await?;
+            app.refresh().await;
+            Ok(started)
+        }
+        "review_session" => {
+            let (_, input, _) = plan(app, &cfg, name, args)?;
+            let started = start_session(app, arg(input)?).await?;
             app.refresh().await;
             Ok(started)
         }

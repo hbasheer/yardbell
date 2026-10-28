@@ -163,9 +163,11 @@ pub async fn serve(
                 continue;
             };
             let (dispatch, sessions) = (after_dispatch.clone(), after_sessions.clone());
+            // A reviewer's report can run long, and it is read from the screen.
+            let lines = if change.review.is_some() { 400 } else { 60 };
             tokio::spawn(async move {
                 let screen = sessions
-                    .read(&m, &change.name, 60)
+                    .read(&m, &change.name, lines)
                     .await
                     .unwrap_or_default();
                 dispatch.report(&change, &screen);

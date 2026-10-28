@@ -42,6 +42,24 @@ and the project uses [Semantic Versioning](https://semver.org).
   now sends too. In a wide window, click the hint beside the Send button to send with Ctrl+Enter
   instead, so Enter starts a new line. On a phone, Enter starts a new line and the Send button
   sends. While Dispatch is working, Stop takes the place of Send.
+- Dispatch asks before it acts. Starting, stopping or typing into a session is now a step in the
+  conversation that waits for you: approve it, edit it first (machine, folder, branch, agent, task
+  or text), or reject it, and nothing runs until you approve. Several waiting steps can be
+  approved or rejected at once. Sending a new message withdraws the steps you have not decided
+  on, and Dispatch hears what happened to each step with your next message. To have Dispatch go
+  ahead on its own as before, change **Before Dispatch starts, stops or types into a session** in
+  Settings, Dispatch.
+- Dispatch: **Review branch** prepares a reviewer for the same folder, which you can start as it
+  is or with another agent or instructions. When it finishes, its findings come back as a review
+  with a verdict, a summary and each problem with its file and severity. Pick the ones that matter
+  and send them to the session that did the work, or dismiss the review. Ask Dispatch to review a
+  session and it proposes the same reviewer.
+- Dispatch keeps a record of every decision in the conversation: which steps you approved, edited
+  or rejected and when, what each one did, the answers you picked for a waiting session, and what
+  you did with a review. The cards show it after a reload and on another device, and a conversation
+  in the sidebar says how many steps wait for you.
+- Conversations from earlier versions open as before, with the sessions they started shown as
+  steps that ran without asking.
 
 ## [0.6.7] - 2026-10-27
 

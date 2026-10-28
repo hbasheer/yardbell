@@ -1441,7 +1441,8 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "start_session",
             "read_session",
             "send_to_session",
-            "stop_session"
+            "stop_session",
+            "review_session"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;
@@ -1560,6 +1561,465 @@ async fn dispatch_routes_need_login_and_check_conversation_ids() {
     let (status, _, body) = send(&r.app, post("/dispatch/clear", "{}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, r#"{"kept":0}"#);
+}
+
+async fn dispatch_conversation(r: &Rig) -> String {
+    let script = r._dir.path().join("claude");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho '{\"type\":\"result\",\"is_error\":false,\"result\":\"ok\"}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    r.fake.stub(
+        "command -v claude",
+        Output::ok_with(&format!("{}\n", script.display())),
+    );
+    let (id, mut rx) = r
+        .app
+        .dispatch
+        .ask(
+            None,
+            "fix the inbox",
+            4000,
+            &crate::config::DispatchSettings::default(),
+            None,
+        )
+        .await
+        .unwrap();
+    while rx.recv().await.is_some() {}
+    id
+}
+
+async fn dispatch_tool(
+    r: &Rig,
+    conversation: Option<&str>,
+    name: &str,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    let mut req = Request::post("/mcp")
+        .header(header::HOST, "localhost:4000")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", r.app.dispatch.token()),
+        );
+    if let Some(conversation) = conversation {
+        req = req.header(crate::dispatch::CONVERSATION_HEADER, conversation);
+    }
+    let body = rpc("tools/call", json!({ "name": name, "arguments": args }));
+    let res = router(r.app.clone())
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["result"].clone()
+}
+
+async fn step_post(
+    r: &Rig,
+    cookie: &str,
+    url: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let req = Request::post(url)
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, _, text) = send(&r.app, req).await;
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+fn last_event(r: &Rig, id: &str) -> serde_json::Value {
+    r.app.dispatch.get(id).unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone()
+}
+
+fn ran(r: &Rig, command: &str) -> bool {
+    r.fake
+        .calls()
+        .iter()
+        .any(|call| call.join(" ").contains(command))
+}
+
+#[tokio::test]
+async fn dispatch_steps_wait_for_approval_then_run_once() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let start = json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox" });
+    let result = dispatch_tool(&r, Some(&id), "start_session", start.clone()).await;
+    assert_eq!(result["isError"], false, "{result}");
+    let note = result["content"][0]["text"].as_str().unwrap();
+    assert!(
+        note.starts_with("Not run yet. This is now proposal "),
+        "{note}"
+    );
+    assert!(
+        !ran(&r, "tmux new"),
+        "nothing runs before the person approves"
+    );
+    let step = last_event(&r, &id);
+    assert_eq!(
+        (&step["role"], &step["status"], &step["by"], &step["input"]),
+        (
+            &json!("action"),
+            &json!("pending"),
+            &json!("dispatch"),
+            &start
+        )
+    );
+    let step_id = step["id"].as_str().unwrap().to_string();
+
+    let mistake = dispatch_tool(
+        &r,
+        Some(&id),
+        "start_session",
+        json!({ "machine": "hp", "folder": "nope" }),
+    )
+    .await;
+    assert_eq!(mistake["isError"], true);
+    assert_eq!(mistake["content"][0]["text"], "hp has no folder nope");
+    let lost = dispatch_tool(
+        &r,
+        None,
+        "stop_session",
+        json!({ "machine": "hp", "name": "x" }),
+    )
+    .await;
+    assert_eq!(lost["isError"], true);
+    assert_eq!(
+        r.app.dispatch.pending(&id),
+        std::slice::from_ref(&step_id),
+        "neither became a step"
+    );
+
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301\n"));
+    let url = format!("/dispatch/conversations/{id}/actions/{step_id}");
+    let (status, done) = step_post(&r, &c, &url, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "approved");
+    assert_eq!(done["result"]["ok"], true);
+    assert_eq!(done["result"]["session"]["name"], "hp-eng-1301");
+    assert!(ran(&r, "fix the inbox"));
+    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(
+        r.app.dispatch.get(&id).unwrap()["sessions"][0]["name"],
+        "hp-eng-1301"
+    );
+    let (status, again) = step_post(&r, &c, &url, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(again["error"], "this step was already approved");
+    for bad in [
+        "/dispatch/conversations/{id}/actions/../x",
+        "/dispatch/conversations/{id}/actions/abc",
+    ] {
+        let (status, _) = step_post(
+            &r,
+            &c,
+            &bad.replace("{id}", &id),
+            json!({ "decision": "approve" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn dispatch_steps_can_be_edited_rejected_or_approved_together() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let propose = |name: &'static str, args: serde_json::Value| {
+        let (r, id) = (&r, id.clone());
+        async move {
+            dispatch_tool(r, Some(&id), name, args).await;
+            last_event(r, &id)["id"].as_str().unwrap().to_string()
+        }
+    };
+    let start = propose(
+        "start_session",
+        json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox" }),
+    )
+    .await;
+    let answer = propose(
+        "send_to_session",
+        json!({ "machine": "hp", "name": "hp-eng-1301", "text": "yes" }),
+    )
+    .await;
+    let url = |step: &str| format!("/dispatch/conversations/{id}/actions/{step}");
+
+    let (status, body) = step_post(
+        &r,
+        &c,
+        &url(&start),
+        json!({ "decision": "approve", "input": { "machine": "nope", "folder": "slot2" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "no machine named nope");
+    assert_eq!(
+        r.app.dispatch.pending(&id).len(),
+        2,
+        "a bad edit decides nothing"
+    );
+
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301\n"));
+    let edited =
+        json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox and add a test" });
+    let (status, done) = step_post(
+        &r,
+        &c,
+        &url(&start),
+        json!({ "decision": "approve", "input": edited }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "edited");
+    assert_eq!(done["original"]["prompt"], "fix the inbox");
+    assert!(ran(&r, "fix the inbox and add a test"));
+
+    let (status, rejected) =
+        step_post(&r, &c, &url(&answer), json!({ "decision": "reject" })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rejected["status"], "rejected");
+    assert!(!ran(&r, "send-keys"), "a rejected step never runs");
+    let (status, _) = step_post(&r, &c, &url(&answer), json!({ "decision": "maybe" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    r.fake.stub("kill-session", Output::ok_with(""));
+    for name in ["hp-a", "hp-b"] {
+        propose("stop_session", json!({ "machine": "hp", "name": name })).await;
+    }
+    let (status, all) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/actions"),
+        json!({ "decision": "approve" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert!(all
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["result"]["ok"] == true));
+    assert!(ran(&r, "kill-session -t '=hp-a'") && ran(&r, "kill-session -t '=hp-b'"));
+    assert_eq!(r.app.dispatch.list()[0]["waiting"], 0);
+}
+
+#[tokio::test]
+async fn with_approval_off_dispatch_steps_run_at_once_and_are_recorded() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    r.app
+        .settings
+        .set_dispatch(crate::config::DispatchSettings {
+            approval: crate::config::Approval::Auto,
+            ..Default::default()
+        })
+        .unwrap();
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301\n"));
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "start_session",
+        json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox" }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let started: serde_json::Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(started["name"], "hp-eng-1301");
+    let step = last_event(&r, &id);
+    assert_eq!(
+        (&step["status"], &step["told"]),
+        (&json!("auto"), &json!(true))
+    );
+    assert_eq!(step["result"]["session"]["name"], "hp-eng-1301");
+    assert!(r.app.dispatch.pending(&id).is_empty());
+}
+
+#[tokio::test]
+async fn a_review_is_requested_approved_and_its_findings_sent_back() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let finished = |name: &str, review: Option<crate::dispatch::ReviewOf>, screen: &str| {
+        r.app.dispatch.report(
+            &crate::dispatch::Change {
+                conversation: id.clone(),
+                machine: "hp".into(),
+                name: name.into(),
+                path: "/r/slots/slot2".into(),
+                state: "idle",
+                review,
+            },
+            screen,
+        );
+        r.app.dispatch.get(&id).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .len()
+            - 1
+    };
+    let card = finished("hp-eng-1301", None, "Done.");
+    let (status, step) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/reviews"),
+        json!({ "card": card }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{step}");
+    assert_eq!(
+        (&step["by"], &step["status"]),
+        (&json!("you"), &json!("pending"))
+    );
+    assert_eq!(
+        step["review"],
+        json!({ "machine": "hp", "name": "hp-eng-1301", "path": "/r/slots/slot2", "branch": "eng-1301-inbox" })
+    );
+    assert_eq!(step["input"]["path"], "/r/slots/slot2");
+    assert!(step["input"]["prompt"]
+        .as_str()
+        .unwrap()
+        .starts_with("Review the work on branch eng-1301-inbox in this folder"));
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/reviews"),
+        json!({ "card": 0 }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the first event is a message"
+    );
+
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301-2\n"));
+    let (status, started) = step_post(
+        &r,
+        &c,
+        &format!(
+            "/dispatch/conversations/{id}/actions/{}",
+            step["id"].as_str().unwrap()
+        ),
+        json!({ "decision": "approve" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let tracked = r.app.dispatch.get(&id).unwrap()["sessions"].clone();
+    assert_eq!(tracked[0]["name"], "hp-eng-1301-2");
+    assert_eq!(tracked[0]["review"]["name"], "hp-eng-1301");
+
+    let of: crate::dispatch::ReviewOf = serde_json::from_value(step["review"].clone()).unwrap();
+    let screen = "⏺ YARDBELL REVIEW\n  verdict: changes needed\n  summary: Two problems.\n  - high: src/inbox.rs:40: The unread count can go negative.\n  - low: README.md: Mention the new flag.\n  END REVIEW";
+    let review = finished("hp-eng-1301-2", Some(of), screen);
+    let url = format!("/dispatch/conversations/{id}/reviews/{review}");
+    let (status, _) = step_post(&r, &c, &url, json!({ "decision": "send", "findings": [] })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = step_post(&r, &c, &url, json!({ "decision": "send", "findings": [7] })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    r.fake.stub("send-keys", Output::ok_with(""));
+    let (status, sent) =
+        step_post(&r, &c, &url, json!({ "decision": "send", "findings": [0] })).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["outcome"]["decision"], "sent",);
+    assert_eq!(sent["outcome"]["to"], "hp-eng-1301");
+    let typed = r
+        .fake
+        .calls()
+        .iter()
+        .map(|c| c.join(" "))
+        .find(|c| c.contains("send-keys"))
+        .unwrap();
+    assert!(typed.contains("'=hp-eng-1301:'"), "{typed}");
+    assert!(typed.contains("found this problem. Fix it,"), "{typed}");
+    assert!(
+        typed.contains("The unread count can go negative."),
+        "{typed}"
+    );
+    assert!(!typed.contains("Mention the new flag"), "{typed}");
+    let (status, _) = step_post(&r, &c, &url, json!({ "decision": "dismiss" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn dispatch_can_ask_for_a_review_of_a_running_session() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "review_session",
+        json!({ "machine": "hp", "name": "hp-eng-1301", "focus": "the unread count" }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let step = last_event(&r, &id);
+    assert_eq!(step["tool"], "start_session");
+    assert_eq!(step["review"]["branch"], "eng-1301-inbox");
+    assert!(step["input"]["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("Pay special attention to this: the unread count"));
+    let missing = dispatch_tool(
+        &r,
+        Some(&id),
+        "review_session",
+        json!({ "machine": "hp", "name": "hp-nope" }),
+    )
+    .await;
+    assert_eq!(
+        missing["content"][0]["text"],
+        "no session named hp-nope on hp"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_to_a_waiting_session_is_kept_in_the_conversation() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    r.app.dispatch.report(
+        &crate::dispatch::Change {
+            conversation: id.clone(),
+            machine: "hp".into(),
+            name: "hp-eng-1301".into(),
+            path: "/r/slots/slot2".into(),
+            state: "blocked",
+            review: None,
+        },
+        "Run the migration?\n ❯ 1. Yes\n   2. No",
+    );
+    let card = r.app.dispatch.get(&id).unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .len()
+        - 1;
+    let url = format!("/dispatch/conversations/{id}/answers");
+    let (status, _) = step_post(&r, &c, &url, json!({ "card": card, "key": "7" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    r.fake.stub("send-keys", Output::ok_with(""));
+    let (status, answered) = step_post(&r, &c, &url, json!({ "card": card, "key": "2" })).await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+    assert_eq!(answered["answer"]["label"], "No");
+    assert!(ran(&r, "send-keys -t '=hp-eng-1301:' -l '2'"));
+    let (status, again) = step_post(&r, &c, &url, json!({ "card": card, "key": "1" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(again["error"], "it was already answered with No");
 }
 
 #[tokio::test]
