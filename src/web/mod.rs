@@ -326,6 +326,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/workspace.js", get(|| async { asset("workspace.js") }))
         .route("/dispatch", get(|| async { asset("dispatch.html") }))
         .route("/dispatch.js", get(|| async { asset("dispatch.js") }))
+        .route("/composer.js", get(|| async { asset("composer.js") }))
         .route("/dispatch/conversations", get(dispatch_list))
         .route("/dispatch/conversations/{id}", get(dispatch_get))
         .route("/dispatch/conversations/{id}/stop", post(dispatch_stop))

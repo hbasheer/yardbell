@@ -28,6 +28,20 @@ and the project uses [Semantic Versioning](https://semver.org).
   its tooltip. Enter or Space opens the tab that has keyboard focus.
 - Dispatch: the dot and label in the small chips under a message, such as **Checked machines**,
   sit in the middle of the chip again in the desktop app, which drew them 3px too high.
+- Dispatch on a phone: the last lines of a conversation are no longer hidden behind the message
+  box, which used to sit above its place with an empty strip under it that never scrolled away. The
+  box now sits at the bottom of the screen, above the home indicator, and stays above the on-screen
+  keyboard while the conversation keeps its newest message in view. It also uses larger text there,
+  so an iPhone no longer zooms in when you tap it.
+- Dispatch's message box works more like Commslayer's. Type `/` to pick one of your tasks, or `@` to
+  name a machine, session or folder; the Tasks and @ buttons in the box open the same lists. A
+  picked task's text goes into the box, so you can change it before sending. What you type is kept
+  for each conversation until you send it, also after a reload, and Arrow Up in an empty box brings
+  back earlier messages.
+- Dispatch: Enter still sends and Shift+Enter starts a new line, and Ctrl+Enter (⌘+Enter on a Mac)
+  now sends too. In a wide window, click the hint beside the Send button to send with Ctrl+Enter
+  instead, so Enter starts a new line. On a phone, Enter starts a new line and the Send button
+  sends. While Dispatch is working, Stop takes the place of Send.
 
 ## [0.6.7] - 2026-10-27
 

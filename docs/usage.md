@@ -183,6 +183,17 @@ the copy button next to a default starts a task of your own from its text. Delet
 only hides it, and **Restore default tasks** brings the defaults back. **Save as task** in the
 message box keeps whatever you typed.
 
+In the message box, **Enter** sends and **Shift+Enter** starts a new line; **Ctrl+Enter**
+(**⌘+Enter** on a Mac) sends too. In a wide window, click the hint beside the Send button to send
+with Ctrl+Enter instead, so Enter starts a new line; the browser remembers the choice. On a phone,
+Enter starts a new line and the Send button sends. Type **/** to pick one of your tasks, or **@** to
+name a machine, session or folder, or use the **Tasks** and **@** buttons in the box: the arrow keys
+move through the list, **Enter** or **Tab** picks, and **Esc** closes it. A picked task's text goes
+into the box, so you can change it before sending. What you type is kept for each conversation
+until you send it, also after a reload, and **Arrow Up** in an empty box brings back your earlier
+messages. While Dispatch is working, **Stop** takes the place of Send; it stops Dispatch's reply,
+and the sessions it started keep running.
+
 The **Dispatch** section of Settings adds your own instructions to its prompt (where your
 repositories live, which machine suits which work, how you name branches), picks the agent it
 starts in new sessions from the ones installed on your machines, and picks the Claude model that

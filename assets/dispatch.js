@@ -1,5 +1,6 @@
 import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
+import { composer } from "/composer.js";
 
 const $ = (id) => document.getElementById(id);
 const Nav = window.YardbellNav;
@@ -28,6 +29,7 @@ const INTRO = html`<div class="dispatch-intro">
   <h2>What should your agents work on?</h2>
   <p>Describe a task in plain words. Dispatch finds the machine that has the repository and the most room, and starts an agent there.</p>
   <p class="help">Dispatch runs Claude Code on this machine with Yardbell's own tools. It can start, read and answer sessions, but never edits files itself.</p>
+  <p class="help">Type <kbd>/</kbd> to use one of your tasks, or <kbd>@</kbd> to name a machine, session or folder.</p>
 </div>`;
 
 const LABELS = {
@@ -191,6 +193,7 @@ async function deleteConvo(c) {
 
 async function loadList() {
   conversations = await api("GET", "/dispatch/conversations");
+  compose.keep(conversations.map((c) => c.id));
   renderList();
 }
 
@@ -352,7 +355,8 @@ function review(e) {
 
 function setBusy(on) {
   busy = on;
-  $("dispatch-send").disabled = on;
+  if (document.activeElement === $(on ? "dispatch-send" : "dispatch-stop")) form.text.focus();
+  $("dispatch-send").hidden = on;
   $("dispatch-stop").hidden = !on;
   $("dispatch-thinking").hidden = !on;
   draw();
@@ -375,6 +379,7 @@ async function open(id) {
   tracked = [];
   shownEvents = 0;
   renderTracked();
+  compose.show(id);
   if (!id) {
     if (document.hasFocus()) form.text.focus();
     return;
@@ -439,6 +444,7 @@ async function ask(text) {
         const event = JSON.parse(line);
         if (event.role === "conversation") {
           current = event.id;
+          compose.adopt(event.id);
           setUrl();
           loadList().catch(() => {});
         } else {
@@ -574,27 +580,25 @@ $("save-as-task").addEventListener("click", () => {
 
 setInterval(() => catchUp(true), 5000);
 
-form.addEventListener("submit", (e) => {
-  e.preventDefault();
-  const text = form.text.value.trim();
-  if (!text || busy) return;
-  form.text.value = "";
-  fitCompose();
-  ask(text);
-});
-
-function fitCompose() {
-  form.text.style.height = "auto";
-  form.text.style.height = `${form.text.scrollHeight}px`;
+function scroller() {
+  const main = document.querySelector(".main");
+  return getComputedStyle(main).overflowY === "visible" ? document.scrollingElement : main;
 }
 
-form.text.addEventListener("input", fitCompose);
-
-form.text.addEventListener("keydown", (e) => {
-  if (e.key === "Enter" && !e.shiftKey && !e.isComposing) {
-    e.preventDefault();
-    form.requestSubmit();
-  }
+const compose = composer(form, {
+  send(text) {
+    if (busy) {
+      toast("Dispatch is still working on the last message. Stop it or wait, then send.");
+      return false;
+    }
+    ask(text);
+    return true;
+  },
+  sent: () => events.filter((e) => e.role === "user").map((e) => e.text),
+  tasks: () => savedTasks.filter((t) => !t.hidden),
+  state: () => api("GET", "/state"),
+  scroller,
+  scrollDown,
 });
 
 $("dispatch-stop").addEventListener("click", () => {
