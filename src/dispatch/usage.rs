@@ -3,6 +3,8 @@ use std::time::Duration;
 
 use serde_json::{json, Value};
 
+use super::Dispatch;
+
 const WINDOWS: [(&str, &str); 2] = [("five_hour", "5-hour limit"), ("seven_day", "Weekly limit")];
 
 // Claude Code reports the account's plan limits in a rate_limit_event while it runs, so every
@@ -130,9 +132,42 @@ fn credentials_file() -> Option<PathBuf> {
     Some(dir.join(".credentials.json"))
 }
 
+const USAGE_FRESH: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
+
+impl Dispatch {
+    pub async fn refresh_usage(&self, http: &reqwest::Client) -> Result<(), String> {
+        self.shared.set_usage(from_account(http).await?);
+        Ok(())
+    }
+
+    // A click right after a check gets that check's figures instead of asking Anthropic again.
+    pub async fn refresh_usage_now(&self, http: &reqwest::Client) -> Result<Value, String> {
+        let current = self.usage();
+        let fresh = current["source"] == "account"
+            && current["seen"]
+                .as_str()
+                .and_then(|seen| chrono::DateTime::parse_from_rfc3339(seen).ok())
+                .is_some_and(|seen| chrono::Local::now().signed_duration_since(seen) < USAGE_FRESH);
+        if !fresh {
+            self.refresh_usage(http).await?;
+        }
+        Ok(self.usage())
+    }
+
+    pub fn usage(&self) -> Value {
+        self.shared
+            .usage
+            .lock()
+            .expect("dispatch lock")
+            .clone()
+            .unwrap_or(Value::Null)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::dispatch::tests::fake_claude;
 
     #[test]
     fn plan_limits_are_read_from_the_rate_limit_event() {
@@ -191,5 +226,22 @@ mod tests {
         assert_eq!(token_from(creds, 2000), None);
         assert_eq!(token_from(r#"{"claudeAiOauth": {}}"#, 0), None);
         assert_eq!(token_from("not json", 0), None);
+    }
+
+    #[tokio::test]
+    async fn a_refresh_right_after_a_check_reuses_its_figures() {
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = fake_claude(dir.path(), "true");
+        let checked = json!({
+            "windows": [{"name": "five_hour", "label": "5-hour limit", "used": 0.12, "resets_at": null, "status": "allowed"}],
+            "seen": chrono::Local::now().to_rfc3339(),
+            "source": "account",
+        });
+        dispatch.shared.set_usage(checked.clone());
+        let usage = dispatch
+            .refresh_usage_now(&reqwest::Client::new())
+            .await
+            .unwrap();
+        assert_eq!(usage, checked);
     }
 }
