@@ -5,15 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.6] - 2026-10-29
+
 - Dispatch can run on Codex as well as Claude Code. **Dispatch runs on** in Settings, under
   Dispatch, picks one, with a **Codex model** field beside it that suggests the models Codex lists
   for your account. Your approval setting, rules and memory work the same on both, and the agent
   for new sessions is still its own setting. On Codex, Dispatch acts only through Yardbell's tools
   and your MCP servers from Settings, such as Linear: Codex's shell, browser and other tools are
   off, it runs read-only, so its file edits and sub-agents cannot write, and your
-  `~/.codex/config.toml` is never read. It needs Codex 0.165.0 or newer and says so when it finds an older one, and a message fails
-  with a clear error when Codex cannot reach Yardbell's tools, since Codex itself carries on
-  without them.
+  `~/.codex/config.toml` is never read. It needs Codex 0.165.0 or newer and says so when it finds
+  an older one, and a message fails with a clear error when Codex cannot reach Yardbell's tools,
+  since Codex itself carries on without them.
 - A conversation stays on the agent it started on, and says so when **Dispatch runs on** has
   changed since. Start a new conversation to switch. Conversations from before run on Claude Code.
 - The usage card in the sidebar adds Codex's 5-hour and weekly limits, as Codex recorded them after
