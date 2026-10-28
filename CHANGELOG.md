@@ -36,6 +36,10 @@ and the project uses [Semantic Versioning](https://semver.org).
   next version of the task the session came from.
 - **Scan** in the Dispatch message box picks a project and then the branch to scan, from its own
   checkout or one of its worktrees, instead of listing every folder.
+- Quitting the desktop app stops the SSH tunnels its server opened. They used to keep running
+  after the app quit and held their ports, so the next start could not forward that machine
+  (the tunnel log showed "Address already in use"). Signing out no longer lets the next machine
+  check start a tunnel again either.
 
 ## [0.7.4] - 2026-10-28
 

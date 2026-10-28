@@ -4,6 +4,7 @@ use crate::snapshot::Port;
 use crate::state::PortStatus;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -34,6 +35,7 @@ pub struct Tunnels {
     log_dir: PathBuf,
     clock: Clock,
     entries: Mutex<HashMap<String, Entry>>,
+    closed: AtomicBool,
 }
 
 impl Tunnels {
@@ -49,6 +51,7 @@ impl Tunnels {
             log_dir,
             clock,
             entries: Mutex::new(HashMap::new()),
+            closed: AtomicBool::new(false),
         }
     }
 
@@ -121,6 +124,10 @@ impl Tunnels {
         wanted.dedup_by_key(|(remote, _)| *remote);
 
         let mut entries = self.entries.lock().expect("tunnels lock");
+        // Read under the lock, so a poll already under way cannot start a tunnel after shutdown.
+        if self.closed.load(Ordering::SeqCst) {
+            return;
+        }
         if wanted.is_empty() {
             if let Some(old) = entries.remove(&m.name) {
                 old.pid.into_iter().for_each(|pid| self.runner.kill(pid));
@@ -185,15 +192,13 @@ impl Tunnels {
     }
 
     pub fn shutdown(&self) {
-        let names: Vec<String> = self
-            .entries
-            .lock()
-            .expect("tunnels lock")
-            .keys()
-            .cloned()
-            .collect();
-        for name in names {
-            self.remove(&name);
+        let old: Vec<Entry> = {
+            let mut entries = self.entries.lock().expect("tunnels lock");
+            self.closed.store(true, Ordering::SeqCst);
+            entries.drain().map(|(_, entry)| entry).collect()
+        };
+        for entry in old {
+            entry.pid.into_iter().for_each(|pid| self.runner.kill(pid));
         }
     }
 }
@@ -485,6 +490,16 @@ mod tests {
         assert!(!rig.fake.spawned()[0].2);
         assert!(rig.fake.spawned()[1].2);
         rig.tunnels.shutdown();
+        assert!(rig.fake.spawned().iter().all(|s| !s.2));
+    }
+
+    #[test]
+    fn sync_after_shutdown_starts_nothing() {
+        let rig = Rig::new();
+        rig.tunnels.sync(&machine(), &[port(3020, true)]);
+        rig.tunnels.shutdown();
+        rig.tunnels.sync(&machine(), &[port(3020, true)]);
+        assert_eq!(rig.spawn_count(), 1);
         assert!(rig.fake.spawned().iter().all(|s| !s.2));
     }
 }
