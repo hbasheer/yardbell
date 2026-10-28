@@ -2,6 +2,7 @@ mod actions;
 mod follow;
 mod group;
 mod mcp_config;
+mod memory;
 mod prompt;
 mod pull;
 mod read_only;
@@ -20,6 +21,7 @@ pub use group::{
     MAX_CHILDREN as GROUP_MAX, MAX_MINUTES as GROUP_MAX_MINUTES, MIN_CHILDREN as GROUP_MIN,
 };
 pub use mcp_config::CONVERSATION_HEADER;
+pub use memory::{Memory, MemoryChange};
 pub use review::{
     changed_file as review_file, changed_files as review_files, evidence_folder, file_view,
     fix_request, found_by, picked as review_picked, places as finding_files,
@@ -27,8 +29,8 @@ pub use review::{
     ReviewOf, ScanKind, Screenshots,
 };
 pub use rules::{
-    decide as decide_step, folder_matches, valid_folder_pattern, validate as validate_rules, Rule,
-    Step, Verdict,
+    decide as decide_step, decide_memory, folder_matches, valid_folder_pattern,
+    validate as validate_rules, Rule, Step, Verdict,
 };
 pub use store::valid_id;
 pub use tasks::SavedTask;
@@ -63,6 +65,7 @@ pub struct Dispatch {
     command: Mutex<Option<Vec<String>>>,
     token: String,
     shared: Arc<Shared>,
+    memory: Memory,
 }
 
 impl Dispatch {
@@ -75,6 +78,7 @@ impl Dispatch {
             runner,
             command: Mutex::new(None),
             token: crate::mcp::new_token(),
+            memory: Memory::new(&dir),
             shared: Arc::new(Shared {
                 dir,
                 chats,
@@ -90,6 +94,10 @@ impl Dispatch {
 
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    pub fn memory(&self) -> &Memory {
+        &self.memory
     }
 
     pub fn list(&self) -> Value {

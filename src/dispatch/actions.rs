@@ -3,7 +3,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 9] = [
+const CHANGING: [&str; 10] = [
     "start_session",
     "send_to_session",
     "stop_session",
@@ -13,6 +13,7 @@ const CHANGING: [&str; 9] = [
     "integrate_branches",
     "push_branch",
     "move_session",
+    "remember",
 ];
 
 pub fn changes_something(tool: &str) -> bool {
@@ -116,9 +117,14 @@ pub fn interrupted(events: &mut [Value]) {
             && matches!(e["status"].as_str(), Some("approved" | "edited" | "auto"))
             && e["result"].is_null()
     }) {
+        let check = if e["tool"] == "remember" {
+            "Check Dispatch's memory in Settings to see whether it was saved."
+        } else {
+            "Check the session list to see whether it ran."
+        };
         e["result"] = json!({
             "ok": false,
-            "text": "Yardbell restarted before this finished. Check the session list to see whether it ran.",
+            "text": format!("Yardbell restarted before this finished. {check}"),
             "at": e["decided"],
         });
     }
@@ -188,6 +194,15 @@ fn what(action: &Value) -> String {
             "" => format!("moving {session} from {machine} to the machine with the most room"),
             to => format!("moving {session} from {machine} to {to}"),
         },
+        "remember" => match text(input, "change") {
+            "replace" => format!(
+                "replacing \"{}\" with \"{}\" in your memory",
+                text(input, "old"),
+                text(input, "entry")
+            ),
+            "forget" => format!("forgetting \"{}\" from your memory", text(input, "old")),
+            _ => format!("adding \"{}\" to your memory", text(input, "entry")),
+        },
         other => other.to_string(),
     }
 }
@@ -212,6 +227,7 @@ fn changed(action: &Value) -> String {
         ("agent", "agent"),
         ("prompt", "task"),
         ("text", "text"),
+        ("entry", "entry"),
     ] {
         let (a, b) = (before.get(key), after.get(key));
         if !(a == b || blank(a) && blank(b)) && !fields.contains(&word) {
@@ -242,6 +258,7 @@ fn ran(action: &Value) -> Option<String> {
         ),
         "send_to_session" => ", and it was sent".into(),
         "stop_session" => ", and the session stopped".into(),
+        "remember" => ", and your memory was updated".into(),
         _ => ", and it ran".into(),
     })
 }
@@ -554,6 +571,47 @@ mod tests {
             with_news(&["a".into(), "b".into()], "hi"),
             "What happened since your last reply:\n- a\n- b\n\nMy message:\nhi"
         );
+    }
+
+    #[test]
+    fn memory_steps_are_told_as_memory() {
+        let step = |input: Value, status: &str| {
+            let mut e = event("remember", input, By::Dispatch, None, status, "t0");
+            e["decided"] = json!("t1");
+            e
+        };
+        let mut edited = step(
+            json!({ "change": "add", "entry": "Use hp for docker", "reason": "said twice" }),
+            "edited",
+        );
+        edited["original"] = edited["input"].clone();
+        edited["input"]["entry"] = json!("Use the shared docker stack on hp");
+        edited["result"] = result(&Ok(json!({ "memory": { "entries": 1 } })), "t1");
+        let mut events = vec![
+            edited,
+            step(
+                json!({ "change": "replace", "old": "a", "entry": "b", "reason": "r" }),
+                "rejected",
+            ),
+            step(
+                json!({ "change": "forget", "old": "a", "reason": "r" }),
+                "rejected",
+            ),
+        ];
+        assert_eq!(
+            untold(&mut events),
+            [
+                "You proposed adding \"Use hp for docker\" to your memory. I approved it after changing the entry, and your memory was updated.",
+                "You proposed replacing \"a\" with \"b\" in your memory. I rejected it.",
+                "You proposed forgetting \"a\" from your memory. I rejected it.",
+            ]
+        );
+        let mut events = vec![step(json!({ "change": "add", "entry": "x" }), "approved")];
+        interrupted(&mut events);
+        assert!(events[0]["result"]["text"]
+            .as_str()
+            .unwrap()
+            .ends_with("Check Dispatch's memory in Settings to see whether it was saved."));
     }
 
     #[test]

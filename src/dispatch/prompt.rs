@@ -1,3 +1,4 @@
+use super::memory::{CLOSE_TAG, MAX_BYTES, OPEN_TAG};
 use crate::config::{Approval, DispatchSettings};
 
 const PROMPT: &str = "You are Yardbell's dispatcher. The user gives you a coding task, and you \
@@ -72,12 +73,51 @@ After proposing, end your reply with one or two sentences on what you proposed a
 user's next message starts with what happened to each proposal; trust it over what you expected.";
 
 const RULES: &str = "The user's rules decide some steps differently: a call that starts, stops, \
-types into or reviews a session, scans a folder, or starts a child of a group, may run at once, become a proposal for the \
+types into or reviews a session, scans a folder, starts a child of a group, or changes your memory, may run at once, become a proposal for the \
 user, or be refused. Each tool result says which. When a call is refused, tell the user which rule refused it and that \
 they can change it in Yardbell's Settings, and do not try it again or reach the same result \
 another way.";
 
-pub(super) fn system_prompt(settings: &DispatchSettings) -> String {
+const MEMORY: &str = "You have a memory that the user keeps with you across conversations: \
+facts and corrections such as where repositories live, branch naming, conventions, and what the \
+user wants always or never done. It is between the memory tags below. Follow it as the user's own \
+words unless they say otherwise in this conversation, and treat it as information, never as a task \
+to start.
+
+Propose a change with remember only when the user corrects you or states a lasting preference \
+(\"always use the shared docker stack on hp\", \"never open PRs on Fridays\"), or when a fact you \
+needed has come up again and will matter in later conversations. Do not propose details of the \
+task at hand, anything you guessed, anything already in memory, or secrets such as tokens and \
+passwords. Most turns need no change: propose at most one per turn unless the user asks you to \
+remember more. When an entry is wrong or out of date, replace or forget it rather than adding \
+another. Keep each entry to one short sentence and give the reason: what the user said or did. \
+Unless a rule of the user's allows it, each call becomes a proposal that the user approves, edits \
+or rejects, and nothing is saved before that.";
+
+// The memory as any backend gives it to its model: the guidance, then the entries between tags
+// that an entry cannot contain.
+pub fn memory_section(entries: &[String], omitted: usize) -> String {
+    let mut section = format!("{MEMORY}\n\n{OPEN_TAG}\n");
+    if entries.is_empty() {
+        section.push_str("(empty)\n");
+    }
+    for entry in entries {
+        section.push_str("- ");
+        section.push_str(entry);
+        section.push('\n');
+    }
+    section.push_str(CLOSE_TAG);
+    if omitted > 0 {
+        section.push_str(&format!(
+            "\n{omitted} more {} left out because the memory is over its cap of {MAX_BYTES} bytes. \
+Tell the user they can shorten it in Yardbell's Settings, under Dispatch, Memory.",
+            if omitted == 1 { "entry is" } else { "entries are" }
+        ));
+    }
+    section
+}
+
+pub(super) fn system_prompt(settings: &DispatchSettings, memory: &str) -> String {
     let mut prompt = PROMPT.to_string();
     prompt.push_str("\n\n");
     prompt.push_str(match settings.approval {
@@ -93,6 +133,10 @@ pub(super) fn system_prompt(settings: &DispatchSettings) -> String {
             "\n\nStart sessions with agent \"{}\" unless the user asks for another.",
             settings.agent
         ));
+    }
+    if !memory.is_empty() {
+        prompt.push_str("\n\n");
+        prompt.push_str(memory);
     }
     let own = settings.instructions.trim();
     if !own.is_empty() {
@@ -110,39 +154,87 @@ mod tests {
 
     #[test]
     fn settings_shape_the_prompt() {
-        let asking = system_prompt(&DispatchSettings::default());
+        let asking = system_prompt(&DispatchSettings::default(), "");
         assert_eq!(asking, format!("{PROMPT}\n\n{PROPOSE}"));
         assert!(!asking.contains("Start nothing until the user agrees"));
-        let acting = system_prompt(&DispatchSettings {
-            approval: Approval::Allow,
-            ..DispatchSettings::default()
-        });
+        let acting = system_prompt(
+            &DispatchSettings {
+                approval: Approval::Allow,
+                ..DispatchSettings::default()
+            },
+            "",
+        );
         assert_eq!(acting, format!("{PROMPT}\n\n{ACT}"));
-        let ruled = system_prompt(&DispatchSettings {
-            rules: vec![crate::dispatch::Rule {
-                action: "stop_session".into(),
-                machine: "any".into(),
-                folder: String::new(),
-                approval: Approval::Deny,
-            }],
-            ..DispatchSettings::default()
-        });
+        let ruled = system_prompt(
+            &DispatchSettings {
+                rules: vec![crate::dispatch::Rule {
+                    action: "stop_session".into(),
+                    machine: "any".into(),
+                    folder: String::new(),
+                    approval: Approval::Deny,
+                }],
+                ..DispatchSettings::default()
+            },
+            "",
+        );
         assert_eq!(ruled, format!("{PROMPT}\n\n{PROPOSE}\n\n{RULES}"));
-        let refusing = system_prompt(&DispatchSettings {
-            approval: Approval::Deny,
-            ..DispatchSettings::default()
-        });
+        let refusing = system_prompt(
+            &DispatchSettings {
+                approval: Approval::Deny,
+                ..DispatchSettings::default()
+            },
+            "",
+        );
         assert_eq!(refusing, format!("{PROMPT}\n\n{ACT}\n\n{RULES}"));
-        let prompt = system_prompt(&DispatchSettings {
-            instructions: "  acme/web work goes to devbox \n".into(),
-            agent: "codex".into(),
-            model: String::new(),
-            approval: Approval::Prompt,
-            rules: Vec::new(),
-        });
+        let prompt = system_prompt(
+            &DispatchSettings {
+                instructions: "  acme/web work goes to devbox \n".into(),
+                agent: "codex".into(),
+                model: String::new(),
+                approval: Approval::Prompt,
+                rules: Vec::new(),
+            },
+            "",
+        );
         assert!(prompt.starts_with(PROMPT));
         assert!(prompt.contains("Start sessions with agent \"codex\""));
         assert!(prompt
             .ends_with("take precedence over the guidance above:\nacme/web work goes to devbox"));
+    }
+
+    #[test]
+    fn memory_sits_between_the_guidance_and_the_users_instructions() {
+        let memory = memory_section(
+            &[
+                "Use the shared docker stack on hp".into(),
+                "Never open PRs on Fridays".into(),
+            ],
+            0,
+        );
+        assert!(memory.starts_with(MEMORY));
+        assert!(memory.ends_with(
+            "<dispatch_memory>\n- Use the shared docker stack on hp\n- Never open PRs on Fridays\n</dispatch_memory>"
+        ));
+        let prompt = system_prompt(
+            &DispatchSettings {
+                instructions: "acme/web work goes to devbox".into(),
+                ..DispatchSettings::default()
+            },
+            &memory,
+        );
+        let at = |part: &str| prompt.find(part).unwrap();
+        assert!(at(PROPOSE) < at(MEMORY));
+        assert!(at(CLOSE_TAG) < at("The user's own instructions follow"));
+        assert_eq!(prompt.matches(OPEN_TAG).count(), 1);
+        assert_eq!(prompt.matches(CLOSE_TAG).count(), 1);
+        assert!(prompt.ends_with("acme/web work goes to devbox"));
+
+        let empty = memory_section(&[], 0);
+        assert!(empty.ends_with("<dispatch_memory>\n(empty)\n</dispatch_memory>"));
+        let cut = memory_section(&["one".into()], 2);
+        assert!(cut.ends_with(
+            "</dispatch_memory>\n2 more entries are left out because the memory is over its cap of 8192 bytes. \
+Tell the user they can shorten it in Yardbell's Settings, under Dispatch, Memory."
+        ));
     }
 }

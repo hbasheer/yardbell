@@ -28,6 +28,9 @@ SHOT_FILE = "shotbrowsertest1.png"
 PULL_CHAT = "browsertestpull0"
 GROUP_CHAT = "browsergroup0001"
 RESULTS_CHAT = "browserresults01"
+MEMORY_CHAT = "browsermemory001"
+MEMORY_OLD = "Run docker on hp"
+MEMORY_NEW = "Always use the shared docker stack on hp"
 REFUSED = "the user's Dispatch rule \"deny start_session on pro\" refuses it"
 PULL_SESSION = "hp-pull-test"
 FAKE_PR = {
@@ -221,6 +224,19 @@ def results_chat(root):
     ])
 
 
+# Dispatch proposed to sharpen an entry after a correction; the memory holds the old one.
+def memory_chat():
+    step = {"role": "action", "id": "memstep1", "tool": "remember", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00",
+            "input": {"change": "replace", "old": MEMORY_OLD, "entry": MEMORY_NEW,
+                      "reason": "You said to use the shared stack, not a new one."}}
+    return conversation(MEMORY_CHAT, "Start the api on hp", [
+        {"role": "user", "text": "No, use the shared docker stack on hp, not a new one"},
+        {"role": "assistant", "text": "Understood. I proposed keeping that in memory."},
+        step,
+    ])
+
+
 def conversation(id, title, events):
     stamp = "2026-01-01T10:00:00+00:00"
     return {"id": id, "title": title, "created": stamp, "updated": stamp, "events": events}
@@ -363,7 +379,9 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "at": "2026-01-01T10:00:00+00:00",
         }
         pull = conversation(PULL_CHAT, "Pull request #12: Fix the login redirect", [card])
-        for chat in (short, long, review, pull, scan, group_chat(self.root), results_chat(self.root)):
+        with open(os.path.join(self.state, "dispatch", "memory.md"), "w") as f:
+            f.write(f"# Dispatch memory\n\n- {MEMORY_OLD}\n- Branches are named after the ticket\n")
+        for chat in (short, long, review, pull, scan, group_chat(self.root), results_chat(self.root), memory_chat()):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -974,6 +992,45 @@ class Suite:
         if b.js("document.querySelector('#dispatch-log .steps-bar')"):
             raise Failure("a step still waits after Approve all")
         b.wait(f"document.querySelector('{card} .step-card-head .badge').textContent === '0 of 2 done'", "the group running")
+
+    def test_dispatch_memory_step_shows_a_diff_and_updates_settings(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={MEMORY_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .memory-diff')", "the memory step with its diff")
+        diff = b.js(f"""(() => {{
+          const d = document.querySelector('{card} .memory-diff');
+          return {{ del: d.querySelector('del')?.textContent, ins: d.querySelector('ins')?.textContent,
+                   title: document.querySelector('{card} .step-card-title strong').textContent }};
+        }})()""")
+        if diff != {"del": f"-{MEMORY_OLD}", "ins": f"+{MEMORY_NEW}", "title": "Change a memory"}:
+            raise Failure(f"the card shows {diff}")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome a[href=\"/settings#dispatch-memory\"]')", "the step saved, with a link to the memory")
+        b.goto(self.url("/settings#dispatch-memory"))
+        b.wait("!document.getElementById('dispatch').hidden && document.querySelectorAll('#memory-rows .row').length === 2", "the memory in Settings")
+        rows = b.js("[...document.querySelectorAll('#memory-rows .row-title')].map((r) => r.textContent)")
+        if rows != [MEMORY_NEW, "Branches are named after the ticket"]:
+            raise Failure(f"Settings lists {rows}")
+        history = b.js("document.getElementById('memory-history-list').textContent")
+        if "proposed by Dispatch, approved by you" not in history or MEMORY_OLD not in history:
+            raise Failure(f"the history says {history!r}")
+
+        b.click("#memory-add")
+        b.click("#memory-form textarea")
+        b.type("Never open PRs on Fridays")
+        b.click("#memory-form button[type=submit]")
+        b.wait("document.querySelectorAll('#memory-rows .row').length === 3 && document.getElementById('memory-form').hidden", "the new entry")
+        b.click("#memory-rows .row:nth-child(2) [data-memory-delete]")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the delete confirmation")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("document.querySelectorAll('#memory-rows .row').length === 2", "the entry deleted")
+        with open(os.path.join(self.y.state, "dispatch", "memory.md")) as f:
+            saved = f.read()
+        if saved != f"# Dispatch memory\n\n- {MEMORY_NEW}\n- Never open PRs on Fridays\n":
+            raise Failure(f"memory.md holds {saved!r}")
+        if os.stat(os.path.join(self.y.state, "dispatch", "memory.md")).st_mode & 0o777 != 0o600:
+            raise Failure("memory.md is readable by other accounts")
 
     def check_errors(self, where):
         if self.b.errors:

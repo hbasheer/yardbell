@@ -416,6 +416,10 @@ pub fn router(app: Arc<AppState>) -> Router {
         )
         .route("/dispatch/tasks/delete", post(dispatch_delete_task))
         .route("/dispatch/tasks/restore", post(dispatch_restore_tasks))
+        .route(
+            "/dispatch/memory",
+            get(dispatch_memory).post(dispatch_change_memory),
+        )
         .route("/dispatch/usage", get(dispatch_usage))
         .route("/dispatch/usage/refresh", post(dispatch_usage_refresh))
         .route(
@@ -782,6 +786,21 @@ async fn dispatch_usage_refresh(AxState(app): AxState<Arc<AppState>>) -> Respons
         Ok(usage) => Json(usage).into_response(),
         Err(message) => error(StatusCode::BAD_GATEWAY, &message),
     }
+}
+
+async fn dispatch_memory(AxState(app): AxState<Arc<AppState>>) -> Response {
+    Json(app.dispatch.memory().view()).into_response()
+}
+
+async fn dispatch_change_memory(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<crate::dispatch::MemoryChange>,
+) -> Result<Response, ApiError> {
+    app.dispatch
+        .memory()
+        .apply(&req, crate::dispatch::By::You)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(app.dispatch.memory().view()).into_response())
 }
 
 async fn dispatch_tasks(AxState(app): AxState<Arc<AppState>>) -> Response {

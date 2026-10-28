@@ -295,6 +295,8 @@ dispatch:
       machine: devbox
       folder: acme/*
       approval: allow
+    - action: remember            # changes to Dispatch's memory
+      approval: allow
 ```
 
 `instructions` is at most 4000 characters. Dispatch itself always runs Claude Code on the host;
@@ -311,7 +313,7 @@ and `deny`.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, or `any` (the default). |
+| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, `remember`, or `any` (the default). |
 | `machine` | no | A machine name, or `any` (the default). |
 | `folder` | no | A folder pattern. Empty matches every folder. |
 | `approval` | yes | `allow`, `prompt` or `deny`. |
@@ -330,6 +332,14 @@ Which rule decides:
    two that name as many, the one with the longer folder pattern wins, and if they still tie,
    `prompt` beats `allow`. The order of the list never matters.
 3. When no rule matches, `approval` decides.
+
+`remember` steps, Dispatch's changes to its memory, are decided apart from the others. Only a rule
+with `action: remember` decides them, so an `any` rule never does, and a `remember` rule leaves
+`machine` and `folder` out, since the memory is on no machine or folder. Without such a rule a
+change always waits for you, even with `approval: allow`, and `approval: deny` refuses it. The
+memory itself is not in `yardbell.yml`: it is `dispatch/memory.md` in the state folder, with its
+history next to it in `dispatch/memory-history.json`, both readable only by your account, see
+[Memory](usage.md#memory).
 
 When Yardbell cannot tell which folder a session is in, for example a session it does not see, a
 rule with a `folder` only matches it if that rule denies. A refused step never becomes a card:

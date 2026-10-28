@@ -1,5 +1,5 @@
 use crate::config::{Approval, Config};
-use crate::dispatch::{By, ChildStart, ReviewOf, Rule, Step};
+use crate::dispatch::{By, ChildStart, MemoryChange, ReviewOf, Rule, Step};
 use crate::web::{find_machine, start_session, ApiError, AppState, NewSession};
 use axum::extract::State as AxState;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -121,7 +121,10 @@ pub async fn handle(
     let result = match rpc.method.as_str() {
         "initialize" => Ok(initialize(&rpc.params)),
         "ping" => Ok(json!({})),
-        "tools/list" => Ok(json!({ "tools": tools() })),
+        "tools/list" => Ok(json!({ "tools": tools()
+            .into_iter()
+            .filter(|t| dispatch || t["name"] != "remember")
+            .collect::<Vec<_>>() })),
         // A call that changes something finishes, and is recorded, even when the caller hangs up.
         "tools/call" => {
             let app = app.clone();
@@ -329,6 +332,17 @@ fn tools() -> Vec<Value> {
             }),
             &["machine", "name"],
         ),
+        tool(
+            "remember",
+            "Propose a change to your memory, the notes the user keeps with you across conversations, shown in your instructions between the memory tags. change is add (entry is the new note), replace (old is an entry exactly as it is in memory, entry is what it becomes) or forget (old is the entry to drop). reason is what the user said or did that makes it worth keeping. Unless the user's rules say otherwise, it becomes a step the user approves, edits or rejects, and nothing is saved before that. Keep an entry to one short sentence, and never store a secret.",
+            json!({
+                "change": { "type": "string", "enum": ["add", "replace", "forget"] },
+                "entry": { "type": "string", "description": "The note to add, or what the old one becomes; not used to forget" },
+                "old": { "type": "string", "description": "For replace and forget: the entry exactly as it is in memory" },
+                "reason": { "type": "string", "description": "What the user said or did that makes this worth remembering" },
+            }),
+            &["change", "reason"],
+        ),
     ]
 }
 
@@ -377,7 +391,11 @@ async fn dispatch_step(
     let cfg = app.config()?;
     let (tool, input, review) = plan(app, &cfg, name, args)?;
     let step = step_of(app, name, &input);
-    let verdict = crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);
+    let verdict = if name == "remember" {
+        crate::dispatch::decide_memory(cfg.dispatch.approval, &cfg.dispatch.rules)
+    } else {
+        crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step)
+    };
     match (verdict.approval, conversation) {
         (Approval::Deny, _) => Err(ApiError(
             StatusCode::FORBIDDEN,
@@ -604,6 +622,13 @@ started or proposed.",
 // in or scans, the folder of the session it reviews, or the folder of the session it stops or
 // types into.
 pub fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
+    if called == "remember" {
+        return Step {
+            action: called.to_string(),
+            machine: String::new(),
+            folders: Some(Vec::new()),
+        };
+    }
     let machine = input["machine"].as_str().unwrap_or_default().to_string();
     let snap = app.state.snapshot(&machine).unwrap_or_default();
     let text = |key: &str| input[key].as_str().unwrap_or_default().trim().to_string();
@@ -685,8 +710,20 @@ fn plan(
         let (input, of) = scan_plan(app, cfg, &target, &s.kind, &s.agent, &s.focus)?;
         return Ok(("start_session".into(), input, Some(of)));
     }
+    if name == "remember" {
+        let change: MemoryChange = arg(args)?;
+        check_memory(app, &change)?;
+        return Ok((name.to_string(), json!(change), None));
+    }
     check(app, cfg, name, &args)?;
     Ok((name.to_string(), args, None))
+}
+
+fn check_memory(app: &AppState, change: &MemoryChange) -> Result<(), ApiError> {
+    app.dispatch
+        .memory()
+        .check(change, By::Dispatch)
+        .map_err(bad)
 }
 
 pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<(), ApiError> {
@@ -703,6 +740,7 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
             }
             Ok(())
         }
+        "remember" => check_memory(app, &arg(input.clone())?),
         tool if crate::web::worktrees_api::TOOLS.contains(&tool) => {
             crate::web::worktrees_api::check(app, cfg, tool, input)
         }
@@ -906,6 +944,13 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
             format!("{tool} is not a step that changes anything"),
         ));
     }
+    if tool == "remember" {
+        return app
+            .dispatch
+            .memory()
+            .apply(&arg(input)?, By::Dispatch)
+            .map_err(bad);
+    }
     run_tool(app, tool, input).await
 }
 
@@ -1038,6 +1083,11 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
         "start_group" => Err(bad(
             "only Dispatch can start a group, since it gathers the results; start each session \
 with start_session"
+                .into(),
+        )),
+        "remember" => Err(bad(
+            "only Dispatch changes its memory, through a step the user approves; the user edits \
+it in Yardbell's Settings, under Dispatch, Memory"
                 .into(),
         )),
         tool if crate::web::worktrees_api::TOOLS.contains(&tool) => {

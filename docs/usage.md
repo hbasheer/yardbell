@@ -173,7 +173,9 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 - **Notifications:** which notifications the Android app shows, and whether it is connected, see
   [Phone notifications](apps.md#phone-notifications).
 - **Dispatch:** your own instructions for Dispatch, the agent it starts, the model it runs on and
-  whether it asks before each step, see [Dispatch](#dispatch).
+  whether it asks before each step, see [Dispatch](#dispatch). **Memory** below them lists what
+  Dispatch remembers, to add, edit or delete, with the history of changes, see
+  [Memory](#memory).
 - **Triggers:** start a saved task on a schedule, or for a Linear or GitHub ticket that comes your
   way, see [Triggers](#triggers).
 - **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
@@ -263,6 +265,32 @@ secrets list, and a hit blocks it with the file and line but never the value; **
 removes one that would lose nothing, since only you can confirm a loss; and **Move a session**
 moves a session as **Move** on the dashboard does. A push is always its own step, so a rule such as
 "Push a branch, Any machine, Ask me" keeps every push waiting for you.
+
+#### Memory
+
+Dispatch keeps a memory across conversations: short entries such as where your repositories live,
+how you name branches, your conventions and your corrections, like "always use the shared docker
+stack on hp" or "never open PRs on Fridays". It reads the memory at the start of every turn, as a
+section of its prompt of its own, apart from your instructions in Settings, which win when the two
+disagree.
+
+Dispatch proposes a change with its `remember` tool: add an entry, replace one or forget one, with
+the reason. It is asked to propose only after you correct it or state something lasting, or when
+the same fact comes up again, and to leave out task details, guesses and secrets. A proposal is a
+card like any other step, **Remember this**, **Change a memory** or **Forget a memory**, with the
+change shown as a diff: the entry it removes and the one it adds. **Approve** saves it, **Edit**
+lets you reword the entry first, and **Reject** drops it. Nothing is saved before you decide. This
+holds even when Dispatch is set to go ahead without asking: only a rule for **Change Dispatch's
+memory** (`remember`) can allow it or deny it, and refusing every step refuses it too.
+
+**Memory**, under Dispatch in Settings, lists the entries to add, edit or delete yourself, shows how
+much of the 8 KB cap is used, and keeps the history of changes with their dates, who made them and
+why. A change that would take the memory over the cap is refused with a note to forget or shorten
+an entry first, and so is an entry over 500 characters. The memory is the file `memory.md` in
+Yardbell's state folder, under `dispatch/`, readable only by your account: a heading, then one
+`- ` line per entry. You can edit it by hand; Yardbell reads its `- ` lines and rewrites the file on
+the next change. If a hand edit takes it over the cap, Dispatch reads the entries that fit and
+Settings says how many were left out.
 
 Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a

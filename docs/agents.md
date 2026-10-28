@@ -77,6 +77,9 @@ server to `~/.claude.json` by hand.
 | `push_branch` | push a branch, never forced, after a scan for keys, tokens and saved secret values |
 | `move_session` | move a session's branch, uncommitted changes and task to another machine, without committing or pushing |
 
+Dispatch also has `remember`, which proposes a change to its own [memory](usage.md#memory). Other
+clients do not see it, and calling it from one is refused.
+
 **MCP servers for sessions** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code
 sessions that Yardbell starts get them through `--mcp-config`, without touching the agent's own
