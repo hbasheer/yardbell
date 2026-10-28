@@ -9,8 +9,10 @@ A tour of the pages: dashboard, new sessions, Workspace, the terminal, adding ma
 The page is grouped by machine. Each machine gets a section: its health on top (connection, load,
 memory drawn to scale, amber from 85% and red from 95%), its sessions below. The memory bar covers
 the whole machine, split into your agents (blue), your other processes (light blue), other accounts
-and free, so on a server shared without per-account limits you can see whose memory it is. Where
-your account has a memory limit, the bar shows that limit instead, and all of it is yours.
+and free. On a machine shared with other people, a line under it lists the accounts using the most
+memory, yours included, and when your account has its own memory limit another line shows how much
+of it you use. The memory warning goes by whichever is fuller, the machine or your limit, and
+Dispatch counts only the room your limit leaves when it picks a machine.
 The sidebar lists the machines, problems first, with a session count; click one to show only that
 machine. Every page updates by itself as soon as Yardbell has checked a machine, and a session you
 stop leaves the list at once.

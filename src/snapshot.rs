@@ -74,6 +74,10 @@ pub struct Health {
     #[serde(default)]
     pub user_kb: u64,
     #[serde(default)]
+    pub limit_kb: u64,
+    #[serde(default)]
+    pub limit_used_kb: u64,
+    #[serde(default)]
     pub load1: f64,
     #[serde(default)]
     pub cpus: u32,
@@ -83,9 +87,36 @@ pub struct Health {
     pub disk_used_kb: u64,
 }
 
+impl Health {
+    // Either one running out stops agents: the machine's memory, or the account's own limit.
+    pub fn pressure(&self) -> Option<u64> {
+        let share = |used: u64, total: u64| (total > 0).then(|| used * 100 / total);
+        share(self.mem_used_kb, self.mem_total_kb).max(share(self.limit_used_kb, self.limit_kb))
+    }
+
+    pub fn room_kb(&self) -> u64 {
+        let free = self.mem_total_kb.saturating_sub(self.mem_used_kb);
+        if self.limit_kb == 0 {
+            return free;
+        }
+        free.min(self.limit_kb.saturating_sub(self.limit_used_kb))
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Account {
+    pub name: String,
+    pub kb: u64,
+    #[serde(default)]
+    pub containers_kb: u64,
+    #[serde(default)]
+    pub you: bool,
+}
+
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Snapshot {
     pub health: Option<Health>,
+    pub accounts: Vec<Account>,
     pub mesh_ips: Vec<String>,
     pub sessions: Vec<Session>,
     pub folders: BTreeMap<String, String>,
@@ -148,6 +179,8 @@ struct Raw {
     #[serde(default)]
     health: Option<Health>,
     #[serde(default)]
+    accounts: Vec<Account>,
+    #[serde(default)]
     mesh_ips: Vec<String>,
     agents: Vec<RawAgent>,
     folders: Vec<RawFolder>,
@@ -204,6 +237,7 @@ pub fn parse(
 
     let mut snap = Snapshot {
         health: raw.health,
+        accounts: raw.accounts,
         mesh_ips: raw.mesh_ips,
         ..Snapshot::default()
     };
@@ -426,9 +460,15 @@ mod tests {
 
     #[test]
     fn parses_machine_health() {
-        let json = r#"{"root":"/r","health":{"mem_total_kb":16252928,"mem_used_kb":10276044,"agent_kb":2293760,"user_kb":3145728,"load1":2.41,"cpus":10,"disk_total_kb":500000000,"disk_used_kb":125000000},"agents":[],"folders":[],"ports":[]}"#;
+        let json = r#"{"root":"/r","health":{"mem_total_kb":16252928,"mem_used_kb":10276044,"agent_kb":2293760,"user_kb":3145728,"limit_kb":8388608,"limit_used_kb":4194304,"load1":2.41,"cpus":10,"disk_total_kb":500000000,"disk_used_kb":125000000},"accounts":[{"name":"risal","kb":26100000,"containers_kb":7020000},{"name":"hasan","kb":5033164,"you":true}],"agents":[],"folders":[],"ports":[]}"#;
         let snap = parse(json, &machine("hp", "/r"), Path::new("/r"), None).unwrap();
+        assert_eq!(snap.accounts.len(), 2);
+        assert_eq!(snap.accounts[0].name, "risal");
+        assert_eq!(snap.accounts[0].containers_kb, 7020000);
+        assert_eq!(snap.accounts[1].containers_kb, 0);
+        assert!(!snap.accounts[0].you && snap.accounts[1].you);
         let h = snap.health.unwrap();
+        assert_eq!((h.limit_kb, h.limit_used_kb), (8388608, 4194304));
         assert_eq!(h.mem_total_kb, 16252928);
         assert_eq!(h.mem_used_kb, 10276044);
         assert_eq!(h.agent_kb, 2293760);
@@ -437,6 +477,28 @@ mod tests {
         assert_eq!(h.disk_total_kb, 500000000);
         assert_eq!(h.disk_used_kb, 125000000);
         assert!((h.load1 - 2.41).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pressure_and_room_take_the_fuller_of_the_machine_and_the_account_limit() {
+        let mut h = Health {
+            mem_total_kb: 1000,
+            mem_used_kb: 250,
+            agent_kb: 0,
+            user_kb: 0,
+            limit_kb: 0,
+            limit_used_kb: 0,
+            load1: 0.0,
+            cpus: 1,
+            disk_total_kb: 0,
+            disk_used_kb: 0,
+        };
+        assert_eq!((h.pressure(), h.room_kb()), (Some(25), 750));
+        h.limit_kb = 400;
+        h.limit_used_kb = 380;
+        assert_eq!((h.pressure(), h.room_kb()), (Some(95), 20));
+        h.mem_total_kb = 0;
+        assert_eq!(h.pressure(), Some(95));
     }
 
     #[test]

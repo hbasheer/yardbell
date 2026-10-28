@@ -220,6 +220,7 @@ mod tests {
                 last_seen: None,
                 local: true,
                 health: None,
+                accounts: Vec::new(),
                 mesh_on: None,
             }],
             folders: vec![],

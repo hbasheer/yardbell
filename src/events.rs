@@ -165,10 +165,9 @@ impl Tracker {
                 }
             }
 
-            let Some(health) = m.health.filter(|h| h.mem_total_kb > 0) else {
+            let Some(percent) = m.health.and_then(|h| h.pressure()) else {
                 continue;
             };
-            let percent = health.mem_used_kb * 100 / health.mem_total_kb;
             if percent < MEMORY_REARM_PERCENT {
                 state.memory_armed = true;
             } else if percent >= MEMORY_HIGH_PERCENT && state.memory_armed {
@@ -278,6 +277,7 @@ mod tests {
             last_seen: None,
             local: false,
             health: None,
+            accounts: Vec::new(),
             mesh_on: None,
         }
     }
@@ -289,6 +289,8 @@ mod tests {
                 mem_used_kb: percent * 10,
                 agent_kb: 0,
                 user_kb: 0,
+                limit_kb: 0,
+                limit_used_kb: 0,
                 load1: 0.0,
                 cpus: 4,
                 disk_total_kb: 0,
@@ -601,6 +603,27 @@ mod tests {
         assert_eq!(t.observe(&at(96), secs(t0, 4)), vec![]);
         assert_eq!(t.observe(&at(89), secs(t0, 5)), vec![]);
         assert_eq!(t.observe(&at(95), secs(t0, 6)), high(95));
+    }
+
+    #[test]
+    fn memory_high_also_counts_an_account_limit_on_a_roomy_machine() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let at = |limit_used_kb| {
+            let mut m = with_memory("hp", 20);
+            let h = m.health.as_mut().unwrap();
+            h.limit_kb = 500;
+            h.limit_used_kb = limit_used_kb;
+            view(vec![m], vec![], vec![])
+        };
+        assert_eq!(t.observe(&at(100), t0), vec![]);
+        assert_eq!(
+            t.observe(&at(485), secs(t0, 1)),
+            vec![Event::MemoryHigh {
+                machine: "hp".into(),
+                percent: 97,
+            }]
+        );
     }
 
     #[test]
