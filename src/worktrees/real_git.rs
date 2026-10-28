@@ -35,7 +35,9 @@ fn commit(dir: &Path, file: &str, text: &str, message: &str) {
 }
 
 struct Rig {
-    dir: tempfile::TempDir,
+    _dir: tempfile::TempDir,
+    // git reports real paths, and on macOS the temp dir sits under the /var symlink.
+    root: std::path::PathBuf,
     worktrees: Worktrees,
     folders: Folders,
 }
@@ -47,7 +49,8 @@ fn rig() -> Rig {
     Rig {
         worktrees: Worktrees::new(runner.clone(), ssh.clone()),
         folders: Folders::new(runner, ssh),
-        dir,
+        root: dir.path().canonicalize().unwrap(),
+        _dir: dir,
     }
 }
 
@@ -63,7 +66,7 @@ fn repo(at: &Path) -> String {
 #[tokio::test]
 async fn integrate_merges_in_order_and_stops_at_a_conflict() {
     let r = rig();
-    let app = r.dir.path().join("app");
+    let app = r.root.as_path().join("app");
     let path = repo(&app);
     for (branch, file, text) in [
         ("eng-1-api", "api.txt", "api\n"),
@@ -76,7 +79,7 @@ async fn integrate_merges_in_order_and_stops_at_a_conflict() {
     }
     git(&app, &["checkout", "-q", "main"]);
     commit(&app, "app.txt", "one\nMAIN\nthree\n", "main moves on");
-    let m = local("here", r.dir.path().to_str().unwrap());
+    let m = local("here", r.root.as_path().to_str().unwrap());
     for method in [Method::Merge, Method::Rebase] {
         let into = format!("together-{method:?}").to_lowercase();
         let plan = Integration {
@@ -116,9 +119,9 @@ async fn integrate_merges_in_order_and_stops_at_a_conflict() {
 #[tokio::test]
 async fn handoff_moves_commits_and_uncommitted_changes_without_pushing() {
     let r = rig();
-    let origin = r.dir.path().join("origin.git");
+    let origin = r.root.as_path().join("origin.git");
     git(
-        r.dir.path(),
+        r.root.as_path(),
         &[
             "init",
             "-q",
@@ -128,15 +131,15 @@ async fn handoff_moves_commits_and_uncommitted_changes_without_pushing() {
             origin.to_str().unwrap(),
         ],
     );
-    let seed = r.dir.path().join("seed");
+    let seed = r.root.as_path().join("seed");
     repo(&seed);
     git(
         &seed,
         &["remote", "add", "origin", origin.to_str().unwrap()],
     );
     git(&seed, &["push", "-q", "origin", "main"]);
-    let from = r.dir.path().join("hp");
-    let to = r.dir.path().join("mini");
+    let from = r.root.as_path().join("hp");
+    let to = r.root.as_path().join("mini");
     std::fs::create_dir_all(&from).unwrap();
     std::fs::create_dir_all(&to).unwrap();
     git(&from, &["clone", "-q", origin.to_str().unwrap(), "app"]);
@@ -213,9 +216,9 @@ async fn handoff_moves_commits_and_uncommitted_changes_without_pushing() {
 #[tokio::test]
 async fn cleanup_counts_only_work_that_would_be_lost() {
     let r = rig();
-    let app = r.dir.path().join("app");
+    let app = r.root.as_path().join("app");
     let path = repo(&app);
-    let m = local("here", r.dir.path().to_str().unwrap());
+    let m = local("here", r.root.as_path().to_str().unwrap());
     let pick = crate::folders::Pick {
         branch: "eng-9".into(),
         new_branch: true,
