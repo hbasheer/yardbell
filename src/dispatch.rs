@@ -22,6 +22,7 @@ use tokio::sync::{mpsc, Notify};
 
 const TURN_LIMIT: Duration = Duration::from_secs(900);
 const RESULT_PREVIEW: usize = 4000;
+const USAGE_FRESH: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
 const TITLE_CHARS: usize = 80;
 const ID_LEN: usize = 16;
 const TOOL_PREFIX: &str = "mcp__yardbell__";
@@ -338,6 +339,25 @@ impl Dispatch {
 
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    pub async fn refresh_usage(&self, http: &reqwest::Client) -> Result<(), String> {
+        self.shared.set_usage(usage::from_account(http).await?);
+        Ok(())
+    }
+
+    // A click right after a check gets that check's figures instead of asking Anthropic again.
+    pub async fn refresh_usage_now(&self, http: &reqwest::Client) -> Result<Value, String> {
+        let current = self.usage();
+        let fresh = current["source"] == "account"
+            && current["seen"]
+                .as_str()
+                .and_then(|seen| chrono::DateTime::parse_from_rfc3339(seen).ok())
+                .is_some_and(|seen| chrono::Local::now().signed_duration_since(seen) < USAGE_FRESH);
+        if !fresh {
+            self.refresh_usage(http).await?;
+        }
+        Ok(self.usage())
     }
 
     pub fn usage(&self) -> Value {
@@ -1893,6 +1913,23 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
             0.25,
             "the last usage seen survives a restart"
         );
+    }
+
+    #[tokio::test]
+    async fn a_refresh_right_after_a_check_reuses_its_figures() {
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = fake_claude(dir.path(), "true");
+        let checked = json!({
+            "windows": [{"name": "five_hour", "label": "5-hour limit", "used": 0.12, "resets_at": null, "status": "allowed"}],
+            "seen": chrono::Local::now().to_rfc3339(),
+            "source": "account",
+        });
+        dispatch.shared.set_usage(checked.clone());
+        let usage = dispatch
+            .refresh_usage_now(&reqwest::Client::new())
+            .await
+            .unwrap();
+        assert_eq!(usage, checked);
     }
 
     #[tokio::test]

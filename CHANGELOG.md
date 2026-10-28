@@ -11,6 +11,11 @@ and the project uses [Semantic Versioning](https://semver.org).
   with rootless containers counted toward the person who runs them instead of an unnamed uid, and
   another shows your account's use of its limit. The memory warning still goes by whichever is
   fuller, and Dispatch still counts only the room your limit leaves when it picks a machine.
+- The Claude usage card is live: every 5 minutes Yardbell reads the same figures as Claude Code's
+  `/usage` from the Claude account signed in on its machine, so all your sessions count, not only
+  Dispatch's. The card says how old its figures are, and a limit past its reset time shows as reset
+  instead of the old percentage. The circular arrow on the card checks right away, and when it
+  cannot, the card's tooltip says why, such as an expired Claude Code sign-in.
 
 ## [0.6.8] - 2026-10-28
 

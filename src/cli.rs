@@ -19,6 +19,8 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+const USAGE_EVERY: Duration = Duration::from_secs(5 * 60);
+
 #[derive(Parser)]
 #[command(
     name = "yardbell",
@@ -138,6 +140,17 @@ pub async fn serve(
         runner.clone(),
         dir.join("dispatch"),
     ));
+    let usage_dispatch = dispatch.clone();
+    tokio::spawn(async move {
+        let http = reqwest::Client::new();
+        let mut every = tokio::time::interval(USAGE_EVERY);
+        loop {
+            every.tick().await;
+            if let Err(e) = usage_dispatch.refresh_usage(&http).await {
+                tracing::debug!(error = %e, "Claude usage not refreshed from the account");
+            }
+        }
+    });
     let after_dispatch = dispatch.clone();
     let after_sessions = Arc::new(Sessions::new(runner.clone(), ssh.clone()));
     let after_state = state.clone();

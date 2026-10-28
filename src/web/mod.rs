@@ -357,6 +357,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/dispatch/tasks/delete", post(dispatch_delete_task))
         .route("/dispatch/tasks/restore", post(dispatch_restore_tasks))
         .route("/dispatch/usage", get(dispatch_usage))
+        .route("/dispatch/usage/refresh", post(dispatch_usage_refresh))
         .route(
             "/dispatch/conversations/{id}/actions",
             post(dispatch_decide_all),
@@ -665,6 +666,17 @@ fn hostname() -> String {
 
 async fn dispatch_usage(AxState(app): AxState<Arc<AppState>>) -> Response {
     Json(app.dispatch.usage()).into_response()
+}
+
+async fn dispatch_usage_refresh(AxState(app): AxState<Arc<AppState>>) -> Response {
+    match app
+        .dispatch
+        .refresh_usage_now(&reqwest::Client::new())
+        .await
+    {
+        Ok(usage) => Json(usage).into_response(),
+        Err(message) => error(StatusCode::BAD_GATEWAY, &message),
+    }
 }
 
 async fn dispatch_tasks(AxState(app): AxState<Arc<AppState>>) -> Response {
