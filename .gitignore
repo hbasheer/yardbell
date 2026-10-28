@@ -5,6 +5,7 @@
 /android/gen/schemas
 /yardbell.yml
 *.bak-*
+__pycache__/
 
 # local agent and design-tool scratch
 .superpowers/

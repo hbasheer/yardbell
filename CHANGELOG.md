@@ -14,6 +14,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Security: `yardbell.yml` and its backups are saved readable only by your account. They were
   readable by every account on the host, and they hold the login cookie key, the MCP token and the
   MCP servers' tokens.
+- Desktop app: it takes tokio 1.54.1, which fixes a timer race that could crash it, and
+  rustls-webpki 0.103.16, which stops trusting a CA that browsers distrust.
 
 ## [0.6.9] - 2026-10-28
 
