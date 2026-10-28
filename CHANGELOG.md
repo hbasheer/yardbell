@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Quitting the desktop app stops the SSH tunnels its server opened. They used to keep running
+  after the app quit and held their ports, so the next start could not forward that machine
+  (the tunnel log showed "Address already in use"). Signing out no longer lets the next machine
+  check start a tunnel again either.
+
 ## [0.7.4] - 2026-10-28
 
 - A Mac with a container port bound to a loopback address it does not have, such as `127.0.1.3`,

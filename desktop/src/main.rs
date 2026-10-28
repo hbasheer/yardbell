@@ -380,6 +380,7 @@ fn exit(app: &AppHandle) {
     if let Err(e) = app.save_window_state(WINDOW_STATE) {
         eprintln!("yardbell: can't save the window state: {e}");
     }
+    local::stop_and_wait();
     app.exit(0);
 }
 

@@ -8,6 +8,7 @@ use yardbell::local_server::{status, Status};
 
 const MARKER: &str = "local-server";
 const START_WAIT: Duration = Duration::from_secs(10);
+const STOP_WAIT: Duration = Duration::from_secs(2);
 
 static RUNNING: AtomicBool = AtomicBool::new(false);
 static STOP: OnceLock<Arc<tokio::sync::Notify>> = OnceLock::new();
@@ -66,6 +67,28 @@ pub fn stop() {
     }
 }
 
+// The server's SSH tunnels run in a session of their own and outlive the app, so quitting waits
+// for the server to stop them.
+pub fn stop_and_wait() {
+    stop();
+    if !wait_until_stopped(&RUNNING, STOP_WAIT) {
+        eprintln!(
+            "yardbell: the server on this machine did not stop in time, its tunnels may still run"
+        );
+    }
+}
+
+fn wait_until_stopped(running: &AtomicBool, timeout: Duration) -> bool {
+    let deadline = std::time::Instant::now() + timeout;
+    while running.load(Ordering::SeqCst) {
+        if std::time::Instant::now() >= deadline {
+            return false;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    true
+}
+
 pub async fn wait_until_up(port: u16) -> Result<(), String> {
     let deadline = tokio::time::Instant::now() + START_WAIT;
     while tokio::time::Instant::now() < deadline {
@@ -96,6 +119,31 @@ mod tests {
         disable(&dir).unwrap();
         assert!(!enabled(&dir));
         disable(&dir).unwrap();
+    }
+
+    #[test]
+    fn wait_until_stopped_returns_at_once_when_nothing_runs() {
+        assert!(wait_until_stopped(&AtomicBool::new(false), Duration::ZERO));
+    }
+
+    #[test]
+    fn wait_until_stopped_sees_the_server_finish() {
+        let running = Arc::new(AtomicBool::new(true));
+        let server = running.clone();
+        let finish = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            server.store(false, Ordering::SeqCst);
+        });
+        assert!(wait_until_stopped(&running, Duration::from_secs(5)));
+        finish.join().unwrap();
+    }
+
+    #[test]
+    fn wait_until_stopped_gives_up_after_the_timeout() {
+        assert!(!wait_until_stopped(
+            &AtomicBool::new(true),
+            Duration::from_millis(50)
+        ));
     }
 
     #[tokio::test]
