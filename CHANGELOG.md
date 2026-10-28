@@ -11,6 +11,14 @@ and the project uses [Semantic Versioning](https://semver.org).
 - Under an account memory limit, file cache and reclaimable kernel memory no longer count as used.
   The kernel drops them when the limit is reached, so a shared dev server showed 40% when your
   processes used 12%.
+- Fixed: copying from the terminal could leave it ignoring the keyboard until the session was
+  opened again. **Copy all** now copies and goes back to the live terminal, Esc closes the screen
+  text, and keys typed while it shows no longer reach the terminal hidden underneath. When the
+  browser's own copy has to step in (over plain `http`, in the desktop app's Workspace panes, or for
+  a selection tmux copies), the keyboard goes back to the terminal, and a tab or pane you are not
+  using no longer takes it. When copying fails, a message says how to copy instead.
+- Fixed: closing, reloading or reconnecting a terminal could type a newline and Ctrl-D into its
+  session, which ended a plain shell and sent stray keys to an agent.
 
 ## [0.6.7] - 2026-10-27
 

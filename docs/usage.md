@@ -91,11 +91,13 @@ you pick with the button in the sidebar, on each device.
   sends it to your clipboard when you let go. Yardbell asks tmux to do this for its terminal.
 - **Shift-drag** (Option-drag on a Mac) selects in the browser instead, and copies when you let go.
 - **Copy text** in the header shows the screen as plain text. Select any part of it, or press
-  **Copy all**. On a phone, this is the way to copy.
+  **Copy all**, which copies everything and takes you back to the terminal. **Close** or Esc goes
+  back too. On a phone, this is the way to copy.
 
 Browsers only allow automatic clipboard access on `https` pages or `localhost`. Over
 `http://<host-mesh-ip>` Yardbell copies straight away when it can. If the browser blocks it, a
-**Copy** button appears for a few seconds; tap it to finish copying.
+**Copy** button appears for a few seconds; tap it to finish copying. If the browser refuses that
+too, a message points you to **Copy text**.
 
 ### Add machine
 

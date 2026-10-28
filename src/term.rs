@@ -50,12 +50,16 @@ pub fn spawn(argv: &[String], rows: u16, cols: u16) -> std::io::Result<Pty> {
 }
 
 impl Pty {
+    // portable-pty's own writer types a newline and Ctrl-D as it is dropped. tmux reads its
+    // clients' terminals itself, so a closing page could still type them into the session, and a
+    // shell there ends.
     pub fn writer(&self) -> std::io::Result<Box<dyn Write + Send>> {
-        self.master
-            .lock()
-            .expect("pty lock")
-            .take_writer()
-            .map_err(std::io::Error::other)
+        let master = self.master.lock().expect("pty lock");
+        let fd = master
+            .as_raw_fd()
+            .ok_or_else(|| std::io::Error::other("the terminal has no descriptor"))?;
+        let fd = unsafe { std::os::fd::BorrowedFd::borrow_raw(fd) }.try_clone_to_owned()?;
+        Ok(Box::new(std::fs::File::from(fd)))
     }
 
     pub fn reader(&self) -> std::io::Result<Box<dyn Read + Send>> {
@@ -431,6 +435,54 @@ mod tests {
             .await
             .unwrap()
             .unwrap();
+    }
+
+    #[tokio::test]
+    async fn bridge_close_types_nothing_more_into_the_terminal() {
+        let dir = tempfile::tempdir().unwrap();
+        let typed = dir.path().join("typed");
+        let (mut client_tx, server_rx) = futures::channel::mpsc::unbounded::<Message>();
+        let (server_tx, mut client_rx) = futures::channel::mpsc::unbounded::<Message>();
+        // Like a tmux client, it takes raw keys and still reads them for a moment after the hangup.
+        let pty = spawn(
+            &argv(&[
+                "bash",
+                "-c",
+                r#"trap '' HUP; stty raw -echo; printf ready; while IFS= read -r -d '' -n 1 -t 1 c; do printf '%s' "$c" >> "$0"; done"#,
+                typed.to_str().unwrap(),
+            ]),
+            24,
+            80,
+        )
+        .unwrap();
+        let pid = pty.pid().unwrap();
+        let task = tokio::spawn(bridge(server_tx, server_rx, pty, EXIT_MESSAGE, None));
+        let mut output = String::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while !output.contains("ready") {
+            match tokio::time::timeout_at(deadline, client_rx.next()).await {
+                Ok(Some(Message::Binary(b))) => output.push_str(&String::from_utf8_lossy(&b)),
+                Ok(Some(_)) => {}
+                _ => panic!("the terminal never got ready: {output:?}"),
+            }
+        }
+        client_tx
+            .send(Message::Text(r#"{"t":"in","d":"abc"}"#.into()))
+            .await
+            .unwrap();
+        drop(client_tx);
+        tokio::time::timeout(Duration::from_secs(3), task)
+            .await
+            .unwrap()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while std::path::Path::new(&format!("/proc/{pid}")).exists() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        assert_eq!(
+            String::from_utf8_lossy(&std::fs::read(&typed).unwrap()),
+            "abc"
+        );
     }
 
     #[tokio::test]
