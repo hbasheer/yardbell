@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.3] - 2026-10-28
+
 - Triggers start a saved Dispatch task without you typing it: on a schedule (daily or on weekdays
   at a time, every few hours, or a cron expression, in the server's time zone), when a Linear
   ticket is assigned to you or moves into a state you pick, or when a GitHub issue is assigned to
