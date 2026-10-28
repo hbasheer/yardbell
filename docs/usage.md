@@ -25,6 +25,11 @@ stop leaves the list at once.
 - **Sessions** show folder, ticket, branch, agent, status and ports. Click a row (or press `Enter`) to
   open its terminal, use `j` and `k` to move, and `n` to start a new session. On a phone, a card
   opens only with its **Open** button, so Stop and the other buttons are easy to hit.
+- **Pull requests:** a session whose branch has a pull request on GitHub shows its number and state
+  next to the branch: CI failing, changes requested, CI running, approved, CI passing, merged or
+  closed. Hover it for the title and the checks that failed, click it to open the pull request.
+  Yardbell asks `gh` on the session's machine every two minutes or so; without `gh`, or without a
+  pull request, there is simply no badge. See [`pull_requests`](configuration.md#pull_requests-optional).
 
 Sessions started outside tmux, and sessions that ended, fold into the footer of their machine's
 section, since Yardbell can see them but cannot attach to them. Open the list and press **Move to
@@ -53,7 +58,8 @@ one, named like the first with `-2` after it.
 ### Workspace
 
 The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
-machine, then folder (a workspace), then the sessions in it, each with its state. Click a workspace
+machine, then folder (a workspace), then the sessions in it, each with its state. A session with a pull request shows its number, colored by its state, and
+the full state on hover. Click a workspace
 to switch to it and a session to open it in the focused pane. Hover a session for its **⋯** menu,
 which opens it to the right of or below the focused pane, or in a new tab. Each workspace has tabs: **+** opens the New
 session dialog in that folder and the new session in a tab of its own, and closing a tab with
@@ -192,6 +198,18 @@ Every conversation is kept in a list beside the chat, also after a restart, so y
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
 conversation never stops the sessions it started. Claude Code must be installed and signed in on
 the host.
+
+Dispatch also watches the pull requests of your sessions. When a session's CI goes from passing or
+running to failing, or a reviewer leaves a comment, a review or asks for changes, a card appears in
+the conversation that follows that session, or in a new conversation named after the pull request,
+which then follows the session. A CI card lists the failed checks, with a link and the last lines
+of the failed log when GitHub Actions has them. A review card shows each comment, with its file and
+line for a comment on the code. **Send to session** types a short instruction into the session,
+like "CI failed on test for pull request #12: error: test failed. Fix it and push.", shown on the
+card before you send it. It is a step like Dispatch's own, so your rules for typing into sessions
+apply: it is sent at once, waits below for you to approve or edit it, or is refused. Each failure
+(one commit) and each comment gets one card, also after a restart, and a pull request seen for the
+first time only sets what is known, so old comments never turn into cards.
 
 Dispatch follows the sessions it starts. When one finishes, stops to wait for an answer, or ends,
 the conversation gets a card with the last lines of its screen. A waiting agent's choices, such as

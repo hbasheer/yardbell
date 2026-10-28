@@ -125,6 +125,7 @@ mod tests {
                 tmux: Some("acme-api".into()),
                 stale: false,
                 ports: vec![],
+                pull: None,
             }],
             vec![],
         )

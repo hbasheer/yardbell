@@ -337,6 +337,27 @@ run says which rule on its card. Yardbell refuses to load rules with an unknown 
 a folder starting with `~`, a rule that names nothing (set `approval` instead) or two rules for the
 same steps, and says which rule is wrong.
 
+### `pull_requests` (optional)
+
+For each branch a session works on, Yardbell shows its pull request and CI on the dashboard and in
+the Workspace sidebar, and posts a card in Dispatch when CI starts failing or a reviewer comments.
+It asks the GitHub CLI `gh` on the machine where the session runs, over the same ssh connection,
+from that session's folder. Nothing is installed: a machine without `gh`, or with `gh` not logged
+in, shows no badge and is asked again after 10 minutes. A branch with no pull request shows none.
+Only GitHub is supported so far.
+
+```yaml
+pull_requests:
+  enabled: true        # false: no badges, no cards, gh is never run
+  poll_seconds: 120    # how often each branch is asked, at least 30
+  cards: true          # false: badges only, no cards in Dispatch
+```
+
+Every key is optional. The values above are the defaults. A branch is asked at most once every
+`poll_seconds`, separately from the machine check every `poll_seconds` at the top level, and the
+branches of one machine are asked one after another. What has already been posted is kept in
+`pulls.json` in the state folder, so a restart never posts a card twice.
+
 ### `listen_ip` (optional)
 
 The address Yardbell listens on besides `127.0.0.1`. By default it uses the `mesh_ip` of the
@@ -403,7 +424,7 @@ yourself keeps its mode until Yardbell first saves it, so run `chmod 600` on it.
 
 | Change | Takes effect |
 |---|---|
-| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications` | on the next check, a few seconds |
+| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications`, `pull_requests` | on the next check, a few seconds |
 | passcode, "Log out everywhere" (from Settings) | immediately |
 | `port`, `listen_ip`, the host machine's `mesh_ip` | after restarting Yardbell |
 
@@ -427,6 +448,7 @@ Yardbell refuses to start or save an invalid file and says why:
 | `default_agent "x" is not a known agent` | use a built-in name or add the agent under `agents` |
 | `phone_notifications.topic may only use letters, digits, - and _ (at most 64)` | rename the topic, or leave it empty to turn notifications off |
 | `phone_notifications.wait_minutes must be from 0 to 60` | use a whole number of minutes from 0 to 60 |
+| `pull_requests.poll_seconds must be at least 30` | ask GitHub less often, 120 is the default |
 | `phone_notifications.token must be at most 200 characters without spaces` | paste the token again, with no spaces or line breaks |
 | `cannot read ...yardbell.yml` | the file is missing; Yardbell prints an example to start from |
 

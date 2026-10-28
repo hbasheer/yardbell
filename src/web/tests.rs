@@ -3046,3 +3046,88 @@ async fn mcp_send_to_session_types_through_stdin() {
         Some("the password is hunter2")
     );
 }
+
+#[tokio::test]
+async fn send_to_session_on_a_pull_request_card_follows_the_dispatch_rules() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let instruction = "CI failed on test for pull request #12: boom. Fix it and push.";
+    let card = json!({
+        "role": "pull", "kind": "ci", "key": "ci:u:a",
+        "machine": "hp", "name": "hp-eng-1301", "path": "/r/slots/slot2", "branch": "eng-1301-inbox",
+        "pull": { "number": 12, "url": "u", "title": "Inbox" },
+        "checks": [{ "name": "test", "url": "u" }], "notes": [],
+        "instruction": instruction,
+    });
+    let id = r
+        .app
+        .dispatch
+        .post_pull(
+            "hp",
+            "hp-eng-1301",
+            "/r/slots/slot2",
+            "Pull request #12: Inbox",
+            card,
+        )
+        .unwrap();
+    let url = format!("/dispatch/conversations/{id}/pulls");
+    r.fake.stub("load-buffer", Output::ok_with(""));
+
+    set_rules(
+        &r,
+        "ask",
+        json!([{ "action": "send_to_session", "folder": "slot2", "approval": "deny" }]),
+    );
+    let (status, body) = step_post(&r, &c, &url, json!({ "card": 0 })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body["error"].as_str().unwrap().starts_with(
+        "Not sent: your Dispatch rule \"deny send_to_session on any machine in slot2\""
+    ));
+    assert!(!ran(&r, "load-buffer"));
+
+    set_rules(&r, "ask", json!([]));
+    let (status, body) = step_post(&r, &c, &url, json!({ "card": 0 })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let step = body["step"].clone();
+    assert_eq!(
+        (&step["status"], &step["by"]),
+        (&json!("pending"), &json!("you"))
+    );
+    assert_eq!(step["input"]["text"], instruction);
+    assert_eq!(body["card"]["sent"]["step"], step["id"]);
+    assert!(!ran(&r, "load-buffer"), "waits for approval");
+    let (status, _) = step_post(&r, &c, &url, json!({ "card": 0 })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "sent once");
+
+    let step_url = format!(
+        "/dispatch/conversations/{id}/actions/{}",
+        step["id"].as_str().unwrap()
+    );
+    step_post(&r, &c, &step_url, json!({ "decision": "reject" })).await;
+    set_rules(
+        &r,
+        "ask",
+        json!([{ "action": "send_to_session", "machine": "hp", "approval": "allow" }]),
+    );
+    let (status, body) =
+        step_post(&r, &c, &url, json!({ "card": 0, "text": "Fix the test." })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["step"]["status"], "approved");
+    assert_eq!(body["step"]["result"]["ok"], true);
+    let at = r
+        .fake
+        .calls()
+        .iter()
+        .position(|c| c.join(" ").contains("load-buffer"))
+        .unwrap();
+    assert_eq!(r.fake.inputs()[at].as_deref(), Some("Fix the test."));
+
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/pulls"),
+        json!({ "card": 5 }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

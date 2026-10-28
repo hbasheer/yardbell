@@ -87,7 +87,7 @@ function stateOf(e) {
 function badge(e, state) {
   const mine = e.by === "you";
   switch (state) {
-    case "pending": return html`<span class="badge blocked">${mine ? "Not started" : "Waiting for you"}</span>`;
+    case "pending": return html`<span class="badge blocked">${mine ? mineWords(e).waiting : "Waiting for you"}</span>`;
     case "running": return html`<span class="badge busy">Running</span>`;
     case "failed": return html`<span class="badge failed">Failed</span>`;
     case "rejected": return html`<span class="badge">${mine ? "Cancelled" : "Rejected"}</span>`;
@@ -247,6 +247,13 @@ function ruleText(r) {
   return `${RULE_STEPS[r.action] || "any step"} on ${machine}${r.folder ? ` in ${r.folder}` : ""}`;
 }
 
+// A step the person asked for goes ahead in its own words: a review starts, a message is sent.
+const MINE = {
+  start_session: { go: "Start review", done: "Started", edited: "started", waiting: "Not started" },
+  send_to_session: { go: "Send", done: "Sent", edited: "sent", waiting: "Not sent" },
+};
+const mineWords = (e) => MINE[e.tool] || MINE.start_session;
+
 function trail(e, state) {
   if (e.legacy) return "Ran without asking";
   const parts = [];
@@ -254,8 +261,8 @@ function trail(e, state) {
   if (e.status === "auto") parts.push(`Ran without asking ${clock(e.at)}`);
   else parts.push(`${mine ? "You asked for this" : "Proposed by Dispatch"} ${clock(e.at)}`);
   if (e.rule) parts.push(`Your rule: ${ruleText(e.rule)}`);
-  if (e.status === "approved") parts.push(`${mine ? "Started" : "Approved"} ${clock(e.decided)}`);
-  if (e.status === "edited") parts.push(`Edited and ${mine ? "started" : "approved"} ${clock(e.decided)}`);
+  if (e.status === "approved") parts.push(`${mine ? mineWords(e).done : "Approved"} ${clock(e.decided)}`);
+  if (e.status === "edited") parts.push(`Edited and ${mine ? mineWords(e).edited : "approved"} ${clock(e.decided)}`);
   if (e.status === "rejected") parts.push(`${mine ? "Cancelled" : "Rejected"} ${clock(e.decided)}`);
   if (e.status === "withdrawn") parts.push(`Withdrawn ${clock(e.decided)} when you sent a new message`);
   if (state === "running" && working.get(e.id) !== "reject") parts.push("Running…");
@@ -270,14 +277,14 @@ function actions(e, state) {
   if (editingNow) {
     return html`<div class="step-card-actions">
       <button class="btn quiet" type="button" ?disabled=${busy} @click=${() => { drafts.delete(e.id); ctx.draw(); }}>Cancel</button>
-      <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? "Start review" : "Approve with changes"}</button>
+      <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve with changes"}</button>
     </div>`;
   }
   const editable = e.tool !== "stop_session";
   return html`<div class="step-card-actions">
     <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => decide(e, "reject")}>${mine ? "Cancel" : "Reject"}</button>
     ${editable ? html`<button class="btn" type="button" ?disabled=${busy} @click=${() => startEditing(e)}>${ICONS.edit}Edit</button>` : nothing}
-    <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? "Start review" : "Approve"}</button>
+    <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve"}</button>
   </div>`;
 }
 

@@ -17,6 +17,7 @@ struct Inner {
     last_seen: HashMap<String, DateTime<Local>>,
     snapshots: HashMap<String, Snapshot>,
     ended: BTreeMap<String, Session>,
+    pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>,
 }
 
 #[derive(Clone)]
@@ -78,6 +79,8 @@ pub struct SessionView {
     pub tmux: Option<String>,
     pub stale: bool,
     pub ports: Vec<PortView>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull: Option<crate::pulls::PullView>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -155,6 +158,16 @@ impl State {
             inner.last_seen.insert(st.name.clone(), st.checked_at);
         }
         inner.statuses.insert(st.name.clone(), st);
+        drop(inner);
+        self.touch();
+    }
+
+    pub fn set_pulls(&self, pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>) {
+        let mut inner = self.inner.write().expect("state lock");
+        if inner.pulls == pulls {
+            return;
+        }
+        inner.pulls = pulls;
         drop(inner);
         self.touch();
     }
@@ -309,6 +322,12 @@ impl State {
                     tmux: s.tmux.clone(),
                     stale: !up,
                     ports: port_views,
+                    pull: snap.folder_paths.get(&s.folder).and_then(|path| {
+                        inner
+                            .pulls
+                            .get(&(m.name.clone(), path.clone(), s.branch.clone()))
+                            .cloned()
+                    }),
                 });
             }
         }

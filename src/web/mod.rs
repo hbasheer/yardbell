@@ -450,6 +450,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/settings.js", get(|| async { asset("settings.js") }))
         .merge(settings_api::routes())
         .merge(review_api::routes())
+        .merge(pulls_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -1820,6 +1821,7 @@ async fn remove_machine(
     Json(app.onboarding.remove(&name).await).into_response()
 }
 
+mod pulls_api;
 mod review_api;
 mod settings_api;
 

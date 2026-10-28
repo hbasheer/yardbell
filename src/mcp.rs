@@ -336,7 +336,7 @@ Yardbell's Settings, under Dispatch. Do not try it again or reach the same resul
 
 // What the rules match a step on. The folder is the one the step works in: the folder it starts
 // in, the folder of the session it reviews, or the folder of the session it stops or types into.
-fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
+pub fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
     let machine = input["machine"].as_str().unwrap_or_default().to_string();
     let snap = app.state.snapshot(&machine).unwrap_or_default();
     let text = |key: &str| input[key].as_str().unwrap_or_default().trim().to_string();

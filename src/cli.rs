@@ -194,6 +194,11 @@ pub async fn serve(
             });
         }
     });
+    Arc::new(crate::pulls::Pulls::new(
+        Arc::new(crate::pulls::GitHub::new(runner.clone(), ssh.clone())),
+        dir.join("pulls.json"),
+    ))
+    .start(path.clone(), state.clone(), dispatch.clone());
     let poller = Arc::new(Poller::new(
         path.clone(),
         Arc::new(Probe::new(runner.clone(), ssh.clone())),

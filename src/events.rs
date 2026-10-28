@@ -314,6 +314,7 @@ mod tests {
             tmux: Some("eng-1".into()),
             stale: false,
             ports: vec![],
+            pull: None,
         }
     }
 

@@ -263,6 +263,7 @@ mod tests {
             tmux: Some(id.into()),
             stale: false,
             ports: vec![],
+            pull: None,
         }
     }
 

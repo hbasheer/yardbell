@@ -2,6 +2,7 @@ mod actions;
 mod follow;
 mod mcp_config;
 mod prompt;
+mod pull;
 mod review;
 mod rules;
 mod store;
@@ -508,6 +509,7 @@ mod tests {
                     tmux: Some(name.into()),
                     stale: false,
                     ports: vec![],
+                    pull: None,
                 })
                 .collect(),
             ended: vec![],
