@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-10-28
+
 - Dispatch has rules for what it may do. Each rule matches a step (starting, stopping or typing
   into a session, or starting a review, or any of them), a machine or any, and optionally a folder
   pattern like `acme/*`, and then allows the step, asks you first, or denies it. A deny always
