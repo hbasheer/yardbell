@@ -136,7 +136,10 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 - **Dispatch:** your own instructions for Dispatch, the agent it starts, the model it runs on and
   whether it asks before each step, see [Dispatch](#dispatch).
 - **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
-  servers for the sessions it starts, see [Agent tools (MCP)](agents.md#agent-tools-mcp).
+  servers for the sessions it starts, see [Agent tools (MCP)](agents.md#agent-tools-mcp). Their
+  tokens go in **Secrets** under the list: add, replace or delete one by name, and refer to it as
+  `${secret:NAME}`. A saved value is never shown again. When `yardbell.yml` still holds tokens
+  itself, **Move to secrets** moves them, see [Secrets](configuration.md#secrets).
 - **Appearance:** same as the device, light or dark, like the theme button in the sidebar.
   **Terminal** picks light or dark for terminals on its own, or follows the theme.
 - **Security:** change the passcode (takes effect immediately) and log out every other device.

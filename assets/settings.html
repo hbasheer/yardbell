@@ -212,16 +212,17 @@
       <button class="btn primary" type="button" id="mcp-on">Turn on</button>
     </div>
     <div class="panel mcp-on" id="mcp-panel" hidden>
-      <p>Add Yardbell to Claude Code on any machine on the mesh:</p>
+      <p>Add Yardbell to Claude Code on any machine on the mesh. Run this command, then paste the token when it asks for it:</p>
       <p class="phone-field"><code id="mcp-command"></code><button class="btn" type="button" id="mcp-copy">Copy</button></p>
-      <p class="help">The token lets an agent start and type into sessions on every machine. Keep it secret. Make a new one if it leaks: the old one stops working at once.</p>
+      <p class="phone-field"><code id="mcp-token"></code><button class="btn" type="button" id="mcp-token-copy">Copy token</button></p>
+      <p class="help">The token is read without showing it, so it stays out of your shell history and off the command you type. Claude Code keeps it in its own config, <code>~/.claude.json</code>. The token lets an agent start and type into sessions on every machine. Keep it secret. Make a new one if it leaks: the old one stops working at once.</p>
       <button class="btn" type="button" id="mcp-rotate">Make a new token</button>
     </div>
   </section>
 
   <section id="servers">
     <div class="section-head"><h2>MCP servers for sessions</h2><button class="btn small-link" type="button" id="server-add">Add server</button></div>
-    <p class="help">Claude Code sessions that Yardbell starts get these servers. Nothing is written on the machines: the list is passed when the session starts. Values, tokens included, are visible in that machine's process list while the session runs.</p>
+    <p class="help">Claude Code sessions that Yardbell starts get these servers, in a file only your account can read on that machine. Keep tokens in the secrets below and write <code>${secret:NAME}</code> where they go.</p>
     <ul class="rows" id="server-rows"></ul>
     <form class="panel" id="server-form" hidden>
       <div class="grid2">
@@ -233,12 +234,39 @@
       <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
       <label data-kind="url">URL <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
       <label><span id="server-pairs-label">Environment variables</span>
-        <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=ghp_..." autocapitalize="off" spellcheck="false"></textarea>
+        <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=${secret:github}" autocapitalize="off" spellcheck="false"></textarea>
       </label>
       <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">None picked means every machine.</p></fieldset>
       <div class="form-foot">
         <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
         <button class="btn primary" type="submit">Save server</button>
+      </div>
+    </form>
+
+    <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
+    <p class="help">Tokens for the servers above, kept in <code id="secrets-file">secrets.yml</code>, which only your account can read. A value is never shown again once it is saved. Refer to one as <code>${secret:NAME}</code> in a header, an environment variable or a URL, for example <code>Authorization=Bearer ${secret:linear}</code>.</p>
+    <div class="banner" id="secrets-missing" hidden>
+      <div class="banner-text"><strong>A secret is not set</strong><span id="secrets-missing-text"></span></div>
+    </div>
+    <div class="banner warn" id="secrets-inline" hidden>
+      <div class="banner-text">
+        <strong>Some values are written in yardbell.yml itself</strong>
+        <span>Move them into secrets so yardbell.yml holds none. Tick the ones that are secret. Each is read back from secrets before it leaves yardbell.yml. Older <code>yardbell.yml.bak-</code> copies still hold them, so delete those afterwards.</span>
+        <div class="inline-picks" id="inline-picks"></div>
+      </div>
+      <button class="btn primary" type="button" id="secrets-move">Move to secrets</button>
+    </div>
+    <ul class="rows" id="secret-rows" hidden></ul>
+    <p class="help" id="secrets-empty">No secrets yet.</p>
+    <form class="panel" id="secret-form" hidden>
+      <div class="grid2">
+        <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" maxlength="64" placeholder="linear" autocapitalize="off" spellcheck="false" required></label>
+        <label>Value <input type="password" name="value" autocomplete="new-password" autocapitalize="off" spellcheck="false" required></label>
+      </div>
+      <div class="form-foot">
+        <p class="help" id="secret-form-help">Letters, digits, - and _ in the name. New sessions get the value; running ones keep the one they started with.</p>
+        <button class="btn quiet" type="button" id="secret-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Save secret</button>
       </div>
     </form>
   </section>

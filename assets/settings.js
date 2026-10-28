@@ -96,7 +96,9 @@ function renderMcp(m) {
   $("mcp-turn-off").hidden = !on;
   if (!on) return;
   const url = m.urls.find((u) => !u.includes("//127.0.0.1:")) || m.urls[0];
-  $("mcp-command").textContent = `claude mcp add --transport http --scope user yardbell ${url} --header "Authorization: Bearer ${m.token}"`;
+  // read -s keeps the token out of the line typed, so shell history never sees it.
+  $("mcp-command").textContent = `printf 'Yardbell token: ' && read -rs YB_TOKEN && echo && claude mcp add --transport http --scope user yardbell ${url} --header "Authorization: Bearer $YB_TOKEN"; unset YB_TOKEN`;
+  $("mcp-token").textContent = `${m.token.slice(0, 7)}…`;
 }
 
 // Dispatch can start a session on any machine, so it offers the agents installed on at least one,
@@ -179,10 +181,42 @@ function renderServers() {
     <div class="row-actions"><button class="btn" type="button" data-edit="${i}">Edit</button><button class="btn quiet danger" type="button" data-remove="${i}">Remove</button></div></li>`).join("");
 }
 
+function day(stamp) {
+  return new Date(stamp).toLocaleDateString([], { dateStyle: "medium" });
+}
+
+function renderSecrets() {
+  const s = data.secrets || { list: [], missing: [], inline: [] };
+  if (s.error) toast(s.error);
+  $("secrets-file").textContent = s.file || "secrets.yml";
+  $("secret-rows").hidden = !s.list.length;
+  $("secrets-empty").hidden = Boolean(s.list.length);
+  $("secret-rows").innerHTML = s.list.map((x) => `<li class="row">
+    <div class="row-main"><div class="row-title"><span class="folder secret-name">${esc(x.name)}</span><span class="note">${x.updated ? `set ${esc(day(x.updated))}` : "set"}</span></div>
+      <p class="help">${x.used_by.length ? `Used by ${esc(x.used_by.join(", "))}` : "Not used by any server"}</p></div>
+    <div class="row-actions"><button class="btn" type="button" data-replace="${esc(x.name)}">Replace</button><button class="btn quiet danger" type="button" data-delete="${esc(x.name)}">Delete</button></div></li>`).join("");
+  $("secrets-missing").hidden = !s.missing.length;
+  $("secrets-missing-text").textContent = `${s.missing.map((x) => `${x.server} uses \${secret:${x.name}}, which is not set.`).join(" ")} New Claude Code sessions that get it do not start until it is. Add it below.`;
+  $("secrets-inline").hidden = !s.inline.some((x) => x.secret);
+  $("inline-picks").innerHTML = s.inline.map((x, i) => `<label class="choice"><input type="checkbox" data-inline="${i}"${x.secret ? " checked" : ""}>${esc(x.label)}</label>`).join("");
+}
+
+function openSecretForm(name) {
+  const f = $("secret-form");
+  f.reset();
+  f.elements.name.value = name || "";
+  f.elements.name.readOnly = Boolean(name);
+  $("secret-form-help").textContent = name
+    ? `The new value replaces the one saved for ${name}. New sessions get it; running ones keep the one they started with.`
+    : "Letters, digits, - and _ in the name. New sessions get the value; running ones keep the one they started with.";
+  f.hidden = false;
+  (name ? f.elements.value : f.elements.name).focus();
+}
+
 function showKind(kind) {
   $("server-form").querySelectorAll("[data-kind]").forEach((el) => { el.hidden = el.dataset.kind !== kind; });
   $("server-pairs-label").textContent = kind === "url" ? "Headers" : "Environment variables";
-  $("server-form").elements.pairs.placeholder = kind === "url" ? "Authorization=Bearer ..." : "GITHUB_TOKEN=ghp_...";
+  $("server-form").elements.pairs.placeholder = kind === "url" ? "Authorization=Bearer ${secret:linear}" : "GITHUB_TOKEN=${secret:github}";
 }
 
 function openServerForm(index) {
@@ -258,6 +292,7 @@ async function load() {
   renderPhone(data.phone);
   renderMcp(data.mcp);
   renderServers();
+  renderSecrets();
   renderDispatch();
   if (!data.can_undo) $("undo-btn").hidden = true;
 }
@@ -507,6 +542,72 @@ $("server-form").addEventListener("submit", async (e) => {
 $("mcp-copy").addEventListener("click", () => {
   if (copyText($("mcp-command").textContent)) toast("Command copied", "ok");
   else toast("Couldn't copy. Select the command and copy it.");
+});
+
+$("mcp-token-copy").addEventListener("click", () => {
+  if (copyText(data.mcp.token)) toast("Token copied. Paste it when the command asks for it.", "ok");
+  else toast("Couldn't copy the token.");
+});
+
+$("secret-add").addEventListener("click", () => openSecretForm(null));
+$("secret-cancel").addEventListener("click", () => { $("secret-form").reset(); $("secret-form").hidden = true; });
+
+$("secret-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const name = f.elements.name.value.trim();
+  const button = f.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("POST", "/api/settings/secrets", { name, value: f.elements.value.value });
+    f.reset();
+    f.hidden = true;
+    toast(`${name} saved. New sessions get it.`, "ok");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("secret-rows").addEventListener("click", async (e) => {
+  const replace = e.target.closest("[data-replace]");
+  if (replace) { openSecretForm(replace.dataset.replace); return; }
+  const del = e.target.closest("[data-delete]");
+  if (!del) return;
+  const name = del.dataset.delete;
+  const users = (data.secrets.list.find((x) => x.name === name) || {}).used_by || [];
+  const text = users.length
+    ? `${users.join(", ")} ${users.length === 1 ? "uses" : "use"} it. New Claude Code sessions that get ${users.length === 1 ? "that server" : "those servers"} do not start until you set it again.`
+    : "No server uses it. The value cannot be brought back.";
+  if (!(await Nav.confirm(`Delete the secret ${name}?`, text, { confirm: "Delete", danger: true }))) return;
+  try {
+    await api("POST", "/api/settings/secrets/delete", { name });
+    toast(`${name} deleted.`, "ok");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("secrets-move").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  const items = [...$("inline-picks").querySelectorAll("input:checked")]
+    .map((c) => data.secrets.inline[Number(c.dataset.inline)])
+    .map(({ kind, server, key }) => ({ kind, server, key }));
+  if (!items.length) { toast("Tick the values to move first."); return; }
+  button.disabled = true;
+  try {
+    const res = await api("POST", "/api/settings/secrets/move", { items });
+    $("undo-bar").hidden = true;
+    toast(`Moved ${res.moved.length} ${res.moved.length === 1 ? "value" : "values"} into secrets.`, "ok");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
 });
 
 $("pass-form").addEventListener("submit", async (e) => {

@@ -16,6 +16,22 @@ and the project uses [Semantic Versioning](https://semver.org).
   its values are `prompt`, `allow` and `deny`. `ask` and `auto` still work, and Yardbell keeps
   writing them, so a config saved without rules or a deny is the same as 0.7.0 writes and 0.7.0
   can still read it.
+- Security: tokens can live in a secrets file instead of `yardbell.yml`. MCP servers in Settings has
+  a **Secrets** list where you add, replace and delete a secret by name; once saved, a value is
+  never shown again, only when it was set and which servers use it. Write `${secret:linear}` where
+  the token goes, such as `Authorization=Bearer ${secret:linear}`. The values are kept in
+  `secrets.yml` next to `yardbell.yml`, readable only by your account, and are filled in only when
+  a session's MCP config is written. When `yardbell.yml` still holds tokens, **Move to secrets**
+  moves the ones you tick, and Yardbell's own MCP token and login cookie key go there too. A new MCP
+  token or cookie key is always saved there.
+- Security: text sent to a session, such as Dispatch's replies, review findings and the MCP
+  `send_to_session` tool, no longer appears on a command line, where anyone on a shared machine
+  could read it with `ps`. It goes over standard input into a tmux buffer that is pasted and
+  deleted. A session scrolled back in its history is brought to the bottom first, so the text
+  reaches the agent, and several lines arrive as one paste.
+- Security: the command Settings shows for adding Yardbell to Claude Code no longer holds the MCP
+  token. It asks for the token without showing it, so it stays out of your shell history, and
+  **Copy token** copies it.
 
 ## [0.7.0] - 2026-10-28
 

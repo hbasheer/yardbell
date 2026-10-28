@@ -1,5 +1,6 @@
 use crate::config::{expand_tilde, Config, Machine};
 use crate::mesh::Detected;
+use crate::secrets::Secrets;
 use base64::Engine;
 use rand::RngCore;
 use serde::Serialize;
@@ -81,16 +82,25 @@ pub fn set_up(path: &Path, passcode: &str, mesh: Detected) -> Result<u16, String
             Status::NoPasscode { .. } => Config::load(path).map_err(|e| e.to_string())?,
             Status::Missing => new_config(&hostname(), &project_root(), mesh)?,
         };
-    let mut key = [0u8; 64];
-    rand::thread_rng().fill_bytes(&mut key);
     cfg.passcode_hash = Some(crate::auth::hash(passcode));
-    cfg.cookie_key = Some(base64::engine::general_purpose::STANDARD.encode(key));
-    if let Some(dir) = path.parent() {
-        std::fs::create_dir_all(dir)
-            .map_err(|e| format!("cannot create {}: {e}", dir.display()))?;
-    }
+    new_cookie_key(&mut cfg, path)?;
     cfg.save(path).map_err(|e| e.to_string())?;
     Ok(cfg.port)
+}
+
+// The key goes into the secrets file next to the config, and the config only names it.
+pub fn new_cookie_key(cfg: &mut Config, cfg_path: &Path) -> Result<(), String> {
+    let mut key = [0u8; 64];
+    rand::thread_rng().fill_bytes(&mut key);
+    let mut secrets = Secrets::for_config(cfg_path).map_err(|e| e.to_string())?;
+    secrets.set(
+        crate::secrets::COOKIE_KEY,
+        &base64::engine::general_purpose::STANDARD.encode(key),
+        chrono::Utc::now(),
+    )?;
+    secrets.save().map_err(|e| e.to_string())?;
+    cfg.cookie_key = Some(crate::secrets::reference(crate::secrets::COOKIE_KEY));
+    Ok(())
 }
 
 fn new_config(hostname: &str, root: &str, mesh: Detected) -> Result<Config, String> {

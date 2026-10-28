@@ -5,6 +5,7 @@ use crate::folders::Folders;
 use crate::mesh::HostMesh;
 use crate::onboarding::Onboarding;
 use crate::phone::Phone;
+use crate::secrets::Secrets;
 use crate::sessions::{Launch, Sessions, Start};
 use crate::settings::Settings;
 use crate::snapshot;
@@ -121,6 +122,13 @@ impl AppState {
             refresh,
             releases,
         } = services;
+        let key = match Secrets::for_config(&cfg_path) {
+            Ok(secrets) => cookie_key(cfg, &secrets),
+            Err(e) => {
+                tracing::warn!(error = %e, "every login cookie is refused until the key can be read");
+                Key::generate()
+            }
+        };
         AppState {
             cfg_path,
             state,
@@ -133,7 +141,7 @@ impl AppState {
             phone,
             dispatch,
             auth: Auth::new(cfg.passcode_hash.clone().unwrap_or_default(), clock.clone()),
-            key: std::sync::RwLock::new(cookie_key(cfg)),
+            key: std::sync::RwLock::new(key),
             handoff: std::sync::Mutex::new(Vec::new()),
             pairing: std::sync::Mutex::new(Vec::new()),
             viewers: Viewers::default(),
@@ -153,6 +161,11 @@ impl AppState {
 
     pub fn config(&self) -> Result<Config, ApiError> {
         Config::load(&self.cfg_path)
+            .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
+    }
+
+    pub fn secrets(&self) -> Result<Secrets, ApiError> {
+        Secrets::for_config(&self.cfg_path)
             .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()))
     }
 
@@ -184,9 +197,12 @@ async fn settle(check: futures::future::BoxFuture<'static, ()>) {
     }
 }
 
-pub fn cookie_key(cfg: &Config) -> Key {
-    cfg.cookie_key
-        .as_deref()
+pub fn cookie_key(cfg: &Config, secrets: &Secrets) -> Key {
+    cfg.cookie_key(secrets)
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "every login cookie is refused until the key can be read");
+            None
+        })
         .and_then(|k| base64::engine::general_purpose::STANDARD.decode(k).ok())
         .filter(|bytes| bytes.len() >= 64)
         .map(|bytes| Key::from(&bytes))
@@ -206,6 +222,10 @@ pub struct ApiError(pub StatusCode, pub String);
 impl ApiError {
     pub fn gateway(msg: String) -> ApiError {
         ApiError(StatusCode::BAD_GATEWAY, msg)
+    }
+
+    pub fn internal(msg: String) -> ApiError {
+        ApiError(StatusCode::INTERNAL_SERVER_ERROR, msg)
     }
 }
 
@@ -838,6 +858,12 @@ async fn dispatch_ask(
         .as_deref()
         .map(conversation_id)
         .transpose()?;
+    let host_mcp = match cfg.host() {
+        Some(m) => cfg
+            .mcp_config_for(&m.name, &app.secrets()?)
+            .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?,
+        None => None,
+    };
     let (id, rx) = app
         .dispatch
         .ask(
@@ -845,9 +871,7 @@ async fn dispatch_ask(
             &req.text,
             cfg.port,
             &cfg.dispatch,
-            cfg.host()
-                .and_then(|m| cfg.mcp_config_for(&m.name))
-                .as_deref(),
+            host_mcp.as_deref(),
         )
         .await
         .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
@@ -1245,6 +1269,7 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
             format!("no agent named {agent_name}"),
         )
     })?;
+    let mcp_config = mcp_config(&cfg, &m, &agent, &app.secrets()?)?;
     let snap = app.state.snapshot(&m.name).unwrap_or_default();
     let repo = if req.path.trim().is_empty() {
         snap.folder_paths.get(&req.folder).cloned().ok_or_else(|| {
@@ -1289,7 +1314,6 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
         (false, "") => Start::New,
         (false, prompt) => Start::Task(prompt),
     };
-    let mcp_config = mcp_config(&cfg, &m, &agent);
     let name = app
         .sessions
         .create(
@@ -1309,11 +1333,17 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
     Ok(json!({ "machine": m.name, "name": name, "path": path }))
 }
 
-fn mcp_config(cfg: &Config, m: &Machine, agent: &crate::agents::Agent) -> Option<String> {
+fn mcp_config(
+    cfg: &Config,
+    m: &Machine,
+    agent: &crate::agents::Agent,
+    secrets: &Secrets,
+) -> Result<Option<String>, ApiError> {
     if agent.process_name() != "claude" {
-        return None;
+        return Ok(None);
     }
-    cfg.mcp_config_for(&m.name)
+    cfg.mcp_config_for(&m.name, secrets)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))
 }
 
 fn remember(app: &AppState, machine: &str, path: &str) {
@@ -1515,6 +1545,7 @@ async fn move_to_tmux(
             format!("no agent named {}", s.agent),
         )
     })?;
+    let mcp_config = mcp_config(&cfg, &m, &agent, &app.secrets()?)?;
     app.sessions
         .stop_pid(&m, pid)
         .await
@@ -1529,7 +1560,7 @@ async fn move_to_tmux(
                 folder_label: &label_of(&s.cwd),
                 agent: &agent,
                 start: Start::Resume,
-                mcp_config: mcp_config(&cfg, &m, &agent).as_deref(),
+                mcp_config: mcp_config.as_deref(),
             },
         )
         .await;

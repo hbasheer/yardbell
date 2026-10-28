@@ -1170,6 +1170,10 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .phone-intro { display: flex; align-items: center; gap: 16px; }
 .phone-intro p { flex: 1; margin: 0; color: var(--ink-2); }
 .phone-field { display: flex; align-items: center; gap: 8px; min-width: 0; }
+.sub-head { margin-top: 28px; }
+.sub-head h3 { margin: 0; font-size: 14px; font-weight: 600; }
+.inline-picks { display: flex; flex-wrap: wrap; gap: 6px 16px; margin-top: 6px; }
+.secret-name { font-family: var(--mono); font-size: 13px; }
 .server-machines { border: 0; padding: 0; margin: 0 0 14px; }
 .server-machines legend { padding: 0; margin-bottom: 6px; font-size: 13px; font-weight: 500; color: var(--ink-2); }
 .server-machines > div { display: flex; flex-wrap: wrap; gap: 8px 16px; }

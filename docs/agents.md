@@ -50,9 +50,16 @@ Turn on **Agent tools (MCP)** in Settings to let any MCP client use Yardbell. Se
 command for Claude Code, for example:
 
 ```sh
-claude mcp add --transport http --scope user yardbell http://100.64.0.10:4000/mcp \
-  --header "Authorization: Bearer yb_..."
+printf 'Yardbell token: ' && read -rs YB_TOKEN && echo && claude mcp add --transport http \
+  --scope user yardbell http://100.64.0.10:4000/mcp --header "Authorization: Bearer $YB_TOKEN"; unset YB_TOKEN
 ```
+
+Run it, then paste the token (**Copy token** in Settings) when it asks. `read -s` takes the token
+without showing it, so it never appears in the line you type or in your shell history, and
+`unset` drops it afterwards. Claude Code stores it in its own config, `~/.claude.json`. The command
+works in bash and zsh. The token is still an argument of `claude mcp add` for the second it runs;
+on a machine shared with people you do not trust, run it where you are the only user, or add the
+server to `~/.claude.json` by hand.
 
 | Tool | What it does |
 |---|---|
@@ -61,14 +68,16 @@ claude mcp add --transport http --scope user yardbell http://100.64.0.10:4000/mc
 | `list_folders` | git checkouts per machine with their branch, and recent folders |
 | `start_session` | start an agent in a folder, on a branch (new ones get a worktree), with a task |
 | `read_session` | what the session's terminal shows, with scrollback |
-| `send_to_session` | type a reply and press Enter |
+| `send_to_session` | type a reply and press Enter; the text goes over standard input, never on a command line |
 | `stop_session` | end the session |
 
 **MCP servers for sessions** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code
 sessions that Yardbell starts get them through `--mcp-config`, without touching the agent's own
-settings. Their tokens never appear on a command line: Yardbell writes the list to a file only your
-account can read on that machine and gives Claude Code its path, see
+settings. Keep their tokens in the **Secrets** list below them and write `${secret:NAME}` in the
+header or variable, for example `Authorization=Bearer ${secret:linear}`, see
+[Secrets](configuration.md#secrets). Their tokens never appear on a command line: Yardbell writes the
+list to a file only your account can read on that machine and gives Claude Code its path, see
 [`mcp_servers`](configuration.md#mcp_servers-optional). Other agents configure MCP their own way
 and do not get them.
 

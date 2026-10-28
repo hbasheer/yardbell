@@ -163,6 +163,20 @@ fn mcp_config_script(config: &str) -> String {
     )
 }
 
+// What is typed can be sensitive, so it reaches tmux on stdin through a buffer of its own instead
+// of on a command line, which ps shows to every account on the machine. Copy mode would take the
+// keys as commands, so it is left first. The paste is bracketed when the program asked for that,
+// so its lines arrive as one input, and -r keeps them as typed; Enter then sends it.
+fn send_script(name: &str) -> String {
+    let target = quote(&format!("{}:", exact(name)));
+    format!(
+        "tmux send-keys -X -t {target} cancel </dev/null 2>/dev/null; b=yardbell-send-$$; \
+         tmux load-buffer -b \"$b\" - && tmux paste-buffer -d -p -r -b \"$b\" -t {target} </dev/null \
+         || {{ tmux delete-buffer -b \"$b\" </dev/null 2>/dev/null; exit 1; }}; \
+         sleep 0.2; tmux send-keys -t {target} Enter </dev/null"
+    )
+}
+
 pub struct Sessions {
     runner: Arc<dyn Runner>,
     ssh: Ssh,
@@ -251,12 +265,9 @@ impl Sessions {
     }
 
     pub async fn send(&self, m: &Machine, name: &str, text: &str) -> Result<(), String> {
-        let target = quote(&format!("{}:", exact(name)));
-        let cmd = format!(
-            "tmux send-keys -t {target} -l {} && sleep 0.2 && tmux send-keys -t {target} Enter",
-            quote(text)
-        );
-        self.exec(m, &cmd).await
+        self.output_with_input(m, &send_script(name), Some(text.to_string()))
+            .await
+            .map(|_| ())
     }
 
     // Keys typed as they are, without Enter, for picking an agent's numbered choice.
@@ -650,9 +661,127 @@ mod tests {
         s.send(&machine(false), "hp-app", "yes, it's fine")
             .await
             .unwrap();
-        assert!(last_command(&fake).contains(
-            r"tmux send-keys -t '=hp-app:' -l 'yes, it'\''s fine' && sleep 0.2 && tmux send-keys -t '=hp-app:' Enter"
-        ));
+        assert!(last_command(&fake).ends_with(&send_script("hp-app")));
+        assert_eq!(
+            fake.inputs().last().unwrap().as_deref(),
+            Some("yes, it's fine")
+        );
+    }
+
+    #[tokio::test]
+    async fn sent_text_goes_on_stdin_and_never_on_a_command_line() {
+        let text = "deploy with token lin_api_SENT and\nsecond line";
+        for local in [true, false] {
+            let fake = Arc::new(FakeRunner::default());
+            fake.stub("load-buffer", Output::ok_with(""));
+            sessions(fake.clone())
+                .send(&machine(local), "hp-app", text)
+                .await
+                .unwrap();
+            let calls = fake.calls();
+            assert_eq!(calls.len(), 1);
+            assert_eq!(calls[0][0], if local { "bash" } else { "ssh" });
+            for call in &calls {
+                assert!(!call.join(" ").contains("lin_api_SENT"), "{call:?}");
+                assert!(!call.join(" ").contains("second line"), "{call:?}");
+            }
+            assert_eq!(fake.inputs(), vec![Some(text.to_string())]);
+        }
+    }
+
+    #[tokio::test]
+    async fn a_failed_send_reports_tmux_s_error() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub(
+            "load-buffer",
+            Output::failed(1, "can't find session: =hp-app\n"),
+        );
+        let err = sessions(fake)
+            .send(&machine(false), "hp-app", "hello")
+            .await
+            .unwrap_err();
+        assert_eq!(err, "can't find session: =hp-app");
+    }
+
+    // Runs the script against a private tmux server, as the dev harness and CI can.
+    #[test]
+    fn send_script_types_the_text_into_a_real_pane() {
+        if std::process::Command::new("tmux")
+            .arg("-V")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let sock = dir.path().join("tmux.sock");
+        let out = dir.path().join("got.txt");
+        let tmux = |args: &[&str]| {
+            std::process::Command::new("tmux")
+                .arg("-S")
+                .arg(&sock)
+                .args(args)
+                .env_remove("TMUX")
+                .output()
+                .unwrap()
+        };
+        let reader = format!(
+            "IFS= read -r line; printf '%s' \"$line\" > {}",
+            quote(&out.display().to_string())
+        );
+        assert!(tmux(&[
+            "-f",
+            "/dev/null",
+            "new",
+            "-d",
+            "-s",
+            "hp-app",
+            "-x",
+            "80",
+            "-y",
+            "20",
+            "sh",
+            "-c",
+            &reader
+        ])
+        .status
+        .success());
+        let script = send_script("hp-app").replace(
+            "tmux ",
+            &format!("tmux -S {} ", quote(&sock.display().to_string())),
+        );
+        let mut child = std::process::Command::new("bash")
+            .arg("-c")
+            .arg(&script)
+            .stdin(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(b"it's $HOME `x`")
+            .unwrap();
+        let done = child.wait_with_output().unwrap();
+        assert!(
+            done.status.success(),
+            "{}",
+            String::from_utf8_lossy(&done.stderr)
+        );
+        let mut got = String::new();
+        for _ in 0..50 {
+            got = std::fs::read_to_string(&out).unwrap_or_default();
+            if !got.is_empty() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(100));
+        }
+        tmux(&["kill-server"]);
+        assert_eq!(got, "it's $HOME `x`");
+        let buffers = String::from_utf8_lossy(&tmux(&["list-buffers"]).stdout).into_owned();
+        assert!(!buffers.contains("yardbell-send"), "{buffers}");
     }
 
     #[tokio::test]

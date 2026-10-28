@@ -2191,20 +2191,21 @@ async fn a_review_is_requested_approved_and_its_findings_sent_back() {
     assert_eq!(status, StatusCode::BAD_REQUEST);
     let (status, _) = step_post(&r, &c, &url, json!({ "decision": "send", "findings": [7] })).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    r.fake.stub("send-keys", Output::ok_with(""));
+    r.fake.stub("load-buffer", Output::ok_with(""));
     let (status, sent) =
         step_post(&r, &c, &url, json!({ "decision": "send", "findings": [0] })).await;
     assert_eq!(status, StatusCode::OK, "{sent}");
     assert_eq!(sent["outcome"]["decision"], "sent",);
     assert_eq!(sent["outcome"]["to"], "hp-eng-1301");
-    let typed = r
-        .fake
-        .calls()
+    let calls = r.fake.calls();
+    let at = calls
         .iter()
-        .map(|c| c.join(" "))
-        .find(|c| c.contains("send-keys"))
+        .position(|c| c.join(" ").contains("load-buffer"))
         .unwrap();
-    assert!(typed.contains("'=hp-eng-1301:'"), "{typed}");
+    let command = calls[at].join(" ");
+    assert!(command.contains("'=hp-eng-1301:'"), "{command}");
+    assert!(!command.contains("unread count"), "{command}");
+    let typed = r.fake.inputs()[at].clone().unwrap();
     assert!(typed.contains("found this problem. Fix it,"), "{typed}");
     assert!(
         typed.contains("The unread count can go negative."),
@@ -2608,4 +2609,286 @@ async fn open_pages_hear_about_changes_on_a_socket() {
         .await
         .expect("no message after the state changed");
     assert!(text.parse::<u64>().is_ok(), "{text}");
+}
+
+async fn settings_post(
+    r: &Rig,
+    c: &str,
+    url: &str,
+    body: serde_json::Value,
+) -> (StatusCode, String) {
+    let req = Request::post(url)
+        .header(header::COOKIE, c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, _, text) = send(&r.app, req).await;
+    (status, text)
+}
+
+async fn settings_shown(r: &Rig, c: &str) -> String {
+    let (status, _, body) = send(
+        &r.app,
+        Request::get("/api/settings")
+            .header(header::COOKIE, c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    body
+}
+
+#[tokio::test]
+async fn secrets_are_set_listed_by_name_only_and_reach_new_sessions() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let linear = json!([{ "name": "linear", "url": "https://mcp.linear.app/mcp",
+        "headers": { "Authorization": "Bearer ${secret:linear}" } }]);
+    let (status, body) = settings_post(
+        &r,
+        &c,
+        "/api/settings/mcp/servers",
+        json!({ "servers": linear }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let shown: serde_json::Value = serde_json::from_str(&settings_shown(&r, &c).await).unwrap();
+    assert_eq!(
+        shown["secrets"]["missing"],
+        json!([{ "server": "linear", "name": "linear" }])
+    );
+    r.fake.stub("tmux new", Output::ok_with(""));
+    r.fake.stub(
+        "yardbell/mcp",
+        Output::ok_with("/home/u/.cache/yardbell/mcp/mcp-1.json\n"),
+    );
+    let start = || {
+        Request::post("/sessions")
+            .header(header::COOKIE, &c)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(r#"{"machine":"hp","folder":"slot2"}"#))
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, start()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body.contains("needs the secret linear, which is not set"),
+        "{body}"
+    );
+    assert!(
+        r.fake.calls().is_empty(),
+        "nothing started without the secret"
+    );
+
+    let (status, body) = settings_post(
+        &r,
+        &c,
+        "/api/settings/secrets",
+        json!({ "name": "linear", "value": "lin_api_TOPSECRET" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, body) = settings_post(
+        &r,
+        &c,
+        "/api/settings/secrets",
+        json!({ "name": "yardbell-mcp-token", "value": "x" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let text = settings_shown(&r, &c).await;
+    assert!(!text.contains("lin_api_TOPSECRET"), "{text}");
+    let shown: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let listed = &shown["secrets"]["list"][0];
+    assert_eq!(listed["name"], "linear");
+    assert_eq!(listed["used_by"], json!(["linear"]));
+    assert!(
+        listed["updated"].as_str().unwrap().ends_with('Z'),
+        "{listed}"
+    );
+    assert_eq!(shown["secrets"]["missing"], json!([]));
+
+    let (status, _, body) = send(&r.app, start()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    for call in r.fake.calls() {
+        assert!(!call.join(" ").contains("TOPSECRET"), "{call:?}");
+    }
+    assert!(r
+        .fake
+        .inputs()
+        .iter()
+        .flatten()
+        .any(|input| input.contains("Bearer lin_api_TOPSECRET")));
+    let saved = std::fs::read_to_string(&r.app.cfg_path).unwrap();
+    assert!(!saved.contains("TOPSECRET"), "{saved}");
+    let mode = std::os::unix::fs::PermissionsExt::mode(
+        &std::fs::metadata(r.app.settings.secrets_path())
+            .unwrap()
+            .permissions(),
+    );
+    assert_eq!(mode & 0o777, 0o600);
+
+    let (status, _) = settings_post(
+        &r,
+        &c,
+        "/api/settings/secrets/delete",
+        json!({ "name": "linear" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = settings_post(
+        &r,
+        &c,
+        "/api/settings/secrets/delete",
+        json!({ "name": "linear" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("there is no secret called linear"), "{body}");
+}
+
+#[tokio::test]
+async fn inline_values_move_into_secrets_without_losing_any() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    mcp_on(&r);
+    let mut cfg = r.app.config().unwrap();
+    cfg.mcp_token = Some("yb_secret".into());
+    cfg.cookie_key = Some("a2V5".into());
+    cfg.mcp_servers = serde_json::from_value(json!([
+        { "name": "linear", "url": "https://mcp.linear.app/mcp",
+          "headers": { "Authorization": "Bearer lin_api_ONE" } },
+        { "name": "github", "command": "npx gh-mcp",
+          "env": { "GITHUB_TOKEN": "ghp_TWO", "GITHUB_HOST": "github.com" } },
+    ]))
+    .unwrap();
+    cfg.save(&r.app.cfg_path).unwrap();
+    r.app
+        .settings
+        .set_secret("linear", "something else")
+        .unwrap();
+
+    let shown: serde_json::Value = serde_json::from_str(&settings_shown(&r, &c).await).unwrap();
+    let inline = shown["secrets"]["inline"].as_array().unwrap();
+    assert_eq!(inline.len(), 5, "{inline:?}");
+    let ticked: Vec<_> = inline
+        .iter()
+        .filter(|i| i["secret"] == true)
+        .map(|i| i["label"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        ticked,
+        [
+            "linear: header Authorization",
+            "github: GITHUB_TOKEN",
+            "Yardbell's MCP token",
+            "Yardbell's login cookie key"
+        ]
+    );
+    let picked: Vec<_> = inline
+        .iter()
+        .filter(|i| i["key"] != "GITHUB_HOST")
+        .cloned()
+        .collect();
+    let (status, body) = settings_post(
+        &r,
+        &c,
+        "/api/settings/secrets/move",
+        json!({ "items": picked }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let saved = std::fs::read_to_string(&r.app.cfg_path).unwrap();
+    for value in ["lin_api_ONE", "ghp_TWO", "yb_secret", "a2V5"] {
+        assert!(!saved.contains(value), "{value} left in {saved}");
+    }
+    let cfg = r.app.config().unwrap();
+    assert_eq!(
+        cfg.mcp_servers[0].headers["Authorization"],
+        "Bearer ${secret:linear-2}"
+    );
+    assert_eq!(cfg.mcp_servers[1].env["GITHUB_TOKEN"], "${secret:github}");
+    assert_eq!(cfg.mcp_servers[1].env["GITHUB_HOST"], "github.com");
+    let store = r.app.secrets().unwrap();
+    assert_eq!(store.get("linear"), Some("something else"));
+    assert_eq!(store.get("linear-2"), Some("lin_api_ONE"));
+    assert_eq!(store.get("github"), Some("ghp_TWO"));
+    assert_eq!(cfg.mcp_token(&store).unwrap().as_deref(), Some("yb_secret"));
+    assert_eq!(cfg.cookie_key(&store).unwrap().as_deref(), Some("a2V5"));
+    let (status, body) = mcp(&r.app, Some("yb_secret"), None, rpc("ping", json!({}))).await;
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the moved MCP token still works: {body}"
+    );
+
+    let (status, body) = settings_post(
+        &r,
+        &c,
+        "/api/settings/secrets/move",
+        json!({ "items": picked }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("already secrets"), "{body}");
+}
+
+#[tokio::test]
+async fn a_move_that_cannot_write_the_secrets_leaves_yardbell_yml_alone() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let mut cfg = r.app.config().unwrap();
+    cfg.mcp_servers = serde_json::from_value(json!([
+        { "name": "linear", "url": "https://mcp.linear.app/mcp",
+          "headers": { "Authorization": "Bearer lin_api_ONE" } },
+    ]))
+    .unwrap();
+    cfg.save(&r.app.cfg_path).unwrap();
+    std::fs::create_dir(r.app.settings.secrets_path().with_extension("yml.tmp")).unwrap();
+    let item = json!([{ "kind": "header", "server": "linear", "key": "Authorization" }]);
+    let (status, body) = settings_post(
+        &r,
+        &c,
+        "/api/settings/secrets/move",
+        json!({ "items": item }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(!body.contains("lin_api_ONE"), "{body}");
+    let saved = r.app.config().unwrap();
+    assert_eq!(
+        saved.mcp_servers[0].headers["Authorization"],
+        "Bearer lin_api_ONE"
+    );
+}
+
+#[tokio::test]
+async fn mcp_send_to_session_types_through_stdin() {
+    let r = rig();
+    mcp_on(&r);
+    r.fake.stub("load-buffer", Output::ok_with(""));
+    let result = tool_call(
+        &r,
+        "send_to_session",
+        json!({ "machine": "hp", "name": "hp-eng-1301", "text": "the password is hunter2" }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let calls = r.fake.calls();
+    let at = calls
+        .iter()
+        .position(|c| c.join(" ").contains("load-buffer"))
+        .unwrap();
+    assert_eq!(calls[at][0], "ssh");
+    for call in &calls {
+        assert!(!call.join(" ").contains("hunter2"), "{call:?}");
+    }
+    assert_eq!(
+        r.fake.inputs()[at].as_deref(),
+        Some("the password is hunter2")
+    );
 }
