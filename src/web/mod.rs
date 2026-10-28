@@ -435,6 +435,7 @@ pub fn router(app: Arc<AppState>) -> Router {
             post(dispatch_restore_task_version),
         )
         .route("/dispatch/usage", get(dispatch_usage))
+        .route("/dispatch/runs-on", get(dispatch_runs_on))
         .route("/dispatch/usage/refresh", post(dispatch_usage_refresh))
         .route(
             "/dispatch/conversations/{id}/actions",
@@ -788,8 +789,20 @@ fn hostname() -> String {
         .unwrap_or_else(|| "this machine".into())
 }
 
+fn runs_on(app: &AppState) -> crate::config::RunsOn {
+    app.config()
+        .map(|cfg| cfg.dispatch.runs_on)
+        .unwrap_or_default()
+}
+
+// The agent new conversations start on. A conversation keeps the one it started on.
+async fn dispatch_runs_on(AxState(app): AxState<Arc<AppState>>) -> Response {
+    let runs_on = runs_on(&app);
+    Json(json!({ "runs_on": runs_on, "label": runs_on.label() })).into_response()
+}
+
 async fn dispatch_usage(AxState(app): AxState<Arc<AppState>>) -> Response {
-    Json(app.dispatch.usage()).into_response()
+    Json(app.dispatch.usage_card(runs_on(&app))).into_response()
 }
 
 async fn dispatch_usage_refresh(AxState(app): AxState<Arc<AppState>>) -> Response {
@@ -798,7 +811,7 @@ async fn dispatch_usage_refresh(AxState(app): AxState<Arc<AppState>>) -> Respons
         .refresh_usage_now(&reqwest::Client::new())
         .await
     {
-        Ok(usage) => Json(usage).into_response(),
+        Ok(_) => Json(app.dispatch.usage_card(runs_on(&app))).into_response(),
         Err(message) => error(StatusCode::BAD_GATEWAY, &message),
     }
 }

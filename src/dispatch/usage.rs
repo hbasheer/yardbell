@@ -4,6 +4,7 @@ use std::time::Duration;
 use serde_json::{json, Value};
 
 use super::Dispatch;
+use crate::config::RunsOn;
 
 const WINDOWS: [(&str, &str); 2] = [("five_hour", "5-hour limit"), ("seven_day", "Weekly limit")];
 
@@ -161,6 +162,24 @@ impl Dispatch {
             .expect("dispatch lock")
             .clone()
             .unwrap_or(Value::Null)
+    }
+
+    // The sidebar card: the Claude figures as before, which sessions still use up, with what
+    // Codex last said about its own limits and which of the two Dispatch runs on.
+    pub fn usage_card(&self, runs_on: RunsOn) -> Value {
+        let mut card = match self.usage() {
+            Value::Object(found) => Value::Object(found),
+            _ => json!({}),
+        };
+        card["runs_on"] = json!(runs_on);
+        card["codex"] = self
+            .shared
+            .codex_usage
+            .lock()
+            .expect("dispatch lock")
+            .clone()
+            .unwrap_or(Value::Null);
+        card
     }
 }
 

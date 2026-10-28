@@ -190,9 +190,8 @@ mod tests {
             &DispatchSettings {
                 instructions: "  acme/web work goes to devbox \n".into(),
                 agent: "codex".into(),
-                model: String::new(),
                 approval: Approval::Prompt,
-                rules: Vec::new(),
+                ..DispatchSettings::default()
             },
             "",
         );

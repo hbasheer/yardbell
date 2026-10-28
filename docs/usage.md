@@ -217,9 +217,10 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 ![Dispatch page with a conversation](screenshots/dispatch.png)
 
 The **Dispatch** page takes a task in plain words, like "fix the flaky checkout test in acme/web on a
-new branch eng-1234-checkout-flake". It runs Claude Code on the host (`claude -p`) with only
-Yardbell's own tools, so it can look at machines, folders and sessions and start, read and answer
-sessions, but cannot change files itself. It picks a machine that is up and has the repository,
+new branch eng-1234-checkout-flake". It runs Claude Code (`claude -p`) or Codex (`codex exec`) on
+the host, as **Dispatch runs on** in Settings says, with only Yardbell's own tools, so it can look
+at machines, folders and sessions and start, read and answer sessions, but cannot change files
+itself. It picks a machine that is up and has the repository,
 preferring the most free memory, the lowest load and the fewest running agents, then proposes
 starting the default agent there with your task. Follow-up messages continue the same
 conversation, for example "what is that session doing now?" or "tell it yes".
@@ -310,8 +311,23 @@ Settings says how many were left out.
 
 Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
-conversation never stops the sessions it started. Claude Code must be installed and signed in on
-the host.
+conversation never stops the sessions it started. The agent Dispatch runs on must be installed and
+signed in on the host.
+
+On Codex, Dispatch needs Codex 0.165.0 or newer and says so when the host has an older one. It
+starts Codex without your `~/.codex/config.toml`, with a read-only sandbox, Codex's own shell,
+browser and other tools that act outside it turned off, and Yardbell's tools allowed without Codex
+asking, so every step still goes through your approval setting and rules here, exactly as on Claude
+Code. Codex can still read files and use its sub-agents, which the sandbox keeps from writing. Your
+MCP servers from Settings, such as Linear, come along as they do on Claude Code. Their secrets
+reach Codex by environment, so a server whose URL carries a query or a login is refused on Codex;
+put the credential in a header instead. Codex replies
+arrive whole rather than as they are written. When Codex cannot reach Yardbell's tools, the
+message fails with an error that says so, instead of a reply that could not do anything.
+
+A conversation stays on the agent it started on, since one cannot pick up the other's session.
+Changing **Dispatch runs on** applies to new conversations; an open one carries on where it
+started and says so above its messages. To switch, start a new conversation.
 
 Dispatch also watches the pull requests of your sessions. When a session's CI goes from passing or
 running to failing, or a reviewer leaves a comment, a review or asks for changes, a card appears in
@@ -432,6 +448,11 @@ counts. It only reads the sign-in and never renews it; when the sign-in has expi
 Code has not run for a while, the card keeps the figures from Dispatch's last reply and says how old
 they are. A limit whose reset time has passed shows as reset until the next check. The circular
 arrow on the card checks right away; when it cannot, the card's tooltip says why.
+
+When Dispatch runs on Codex, or has run on it, the card also shows **Codex usage**: Codex's 5-hour
+and weekly limits as Codex recorded them after Dispatch's last reply on it, read from its own
+session files under `~/.codex/sessions`. Codex has no way to ask for them in between, so there is no
+refresh arrow, and when the figures cannot be read the card says they are not available.
 
 The **Tasks** list in Dispatch's sidebar sends a task in one click. Eight come with Yardbell:
 **What's going on?** summarises every machine and session, **Who needs me?** lists the sessions

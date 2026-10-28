@@ -65,6 +65,59 @@ case "$*" in
 esac
 echo '{"type":"result","is_error":false,"result":"done"}'
 """
+# Dispatch runs this instead of Codex when it runs on Codex: the JSONL `codex exec --json` prints,
+# after it calls Yardbell's own MCP server the way Codex does, with the token from its environment.
+FAKE_CODEX = """#!/usr/bin/env python3
+import json, os, sys, urllib.request
+
+args = sys.argv[1:]
+if args == ["--version"]:
+    print("codex-cli 0.165.0")
+    sys.exit(0)
+conf = dict(args[i + 1].split("=", 1) for i, a in enumerate(args) if a == "-c")
+url = json.loads(conf["mcp_servers.yardbell.url"])
+conversation = conf["mcp_servers.yardbell.http_headers"].split("=")[-1].strip('"}')
+token = os.environ[json.loads(conf["mcp_servers.yardbell.bearer_token_env_var"])]
+prompt = sys.stdin.read()
+resumed = args[1] == "resume"
+thread = args[-2] if resumed else "fake-codex-thread"
+
+
+def mcp(n, method, params):
+    body = json.dumps({"jsonrpc": "2.0", "id": n, "method": method, "params": params}).encode()
+    req = urllib.request.Request(url, data=body, headers={
+        "Content-Type": "application/json", "Authorization": "Bearer " + token, "x-yardbell-conversation": conversation})
+    return json.load(urllib.request.urlopen(req, timeout=10))["result"]
+
+
+def say(line):
+    print(json.dumps(line), flush=True)
+
+
+mcp(0, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "fake-codex", "version": "0"}})
+say({"type": "thread.started", "thread_id": thread})
+say({"type": "turn.started"})
+if resumed:
+    heard = "rejected" in prompt
+    say({"type": "item.completed", "item": {"id": "item_0", "type": "agent_message",
+         "text": "Understood, nothing started." if heard else "I did not hear what happened."}})
+else:
+    calls = [("list_machines", {}), ("start_session", {"machine": "hp", "folder": "demo-app", "prompt": "Fix the login redirect."})]
+    for n, (tool, arguments) in enumerate(calls, 1):
+        item = {"id": f"item_{n}", "type": "mcp_tool_call", "server": "yardbell", "tool": tool, "arguments": arguments}
+        say({"type": "item.started", "item": {**item, "result": None, "error": None, "status": "in_progress"}})
+        result = mcp(n, "tools/call", {"name": tool, "arguments": arguments})
+        say({"type": "item.completed", "item": {**item, "result": {"content": result["content"]}, "error": None, "status": "completed"}})
+    say({"type": "item.completed", "item": {"id": "item_9", "type": "agent_message", "text": "I proposed a session on hp in demo-app."}})
+day = os.path.join(os.environ["HOME"], ".codex", "sessions", "2026", "10", "29")
+os.makedirs(day, exist_ok=True)
+with open(os.path.join(day, f"rollout-2026-10-29T00-00-00-{thread}.jsonl"), "a") as f:
+    f.write(json.dumps({"timestamp": "2026-10-29T00:00:00Z", "type": "event_msg", "payload": {"type": "token_count", "rate_limits": {
+        "primary": {"used_percent": 42.0, "window_minutes": 300, "resets_at": 4102444800},
+        "secondary": {"used_percent": 7.0, "window_minutes": 10080, "resets_at": 4102444800},
+        "rate_limit_reached_type": None}}}) + "\\n")
+say({"type": "turn.completed", "usage": {"input_tokens": 1, "output_tokens": 1}})
+"""
 INSIGHTS_CHAT = "browserinsight01"
 OLD_RUN = "hp-old-run"
 OLD_TASK = "Fix the login"
@@ -284,6 +337,10 @@ class Yardbell:
         with open(self.fake_claude, "w") as f:
             f.write(FAKE_CLAUDE)
         os.chmod(self.fake_claude, 0o755)
+        self.fake_codex = os.path.join(fake_bin, "codex")
+        with open(self.fake_codex, "w") as f:
+            f.write(FAKE_CODEX)
+        os.chmod(self.fake_codex, 0o755)
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self.config = os.path.join(tmp, "yardbell.yml")
@@ -307,8 +364,8 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
 """
             )
         # A clean HOME and the system PATH keep the user's shell setup, and with it any real
-        # `claude`, out of reach: Dispatch looks Claude Code up through a login shell and must
-        # find only the fake one.
+        # `claude` or `codex`, out of reach: Dispatch looks them up through a login shell and must
+        # find only the fakes.
         self.env = {
             "HOME": home,
             "PATH": f"{fake_bin}:{SYSTEM_PATH}",
@@ -319,10 +376,11 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "YARDBELL_STATE": self.state,
             "CLAUDE_CONFIG_DIR": os.path.join(home, ".claude"),
         }
-        out = subprocess.run(["bash", "-lic", "command -v claude"], env=self.env, capture_output=True, text=True)
-        found = [line for line in out.stdout.splitlines() if line.startswith("/")]
-        if found != [self.fake_claude]:
-            raise SystemExit(f"refusing to start: the test server would find claude at {found}, not only the fake one")
+        for agent, fake in (("claude", self.fake_claude), ("codex", self.fake_codex)):
+            out = subprocess.run(["bash", "-lic", f"command -v {agent}"], env=self.env, capture_output=True, text=True)
+            found = [line for line in out.stdout.splitlines() if line.startswith("/")]
+            if found != [fake]:
+                raise SystemExit(f"refusing to start: the test server would find {agent} at {found}, not only the fake one")
         self.log = open(os.path.join(tmp, "server.log"), "w")
         self.proc = subprocess.Popen(
             [binary, "serve", "--no-open", "--config", self.config],
@@ -578,6 +636,55 @@ class Suite:
         b.wait("document.querySelector('#dispatch-log .msg.user')?.textContent.includes('Fix the login redirect')", "the saved user message")
         b.wait("document.querySelector('#dispatch-log .msg.md strong')?.textContent === 'hp-demo-app'", "the saved answer with its markdown")
         b.wait("document.getElementById('convo-list').textContent.includes('A long conversation')", "the conversation list")
+
+    def test_dispatch_on_codex_proposes_a_step_and_resumes(self):
+        b = self.b
+        before = self.api("GET", "/api/settings")["dispatch"]
+        self.api("POST", "/api/settings/dispatch", {**before, "rules": [], "approval": "prompt"})
+        try:
+            b.goto(self.url("/settings#dispatch"))
+            b.wait("document.querySelector('#dispatch-form [name=runs_on]').value === 'claude'", "Claude Code, the default")
+            b.wait("!document.querySelector('[data-runs-on=claude]').hidden && document.querySelector('[data-runs-on=codex]').hidden", "the Claude model")
+            b.js("(() => { const s = document.querySelector('#dispatch-form [name=runs_on]'); s.value = 'codex'; s.dispatchEvent(new Event('change')); })()")
+            b.wait("document.querySelector('[data-runs-on=claude]').hidden && !document.querySelector('[data-runs-on=codex]').hidden", "the Codex model in its place")
+            b.wait("document.getElementById('dispatch-foot').textContent.startsWith('Dispatch runs Codex')", "the footer naming Codex")
+            b.click("#dispatch-form [name=codex_model]")
+            b.type("gpt-6.1-sol")
+            b.click("#dispatch-form button[type=submit]")
+            b.wait("!document.getElementById('undo-bar').hidden", "the settings to save")
+            saved = self.api("GET", "/api/settings")["dispatch"]
+            if (saved.get("runs_on"), saved.get("codex_model")) != ("codex", "gpt-6.1-sol"):
+                raise Failure(f"saved {saved}")
+
+            b.goto(self.url("/dispatch"))
+            b.wait("document.querySelector('.dispatch-intro')?.textContent.includes('Dispatch runs Codex on this machine')", "the intro naming Codex")
+            b.click("#dispatch-form textarea")
+            b.type("Fix the login redirect in demo-app")
+            b.click("#dispatch-form button[type=submit]")
+            card = "#dispatch-log .step-card.pending"
+            b.wait(f"document.querySelector('{card}')?.textContent.includes('Fix the login redirect.')", "the proposed session, waiting for approval", timeout=20)
+            b.wait("[...document.querySelectorAll('#dispatch-log .msg')].some((m) => m.textContent.includes('I proposed a session on hp in demo-app.'))", "Codex's reply")
+            b.wait("[...document.querySelectorAll('#dispatch-log *')].some((x) => x.textContent === 'Checked machines')", "the tool Codex called")
+            b.wait("document.querySelector('#nav-usage')?.textContent.includes('Codex usage') && document.querySelector('#nav-usage')?.textContent.includes('42%')", "Codex's limits in the sidebar")
+            id = b.js("new URLSearchParams(location.search).get('c')")
+            convo = self.api("GET", f"/dispatch/conversations/{id}")
+            if convo["backend"] != "codex" or any(e["role"] == "error" for e in convo["events"]):
+                raise Failure(f"the conversation is {convo}")
+
+            b.click(f"{card} .step-card-actions .btn.danger")
+            b.wait("document.querySelector('#dispatch-log .step-card.rejected, #dispatch-log .step-card.done')", "the step rejected")
+            b.click("#dispatch-form textarea")
+            b.type("ok")
+            b.click("#dispatch-form button[type=submit]")
+            b.wait("[...document.querySelectorAll('#dispatch-log .msg')].some((m) => m.textContent.includes('Understood, nothing started.'))",
+                   "a reply from the resumed thread that heard about the rejection", timeout=20)
+
+            self.api("POST", "/api/settings/dispatch", {**before, "rules": [], "approval": "prompt"})
+            b.goto(self.url(f"/dispatch?c={id}"))
+            b.wait("document.querySelector('#dispatch-log .backend-note')?.textContent.includes('This conversation runs on Codex, so it carries on there. New conversations start on Claude Code.')",
+                   "the note that this conversation stays on Codex")
+        finally:
+            self.api("POST", "/api/settings/dispatch", before)
 
     def test_dispatch_review_card_diff_and_evidence(self):
         b = self.b

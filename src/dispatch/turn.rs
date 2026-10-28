@@ -1,36 +1,19 @@
-use super::mcp_config::extra_servers;
+use super::backend::{self, codex, Launch, TurnSpec};
 use super::prompt::{memory_section, system_prompt};
 use super::store::{new_id, now, title_of, Conversation, Shared, Stored};
-use super::{actions, usage, Dispatch};
-use crate::config::DispatchSettings;
+use super::{actions, Dispatch};
+use crate::config::{DispatchSettings, RunsOn};
 use crate::shell::{login_shell, Duration};
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::process::Stdio;
 use std::sync::Arc;
-use tokio::io::{AsyncBufReadExt, BufReader};
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::sync::{mpsc, Notify};
 
 const TURN_LIMIT: Duration = Duration::from_secs(900);
-const RESULT_PREVIEW: usize = 4000;
-const TOOL_PREFIX: &str = "mcp__yardbell__";
-const TOOLS: [&str; 15] = [
-    "list_machines",
-    "list_sessions",
-    "list_folders",
-    "start_session",
-    "read_session",
-    "send_to_session",
-    "stop_session",
-    "review_session",
-    "scan_folder",
-    "start_group",
-    "remove_worktree",
-    "integrate_branches",
-    "push_branch",
-    "move_session",
-    "remember",
-];
+const INSTRUCTIONS_CHANGED: &str = "Yardbell's instructions for you have changed since this \
+conversation started, for example your memory or the user's rules. These replace the earlier ones:";
 
 // A conversation that a trigger starts, rather than the person: its title, the trigger's mark,
 // and a note for Claude that nobody typed the message.
@@ -68,35 +51,91 @@ impl Author<'_> {
 }
 
 impl Dispatch {
-    async fn claude(&self) -> Result<Vec<String>, String> {
-        if let Some(argv) = self.command.lock().expect("dispatch lock").clone() {
-            return Ok(argv);
+    async fn agent(&self, runs_on: RunsOn) -> Result<Vec<String>, String> {
+        let backend = backend::of(runs_on);
+        let cached = self
+            .commands
+            .lock()
+            .expect("dispatch lock")
+            .get(&runs_on)
+            .cloned();
+        let argv = match cached {
+            Some(argv) => argv,
+            None => {
+                let out = self
+                    .runner
+                    .run(
+                        vec![
+                            "sh".into(),
+                            "-c".into(),
+                            login_shell(&format!("command -v {}", backend.binary())),
+                        ],
+                        None,
+                        Duration::from_secs(10),
+                    )
+                    .await;
+                let path = out
+                    .stdout
+                    .lines()
+                    .rev()
+                    .map(str::trim)
+                    .find(|l| l.starts_with('/'))
+                    .ok_or_else(|| {
+                        format!(
+                            "{} is not installed on this machine, Dispatch needs it",
+                            backend.label()
+                        )
+                    })?
+                    .to_string();
+                self.commands
+                    .lock()
+                    .expect("dispatch lock")
+                    .insert(runs_on, vec![path.clone()]);
+                vec![path]
+            }
+        };
+        if runs_on == RunsOn::Codex {
+            codex::check_version(&version_of(&argv).await?)?;
         }
-        let out = self
-            .runner
-            .run(
-                vec!["sh".into(), "-c".into(), login_shell("command -v claude")],
-                None,
-                Duration::from_secs(10),
-            )
-            .await;
-        let path = out
-            .stdout
-            .lines()
-            .rev()
-            .map(str::trim)
-            .find(|l| l.starts_with('/'))
-            .ok_or("Claude Code is not installed on this machine, Dispatch needs it")?
-            .to_string();
-        *self.command.lock().expect("dispatch lock") = Some(vec![path.clone()]);
-        Ok(vec![path])
+        Ok(argv)
     }
 
-    // Returns the conversation, the Claude session to resume, and the prompt: the message, after
+    // A resumed thread keeps the instructions it started with, so a change to them since, such as
+    // a new memory entry or rule, comes with the message instead.
+    fn told(&self, id: &str, instructions: &str, resumed: bool, prompt: String) -> String {
+        let mut chats = self.shared.lock();
+        let Some(c) = chats.get_mut(id) else {
+            return prompt;
+        };
+        let changed = c.stored.instructions.as_deref() != Some(instructions);
+        c.stored.instructions = Some(instructions.to_string());
+        if !(resumed && changed) {
+            return prompt;
+        }
+        format!(
+            "{INSTRUCTIONS_CHANGED}\n<dispatch_instructions>\n{instructions}\n</dispatch_instructions>\n\n{prompt}"
+        )
+    }
+
+    // A conversation keeps the agent it started on; a new one starts on the one in Settings.
+    fn runs_on(&self, id: Option<&str>, settings: &DispatchSettings) -> Result<RunsOn, String> {
+        match id {
+            Some(id) => self
+                .shared
+                .lock()
+                .get(id)
+                .map(|c| c.stored.backend)
+                .ok_or_else(|| "no such conversation".into()),
+            None => Ok(settings.runs_on),
+        }
+    }
+
+    // Returns the conversation, the agent's session to resume, and the prompt: the message, after
     // anything Dispatch has not heard about yet, such as what the person did with its proposals.
     fn begin(
         &self,
         id: Option<&str>,
+        runs_on: RunsOn,
         sender: Author,
         text: &str,
         cancel: Arc<Notify>,
@@ -122,6 +161,7 @@ impl Dispatch {
                         created: stamp.clone(),
                         updated: stamp,
                         trigger: sender.opening().map(|o| o.trigger.clone()),
+                        backend: runs_on,
                         ..Stored::default()
                     }),
                 );
@@ -133,6 +173,7 @@ impl Dispatch {
         c.busy = true;
         c.cancel = Some(cancel);
         c.live = Some(live);
+        c.reached = false;
         actions::withdraw(&mut c.stored.events, &stamp);
         let news = actions::untold(&mut c.stored.events);
         let mut message = json!({ "role": "user", "text": text });
@@ -149,7 +190,7 @@ impl Dispatch {
         let prompt = actions::with_news(&news, text);
         Ok((
             id,
-            c.stored.claude_session.clone(),
+            c.stored.session.clone(),
             match sender.note() {
                 Some(note) => format!("{note}\n\n{prompt}"),
                 None => prompt,
@@ -245,59 +286,70 @@ impl Dispatch {
         if text.is_empty() {
             return Err("type a task first".into());
         }
-        let mut argv = self.claude().await?;
+        let runs_on = self.runs_on(conversation, settings)?;
+        let binary = self.agent(runs_on).await?;
         let cancel = Arc::new(Notify::new());
         let (tx, rx) = mpsc::channel(64);
-        let (id, resume, prompt) =
-            self.begin(conversation, sender, text, cancel.clone(), tx.clone())?;
-        let config = match self.write_mcp_config(port, extra, &id) {
-            Ok(config) => config,
+        let (id, resume, prompt) = self.begin(
+            conversation,
+            runs_on,
+            sender,
+            text,
+            cancel.clone(),
+            tx.clone(),
+        )?;
+        let config = match runs_on {
+            RunsOn::Claude => match self.write_mcp_config(port, extra, &id) {
+                Ok(config) => Some(config),
+                Err(e) => {
+                    self.shared.finish(&id);
+                    return Err(e);
+                }
+            },
+            RunsOn::Codex => None,
+        };
+        let (remembered, omitted) = self.memory.for_prompt();
+        let instructions = system_prompt(settings, &memory_section(&remembered, omitted));
+        let backend = backend::of(runs_on);
+        let prompt = if backend.keeps_instructions() {
+            self.told(&id, &instructions, resume.is_some(), prompt)
+        } else {
+            prompt
+        };
+        self.shared.save(&id);
+        let launch = backend.launch(
+            binary,
+            &TurnSpec {
+                prompt: &prompt,
+                system_prompt: &instructions,
+                settings,
+                resume: resume.as_deref(),
+                port,
+                conversation: &id,
+                token: &self.token,
+                mcp_config: config.as_deref(),
+                extra,
+            },
+        );
+        let launch = match launch {
+            Ok(launch) => launch,
             Err(e) => {
                 self.shared.finish(&id);
                 return Err(e);
             }
         };
-        self.shared.save(&id);
-        let (remembered, omitted) = self.memory.for_prompt();
-        let memory = memory_section(&remembered, omitted);
-        let mut allowed: Vec<String> = TOOLS.iter().map(|t| format!("{TOOL_PREFIX}{t}")).collect();
-        allowed.extend(
-            extra_servers(extra)
-                .into_iter()
-                .map(|name| format!("mcp__{name}")),
-        );
-        argv.extend(
-            [
-                "-p",
-                &prompt,
-                "--output-format",
-                "stream-json",
-                "--verbose",
-                "--mcp-config",
-                &config.display().to_string(),
-                "--strict-mcp-config",
-                "--allowedTools",
-                &allowed.join(","),
-                "--append-system-prompt",
-                &system_prompt(settings, &memory),
-            ]
-            .map(String::from),
-        );
-        if !settings.model.is_empty() {
-            argv.extend(["--model".into(), settings.model.clone()]);
-        }
-        if let Some(session) = resume {
-            argv.extend(["--resume".into(), session]);
-        }
         let shared = self.shared.clone();
         let turn = id.clone();
         tokio::spawn(async move {
-            let outcome =
-                tokio::time::timeout(TURN_LIMIT, run_turn(argv, &shared, &turn, &tx, cancel))
-                    .await
-                    .unwrap_or_else(|_| {
-                        Err("Dispatch took longer than 15 minutes and was stopped".into())
-                    });
+            let outcome = tokio::time::timeout(
+                TURN_LIMIT,
+                run_turn(launch, runs_on, &shared, &turn, &tx, cancel),
+            )
+            .await
+            .unwrap_or_else(|_| Err("Dispatch took longer than 15 minutes and was stopped".into()));
+            if runs_on == RunsOn::Codex {
+                codex_usage(&shared, &turn).await;
+            }
             if let Err(message) = outcome {
                 let event = json!({ "role": "error", "text": message });
                 shared.push(&turn, event.clone());
@@ -310,22 +362,62 @@ impl Dispatch {
     }
 }
 
+async fn version_of(argv: &[String]) -> Result<String, String> {
+    let out = tokio::time::timeout(
+        Duration::from_secs(10),
+        tokio::process::Command::new(&argv[0])
+            .args(&argv[1..])
+            .arg("--version")
+            .stdin(Stdio::null())
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await
+    .map_err(|_| "codex --version did not answer within 10 seconds".to_string())?
+    .map_err(|e| format!("cannot start Codex: {e}"))?;
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+async fn codex_usage(shared: &Shared, id: &str) {
+    let thread = shared.lock().get(id).and_then(|c| c.stored.session.clone());
+    let (Some(home), Some(thread)) = (shared.codex_home.clone(), thread) else {
+        return;
+    };
+    if let Some(usage) = codex::usage_after(home, thread).await {
+        shared.keep_usage(RunsOn::Codex, usage);
+    }
+}
+
 async fn run_turn(
-    argv: Vec<String>,
+    launch: Launch,
+    runs_on: RunsOn,
     shared: &Shared,
     id: &str,
     tx: &mpsc::Sender<Value>,
     cancel: Arc<Notify>,
 ) -> Result<(), String> {
+    let backend = backend::of(runs_on);
+    let label = backend.label();
+    let argv = &launch.argv;
     let mut child = tokio::process::Command::new(&argv[0])
         .args(&argv[1..])
+        .envs(launch.env)
         .current_dir(&shared.dir)
-        .stdin(Stdio::null())
+        .stdin(if launch.stdin.is_some() {
+            Stdio::piped()
+        } else {
+            Stdio::null()
+        })
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .kill_on_drop(true)
         .spawn()
-        .map_err(|e| format!("cannot start Claude Code: {e}"))?;
+        .map_err(|e| format!("cannot start {label}: {e}"))?;
+    if let (Some(text), Some(mut stdin)) = (launch.stdin, child.stdin.take()) {
+        tokio::spawn(async move {
+            let _ = stdin.write_all(text.as_bytes()).await;
+        });
+    }
     let stdout = child.stdout.take().expect("piped stdout");
     let stderr = child.stderr.take().expect("piped stderr");
     let stderr_text = tokio::spawn(async move {
@@ -352,160 +444,119 @@ async fn run_turn(
         let Ok(message) = serde_json::from_str::<Value>(&line) else {
             continue;
         };
-        if let Some(session) = message["session_id"].as_str() {
+        if let Some(session) = backend.session_of(&message) {
             if let Some(c) = shared.lock().get_mut(id) {
-                c.stored.claude_session = Some(session.to_string());
+                c.stored.session = Some(session);
             }
         }
-        finished |= message["type"] == "result";
-        if let Some(found) = usage::from_stream(&message) {
+        finished |= backend.finished(&message);
+        if let Some(found) = backend.usage_of(&message) {
             shared.set_usage(found);
         }
-        for event in events_of(&message, &mut tools) {
+        for event in backend.events_of(&message, &mut tools) {
+            // A step that changes something is recorded by the MCP server as a step of its own,
+            // with its decision and result.
+            if matches!(event["role"].as_str(), Some("tool" | "tool_result"))
+                && event["name"]
+                    .as_str()
+                    .is_some_and(actions::changes_something)
+            {
+                continue;
+            }
             shared.push(id, event.clone());
             let _ = tx.send(event).await;
         }
     }
     let status = child.wait().await.map_err(|e| e.to_string())?;
     let stderr = stderr_text.await.unwrap_or_default();
+    let reached = shared.lock().get(id).is_some_and(|c| c.reached);
+    if runs_on == RunsOn::Codex && !reached && (status.success() || codex::mentions_mcp(&stderr)) {
+        return Err(codex::unreachable(&stderr));
+    }
     if !status.success() && !finished {
         let detail = stderr.trim();
         return Err(if detail.is_empty() {
-            format!("Claude Code stopped with {status}")
+            format!("{label} stopped with {status}")
         } else {
-            format!("Claude Code stopped: {detail}")
+            format!("{label} stopped: {detail}")
         });
     }
     Ok(())
 }
 
-fn short(text: &str) -> String {
-    if text.chars().count() <= RESULT_PREVIEW {
-        return text.to_string();
-    }
-    let mut cut: String = text.chars().take(RESULT_PREVIEW).collect();
-    cut.push_str("\n…");
-    cut
-}
-
-fn tool_text(content: &Value) -> String {
-    match content {
-        Value::String(s) => s.clone(),
-        Value::Array(parts) => parts
-            .iter()
-            .filter_map(|p| p["text"].as_str())
-            .collect::<Vec<_>>()
-            .join("\n"),
-        _ => String::new(),
-    }
-}
-
-fn events_of(message: &Value, tools: &mut HashMap<String, String>) -> Vec<Value> {
-    let parts = message["message"]["content"].as_array();
-    match message["type"].as_str() {
-        Some("assistant") => parts
-            .into_iter()
-            .flatten()
-            .filter_map(|part| match part["type"].as_str() {
-                Some("text") => part["text"]
-                    .as_str()
-                    .filter(|t| !t.trim().is_empty())
-                    .map(|t| json!({ "role": "assistant", "text": t })),
-                Some("tool_use") => {
-                    let name = part["name"].as_str()?.strip_prefix(TOOL_PREFIX)?;
-                    if let Some(id) = part["id"].as_str() {
-                        tools.insert(id.to_string(), name.to_string());
-                    }
-                    // A step that changes something is recorded by the MCP server as a step of
-                    // its own, with its decision and result.
-                    (!actions::changes_something(name))
-                        .then(|| json!({ "role": "tool", "name": name, "input": part["input"] }))
-                }
-                _ => None,
-            })
-            .collect(),
-        Some("user") => parts
-            .into_iter()
-            .flatten()
-            .filter(|part| part["type"] == "tool_result")
-            .filter_map(|part| {
-                let name = tools
-                    .get(part["tool_use_id"].as_str()?)
-                    .filter(|name| !actions::changes_something(name))?;
-                Some(json!({
-                    "role": "tool_result",
-                    "name": name,
-                    "text": short(&tool_text(&part["content"])),
-                    "is_error": part["is_error"].as_bool().unwrap_or(false),
-                }))
-            })
-            .collect(),
-        Some("result") if message["is_error"] == true => {
-            let text = message["result"]
-                .as_str()
-                .unwrap_or("Claude Code reported an error");
-            vec![json!({ "role": "error", "text": text })]
-        }
-        _ => Vec::new(),
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::tests::{conversation, drain, fake_claude, start_input};
+    use crate::dispatch::tests::{conversation, drain, fake_claude, fake_script, start_input};
     use crate::dispatch::{By, Refusal};
     use crate::testing::FakeRunner;
+    use std::path::Path;
+    use tokio::io::AsyncReadExt;
 
-    #[test]
-    fn stream_json_becomes_chat_events() {
-        let mut tools = HashMap::new();
-        let call = json!({ "type": "assistant", "message": { "content": [
-            { "type": "text", "text": "Looking at your machines." },
-            { "type": "tool_use", "id": "t1", "name": "mcp__yardbell__list_folders", "input": { "machine": "mini" } },
-        ]}});
-        assert_eq!(
-            events_of(&call, &mut tools),
-            [
-                json!({ "role": "assistant", "text": "Looking at your machines." }),
-                json!({ "role": "tool", "name": "list_folders", "input": { "machine": "mini" } }),
-            ]
-        );
-        let result = json!({ "type": "user", "message": { "content": [
-            { "type": "tool_result", "tool_use_id": "t1", "content": [{ "type": "text", "text": "[]" }] },
-        ]}});
-        assert_eq!(
-            events_of(&result, &mut tools),
-            [
-                json!({ "role": "tool_result", "name": "list_folders", "text": "[]", "is_error": false })
-            ]
-        );
-        let failed =
-            json!({ "type": "result", "is_error": true, "result": "credit balance too low" });
-        assert_eq!(
-            events_of(&failed, &mut tools),
-            [json!({ "role": "error", "text": "credit balance too low" })]
-        );
-        assert!(events_of(&json!({ "type": "system", "subtype": "init" }), &mut tools).is_empty());
-        let builtin = json!({ "type": "assistant", "message": { "content": [
-            { "type": "tool_use", "id": "t2", "name": "ToolSearch", "input": {} },
-        ]}});
-        assert!(events_of(&builtin, &mut tools).is_empty());
-        let builtin_result = json!({ "type": "user", "message": { "content": [
-            { "type": "tool_result", "tool_use_id": "t2", "content": "" },
-        ]}});
-        assert!(events_of(&builtin_result, &mut tools).is_empty());
-        let step = json!({ "type": "assistant", "message": { "content": [
-            { "type": "tool_use", "id": "t3", "name": "mcp__yardbell__start_session", "input": { "machine": "mini" } },
-        ]}});
-        assert!(
-            events_of(&step, &mut tools).is_empty(),
-            "a step is recorded by the MCP server instead"
-        );
-        let step_result = json!({ "type": "user", "message": { "content": [
-            { "type": "tool_result", "tool_use_id": "t3", "content": "Not run yet." },
-        ]}});
-        assert!(events_of(&step_result, &mut tools).is_empty());
+    const VERSION: &str = r#"[ "$1" = --version ] && echo 'codex-cli 0.165.0' && exit 0"#;
+    // What Codex does first with a reachable server: a request to Yardbell's MCP server, with the
+    // conversation header Yardbell gave it.
+    const REACH: &str = r#"for a in "$@"; do case "$a" in
+  *yardbell.http_headers=*) id=${a##*=\"}; id=${id%\"\}} ;;
+  *yardbell.url=*) port=${a##*:}; port=${port%%/*} ;;
+esac; done
+exec 3<>"/dev/tcp/127.0.0.1/$port"
+printf 'POST /mcp HTTP/1.0\r\nx-yardbell-conversation: %s\r\n\r\n' "$id" >&3
+cat <&3 >/dev/null"#;
+
+    // Run by bash rather than exec'd, since a script written a moment ago can still be open in
+    // a process another test is forking ("Text file busy").
+    fn codex_argv(dir: &Path, script: &str) -> Vec<String> {
+        vec![
+            "/bin/bash".into(),
+            fake_script(dir, "codex", "/bin/bash", script),
+        ]
+    }
+
+    fn fake_codex(dir: &Path, script: &str) -> Arc<Dispatch> {
+        Arc::new(
+            Dispatch::new(Arc::new(FakeRunner::default()), dir.join("dispatch"))
+                .with_agent(RunsOn::Codex, codex_argv(dir, script))
+                .with_codex_home(dir.join("codex-home")),
+        )
+    }
+
+    // A stand-in for Yardbell's MCP server that only notes which conversation reached it.
+    async fn mcp_stub(dispatch: Arc<Dispatch>) -> u16 {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            while let Ok((mut socket, _)) = listener.accept().await {
+                let dispatch = dispatch.clone();
+                tokio::spawn(async move {
+                    let mut request = String::new();
+                    let mut buf = vec![0; 4096];
+                    while !request.contains("\r\n\r\n") {
+                        let n = socket.read(&mut buf).await.unwrap_or(0);
+                        if n == 0 {
+                            break;
+                        }
+                        request.push_str(&String::from_utf8_lossy(&buf[..n]));
+                    }
+                    let header = format!("{}: ", crate::dispatch::CONVERSATION_HEADER);
+                    if let Some(id) = request.lines().find_map(|l| l.strip_prefix(&header)) {
+                        dispatch.reached(id.trim());
+                    }
+                    let _ = socket
+                        .write_all(b"HTTP/1.0 200 OK\r\nContent-Length: 0\r\n\r\n")
+                        .await;
+                });
+            }
+        });
+        port
+    }
+
+    fn codex_settings(model: &str) -> DispatchSettings {
+        DispatchSettings {
+            runs_on: RunsOn::Codex,
+            codex_model: model.into(),
+            ..DispatchSettings::default()
+        }
     }
 
     #[tokio::test]
@@ -655,7 +706,7 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
 
         let session = dispatch.shared.lock()[&first]
             .stored
-            .claude_session
+            .session
             .clone()
             .unwrap();
         let (again, rx) = dispatch
@@ -784,6 +835,324 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
             dispatch.list(),
             json!([]),
             "nothing is saved when Claude is missing"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_codex_turn_gets_its_prompt_on_stdin_and_its_token_by_environment() {
+        let dir = tempfile::tempdir().unwrap();
+        let rec = dir.path().join("rec");
+        std::fs::create_dir_all(&rec).unwrap();
+        let day = dir.path().join("codex-home/sessions/2026/10/29");
+        std::fs::create_dir_all(&day).unwrap();
+        let script = format!(
+            r#"{VERSION}
+printf '%s\n' "$@" > {rec}/args
+printf '%s' "$YARDBELL_DISPATCH_TOKEN" > {rec}/token
+cat > {rec}/stdin
+{REACH}
+cat > {day}/rollout-2026-10-29T00-16-51-thread-1.jsonl <<'ROLLOUT'
+{{"timestamp":"2026-10-28T21:17:06.737Z","type":"event_msg","payload":{{"type":"token_count","rate_limits":{{"primary":{{"used_percent":6.0,"window_minutes":300,"resets_at":1793226870}},"secondary":{{"used_percent":3.0,"window_minutes":10080,"resets_at":1793790405}},"rate_limit_reached_type":null}}}}}}
+ROLLOUT
+cat <<'LINES'
+{{"type":"thread.started","thread_id":"thread-1"}}
+{{"type":"turn.started"}}
+{{"type":"item.completed","item":{{"id":"item_0","type":"agent_message","text":"Looking at your machines."}}}}
+{{"type":"item.started","item":{{"id":"item_1","type":"mcp_tool_call","server":"yardbell","tool":"list_machines","arguments":{{}},"result":null,"error":null,"status":"in_progress"}}}}
+{{"type":"item.completed","item":{{"id":"item_1","type":"mcp_tool_call","server":"yardbell","tool":"list_machines","arguments":{{}},"result":{{"content":[{{"type":"text","text":"hp is up"}}],"structured_content":null}},"error":null,"status":"completed"}}}}
+{{"type":"item.started","item":{{"id":"item_2","type":"mcp_tool_call","server":"yardbell","tool":"start_session","arguments":{{"machine":"hp"}},"result":null,"error":null,"status":"in_progress"}}}}
+{{"type":"item.completed","item":{{"id":"item_2","type":"mcp_tool_call","server":"yardbell","tool":"start_session","arguments":{{"machine":"hp"}},"result":{{"content":[{{"type":"text","text":"Not run yet."}}]}},"error":null,"status":"completed"}}}}
+{{"type":"item.completed","item":{{"id":"item_3","type":"agent_message","text":"I proposed a session on hp."}}}}
+{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
+LINES"#,
+            rec = rec.display(),
+            day = day.display(),
+        );
+        let dispatch = fake_codex(dir.path(), &script);
+        let port = mcp_stub(dispatch.clone()).await;
+        let (id, rx) = dispatch
+            .ask(None, "what is up?", port, &codex_settings(""), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            drain(rx).await,
+            [
+                json!({ "role": "assistant", "text": "Looking at your machines." }),
+                json!({ "role": "tool", "name": "list_machines", "input": {} }),
+                json!({ "role": "tool_result", "name": "list_machines", "text": "hp is up", "is_error": false }),
+                json!({ "role": "assistant", "text": "I proposed a session on hp." }),
+                json!({ "role": "done" }),
+            ],
+            "a step is left to the MCP server, which records it with its decision"
+        );
+        let args = std::fs::read_to_string(rec.join("args")).unwrap();
+        let token = dispatch.token();
+        assert!(!args.contains(token), "the token is never in argv: {args}");
+        assert_eq!(std::fs::read_to_string(rec.join("token")).unwrap(), token);
+        assert_eq!(
+            std::fs::read_to_string(rec.join("stdin")).unwrap(),
+            "what is up?"
+        );
+        assert!(
+            args.starts_with(
+                "exec\n--json\n--ignore-user-config\n--ignore-rules\n--skip-git-repo-check\n"
+            ),
+            "{args}"
+        );
+        assert!(
+            args.ends_with("\n-\n"),
+            "the prompt is read from stdin: {args}"
+        );
+        for wanted in [
+            "--disable\nshell_tool\n".to_string(),
+            "--disable\nunified_exec\n".to_string(),
+            "-c\nsandbox_mode=\"read-only\"\n".to_string(),
+            format!("-c\nmcp_servers.yardbell.url=\"http://127.0.0.1:{port}/mcp\"\n"),
+            "-c\nmcp_servers.yardbell.bearer_token_env_var=\"YARDBELL_DISPATCH_TOKEN\"\n"
+                .to_string(),
+            format!(
+                "-c\nmcp_servers.yardbell.http_headers={{\"x-yardbell-conversation\"=\"{id}\"}}\n"
+            ),
+            "-c\nmcp_servers.yardbell.default_tools_approval_mode=\"approve\"\n".to_string(),
+            "-c\nmcp_servers.yardbell.required=true\n".to_string(),
+        ] {
+            assert!(args.contains(&wanted), "{wanted} missing from {args}");
+        }
+        let tools = args
+            .lines()
+            .find_map(|l| l.strip_prefix("mcp_servers.yardbell.enabled_tools="))
+            .unwrap();
+        let tools: toml::Table = toml::from_str(&format!("t = {tools}")).unwrap();
+        assert_eq!(tools["t"].as_array().unwrap().len(), backend::TOOLS.len());
+        let instructions = args
+            .split("-c\ndeveloper_instructions=")
+            .nth(1)
+            .unwrap()
+            .split("\n-c\n")
+            .next()
+            .unwrap();
+        let instructions: toml::Table = toml::from_str(&format!("v = {instructions}")).unwrap();
+        assert!(instructions["v"]
+            .as_str()
+            .unwrap()
+            .contains("<dispatch_memory>\n(empty)\n</dispatch_memory>"));
+        assert!(!args.contains("\n-m\n"), "Codex's own default model");
+        assert!(!args.contains("resume"));
+
+        let convo = dispatch.get(&id).unwrap();
+        assert_eq!(convo["backend"], "codex");
+        assert_eq!(dispatch.list()[0]["backend"], "codex");
+        let saved = std::fs::read_to_string(dispatch.shared.file(&id)).unwrap();
+        assert!(saved.contains(r#""backend":"codex""#), "{saved}");
+        assert!(saved.contains(r#""session":"thread-1""#), "{saved}");
+        let card = dispatch.usage_card(RunsOn::Codex);
+        assert_eq!(card["runs_on"], "codex");
+        assert_eq!(card["codex"]["windows"][0]["used"], 0.06);
+        assert_eq!(card["codex"]["windows"][1]["label"], "Weekly limit");
+
+        let (_, rx) = dispatch
+            .ask(
+                Some(&id),
+                "and now?",
+                port,
+                &codex_settings("gpt-6.1-sol"),
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let args = std::fs::read_to_string(rec.join("args")).unwrap();
+        assert!(args.starts_with("exec\nresume\n--json\n"), "{args}");
+        assert!(args.contains("\n-m\ngpt-6.1-sol\n"), "{args}");
+        assert!(args.ends_with("\nthread-1\n-\n"), "{args}");
+        assert!(args.contains("-c\nsandbox_mode=\"read-only\"\n"));
+        assert_eq!(
+            std::fs::read_to_string(rec.join("stdin")).unwrap(),
+            "and now?",
+            "unchanged instructions are not sent again"
+        );
+        dispatch
+            .memory()
+            .apply(
+                &crate::dispatch::MemoryChange {
+                    change: crate::dispatch::memory::Kind::Add,
+                    entry: "Never open PRs on Fridays".into(),
+                    old: String::new(),
+                    reason: "the user said so".into(),
+                },
+                crate::dispatch::By::You,
+            )
+            .unwrap();
+        let (_, rx) = dispatch
+            .ask(Some(&id), "and Friday?", port, &codex_settings(""), None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        let sent = std::fs::read_to_string(rec.join("stdin")).unwrap();
+        assert!(sent.starts_with(INSTRUCTIONS_CHANGED), "{sent}");
+        assert!(
+            sent.contains("<dispatch_memory>\n- Never open PRs on Fridays\n</dispatch_memory>"),
+            "a resumed thread keeps its first instructions, so the change comes with the message"
+        );
+        assert!(
+            sent.ends_with("</dispatch_instructions>\n\nand Friday?"),
+            "{sent}"
+        );
+        let reopened = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().join("dispatch"));
+        assert_eq!(
+            reopened.usage_card(RunsOn::Claude)["codex"]["windows"][0]["used"],
+            0.06,
+            "Codex's figures survive a restart"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_codex_turn_that_never_reached_yardbell_fails() {
+        let dir = tempfile::tempdir().unwrap();
+        let silent = fake_codex(
+            dir.path(),
+            &format!(
+                r#"{VERSION}
+echo '2026-10-28T21:18:45Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed' >&2
+echo '{{"type":"thread.started","thread_id":"thread-2"}}'
+echo '{{"type":"item.completed","item":{{"id":"item_0","type":"agent_message","text":"I cannot see any tools."}}}}'
+echo '{{"type":"turn.completed","usage":{{}}}}'"#
+            ),
+        );
+        let (_, rx) = silent
+            .ask(None, "hi", 1, &codex_settings(""), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            drain(rx).await,
+            [
+                json!({ "role": "assistant", "text": "I cannot see any tools." }),
+                json!({ "role": "error", "text": "Codex could not reach Yardbell's tools, so Dispatch could not act on this message. Codex said: 2026-10-28T21:18:45Z ERROR rmcp::transport::worker: worker quit with fatal: Transport channel closed" }),
+                json!({ "role": "done" }),
+            ]
+        );
+
+        let required = fake_codex(
+            dir.path(),
+            &format!(
+                r#"{VERSION}
+echo 'Error: thread/start failed: required MCP servers failed to initialize: yardbell: handshaking with MCP server failed' >&2
+exit 1"#
+            ),
+        );
+        let (_, rx) = required
+            .ask(None, "hi", 1, &codex_settings(""), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            drain(rx).await,
+            [
+                json!({ "role": "error", "text": "Codex could not reach Yardbell's tools, so Dispatch could not act on this message. Codex said: Error: thread/start failed: required MCP servers failed to initialize: yardbell: handshaking with MCP server failed" }),
+                json!({ "role": "done" }),
+            ]
+        );
+
+        let signed_out = fake_codex(
+            dir.path(),
+            &format!("{VERSION}\necho 'Not signed in. Run codex login.' >&2\nexit 1"),
+        );
+        let (_, rx) = signed_out
+            .ask(None, "hi", 1, &codex_settings(""), None)
+            .await
+            .unwrap();
+        assert_eq!(
+            drain(rx).await,
+            [
+                json!({ "role": "error", "text": "Codex stopped: Not signed in. Run codex login." }),
+                json!({ "role": "done" }),
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn an_old_or_missing_codex_is_refused_before_anything_is_saved() {
+        let dir = tempfile::tempdir().unwrap();
+        let old = fake_codex(
+            dir.path(),
+            r#"[ "$1" = --version ] && echo 'codex-cli 0.150.3' && exit 0
+touch ran"#,
+        );
+        assert_eq!(
+            old.ask(None, "hi", 4000, &codex_settings(""), None)
+                .await
+                .unwrap_err(),
+            "Dispatch needs Codex 0.165.0 or newer, and this machine has 0.150.3. Update Codex, then send the message again"
+        );
+        assert_eq!(old.list(), json!([]));
+        let missing = Dispatch::new(Arc::new(FakeRunner::default()), dir.path().join("d"));
+        assert_eq!(
+            missing
+                .ask(None, "hi", 4000, &codex_settings(""), None)
+                .await
+                .unwrap_err(),
+            "Codex is not installed on this machine, Dispatch needs it"
+        );
+        assert_eq!(missing.list(), json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_conversation_keeps_the_agent_it_started_on() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = dir.path().join("log");
+        let claude = fake_script(
+            dir.path(),
+            "claude",
+            "/bin/sh",
+            &format!(
+                r#"echo claude >> {log}
+echo '{{"type":"system","subtype":"init","session_id":"claude-session"}}'"#,
+                log = log.display()
+            ),
+        );
+        let codex = codex_argv(
+            dir.path(),
+            &format!(
+                r#"{VERSION}
+{REACH}
+echo codex >> {log}
+echo '{{"type":"thread.started","thread_id":"codex-thread"}}'
+echo '{{"type":"turn.completed","usage":{{}}}}'"#,
+                log = log.display()
+            ),
+        );
+        let dispatch = Arc::new(
+            Dispatch::new(Arc::new(FakeRunner::default()), dir.path().join("dispatch"))
+                .with_agent(RunsOn::Claude, vec![claude])
+                .with_agent(RunsOn::Codex, codex)
+                .with_codex_home(dir.path().join("codex-home")),
+        );
+        let port = mcp_stub(dispatch.clone()).await;
+        let on_claude_settings = DispatchSettings::default();
+        let ask = |id: Option<String>, text: &'static str, settings: DispatchSettings| {
+            let dispatch = dispatch.clone();
+            async move {
+                let (id, rx) = dispatch
+                    .ask(id.as_deref(), text, port, &settings, None)
+                    .await
+                    .unwrap();
+                drain(rx).await;
+                id
+            }
+        };
+        let on_claude = ask(None, "one", on_claude_settings.clone()).await;
+        let on_codex = ask(None, "two", codex_settings("")).await;
+        ask(Some(on_claude.clone()), "three", codex_settings("")).await;
+        ask(Some(on_codex.clone()), "four", on_claude_settings).await;
+        assert_eq!(
+            std::fs::read_to_string(&log).unwrap(),
+            "claude\ncodex\nclaude\ncodex\n"
+        );
+        assert_eq!(dispatch.get(&on_claude).unwrap()["backend"], "claude");
+        assert_eq!(dispatch.get(&on_codex).unwrap()["backend"], "codex");
+        let saved = std::fs::read_to_string(dispatch.shared.file(&on_claude)).unwrap();
+        assert!(
+            !saved.contains("backend"),
+            "Claude Code conversations are saved as before: {saved}"
         );
     }
 }

@@ -173,17 +173,28 @@
         <textarea name="instructions" rows="5" maxlength="4000" placeholder="acme/web work goes to devbox unless it is down.&#10;Start frontend tasks with codex.&#10;Always create a branch named after the ticket, like eng-1234-short-name."></textarea>
       </label>
       <p class="help dispatch-help">Added to Dispatch's prompt for every conversation and followed before its own defaults. Use it for where your repositories live, which machine suits which work, branch naming, and anything you find yourself repeating.</p>
+      <label>Dispatch runs on
+        <select name="runs_on">
+          <option value="claude">Claude Code</option>
+          <option value="codex">Codex</option>
+        </select>
+      </label>
+      <p class="help dispatch-help" id="runs-on-help">The agent that reads your messages and proposes steps, with only Yardbell's tools. Your approval setting and rules work the same on both. A conversation stays on the agent it started on, so a change here applies to new conversations.</p>
       <div class="grid2">
         <label>Agent for new sessions
           <select name="agent"></select>
         </label>
-        <label>Model that runs Dispatch
+        <label data-runs-on="claude">Model that runs Dispatch
           <select name="model">
             <option value="">Claude Code's default</option>
             <option value="sonnet">Sonnet</option>
             <option value="opus">Opus</option>
             <option value="haiku">Haiku (fastest)</option>
           </select>
+        </label>
+        <label data-runs-on="codex" hidden>Codex model
+          <input type="text" name="codex_model" list="codex-models" maxlength="64" placeholder="Codex's default" autocomplete="off" autocapitalize="off" spellcheck="false">
+          <datalist id="codex-models"></datalist>
         </label>
       </div>
       <label>Before Dispatch starts, stops or types into a session
@@ -201,7 +212,7 @@
       <p class="help dispatch-help">A rule decides the steps it matches instead of the setting above. Deny always wins. Otherwise the rule that names the most of step, machine and folder wins, so their order does not matter. A folder is a name from the folder list, like acme/web, or a path, and covers the folders inside it. Use * for any part of a name.</p>
       <ul class="rows rule-rows" id="rule-rows"></ul>
       <div class="form-foot">
-        <p class="help">Dispatch runs Claude Code on this machine. The agent it starts can be any of yours.</p>
+        <p class="help" id="dispatch-foot">Dispatch runs Claude Code on this machine. The agent it starts can be any of yours.</p>
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>

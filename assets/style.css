@@ -866,6 +866,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .usage-fill.warn { background: var(--warn); }
 .usage-fill.bad { background: var(--bad); }
 .usage-reset { font-size: 11px; color: var(--muted); }
+.usage-none { margin: -4px 0 0; font-size: 12px; color: var(--muted); }
+.usage-row + .usage-head { padding-top: 8px; border-top: 1px solid var(--line); }
 .usage-age { font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .usage-tools { display: inline-flex; align-items: center; gap: 2px; }
 .usage-refresh { display: inline-grid; place-items: center; width: 22px; height: 22px; margin: -3px -4px -3px 0; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
@@ -965,6 +967,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .trigger-head-text strong { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 .trigger-head-text span { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
 .trigger-head-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.backend-note { margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--side); color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 .convo-trigger { display: inline-flex; color: var(--muted); }
 .convo-trigger .icon { width: 12px; height: 12px; }
 .dispatch-session { display: inline-flex; align-items: center; gap: 6px; }

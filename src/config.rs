@@ -158,6 +158,27 @@ impl PullRequests {
 pub const DISPATCH_MODELS: [&str; 3] = ["sonnet", "opus", "haiku"];
 const DISPATCH_INSTRUCTIONS_MAX: usize = 4000;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum RunsOn {
+    #[default]
+    Claude,
+    Codex,
+}
+
+impl RunsOn {
+    pub fn is_default(&self) -> bool {
+        *self == RunsOn::default()
+    }
+
+    pub fn label(&self) -> &'static str {
+        match self {
+            RunsOn::Claude => "Claude Code",
+            RunsOn::Codex => "Codex",
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Approval {
@@ -190,8 +211,12 @@ pub struct DispatchSettings {
     pub instructions: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub agent: String,
+    #[serde(default, skip_serializing_if = "RunsOn::is_default")]
+    pub runs_on: RunsOn,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub codex_model: String,
     #[serde(
         default,
         skip_serializing_if = "Approval::is_default",
@@ -497,6 +522,13 @@ impl Config {
             return Err(format!(
                 "dispatch.model must be one of {}, or empty for Claude Code's default",
                 DISPATCH_MODELS.join(", ")
+            ));
+        }
+        let codex_model = Regex::new("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$").expect("static regex");
+        if !d.codex_model.is_empty() && !codex_model.is_match(&d.codex_model) {
+            return Err(format!(
+                "dispatch.codex_model {:?} is not a Codex model name like gpt-6.1-sol: up to 64 letters, digits, dots, dashes and underscores, or empty for Codex's default",
+                d.codex_model
             ));
         }
         crate::dispatch::validate_rules(&d.rules, |m| self.machine(m).is_some())
@@ -1136,6 +1168,8 @@ mod tests {
         let cases = [
             ("agent: nope", "dispatch.agent \"nope\" is not a built-in agent or one listed under agents"),
             ("model: gpt-9", "dispatch.model must be one of sonnet, opus, haiku, or empty for Claude Code's default"),
+            ("codex_model: 'gpt 6; rm -rf'", "dispatch.codex_model \"gpt 6; rm -rf\" is not a Codex model name like gpt-6.1-sol: up to 64 letters, digits, dots, dashes and underscores, or empty for Codex's default"),
+            ("codex_model: -m", "dispatch.codex_model \"-m\" is not a Codex model name like gpt-6.1-sol: up to 64 letters, digits, dots, dashes and underscores, or empty for Codex's default"),
         ];
         for (setting, message) in cases {
             match load_str(&format!("dispatch:\n  {setting}\n{BASE}")) {
@@ -1145,6 +1179,46 @@ mod tests {
         }
         let long = format!("dispatch:\n  instructions: {}\n{BASE}", "a".repeat(4001));
         assert!(load_str(&long).is_err());
+    }
+
+    #[test]
+    fn dispatch_can_run_on_codex_with_its_own_model() {
+        let cfg = load_str(&format!(
+            "dispatch:\n  runs_on: codex\n  model: haiku\n  codex_model: gpt-6.1-sol\n{BASE}"
+        ))
+        .unwrap();
+        assert_eq!(cfg.dispatch.runs_on, RunsOn::Codex);
+        assert_eq!(cfg.dispatch.model, "haiku", "the Claude model is kept");
+        assert_eq!(cfg.dispatch.codex_model, "gpt-6.1-sol");
+        assert_eq!(load_str(BASE).unwrap().dispatch.runs_on, RunsOn::Claude);
+        match load_str(&format!("dispatch:\n  runs_on: gemini\n{BASE}")) {
+            Err(ConfigError::Parse { source, .. }) => {
+                let text = source.to_string();
+                assert!(
+                    text.contains(
+                        "dispatch.runs_on: unknown variant `gemini`, expected `claude` or `codex`"
+                    ),
+                    "{text}"
+                );
+            }
+            other => panic!("{other:?}"),
+        }
+
+        let defaults = serde_yaml::to_string(&DispatchSettings {
+            runs_on: RunsOn::Claude,
+            instructions: "x".into(),
+            ..DispatchSettings::default()
+        })
+        .unwrap();
+        assert_eq!(
+            defaults, "instructions: x\n",
+            "the defaults are not written, so 0.7.5 reads the file"
+        );
+        let codex = serde_yaml::to_string(&cfg.dispatch).unwrap();
+        assert_eq!(
+            codex,
+            "runs_on: codex\nmodel: haiku\ncodex_model: gpt-6.1-sol\n"
+        );
     }
 
     #[test]
