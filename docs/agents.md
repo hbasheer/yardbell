@@ -70,6 +70,12 @@ server to `~/.claude.json` by hand.
 | `read_session` | what the session's terminal shows, with scrollback |
 | `send_to_session` | type a reply and press Enter; the text goes over standard input, never on a command line |
 | `stop_session` | end the session |
+| `review_session` | start a read-only reviewer for a session's branch |
+| `scan_folder` | start a read-only scan of a folder for dead code, test gaps or security problems |
+| `remove_worktree` | remove a worktree that would lose nothing; never a main checkout, never forced |
+| `integrate_branches` | merge or rebase several branches, in order, onto a new branch in its own worktree; stops at the first conflict |
+| `push_branch` | push a branch, never forced, after a scan for keys, tokens and saved secret values |
+| `move_session` | move a session's branch, uncommitted changes and task to another machine, without committing or pushing |
 
 **MCP servers for sessions** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code

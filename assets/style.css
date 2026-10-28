@@ -1090,6 +1090,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .step-card-outcome > .icon { color: var(--ok-text); }
 .step-card-outcome .btn { margin-left: 4px; max-width: 100%; }
 .step-card-outcome.step-card-error { display: block; color: var(--bad-text); }
+.step-card-outcome.step-card-warn { display: block; color: var(--warn-text); }
+.step-card-said { flex: 1; min-width: 0; }
 .step-card-actions { display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 6px; min-width: 0; margin-left: auto; }
 .step-card-actions .btn { max-width: 100%; min-width: 0; }
 .step-card-actions .btn .icon { width: 14px; height: 14px; }
@@ -1323,6 +1325,10 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .rule-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 0.8fr) 32px; align-items: center; gap: 8px; padding: 8px 10px; }
 .rule-row select, .rule-row input[type=text] { height: 32px; }
 .rule-row .btn { width: 32px; padding: 0; }
+.setup-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.6fr) 76px 32px; align-items: center; gap: 8px; padding: 8px 10px; }
+.setup-row select, .setup-row input { height: 32px; min-width: 0; }
+.setup-row input.mono { font-family: var(--mono); font-size: 12.5px; }
+.setup-row .btn { width: 32px; padding: 0; }
 .rule-empty { color: var(--muted); font-size: 13px; }
 #triggers > .help { margin: 0 0 12px; }
 #trigger-form { margin-top: 12px; }
@@ -1346,6 +1352,13 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
   .rule-row [data-key=machine] { grid-area: machine; }
   .rule-row [data-key=folder] { grid-area: folder; }
   .rule-row .btn { grid-area: remove; width: 36px; height: 36px; }
+  .setup-row { grid-template-columns: minmax(0, 1fr) 76px 36px; grid-template-areas: "folder timeout remove" "command command command" "machine machine machine"; }
+  .setup-row [data-key=folder] { grid-area: folder; }
+  .setup-row [data-key=machine] { grid-area: machine; }
+  .setup-row [data-key=command] { grid-area: command; }
+  .setup-row [data-key=timeout_seconds] { grid-area: timeout; }
+  .setup-row .btn { grid-area: remove; width: 36px; height: 36px; }
+  .setup-row select, .setup-row input { height: 36px; }
   .rule-row select, .rule-row input[type=text] { height: 36px; }
 }
 .pair-panel { display: flex; gap: 24px; align-items: center; }
@@ -1705,3 +1718,26 @@ html.embedded .embed-only { display: inline-flex; }
   .dir-list, .branch-list { max-height: none; }
   .page-body { gap: 24px; }
 }
+
+/* worktrees: remove, setup output, move */
+
+dialog.wt-dialog { width: min(520px, calc(100% - 32px)); }
+dialog.wt-dialog p.wt-warn { margin: 0 0 6px; color: var(--warn-text); font-weight: 500; }
+dialog.wt-dialog p.wt-error { margin: 0 0 12px; color: var(--bad-text); }
+dialog.wt-dialog .help { margin: 0 0 14px; }
+dialog.wt-dialog textarea { width: 100%; }
+.wt-list { margin: 0 0 14px; padding: 8px 10px; max-height: 180px; overflow: auto; list-style: none; border: 1px solid var(--line); border-radius: 8px; background: var(--side); font: 12px/1.6 var(--mono); color: var(--ink-2); overflow-wrap: anywhere; }
+.wt-list .wt-more { font-family: var(--sans); color: var(--muted); }
+.wt-output { margin: 0 0 10px; padding: 10px 12px; max-height: 280px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--side); color: var(--ink); font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.setup-flag { display: inline-flex; align-items: baseline; gap: 5px; padding: 0; border: 0; background: none; font: inherit; color: var(--muted); cursor: pointer; white-space: nowrap; }
+.setup-flag::after { content: ""; width: 6px; height: 6px; border-radius: 50%; align-self: center; order: -1; background: var(--ok); }
+.s-sub > .setup-flag::before { order: -2; }
+.setup-flag.failed { color: var(--warn-text); font-weight: 600; }
+.setup-flag.failed::after { background: var(--warn); }
+.setup-flag:hover { text-decoration: underline; }
+.branch-list li.has-worktree { display: flex; align-items: center; gap: 4px; }
+.branch-list li.has-worktree .branch-opt { flex: 1; min-width: 0; }
+.dir-remove { flex: none; }
+.wt-here { display: flex; align-items: center; gap: 8px; margin: 0 0 10px; color: var(--muted); font-size: 12.5px; }
+.step-card-list { margin: 4px 0 6px; padding-left: 20px; font-size: 13px; line-height: 1.7; }
+dialog.wt-dialog code { font-size: 12.5px; }

@@ -178,6 +178,12 @@ impl Secrets {
         self.entries.get(name).map(|e| e.value.as_str())
     }
 
+    pub fn values(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.entries
+            .iter()
+            .map(|(name, e)| (name.as_str(), e.value.as_str()))
+    }
+
     pub fn list(&self) -> Vec<Info> {
         self.entries
             .iter()

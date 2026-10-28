@@ -21,6 +21,26 @@ and the project uses [Semantic Versioning](https://semver.org).
   an answer shows as **Needs you** without holding up the results. Dispatch hears the results with
   your next message, or, when it said what it would do with them, in one turn Yardbell starts for
   it once they are in. Groups carry on after a restart.
+- A repository can have a setup command, like `bin/setup`, `npm ci` or copying `.env` from the
+  main checkout, that runs in each new worktree Yardbell creates before the agent starts. Set it
+  per folder under **Worktree setup** in Settings, or `worktree_setup:` in `yardbell.yml`. Its
+  output is saved in the worktree's git folder and shown from the session row, which says **Setup
+  ran**, **Setup failed** or **Setup timed out**. A failed or timed-out setup is stopped with
+  everything it started, and the agent starts anyway and is told. Only commands saved in Yardbell
+  run, never a script found in the branch.
+- **Remove worktree** on a session that ended in a worktree, and in the New session dialog's
+  folders and branches, runs `git worktree remove` and prunes, and can delete the branch once it
+  is merged. It shows the uncommitted changes and the commits no remote has before removing them,
+  and asks you to confirm that loss. It never removes a main checkout.
+- **Move** on a session moves its branch, uncommitted changes and task to another machine, the one
+  with the most free memory by default, as a git bundle and a patch over ssh: nothing is committed
+  or pushed. The same agent starts there with a note that it continued from the first machine, and
+  Yardbell offers to stop the original.
+- Dispatch has four new steps under your approval setting and rules: **Integrate branches** merges
+  or rebases several branches onto a new branch one at a time and stops at the first conflict with
+  its files, **Push a branch** scans what it would push for keys, tokens and your saved secrets
+  first and never forces, **Remove a worktree** and **Move a session**. MCP clients get them as
+  `integrate_branches`, `push_branch`, `remove_worktree` and `move_session`.
 
 ## [0.7.3] - 2026-10-28
 

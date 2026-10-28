@@ -18,7 +18,10 @@ list_folders to see which git checkouts each machine has, and start_session to s
 in a folder with a task. read_session shows what a session's terminal shows now, \
 send_to_session types a reply into it, review_session starts a reviewer for a session's work, \
 scan_folder starts a read-only scan of a folder for dead code, test gaps or security problems, \
-and start_group starts several sessions as one group whose results Dispatch gathers.";
+start_group starts several sessions as one group whose results Dispatch gathers, \
+integrate_branches merges several branches into a new one, push_branch pushes a branch after a \
+secret scan, remove_worktree removes a finished worktree, and move_session moves a session's \
+branch, uncommitted changes and task to another machine.";
 
 pub fn token_matches(expected: &str, given: &str) -> bool {
     let (a, b) = (expected.as_bytes(), given.as_bytes());
@@ -275,6 +278,56 @@ fn tools() -> Vec<Value> {
                 "timeout_minutes": { "type": "integer", "minimum": 1, "maximum": crate::dispatch::GROUP_MAX_MINUTES, "description": "Gather after this long even if some children are not done, default 60" },
             }),
             &["children"],
+        ),
+        tool(
+            "remove_worktree",
+            "Remove a git worktree that Yardbell or anyone made, with git worktree remove and prune. It never removes a repository's main checkout, refuses while a session runs in it, and refuses when it has uncommitted changes or commits that no remote or other branch has; only the user can remove those, in Yardbell. delete_branch also deletes its branch when that is merged.",
+            json!({
+                "machine": machine,
+                "path": { "type": "string", "description": "Absolute path of the worktree" },
+                "folder": { "type": "string", "description": "Folder label from list_folders, instead of path" },
+                "delete_branch": { "type": "boolean", "description": "Also delete the branch if it is merged" },
+            }),
+            &["machine"],
+        ),
+        tool(
+            "integrate_branches",
+            "Bring several branches made from the same base together on a new branch, in its own worktree: one at a time in the order given, by merge or by rebase (each branch's commits replayed on top). It stops at the first conflict, undoes it, and reports the branch and the conflicting files. Nothing is pushed. folder or path is the repository's main checkout.",
+            json!({
+                "machine": machine,
+                "folder": { "type": "string", "description": "Folder label from list_folders" },
+                "path": { "type": "string", "description": "Absolute path of the repository, instead of folder" },
+                "base": { "type": "string", "description": "The branch they were made from, like main or origin/main" },
+                "branches": { "type": "array", "items": { "type": "string" }, "description": "Branches to integrate, in order" },
+                "into": { "type": "string", "description": "Name of the new integration branch" },
+                "method": { "type": "string", "enum": ["merge", "rebase"], "description": "merge (the default) or rebase" },
+            }),
+            &["machine", "base", "branches", "into"],
+        ),
+        tool(
+            "push_branch",
+            "Push a branch to a remote, never forced. First every commit it would push is scanned for keys, tokens and the values of the user's saved secrets; a hit blocks the push and names file and line, never the value.",
+            json!({
+                "machine": machine,
+                "folder": { "type": "string", "description": "Folder label from list_folders" },
+                "path": { "type": "string", "description": "Absolute path of a checkout or worktree that has the branch" },
+                "branch": { "type": "string" },
+                "remote": { "type": "string", "description": "Remote name, default origin" },
+            }),
+            &["machine", "branch"],
+        ),
+        tool(
+            "move_session",
+            "Move a session's work to another machine without committing or pushing: its branch and uncommitted changes go over ssh into a worktree there, and the same agent starts there with the original task and a note that it continued from this machine. to defaults to the machine with the most free memory that has the repository. stop_original also stops the session here once the new one runs.",
+            json!({
+                "machine": machine,
+                "name": session,
+                "to": { "type": "string", "description": "Machine to move to; empty picks the one with the most room" },
+                "folder": { "type": "string", "description": "The repository's folder label on the target, when it differs" },
+                "task": { "type": "string", "description": "The task for the agent there; empty reuses the original task when Yardbell knows it" },
+                "stop_original": { "type": "boolean", "description": "Stop the original session after the move" },
+            }),
+            &["machine", "name"],
         ),
     ]
 }
@@ -555,7 +608,8 @@ pub fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
     let snap = app.state.snapshot(&machine).unwrap_or_default();
     let text = |key: &str| input[key].as_str().unwrap_or_default().trim().to_string();
     let folders = match called {
-        "start_session" | "review_session" | "scan_folder" => {
+        "start_session" | "review_session" | "scan_folder" | "remove_worktree"
+        | "integrate_branches" | "push_branch" => {
             let path = match text("path") {
                 path if path.is_empty() => snap.folder_paths.get(&text("folder")).cloned(),
                 path => Some(path),
@@ -648,6 +702,9 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
                 return Err(ApiError(StatusCode::BAD_REQUEST, "text is empty".into()));
             }
             Ok(())
+        }
+        tool if crate::web::worktrees_api::TOOLS.contains(&tool) => {
+            crate::web::worktrees_api::check(app, cfg, tool, input)
         }
         other => Err(ApiError(
             StatusCode::BAD_REQUEST,
@@ -983,6 +1040,9 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
 with start_session"
                 .into(),
         )),
+        tool if crate::web::worktrees_api::TOOLS.contains(&tool) => {
+            crate::web::worktrees_api::run_tool(app, tool, args).await
+        }
         other => Err(ApiError(
             StatusCode::BAD_REQUEST,
             format!("unknown tool {other}"),

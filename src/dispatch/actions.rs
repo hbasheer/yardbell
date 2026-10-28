@@ -3,12 +3,16 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 5] = [
+const CHANGING: [&str; 9] = [
     "start_session",
     "send_to_session",
     "stop_session",
     "review_session",
     "scan_folder",
+    "remove_worktree",
+    "integrate_branches",
+    "push_branch",
+    "move_session",
 ];
 
 pub fn changes_something(tool: &str) -> bool {
@@ -160,6 +164,30 @@ fn what(action: &Value) -> String {
             text(input, "text")
         ),
         "stop_session" => format!("stopping {session} on {machine}"),
+        "remove_worktree" => format!(
+            "removing the worktree {} on {machine}",
+            [text(input, "path"), text(input, "folder")]
+                .into_iter()
+                .find(|f| !f.is_empty())
+                .unwrap_or_default()
+        ),
+        "integrate_branches" => format!(
+            "integrating {} into a new branch {} on {machine}",
+            input["branches"]
+                .as_array()
+                .map(|b| b
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .collect::<Vec<_>>()
+                    .join(", "))
+                .unwrap_or_default(),
+            text(input, "into")
+        ),
+        "push_branch" => format!("pushing {} on {machine}", text(input, "branch")),
+        "move_session" => match text(input, "to") {
+            "" => format!("moving {session} from {machine} to the machine with the most room"),
+            to => format!("moving {session} from {machine} to {to}"),
+        },
         other => other.to_string(),
     }
 }

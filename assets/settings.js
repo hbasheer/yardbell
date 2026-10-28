@@ -144,7 +144,7 @@ function renderDispatch() {
   loadInstalled();
 }
 
-const RULE_STEPS = { any: "Any step", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan" };
+const RULE_STEPS = { any: "Any step", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session" };
 const RULE_APPROVALS = { allow: "Allow", prompt: "Ask me", deny: "Deny" };
 let rules = [];
 const CROSS = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`;
@@ -295,6 +295,7 @@ async function load() {
   renderSecrets();
   renderDispatch();
   await loadTriggers().catch((err) => toast(err.message));
+  await loadSetups();
   if (!data.can_undo) $("undo-btn").hidden = true;
 }
 
@@ -961,3 +962,63 @@ window.addEventListener("hashchange", () => {
 });
 showSection();
 loadAbout().catch((err) => toast(err.message));
+
+let setups = [];
+
+function renderSetups() {
+  const machines = { any: "Any machine", ...Object.fromEntries((data.machines || []).map((m) => [m.name, m.name])) };
+  $("setup-rows").innerHTML = setups.length
+    ? setups.map((x, i) => `<li class="row setup-row" data-setup="${i}">
+      <input type="text" data-key="folder" aria-label="Folder" value="${esc(x.folder)}" placeholder="acme/web" autocapitalize="off" spellcheck="false">
+      <select data-key="machine" aria-label="Machine">${options(machines, x.machine)}</select>
+      <input type="text" class="mono" data-key="command" aria-label="Command" value="${esc(x.command)}" placeholder="bin/setup" autocapitalize="off" spellcheck="false">
+      <input type="number" data-key="timeout_seconds" aria-label="Timeout in seconds" title="Timeout in seconds" value="${esc(x.timeout_seconds)}" min="1" max="3600">
+      <button class="btn quiet danger" type="button" data-remove-setup="${i}" aria-label="Remove command" title="Remove command">${CROSS}</button>
+    </li>`).join("")
+    : `<li class="row rule-empty">No setup commands. New worktrees start the agent right away.</li>`;
+}
+
+async function loadSetups() {
+  try {
+    const res = await api("GET", "/api/settings/worktree-setup");
+    setups = (res.setups || []).map((x) => ({ machine: "any", timeout_seconds: 300, ...x }));
+  } catch {
+    setups = [];
+  }
+  renderSetups();
+}
+
+$("setup-add").addEventListener("click", () => {
+  setups.push({ folder: "", machine: "any", command: "", timeout_seconds: 300 });
+  renderSetups();
+  $("setup-rows").querySelector("li:last-child input")?.focus();
+});
+
+$("setup-rows").addEventListener("input", (e) => {
+  const row = e.target.closest("[data-setup]");
+  if (!row || !e.target.dataset.key) return;
+  const key = e.target.dataset.key;
+  setups[Number(row.dataset.setup)][key] = key === "timeout_seconds" ? Number(e.target.value) : e.target.value;
+});
+
+$("setup-rows").addEventListener("click", (e) => {
+  const remove = e.target.closest("[data-remove-setup]");
+  if (!remove) return;
+  setups.splice(Number(remove.dataset.removeSetup), 1);
+  renderSetups();
+});
+
+$("setup-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = e.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("POST", "/api/settings/worktree-setup", { setups });
+    saved("Worktree setup saved. It applies to the next worktree Yardbell creates.");
+    await loadSetups();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});

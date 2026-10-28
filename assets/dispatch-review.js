@@ -3,12 +3,16 @@ import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 // Dispatch's steps that change something (start, stop or type into a session) and the results of
 // reviews, drawn as cards the person approves, edits, rejects or acts on.
 
-export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder"]);
+export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session"]);
 
 const ICONS = {
   start_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
   send_to_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5 6.5 8 3 11.5M8.5 12h5"/></svg>`,
   stop_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="4" y="4" width="8" height="8" rx="1.5"/></svg>`,
+  remove_worktree: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>`,
+  integrate_branches: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="12.5" r="1.5"/><path d="M4.5 5v6M4.5 5c0 3 7 3 7 6"/></svg>`,
+  push_branch: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7M3.5 13.5h9"/></svg>`,
+  move_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8h10M9 4.5 12.5 8 9 11.5"/></svg>`,
   review: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg>`,
   scan: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3M2.5 8h11"/></svg>`,
   file: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg>`,
@@ -21,6 +25,10 @@ const TITLES = {
   start_session: "Start a session",
   send_to_session: "Type into a session",
   stop_session: "Stop a session",
+  remove_worktree: "Remove a worktree",
+  integrate_branches: "Integrate branches",
+  push_branch: "Push a branch",
+  move_session: "Move a session",
 };
 
 const SEVERITY = { high: "High", medium: "Medium", low: "Low" };
@@ -112,8 +120,13 @@ function stateOf(e) {
   return e.result && !e.result.ok ? "failed" : "done";
 }
 
+function stoppedShort(e) {
+  return e.tool === "integrate_branches" && worktreeOutcome(e.tool, e.result?.text || "")?.stopped;
+}
+
 function badge(e, state) {
   const mine = e.by === "you";
+  if (state === "done" && stoppedShort(e)) return html`<span class="badge blocked">Stopped at a conflict</span>`;
   switch (state) {
     case "pending": return html`<span class="badge blocked">${mine ? mineWords(e).waiting : "Waiting for you"}</span>`;
     case "running": return html`<span class="badge busy">Running</span>`;
@@ -133,6 +146,12 @@ function where(e) {
     const of = e.review;
     return html`of <strong>${of.name}</strong> on ${i.machine}${of.branch ? html` · <code>${of.branch}</code>` : nothing} · ${agentLabel(i.agent)}`;
   }
+  if (e.tool === "remove_worktree") return html`<code>${i.folder || ctx.short(i.path)}</code> on ${i.machine}`;
+  if (e.tool === "integrate_branches") {
+    return html`${i.machine} · <code>${i.folder || ctx.short(i.path)}</code> · into <code>${i.into}</code>`;
+  }
+  if (e.tool === "push_branch") return html`<code>${i.branch}</code> on ${i.machine} to ${i.remote || "origin"}`;
+  if (e.tool === "move_session") return html`<strong>${i.name}</strong> from ${i.machine} to ${i.to || "the machine with the most room"}`;
   if (e.tool === "start_session") {
     const folder = i.folder || ctx.short(i.path);
     const branch = i.branch ? html` · <code>${i.branch}</code>${i.new_branch ? ` new${i.base ? ` from ${i.base}` : ""}` : ""}` : nothing;
@@ -182,6 +201,17 @@ function body(e) {
       return html`<div class="step-card-body"><p class="step-card-label">Text</p><p class="step-card-text step-card-mono">${i.text}</p></div>`;
     case "stop_session":
       return html`<div class="step-card-body"><p class="step-card-text muted">Ends the tmux session and the agent in it.</p></div>`;
+    case "remove_worktree":
+      return html`<div class="step-card-body"><p class="step-card-text muted">Runs <code>git worktree remove</code> and prunes${i.delete_branch ? ", and deletes the branch if it is merged" : ""}. It is refused if the worktree has uncommitted changes or commits no remote has; only you can remove those, from the dashboard.</p></div>`;
+    case "integrate_branches":
+      return html`<div class="step-card-body"><p class="step-card-label">${i.method === "rebase" ? "Rebased" : "Merged"} in this order onto a new branch from <code>${i.base}</code></p>
+        <ol class="step-card-list">${(i.branches || []).map((b) => html`<li><code>${b}</code></li>`)}</ol>
+        <p class="step-card-text muted">It stops at the first conflict and pushes nothing.</p></div>`;
+    case "push_branch":
+      return html`<div class="step-card-body"><p class="step-card-text muted">Every commit it would push is checked for keys, tokens and your saved secrets first, and a hit stops it. Never forced.</p></div>`;
+    case "move_session":
+      return html`<div class="step-card-body"><p class="step-card-text muted">The branch and its uncommitted changes go over ssh; nothing is committed or pushed. The same agent starts there with the task${i.stop_original ? ", and the original stops" : ""}.</p>
+        ${i.task ? html`<p class="step-card-label">Task</p>${longText(e.id || i.task, i.task)}` : nothing}</div>`;
     default:
       return nothing;
   }
@@ -286,11 +316,28 @@ function outcome(e, state) {
     return html`<p class="step-card-outcome">${ICONS.check}<span>Started <strong>${s.name}</strong> on ${s.machine}</span>
       <a class="btn" href=${ctx.termUrl(s.machine, s.name)} target="_blank" rel="noopener" title="Open ${s.name}"><span class="btn-label">Open</span></a></p>`;
   }
+  const said = worktreeOutcome(e.tool, r.text);
+  if (said?.stopped) return html`<p class="step-card-outcome step-card-warn">${said.text}</p>`;
+  if (said) return html`<p class="step-card-outcome">${ICONS.check}<span class="step-card-said">${said.text}</span>${s ? html`<a class="btn" href=${ctx.termUrl(s.machine, s.name)} target="_blank" rel="noopener" title="Open ${s.name}"><span class="btn-label">Open</span></a>` : nothing}</p>`;
   const word = { send_to_session: "Sent", stop_session: "Stopped" }[e.tool] || "Done";
   return html`<p class="step-card-outcome">${ICONS.check}<span>${word}</span></p>`;
 }
 
-const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans" };
+// What a worktree step did, from the result it returned. An integration that stopped at a conflict
+// ran, but did not finish.
+function worktreeOutcome(tool, text) {
+  let v = null;
+  try { v = JSON.parse(text); } catch { return null; }
+  switch (tool) {
+    case "remove_worktree": return { text: v.removed?.note || "Removed" };
+    case "integrate_branches": return { text: v.summary || "Integrated", stopped: Boolean(v.integrated?.conflict) };
+    case "push_branch": return { text: `Pushed ${v.pushed?.branch} to ${v.pushed?.remote}` };
+    case "move_session": return { text: `Moved to ${v.machine} as ${v.name}${v.from?.stopped ? `; ${v.from.name} stopped` : ""}` };
+    default: return null;
+  }
+}
+
+const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions" };
 
 export function ruleText(r) {
   const machine = !r.machine || r.machine === "any" ? "any machine" : r.machine;
@@ -333,7 +380,7 @@ function actions(e, state) {
       <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve with changes"}</button>
     </div>`;
   }
-  const editable = e.tool !== "stop_session";
+  const editable = e.tool === "start_session" || e.tool === "send_to_session";
   return html`<div class="step-card-actions">
     <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => decide(e, "reject")}>${mine ? "Cancel" : "Reject"}</button>
     ${editable ? html`<button class="btn" type="button" ?disabled=${busy} @click=${() => startEditing(e)}>${ICONS.edit}Edit</button>` : nothing}

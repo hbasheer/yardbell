@@ -243,6 +243,9 @@ mod tests {
             stale: false,
             ports: vec![],
             pull: None,
+            path: String::new(),
+            worktree: false,
+            setup: None,
         }
     }
 

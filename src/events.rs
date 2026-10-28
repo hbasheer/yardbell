@@ -315,6 +315,9 @@ mod tests {
             stale: false,
             ports: vec![],
             pull: None,
+            path: String::new(),
+            worktree: false,
+            setup: None,
         }
     }
 
@@ -332,6 +335,9 @@ mod tests {
             agent: "claude".into(),
             folder: "api".into(),
             ticket: "ENG-1".into(),
+            path: String::new(),
+            branch: String::new(),
+            worktree: false,
         }
     }
 

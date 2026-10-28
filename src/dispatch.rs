@@ -26,7 +26,10 @@ pub use review::{
     prompt as review_prompt, scan_prompt, valid_path as valid_review_path, Anchor as ReviewAnchor,
     ReviewOf, ScanKind, Screenshots,
 };
-pub use rules::{decide as decide_step, validate as validate_rules, Rule, Step, Verdict};
+pub use rules::{
+    decide as decide_step, folder_matches, valid_folder_pattern, validate as validate_rules, Rule,
+    Step, Verdict,
+};
 pub use store::valid_id;
 pub use tasks::SavedTask;
 pub use turn::Opening;
@@ -561,6 +564,9 @@ mod tests {
                     stale: false,
                     ports: vec![],
                     pull: None,
+                    path: String::new(),
+                    worktree: false,
+                    setup: None,
                 })
                 .collect(),
             ended: vec![],

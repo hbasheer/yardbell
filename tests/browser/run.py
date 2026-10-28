@@ -860,6 +860,51 @@ class Suite:
             if "  enabled: false\n" not in f.read():
                 raise Failure("turning the trigger off did not reach yardbell.yml")
 
+    def test_remove_worktree_of_an_ended_session(self):
+        b = self.b
+        repo = os.path.join(self.y.root, "demo-api")
+        started = self.api("POST", "/sessions", {
+            "machine": MACHINE, "path": repo, "branch": "wt-remove", "new_branch": True, "base": "main", "wait": True,
+        })
+        worktree = started["path"]
+        if worktree != repo + "-worktrees/wt-remove":
+            raise Failure(f"the session started in {worktree}, not in its own worktree")
+        write(os.path.join(worktree, "notes.txt"), "not committed\n")
+        b.goto(self.url("/"))
+        b.wait(f"document.querySelector('[data-act=stop][data-name={json.dumps(started['name'])}]')", "the worktree session on the dashboard")
+        self.api("POST", f"/sessions/{MACHINE}/{started['name']}/stop")
+        b.wait(
+            f"(async () => (await (await fetch('/state')).json()).ended.some((e) => e.worktree && e.path === {json.dumps(worktree)}))()",
+            "the ended session, known to be in a worktree",
+            timeout=20,
+        )
+        b.wait("document.querySelector('[data-toggle=ended]')", "the ended sessions toggle")
+        if b.js("document.querySelector('[data-toggle=ended]').getAttribute('aria-expanded')") != "true":
+            b.click("[data-toggle=ended]")
+        b.wait(f"document.querySelector('[data-act=remove-worktree][data-path={json.dumps(worktree)}]')", "Remove worktree on the ended row")
+        b.click(f"[data-act=remove-worktree][data-path={json.dumps(worktree)}]")
+        b.wait("document.querySelector('dialog.wt-dialog [data-wt=remove]')", "what would be lost", timeout=15)
+        shown = b.js("document.querySelector('dialog.wt-dialog').innerText")
+        for expected in ("1 uncommitted change would be lost", "?? notes.txt", "Remove and lose these"):
+            if expected not in shown:
+                raise Failure(f"the dialog does not say {expected!r}:\n{shown}")
+        if not os.path.isdir(worktree):
+            raise Failure("the worktree went before it was confirmed")
+        b.click("dialog.wt-dialog [data-wt=remove]")
+        b.wait("!document.querySelector('dialog.wt-dialog')", "the dialog to close after removing", timeout=15)
+        b.wait("document.getElementById('toast').textContent.includes('Removed')", "the removal toast")
+        if os.path.exists(worktree):
+            raise Failure("the worktree is still there")
+        if not os.path.isfile(os.path.join(repo, "README.md")):
+            raise Failure("the main checkout was touched")
+        branches = subprocess.run(["git", "branch", "--list", "wt-remove"], cwd=repo, capture_output=True, text=True).stdout
+        if "wt-remove" not in branches:
+            raise Failure("the unmerged branch was deleted")
+        b.wait(
+            f"(async () => !(await (await fetch('/state')).json()).ended.some((e) => e.path === {json.dumps(worktree)}))()",
+            "the ended row to go with its worktree",
+        )
+
     # Last, since the children it starts are shell sessions in demo-app and demo-api, which the
     # scan test above counts.
     def test_dispatch_results_card_shows_each_child(self):

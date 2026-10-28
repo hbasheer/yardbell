@@ -37,6 +37,26 @@ tmux** on one: Yardbell stops that agent (it asks first) and starts it again in 
 command, so the conversation continues, then opens its terminal. The terminal it ran in before gets
 its prompt back.
 
+A session that ended in a worktree has **Remove worktree** beside Resume and Forget. Yardbell first
+checks the worktree and shows what would be lost: uncommitted changes, including new files, and
+commits on its branch that no remote branch and no other local branch has. With nothing to lose,
+**Remove worktree** runs `git worktree remove` and `git worktree prune` from the main checkout,
+and can also delete the branch when it is merged into the default branch. With something to lose
+the button becomes **Remove and lose these**, and the server refuses the removal without that
+confirmation too. Yardbell never removes a repository's main checkout, and refuses while a session
+still runs in the worktree.
+
+**Move** on a session moves its work to another machine, for example the one with the most free
+memory, which is preselected and listed first. The branch's commits go as a git bundle and its
+uncommitted changes, new files included, as a patch, over the two machines' ssh connections and
+through Yardbell, so nothing is committed or pushed to a remote. On the other machine they land in
+a worktree of their own at `<repo>-worktrees/<branch>`, the folder's setup command runs there, and
+the same agent starts with the task, prefilled when Yardbell started the session since its last
+restart, and a note that it continued from the first machine. Both clones must have the same
+`origin`, and a branch that already exists there with other commits is never overwritten. The
+original keeps running unless you tick **Stop the original**, and the dialog offers to stop it once
+the new session runs.
+
 ### New session
 
 ![New session dialog with branch picker](screenshots/new-session.png)
@@ -47,7 +67,20 @@ its prompt back.
 2. Pick a folder from **Recent** or browse the machine. Git repositories show their branch.
 3. For a git repository, stay on the current branch, pick another branch, or create a new one from
    a base. Any branch other than the current one opens in its own worktree at
-   `<repo>-worktrees/<branch>`; an existing worktree for that branch is reused.
+   `<repo>-worktrees/<branch>`; an existing worktree for that branch is reused. A branch with a
+   worktree has **Remove** in the list, and a folder that is a worktree says so above its
+   subfolders with **Remove worktree**, both with the same checks as on the dashboard.
+
+When Yardbell creates a worktree for a repository that has a setup command (Settings, **Worktree
+setup**), the command runs in the new worktree before the agent starts, through your login shell,
+with the main checkout's path in `$YARDBELL_MAIN_CHECKOUT`, for example `bin/setup`, `npm ci` or
+`cp "$YARDBELL_MAIN_CHECKOUT/.env" .`. Its output is saved in the worktree's git folder as
+`yardbell-setup.log`, and the session row shows **Setup ran** or, in amber, **Setup failed** or
+**Setup timed out**; click it for the output. A command that fails or runs past its timeout (5
+minutes unless you set another) is stopped with everything it started, and the agent starts anyway:
+its task gets a note that the setup did not finish and where the log is. The row's mark lasts until
+Yardbell restarts; the log stays until the worktree is removed. A reused worktree does not run the
+setup again.
 
 The footer always says where the session will start. Yardbell starts the agent inside a new tmux
 session through your login shell, so your PATH and environment apply, then opens its terminal.
@@ -219,6 +252,17 @@ Dispatch hears the results with your next message. When Dispatch said what it wi
 in, shown as a message sent by Yardbell, unless the conversation is answering or has steps waiting
 for you. A group started in such a turn never starts another turn on its own. Groups keep going
 after a restart.
+
+Dispatch can also work with worktrees, each a step under the same approval and rules: **Integrate
+branches** brings several branches made from one base together on a new branch in its own
+worktree, one at a time in the order given, by merge or by rebase, and stops at the first
+conflict, undoes it and names the conflicting files; **Push a branch** pushes, never forced, after
+scanning every commit it would push for private keys, common API key and token shapes (AWS,
+GitHub, GitLab, Slack, Stripe, Google, Anthropic, OpenAI, Linear, npm) and the values in your
+secrets list, and a hit blocks it with the file and line but never the value; **Remove a worktree**
+removes one that would lose nothing, since only you can confirm a loss; and **Move a session**
+moves a session as **Move** on the dashboard does. A push is always its own step, so a rule such as
+"Push a branch, Any machine, Ask me" keeps every push waiting for you.
 
 Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a

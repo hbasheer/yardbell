@@ -343,6 +343,8 @@ pub struct Config {
     pub pull_requests: PullRequests,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<crate::triggers::Trigger>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub worktree_setup: Vec<crate::worktrees::setup::WorktreeSetup>,
     pub machines: Vec<Machine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen_ip: Option<String>,
@@ -473,6 +475,8 @@ impl Config {
         }
         self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
         self.validate_dispatch().map_err(ConfigError::Invalid)?;
+        crate::worktrees::setup::validate(&self.worktree_setup, |m| self.machine(m).is_some())
+            .map_err(ConfigError::Invalid)?;
         crate::triggers::validate(&self.triggers).map_err(ConfigError::Invalid)
     }
 

@@ -151,7 +151,9 @@ emit_folder() {
   seen="$seen$1|"
   [ $first -eq 0 ] && printf ','
   first=0
-  printf '{"path":%s,"branch":%s}' "$(esc "$1")" "$(esc "$(git -C "$1" branch --show-current 2>/dev/null)")"
+  linked=false
+  [ -f "$1/.git" ] && linked=true
+  printf '{"path":%s,"branch":%s,"linked":%s}' "$(esc "$1")" "$(esc "$(git -C "$1" branch --show-current 2>/dev/null)")" "$linked"
 }
 if has git; then
   for ws in ${workspaces[@]+"${workspaces[@]}"}; do

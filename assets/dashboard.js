@@ -6,6 +6,7 @@ const onHost = ["localhost", "127.0.0.1"].includes(location.hostname);
 const Nav = window.YardbellNav;
 const Live = window.YardbellLive;
 const NewSession = window.YardbellNewSession;
+const Worktree = window.YardbellWorktree;
 let current = null;
 let lastJson = "";
 let lastRender = 0;
@@ -207,6 +208,7 @@ function actions(s) {
     ? html`<button class="btn" type="button" data-act="host" data-machine=${s.machine} data-name=${s.tmux}>Terminal app</button>` : "";
   return html`<div class="row-actions">
     <a class="btn" href=${termUrl(s)} target="_blank" rel="noopener">${ICONS.open}Open</a>${host}
+    <button class="btn quiet" type="button" data-act="move-machine" data-id=${s.id} title="Move this session's branch, changes and task to another machine">Move</button>
     <button class="btn quiet danger stop" type="button" data-act="stop" data-machine=${s.machine} data-name=${s.tmux}>Stop</button>
   </div>`;
 }
@@ -242,12 +244,18 @@ function pullBadge(p) {
   return html`<a class="pr-badge ${tone}" href=${p.url} target="_blank" rel="noopener" title=${window.YardbellPull.describe(p)}><span class="pr-num">#${p.number}</span>${word}</a>`;
 }
 
+function setupFlag(s) {
+  if (!s.setup) return "";
+  const word = s.setup.ok ? "Setup ran" : s.setup.timed_out ? "Setup timed out" : "Setup failed";
+  return html`<button type="button" class="setup-flag${s.setup.ok ? "" : " failed"}" data-act="setup" data-id=${s.id} title=${Worktree.setupNote(s.setup)}>${word}</button>`;
+}
+
 function identity(s, extra = "") {
   const ticket = s.ticket !== "-" ? html`<span class="ticket">${s.ticket}</span>` : "";
   const branch = s.branch ? html`<span class="branch">${s.branch}</span>` : "";
   const agent = s.agent ? html`<span class="agent">${agentLabel(s.agent)}</span>` : "";
   return html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}${extra}</div>
-    <div class="s-sub">${branch}${pullBadge(s.pull)}${agent}</div>`;
+    <div class="s-sub">${branch}${pullBadge(s.pull)}${setupFlag(s)}${agent}</div>`;
 }
 
 function sessionRow(s) {
@@ -271,10 +279,13 @@ function looseRow(s) {
 }
 
 function endedRow(e) {
+  const remove = e.worktree && e.path
+    ? html`<button class="btn quiet danger" type="button" data-act="remove-worktree" data-machine=${e.machine} data-path=${e.path}>Remove worktree</button>` : "";
   return html`<li class="sub-row">
-    <div class="s-main">${identity({ ...e, branch: "" })}</div>
+    <div class="s-main">${identity({ ...e, branch: e.worktree ? e.branch : "" })}</div>
     <div class="row-actions">
-      <button class="btn" type="button" data-act="resume" data-machine=${e.machine} data-folder=${e.folder} data-agent=${e.agent}>Resume</button>
+      <button class="btn" type="button" data-act="resume" data-machine=${e.machine} data-folder=${e.folder} data-path=${e.path || ""} data-agent=${e.agent}>Resume</button>
+      ${remove}
       <button class="btn quiet" type="button" data-act="forget" data-id=${e.id}>Forget</button>
     </div>
   </li>`;
@@ -639,6 +650,7 @@ async function startAndOpen(body) {
     const res = await api("POST", "/sessions", body);
     const url = `/term/${encodeURIComponent(body.machine)}/${encodeURIComponent(res.name)}`;
     if (tab) tab.location.href = url; else location.href = url;
+    if (res.setup && !res.setup.ok) toast(`${Worktree.setupNote(res.setup)}. The agent started anyway; its row shows the output.`, "warn");
   } catch (err) {
     if (tab) tab.close();
     throw err;
@@ -671,6 +683,27 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (act === "shell") { openShell(machine); return; }
+  if (act === "setup") {
+    const s = current?.sessions.find((x) => x.id === id);
+    if (s?.setup) Worktree.showSetup(s.setup);
+    return;
+  }
+  if (act === "remove-worktree") {
+    Worktree.remove({ machine, path: b.dataset.path, toast, done: () => Live.soon() });
+    return;
+  }
+  if (act === "move-machine") {
+    const s = current?.sessions.find((x) => x.id === id);
+    if (!s) return;
+    Worktree.move({
+      session: s,
+      state: current,
+      toast,
+      done: (moved) => { leave(s.id); Live.soon(); return moved; },
+      openTerm: (m, n) => window.open(`/term/${encodeURIComponent(m)}/${encodeURIComponent(n)}`, "_blank", "noopener"),
+    });
+    return;
+  }
   if (act === "clear-filters") {
     filters.q = "";
     filters.status = "all";
@@ -752,7 +785,8 @@ document.addEventListener("click", async (e) => {
     } else if (act === "host") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}/host-terminal`);
     } else if (act === "resume") {
-      await startAndOpen({ machine, folder, resume: true, agent });
+      const where = b.dataset.path ? { path: b.dataset.path } : { folder };
+      await startAndOpen({ machine, ...where, resume: true, agent });
     } else if (act === "forget") {
       await api("POST", `/ended/${encodeURIComponent(id)}/forget`);
     }

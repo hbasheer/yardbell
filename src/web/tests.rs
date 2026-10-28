@@ -11,6 +11,8 @@ use http_body_util::BodyExt;
 use std::path::Path;
 use tower::ServiceExt;
 
+mod worktrees;
+
 struct FakePorts;
 
 impl PortStatus for FakePorts {
@@ -133,6 +135,10 @@ fn rig() -> Rig {
         onboarding,
         host_mesh: crate::mesh::HostMesh::new(fake.clone()),
         folders: crate::folders::Folders::new(fake.clone(), Ssh::new(dir.path().join("state2"))),
+        worktrees: crate::worktrees::Worktrees::new(
+            fake.clone(),
+            Ssh::new(dir.path().join("state3")),
+        ),
         settings: crate::settings::Settings::new(
             cfg_path.clone(),
             dir.path().join("ssh_config"),
@@ -1588,7 +1594,11 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "stop_session",
             "review_session",
             "scan_folder",
-            "start_group"
+            "start_group",
+            "remove_worktree",
+            "integrate_branches",
+            "push_branch",
+            "move_session"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;

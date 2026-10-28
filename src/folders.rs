@@ -20,6 +20,8 @@ pub struct Listing {
     pub path: String,
     pub git: bool,
     pub branch: String,
+    // A worktree, whose .git is a file pointing at the main checkout's.
+    pub linked: bool,
     pub entries: Vec<Entry>,
 }
 
@@ -30,6 +32,12 @@ pub struct Branches {
     pub local: Vec<String>,
     pub remote: Vec<String>,
     pub worktrees: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Prepared {
+    pub path: String,
+    pub created: bool,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -77,6 +85,7 @@ pub fn parse_listing(out: &str) -> Result<Listing, String> {
         path: String::new(),
         git: false,
         branch: String::new(),
+        linked: false,
         entries: Vec::new(),
     };
     for line in out.lines() {
@@ -87,6 +96,7 @@ pub fn parse_listing(out: &str) -> Result<Listing, String> {
                 l.git = true;
                 l.branch = b.to_string();
             }
+            ["LINKED"] => l.linked = true,
             ["GIT", name, b] => l.entries.push(Entry {
                 name: name.to_string(),
                 git: true,
@@ -174,6 +184,7 @@ impl Folders {
             "{}; cd \"$p\" 2>/dev/null || {{ echo \"ERR not a folder: $p\"; exit 0; }}; \
              printf 'PWD\\t%s\\n' \"$(pwd)\"; \
              [ -e .git ] && printf 'SELF\\t%s\\n' \"$(git branch --show-current 2>/dev/null)\"; \
+             [ -f .git ] && echo LINKED; \
              for d in */; do [ -d \"$d\" ] || continue; d=${{d%/}}; \
              if [ -e \"$d/.git\" ]; then printf 'GIT\\t%s\\t%s\\n' \"$d\" \"$(git -C \"$d\" branch --show-current 2>/dev/null)\"; \
              else printf 'DIR\\t%s\\n' \"$d\"; fi; done | head -300",
@@ -200,14 +211,17 @@ impl Folders {
         repo: &str,
         pick: &Pick,
         current: &str,
-    ) -> Result<String, String> {
+    ) -> Result<Prepared, String> {
         if !valid_branch(&pick.branch)
             || (pick.new_branch && !pick.base.is_empty() && !valid_branch(&pick.base))
         {
             return Err("invalid branch name".into());
         }
         if !pick.new_branch && pick.branch == current {
-            return Ok(repo.to_string());
+            return Ok(Prepared {
+                path: repo.to_string(),
+                created: false,
+            });
         }
         let target = worktree_dir(repo, &pick.branch);
         let parent = target.rsplit_once('/').map(|(p, _)| p).unwrap_or(&target);
@@ -236,16 +250,20 @@ impl Folders {
             "set -e; cd {}; \
              existing=$(git worktree list --porcelain | awk -v b=\"refs/heads/\"{b} '/^worktree /{{w=substr($0,10)}} $0==\"branch \" b {{print w}}'); \
              if [ -n \"$existing\" ]; then printf 'PATH\\t%s\\n' \"$existing\"; exit 0; fi; \
-             mkdir -p {}; {add} >&2; printf 'PATH\\t%s\\n' {}",
+             mkdir -p {}; {add} >&2; printf 'PATH\\t%s\\nCREATED\\n' {}",
             quote(repo),
             quote(parent),
             quote(&target)
         );
         let out = self.exec(m, &script, WORKTREE_TIMEOUT).await?;
-        out.lines()
+        let path = out
+            .lines()
             .find_map(|l| l.strip_prefix("PATH\t"))
-            .map(str::to_string)
-            .ok_or_else(|| "git did not report the worktree folder".into())
+            .ok_or("git did not report the worktree folder")?;
+        Ok(Prepared {
+            path: path.to_string(),
+            created: out.lines().any(|l| l == "CREATED"),
+        })
     }
 }
 
@@ -370,7 +388,13 @@ mod tests {
             )
             .await
             .unwrap();
-        assert_eq!(path, "/r/app");
+        assert_eq!(
+            path,
+            Prepared {
+                path: "/r/app".into(),
+                created: false
+            }
+        );
         assert!(fake.calls().is_empty());
     }
 
@@ -379,18 +403,19 @@ mod tests {
         let fake = Arc::new(FakeRunner::default());
         fake.stub(
             "worktree",
-            Output::ok_with("PATH\t/r/app-worktrees/eng-1290-csv\n"),
+            Output::ok_with("PATH\t/r/app-worktrees/eng-1290-csv\nCREATED\n"),
         );
         let pick = Pick {
             branch: "eng-1290-csv".into(),
             new_branch: false,
             base: String::new(),
         };
-        let path = folders(fake.clone())
+        let prepared = folders(fake.clone())
             .prepare(&machine(), "/r/app", &pick, "main")
             .await
             .unwrap();
-        assert_eq!(path, "/r/app-worktrees/eng-1290-csv");
+        assert_eq!(prepared.path, "/r/app-worktrees/eng-1290-csv");
+        assert!(prepared.created);
         let script = fake.calls()[0].last().unwrap().clone();
         assert!(script.contains("worktree add"), "{script}");
         assert!(script.contains("'/r/app-worktrees/eng-1290-csv'"));

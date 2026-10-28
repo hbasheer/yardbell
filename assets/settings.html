@@ -63,6 +63,7 @@
       <p class="nav-label">Agents</p>
       <a href="#dispatch">Dispatch</a>
       <a href="#triggers">Triggers</a>
+      <a href="#worktree-setup">Worktree setup</a>
       <a href="#mcp">Agent tools (MCP)</a>
       <a href="#servers">MCP servers</a>
       <p class="nav-label">General</p>
@@ -256,6 +257,19 @@
         <p class="help"></p>
         <button class="btn quiet" type="button" id="trigger-cancel">Cancel</button>
         <button class="btn primary" type="submit">Save trigger</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="worktree-setup">
+    <div class="section-head"><h2>Worktree setup</h2><button class="btn small-link" type="button" id="setup-add">Add command</button></div>
+    <form class="panel" id="setup-form">
+      <p class="help dispatch-help">A command that runs in each new worktree Yardbell creates for a repository, before the agent starts, such as <code>bin/setup</code>, <code>npm ci</code> or <code>cp "$YARDBELL_MAIN_CHECKOUT/.env" .</code>. The folder is the repository's main checkout, as in the folder list or as a path, and <code>*</code> matches any part of a name. If the command fails or runs past its timeout, the agent starts anyway, the session shows the output, and the agent is told.</p>
+      <p class="help dispatch-help">Only commands saved here run. A repository's own script runs only when you name it here, like <code>.yardbell/setup</code>, because that script comes from whatever branch is checked out.</p>
+      <ul class="rows setup-rows" id="setup-rows"></ul>
+      <div class="form-foot">
+        <p class="help">The command runs through your login shell in the new worktree, with the main checkout's path in <code>$YARDBELL_MAIN_CHECKOUT</code>.</p>
+        <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
   </section>
