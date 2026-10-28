@@ -93,7 +93,9 @@ Quick reference:
 | `machines[].root` | Project folder on that machine |
 | `machines[].workspaces`, `machines[].mesh` | Per-machine overrides |
 
-`passcode_hash`, `cookie_key` and `recent` folders are written by Yardbell itself.
+`passcode_hash`, `cookie_key` and `recent` folders are written by Yardbell itself. Tokens live in
+`secrets.yml` next to `yardbell.yml`, which refers to them as `${secret:NAME}`, see
+[Secrets](configuration.md#secrets).
 
 ## Commands
 
@@ -137,7 +139,11 @@ ssh key.
   your account can read.
 - Secrets never go on a command line, where every account on a machine can read them with `ps`.
   The MCP servers for sessions reach each machine over ssh's standard input and land in a file only
-  your account can read, and `yardbell.yml` is saved readable only by your account.
+  your account can read. Text typed into a session (Dispatch's replies, review findings, the MCP
+  `send_to_session` tool) goes the same way, into a tmux buffer that is pasted and deleted.
+- Tokens are kept in `secrets.yml`, readable only by your account, and `yardbell.yml` only names
+  them. Settings never shows a saved value again. `yardbell.yml` is saved readable only by your
+  account too.
 - The desktop app signs its window in with a one-time code. Making a code needs a login, and the code
   works once, within 30 seconds. The window's login ends when the app quits; the app keeps its own
   login in the system keychain.

@@ -359,6 +359,56 @@ class Suite:
         b.click("#dispatch-form button[type=submit]")
         b.wait("(async () => (await (await fetch('/api/settings')).json()).dispatch.rules?.length === 1)()", "one rule saved after removing the other")
 
+    def test_settings_secrets(self):
+        b = self.b
+        values = ["lin_api_BROWSER1", "ghp_BROWSER2", "ghp_BROWSER3"]
+        self.api("POST", "/api/settings/mcp/servers", {"servers": [
+            {"name": "linear", "url": "https://mcp.linear.app/mcp", "headers": {"Authorization": f"Bearer {values[0]}"}},
+            {"name": "github", "command": "npx gh-mcp", "env": {"GITHUB_TOKEN": "${secret:github}"}},
+        ]})
+        b.goto(self.url("/settings?secrets#servers"))
+        b.wait("!document.getElementById('secrets-missing').hidden", "the warning that github's secret is not set")
+        b.wait("!document.getElementById('secrets-inline').hidden", "the offer to move the inline header")
+        b.click("#secrets-move")
+        b.wait("document.querySelector('#secret-rows [data-replace=linear]')", "linear in the secrets list")
+
+        b.click("#secret-add")
+        b.click("#secret-form input[name=name]")
+        b.type("github")
+        b.click("#secret-form input[name=value]")
+        b.type(values[1])
+        b.click("#secret-form button[type=submit]")
+        b.wait("document.querySelector('#secret-rows [data-replace=github]') && document.getElementById('secrets-missing').hidden", "github set and the warning gone")
+
+        b.click("#secret-rows [data-replace=github]")
+        b.wait("document.querySelector('#secret-form input[name=name]').readOnly && !document.querySelector('#secret-form input[name=value]').value", "the replace form, with the name fixed and no value")
+        b.click("#secret-form input[name=value]")
+        b.type(values[2])
+        b.click("#secret-form button[type=submit]")
+        b.wait("document.getElementById('secret-form').hidden", "the replaced value to save")
+
+        page = b.js("document.documentElement.outerHTML")
+        settings = json.dumps(self.api("GET", "/api/settings"))
+        for value in values:
+            if value in page or value in settings:
+                raise Failure(f"{value} is shown after it was saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        if values[0] in config or "Bearer ${secret:linear}" not in config:
+            raise Failure("yardbell.yml still holds the header value, or lost its reference")
+        secrets_file = os.path.join(os.path.dirname(self.y.config), "secrets.yml")
+        if os.stat(secrets_file).st_mode & 0o777 != 0o600:
+            raise Failure("secrets.yml is readable by other accounts")
+        with open(secrets_file) as f:
+            stored = f.read()
+        if values[0] not in stored or values[2] not in stored or values[1] in stored:
+            raise Failure("secrets.yml does not hold the moved and the replaced values")
+
+        b.click("#secret-rows [data-delete=github]")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('github uses it')", "the delete confirmation naming its server")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("!document.querySelector('#secret-rows [data-replace=github]') && !document.getElementById('secrets-missing').hidden", "github deleted and missing again")
+
     def check_errors(self, where):
         if self.b.errors:
             errors, self.b.errors = self.b.errors, []

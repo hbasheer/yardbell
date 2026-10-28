@@ -16,6 +16,7 @@ pub mod onboarding;
 pub mod phone;
 pub mod poller;
 pub mod probe;
+pub mod secrets;
 pub mod service;
 pub mod sessions;
 pub mod settings;

@@ -71,13 +71,24 @@ pub async fn handle(
     };
     let given = bearer(&headers);
     let dispatch = token_matches(app.dispatch.token(), given);
-    if cfg.mcp_token.is_none() && !dispatch {
+    let token = match app
+        .secrets()
+        .and_then(|s| cfg.mcp_token(&s).map_err(ApiError::internal))
+    {
+        Ok(token) => token,
+        Err(e) if dispatch => {
+            tracing::warn!(error = %e.1, "the MCP token cannot be read");
+            None
+        }
+        Err(e) => return e.into_response(),
+    };
+    if token.is_none() && !dispatch {
         return crate::web::error(
             StatusCode::NOT_FOUND,
             "the MCP server is off, turn it on in Settings",
         );
     }
-    if !dispatch && !token_matches(cfg.mcp_token.as_deref().unwrap_or_default(), given) {
+    if !dispatch && !token_matches(token.as_deref().unwrap_or_default(), given) {
         return crate::web::error(StatusCode::UNAUTHORIZED, "wrong or missing MCP token");
     }
     let rpc: Rpc = match serde_json::from_slice(&body) {

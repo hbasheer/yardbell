@@ -11,7 +11,12 @@ same care as an ssh key.
 - Requests that change anything must come from Yardbell's own origin.
 - Secrets, such as the tokens of the MCP servers given to sessions, never go on a command line, where
   every account on a shared machine can read them with `ps`. They travel over ssh's standard input
-  into files only your account can read, and `yardbell.yml` is saved with mode 600.
+  into files only your account can read. Text typed into a session, by Dispatch, a review or the
+  MCP `send_to_session` tool, travels the same way.
+- Tokens live in `secrets.yml`, mode 600 in a mode 700 folder, and `yardbell.yml` (also mode 600)
+  refers to them by name as `${secret:NAME}`, so the config can be read or shared without them.
+  Yardbell fills a reference in only where the value is used and never writes it back to the
+  config, the logs, the UI or an error message. Settings never shows a saved secret again.
 - Do not expose Yardbell to the public internet, a shared LAN, or through a reverse proxy you do not
   control.
 

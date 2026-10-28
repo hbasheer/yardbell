@@ -216,20 +216,65 @@ Other MCP servers that Claude Code sessions started by Yardbell get, through `--
 mcp_servers:
   - name: github                                       # letters, digits, - and _
     command: npx -y @modelcontextprotocol/server-github  # runs on the machine; split on spaces
-    env: {GITHUB_PERSONAL_ACCESS_TOKEN: ghp_...}
+    env: {GITHUB_PERSONAL_ACCESS_TOKEN: '${secret:github}'}
   - name: linear
     url: https://mcp.linear.app/mcp                    # or an HTTP server
-    headers: {Authorization: Bearer lin_...}
+    headers: {Authorization: 'Bearer ${secret:linear}'}
     machines: [mini]                                   # optional; empty means every machine
 ```
 
-Each server needs either `command` or `url`. The values often hold tokens, so they never go on a
+Each server needs either `command` or `url`. Keep tokens out of `yardbell.yml`: store them as
+[secrets](#secrets) and write `${secret:NAME}` where they go, in a header, an `env` value or the
+URL. Quote such a value in YAML, since it contains `{` and `}`. Plain values still work.
+
+The values often hold tokens, so they never go on a
 command line, where every account on the machine could read them with `ps`. When a Claude Code
 session starts, Yardbell sends the machine's servers over ssh's standard input into
 `~/.cache/yardbell/mcp/mcp-<hash>.json` on that machine (`$XDG_CACHE_HOME` if it is set), a file
 only your account can read in a folder only your account can open, and passes Claude Code that
 file's path. Every start and resume writes it again, sessions with the same servers share one file,
 and files left by an older list are removed after 30 days.
+
+### Secrets
+
+Named secrets live in `secrets.yml`, in the same folder as `yardbell.yml`
+(`~/.config/yardbell/secrets.yml` by default). Yardbell saves it readable only by your account
+(mode 600) and makes that folder private (mode 700). The **Secrets** list under **MCP servers** in
+Settings adds, replaces and deletes them. A value is write-only there: once saved it is never
+shown again, only its name, the date it was set and the servers that use it.
+
+```yaml
+# secrets.yml, written by Yardbell
+linear:
+  value: lin_api_...
+  updated: 2026-10-28T09:30:00Z
+github: ghp_...          # a value written by hand needs no date
+```
+
+`yardbell.yml` refers to a secret as `${secret:NAME}`, where `NAME` is letters, digits, `-` and
+`_`, at most 64 of them. Anything around the reference stays as written, so
+`Bearer ${secret:linear}` becomes `Bearer lin_api_...`. References work in the `url`, `headers`
+and `env` of an MCP server, and Yardbell uses them for its own `mcp_token` and `cookie_key`. There
+is no escape: `${secret:` always starts a reference, and one that is not closed with `}` or has a
+bad name stops `yardbell.yml` from loading, with a message that says where.
+
+A reference is filled in only when the value is used: while Yardbell writes a session's MCP config
+on its machine, or Dispatch's on the host, and when it checks the MCP token or the login cookie.
+The filled-in value never goes back into `yardbell.yml`, the logs, `/state`, the Settings page or
+an error message. A session whose servers need a secret that is not set does not start, and the
+message names the server and the secret.
+
+**Moving values out of `yardbell.yml`.** When `yardbell.yml` still holds header or `env` values,
+the MCP token or the cookie key itself, the Secrets list shows them and offers **Move to
+secrets**. Values whose names look secret (`Authorization`, `GITHUB_TOKEN`, `API_KEY` and the like)
+start ticked. Nothing moves until you press the button, so a value such as `GITHUB_HOST` is never
+moved unless you tick it. Each value goes to a secret named after its server (or the server and
+the variable, when one server has several) and an `Authorization` header keeps its scheme, so
+`Bearer lin_api_...` becomes `Bearer ${secret:linear}`. Yardbell writes `secrets.yml` first,
+reads every moved value back, and only then rewrites `yardbell.yml`, so if any step fails, each
+value is still in one file or the other. The move cannot be undone with **Undo**, which would put
+the values back, and older `yardbell.yml.bak-` copies still hold them, so delete those once the
+move is done.
 
 ### `dispatch` (optional)
 
@@ -343,15 +388,16 @@ If you write entries yourself, test them from the host with `ssh -o BatchMode=ye
 | Key | Written by | Notes |
 |---|---|---|
 | `passcode_hash` | `yardbell passcode`, Settings | argon2id hash, never the passcode itself |
-| `cookie_key` | `yardbell passcode`, Settings, "Log out everywhere" | signs login cookies; changing it signs everyone out |
+| `cookie_key` | `yardbell passcode`, Settings, "Log out everywhere" | signs login cookies; changing it signs everyone out. Written as `${secret:yardbell-cookie-key}`, with the key in `secrets.yml` |
 | `machines[].recent` | New session | the last 8 folders per machine |
 | `phone_notifications.topic` | Settings, "Set up" | a generated name, `yardbell-` and 24 random letters and digits |
-| `mcp_token` | Settings, "Agent tools (MCP)" | `yb_` and 40 random letters and digits; absent means the MCP server is off |
+| `mcp_token` | Settings, "Agent tools (MCP)" | `yb_` and 40 random letters and digits; absent means the MCP server is off. Written as `${secret:yardbell-mcp-token}`, with the token in `secrets.yml` |
 
-Keep `yardbell.yml` private: the cookie key can forge a login, the MCP token can start sessions,
-and the notification topic and token and the `mcp_servers` tokens are secrets too. Yardbell saves
-it and its `.bak-` copies readable only by your account (mode 600). A file you wrote yourself keeps
-its mode until Yardbell first saves it, so run `chmod 600` on it.
+The secrets themselves go in `secrets.yml`, see [Secrets](#secrets). Keep both files private: the
+cookie key can forge a login, the MCP token can start sessions, and an older `yardbell.yml` may
+still hold the notification topic and token or MCP server tokens. Yardbell saves `yardbell.yml`,
+its `.bak-` copies and `secrets.yml` readable only by your account (mode 600). A file you wrote
+yourself keeps its mode until Yardbell first saves it, so run `chmod 600` on it.
 
 ## 6. What applies when
 

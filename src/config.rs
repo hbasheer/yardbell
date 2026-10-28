@@ -1,4 +1,5 @@
 use crate::agents::{self, Agent};
+use crate::secrets::{self, Secrets, SecretsError};
 use regex::{Regex, RegexBuilder};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, HashSet};
@@ -197,17 +198,93 @@ pub struct McpServer {
 }
 
 impl McpServer {
-    fn entry(&self) -> serde_json::Value {
+    fn entry(&self, secrets: &Secrets) -> Result<serde_json::Value, String> {
+        let resolve = |text: &str| {
+            secrets.resolve(text).map_err(|e| match e {
+                SecretsError::Missing(name) => format!(
+                    "MCP server {} needs the secret {name}, which is not set. Set it under MCP servers in Settings",
+                    self.name
+                ),
+                other => format!("MCP server {}: {other}", self.name),
+            })
+        };
+        let resolve_all = |pairs: &BTreeMap<String, String>| {
+            pairs
+                .iter()
+                .map(|(k, v)| Ok((k.clone(), resolve(v)?)))
+                .collect::<Result<BTreeMap<_, _>, String>>()
+        };
         if !self.url.is_empty() {
-            return serde_json::json!({ "type": "http", "url": self.url, "headers": self.headers });
+            return Ok(serde_json::json!({
+                "type": "http",
+                "url": resolve(&self.url)?,
+                "headers": resolve_all(&self.headers)?,
+            }));
         }
         let mut words = self.command.split_whitespace();
-        serde_json::json!({
+        Ok(serde_json::json!({
             "command": words.next().unwrap_or_default(),
             "args": words.collect::<Vec<_>>(),
-            "env": self.env,
-        })
+            "env": resolve_all(&self.env)?,
+        }))
     }
+
+    pub fn secret_names(&self) -> Vec<String> {
+        std::iter::once(&self.url)
+            .chain(self.headers.values())
+            .chain(self.env.values())
+            .flat_map(|text| secrets::references(text).unwrap_or_default())
+            .map(str::to_string)
+            .collect()
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InlineKind {
+    Header,
+    Env,
+    McpToken,
+    CookieKey,
+}
+
+// A value written into yardbell.yml itself that could live in the secrets file. It never carries
+// the value.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Inline {
+    pub kind: InlineKind,
+    #[serde(default)]
+    pub server: String,
+    #[serde(default)]
+    pub key: String,
+}
+
+impl Inline {
+    // Ticked by default and enough to offer the move; GITHUB_HOST=github.com is not worth a nag.
+    pub fn looks_secret(&self) -> bool {
+        let re =
+            Regex::new("(?i)token|key|secret|pass|auth|cred|cookie|session|private|signature|pat$")
+                .expect("static regex");
+        match self.kind {
+            InlineKind::Header | InlineKind::Env => re.is_match(&self.key),
+            InlineKind::McpToken | InlineKind::CookieKey => true,
+        }
+    }
+
+    pub fn label(&self) -> String {
+        match self.kind {
+            InlineKind::Header => format!("{}: header {}", self.server, self.key),
+            InlineKind::Env => format!("{}: {}", self.server, self.key),
+            InlineKind::McpToken => "Yardbell's MCP token".into(),
+            InlineKind::CookieKey => "Yardbell's login cookie key".into(),
+        }
+    }
+}
+
+fn is_inline(value: &Option<String>) -> bool {
+    value
+        .as_deref()
+        .is_some_and(|v| !v.is_empty() && !secrets::has_reference(v))
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -431,21 +508,101 @@ impl Config {
                     s.name
                 ));
             }
+            let values = std::iter::once(("URL".to_string(), &s.url))
+                .chain(s.headers.iter().map(|(k, v)| (format!("header {k}"), v)))
+                .chain(s.env.iter().map(|(k, v)| (k.clone(), v)));
+            for (what, value) in values {
+                secrets::references(value)
+                    .map_err(|e| format!("MCP server {:?} {what}: {e}", s.name))?;
+            }
+        }
+        for (what, value) in [
+            ("mcp_token", &self.mcp_token),
+            ("cookie_key", &self.cookie_key),
+        ] {
+            secrets::references(value.as_deref().unwrap_or_default())
+                .map_err(|e| format!("{what}: {e}"))?;
         }
         Ok(())
     }
 
-    pub fn mcp_config_for(&self, machine: &str) -> Option<String> {
-        let servers: serde_json::Map<String, serde_json::Value> = self
+    // Secrets are filled in here, on the way to the file the session reads, and nowhere else.
+    pub fn mcp_config_for(
+        &self,
+        machine: &str,
+        secrets: &Secrets,
+    ) -> Result<Option<String>, String> {
+        let servers = self
             .mcp_servers
             .iter()
             .filter(|s| s.machines.is_empty() || s.machines.iter().any(|m| m == machine))
-            .map(|s| (s.name.clone(), s.entry()))
-            .collect();
+            .map(|s| Ok((s.name.clone(), s.entry(secrets)?)))
+            .collect::<Result<serde_json::Map<String, serde_json::Value>, String>>()?;
         if servers.is_empty() {
-            return None;
+            return Ok(None);
         }
-        Some(serde_json::json!({ "mcpServers": servers }).to_string())
+        Ok(Some(
+            serde_json::json!({ "mcpServers": servers }).to_string(),
+        ))
+    }
+
+    pub fn mcp_token(&self, secrets: &Secrets) -> Result<Option<String>, String> {
+        self.own_secret(self.mcp_token.as_deref(), "MCP token", secrets)
+    }
+
+    pub fn cookie_key(&self, secrets: &Secrets) -> Result<Option<String>, String> {
+        self.own_secret(self.cookie_key.as_deref(), "login cookie key", secrets)
+    }
+
+    fn own_secret(
+        &self,
+        value: Option<&str>,
+        what: &str,
+        secrets: &Secrets,
+    ) -> Result<Option<String>, String> {
+        value
+            .map(|v| {
+                secrets.resolve(v).map_err(|e| {
+                    format!(
+                        "Yardbell's {what} cannot be read from {}: {e}",
+                        secrets.path().display()
+                    )
+                })
+            })
+            .transpose()
+    }
+
+    pub fn inline_values(&self) -> Vec<Inline> {
+        let mut out = Vec::new();
+        for s in &self.mcp_servers {
+            let pairs = s
+                .headers
+                .iter()
+                .map(|kv| (InlineKind::Header, kv))
+                .chain(s.env.iter().map(|kv| (InlineKind::Env, kv)));
+            for (kind, (key, value)) in pairs {
+                if !value.trim().is_empty() && !secrets::has_reference(value) {
+                    out.push(Inline {
+                        kind,
+                        server: s.name.clone(),
+                        key: key.clone(),
+                    });
+                }
+            }
+        }
+        for (kind, value) in [
+            (InlineKind::McpToken, &self.mcp_token),
+            (InlineKind::CookieKey, &self.cookie_key),
+        ] {
+            if is_inline(value) {
+                out.push(Inline {
+                    kind,
+                    server: String::new(),
+                    key: String::new(),
+                });
+            }
+        }
+        out
     }
 
     pub fn bind_addresses(&self) -> Vec<String> {
@@ -788,8 +945,10 @@ mod tests {
     fn mcp_servers_build_a_config_per_machine() {
         let yaml = "mcp_servers:\n  - name: github\n    command: npx -y @modelcontextprotocol/server-github\n    env: {GITHUB_TOKEN: t}\n  - name: linear\n    url: https://mcp.linear.app/mcp\n    headers: {Authorization: Bearer x}\n    machines: [mini]\nmachines:\n  - {name: hp, local: true, root: /r}\n  - {name: mini, port_prefix: 1, root: /r}\n";
         let cfg = load_str(yaml).unwrap();
-        let hp: serde_json::Value =
-            serde_json::from_str(&cfg.mcp_config_for("hp").unwrap()).unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let none_set = Secrets::for_config(&dir.path().join("yardbell.yml")).unwrap();
+        let config = |m: &str| cfg.mcp_config_for(m, &none_set).unwrap().unwrap();
+        let hp: serde_json::Value = serde_json::from_str(&config("hp")).unwrap();
         assert_eq!(
             hp,
             serde_json::json!({ "mcpServers": { "github": {
@@ -798,14 +957,97 @@ mod tests {
                 "env": { "GITHUB_TOKEN": "t" },
             }}})
         );
-        let mini: serde_json::Value =
-            serde_json::from_str(&cfg.mcp_config_for("mini").unwrap()).unwrap();
+        let mini: serde_json::Value = serde_json::from_str(&config("mini")).unwrap();
         assert_eq!(
             mini["mcpServers"]["linear"],
             serde_json::json!({ "type": "http", "url": "https://mcp.linear.app/mcp", "headers": { "Authorization": "Bearer x" } })
         );
         let none = load_str("machines:\n  - {name: hp, local: true, root: /r}\n").unwrap();
-        assert_eq!(none.mcp_config_for("hp"), None);
+        assert_eq!(none.mcp_config_for("hp", &none_set), Ok(None));
+    }
+
+    const WITH_REFS: &str = "mcp_servers:\n  - name: linear\n    url: https://mcp.linear.app/mcp\n    headers: {Authorization: 'Bearer ${secret:linear}'}\n  - name: github\n    command: npx gh-mcp\n    env: {GITHUB_TOKEN: '${secret:gh}', LOG: debug}\nmachines:\n  - {name: hp, local: true, root: /r}\n";
+
+    #[test]
+    fn secret_references_resolve_only_in_the_session_config() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        std::fs::write(&path, WITH_REFS).unwrap();
+        let cfg = Config::load(&path).unwrap();
+        let mut secrets = Secrets::for_config(&path).unwrap();
+        let now = chrono::Utc::now();
+        secrets.set("linear", "lin_api_SECRET", now).unwrap();
+        secrets.set("gh", "ghp_SECRET", now).unwrap();
+        let built: serde_json::Value =
+            serde_json::from_str(&cfg.mcp_config_for("hp", &secrets).unwrap().unwrap()).unwrap();
+        assert_eq!(
+            built["mcpServers"]["linear"]["headers"]["Authorization"],
+            "Bearer lin_api_SECRET"
+        );
+        assert_eq!(
+            built["mcpServers"]["github"]["env"]["GITHUB_TOKEN"],
+            "ghp_SECRET"
+        );
+        assert_eq!(built["mcpServers"]["github"]["env"]["LOG"], "debug");
+        cfg.save(&path).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert!(saved.contains("${secret:linear}"), "{saved}");
+        assert!(!saved.contains("SECRET"), "{saved}");
+        assert!(!format!("{cfg:?}").contains("lin_api_SECRET"));
+        assert_eq!(cfg.inline_values().len(), 1, "only LOG is written inline");
+    }
+
+    #[test]
+    fn a_missing_secret_is_named_without_any_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        std::fs::write(&path, WITH_REFS).unwrap();
+        let cfg = Config::load(&path).unwrap();
+        let mut secrets = Secrets::for_config(&path).unwrap();
+        secrets
+            .set("linear", "lin_api_SECRET", chrono::Utc::now())
+            .unwrap();
+        let err = cfg.mcp_config_for("hp", &secrets).unwrap_err();
+        assert_eq!(
+            err,
+            "MCP server github needs the secret gh, which is not set. Set it under MCP servers in Settings"
+        );
+    }
+
+    #[test]
+    fn malformed_secret_references_are_refused_on_load() {
+        let cases = [
+            ("{name: a, url: 'https://y', headers: {Authorization: 'Bearer ${secret:x'}}", "MCP server \"a\" header Authorization: a ${secret: reference is not closed with }"),
+            ("{name: a, command: x, env: {T: '${secret:a b}'}}", "MCP server \"a\" T: in a ${secret:...} reference, secret name \"a b\" must be 1 to 64 letters, digits, - and _"),
+        ];
+        for (server, message) in cases {
+            match load_str(&format!("mcp_servers:\n  - {server}\n{BASE}")) {
+                Err(ConfigError::Invalid(got)) => assert_eq!(got, message, "{server}"),
+                other => panic!("{server}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn own_secrets_resolve_from_a_reference_or_stay_inline() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        let mut secrets = Secrets::for_config(&path).unwrap();
+        secrets
+            .set(secrets::MCP_TOKEN, "yb_FROMFILE", chrono::Utc::now())
+            .unwrap();
+        let mut cfg = load_str(BASE).unwrap();
+        assert_eq!(cfg.mcp_token(&secrets), Ok(None));
+        cfg.mcp_token = Some("yb_inline".into());
+        assert_eq!(cfg.mcp_token(&secrets), Ok(Some("yb_inline".into())));
+        cfg.mcp_token = Some(secrets::reference(secrets::MCP_TOKEN));
+        assert_eq!(cfg.mcp_token(&secrets), Ok(Some("yb_FROMFILE".into())));
+        cfg.cookie_key = Some(secrets::reference(secrets::COOKIE_KEY));
+        let err = cfg.cookie_key(&secrets).unwrap_err();
+        assert!(
+            err.contains("the secret yardbell-cookie-key is not set"),
+            "{err}"
+        );
     }
 
     #[test]

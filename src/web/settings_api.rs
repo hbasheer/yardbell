@@ -1,5 +1,6 @@
 use super::{error, find_machine, now_secs, ApiError, AppState, COOKIE, COOKIE_TTL_SECS};
 use crate::config::MeshProvider;
+use crate::secrets::Secrets;
 use crate::settings::{propose, AgentEdit, MachineEdit, PhoneEdit};
 use axum::extract::{Path as UrlPath, State as AxState};
 use axum::http::{HeaderMap, StatusCode};
@@ -24,6 +25,9 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/mcp/on", post(mcp_on))
         .route("/api/settings/mcp/off", post(mcp_off))
         .route("/api/settings/mcp/servers", post(mcp_servers))
+        .route("/api/settings/secrets", post(secret_set))
+        .route("/api/settings/secrets/delete", post(secret_delete))
+        .route("/api/settings/secrets/move", post(secrets_move))
         .route("/api/settings/dispatch", post(dispatch))
         .route("/api/settings/pair", post(pair))
         .route("/api/settings/passcode", post(passcode))
@@ -54,6 +58,19 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         })
         .collect();
     let phone = &cfg.phone_notifications;
+    let (secrets, token) = match app.secrets() {
+        Ok(store) => {
+            let token = cfg.mcp_token(&store).unwrap_or_else(|e| {
+                tracing::warn!(error = %e, "the MCP token cannot be read");
+                None
+            });
+            (secrets_view(&cfg, &store), token)
+        }
+        Err(e) => (
+            json!({ "list": [], "missing": [], "inline": [], "error": e.1 }),
+            None,
+        ),
+    };
     Ok(Json(json!({
         "mesh": cfg.mesh,
         "port": cfg.port,
@@ -67,6 +84,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             "memory": phone.memory,
         },
         "mcp_servers": cfg.mcp_servers,
+        "secrets": secrets,
         "dispatch": cfg.dispatch,
         "agents": cfg
             .agents()
@@ -75,7 +93,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             .collect::<Vec<_>>(),
         "default_agent": cfg.default_agent(),
         "mcp": {
-            "token": cfg.mcp_token,
+            "token": token,
             "urls": cfg
                 .bind_addresses()
                 .iter()
@@ -86,6 +104,90 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "service_installed": crate::service::installed(),
     }))
     .into_response())
+}
+
+// Names and dates only: a secret's value never leaves the server once it is set.
+fn secrets_view(cfg: &crate::config::Config, store: &Secrets) -> serde_json::Value {
+    let used_by = |name: &str| -> Vec<&str> {
+        cfg.mcp_servers
+            .iter()
+            .filter(|s| s.secret_names().iter().any(|n| n == name))
+            .map(|s| s.name.as_str())
+            .collect()
+    };
+    let list: Vec<_> = store
+        .list()
+        .into_iter()
+        .filter(|i| !crate::secrets::is_own(&i.name))
+        .map(|i| json!({ "name": i.name, "updated": i.updated, "used_by": used_by(&i.name) }))
+        .collect();
+    let missing: Vec<_> = cfg
+        .mcp_servers
+        .iter()
+        .flat_map(|s| {
+            s.secret_names()
+                .into_iter()
+                .filter(|n| !store.contains(n))
+                .map(|n| json!({ "server": s.name, "name": n }))
+        })
+        .collect();
+    let inline: Vec<_> = cfg
+        .inline_values()
+        .into_iter()
+        .map(|i| {
+            json!({
+                "kind": i.kind,
+                "server": i.server,
+                "key": i.key,
+                "label": i.label(),
+                "secret": i.looks_secret(),
+            })
+        })
+        .collect();
+    json!({
+        "file": store.path().display().to_string(),
+        "list": list,
+        "missing": missing,
+        "inline": inline,
+    })
+}
+
+#[derive(Deserialize)]
+struct SecretReq {
+    name: String,
+    #[serde(default)]
+    value: String,
+}
+
+async fn secret_set(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<SecretReq>,
+) -> Result<Response, ApiError> {
+    app.settings
+        .set_secret(req.name.trim(), &req.value)
+        .map_err(bad)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+async fn secret_delete(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<SecretReq>,
+) -> Result<Response, ApiError> {
+    app.settings.delete_secret(&req.name).map_err(bad)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+#[derive(Deserialize)]
+struct MoveReq {
+    items: Vec<crate::config::Inline>,
+}
+
+async fn secrets_move(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<MoveReq>,
+) -> Result<Response, ApiError> {
+    let moved = app.settings.move_to_secrets(&req.items).map_err(bad)?;
+    Ok(Json(json!({ "moved": moved })).into_response())
 }
 
 #[derive(Deserialize)]

@@ -11,9 +11,7 @@ use crate::state::State;
 use crate::tunnels::Tunnels;
 use crate::web::{router, AppState, Services};
 use anyhow::{bail, Context, Result};
-use base64::Engine;
 use clap::{Parser, Subcommand};
-use rand::RngCore;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -89,10 +87,8 @@ fn passcode(path: PathBuf) -> Result<()> {
     if first != second {
         bail!("the two entries do not match");
     }
-    let mut key = [0u8; 64];
-    rand::thread_rng().fill_bytes(&mut key);
     cfg.passcode_hash = Some(crate::auth::hash(&first));
-    cfg.cookie_key = Some(base64::engine::general_purpose::STANDARD.encode(key));
+    crate::local_server::new_cookie_key(&mut cfg, &path).map_err(anyhow::Error::msg)?;
     cfg.save(&path)?;
     println!("Passcode saved to {}", path.display());
     Ok(())
@@ -111,6 +107,8 @@ pub async fn serve(
     if cfg.passcode_hash.is_none() {
         bail!("no passcode set, run `yardbell passcode` first");
     }
+    let secrets = crate::secrets::Secrets::for_config(&path)?;
+    cfg.cookie_key(&secrets).map_err(anyhow::Error::msg)?;
     let dir = state_dir();
     let runner: Arc<dyn Runner> = Arc::new(RealRunner::default());
     let ssh = Ssh::new(dir.clone());
