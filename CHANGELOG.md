@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-10-28
+
 - Security: the tokens of the MCP servers for sessions, such as a Linear API key, no longer appear
   on the agent's command line. On a machine shared with other people, anyone could read them with
   `ps` while a Claude Code session ran. Yardbell now sends the list over ssh's standard input into a
