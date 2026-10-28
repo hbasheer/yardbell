@@ -403,11 +403,12 @@ stopped after 300 s, its timeout. Its output is in /l. Finish the setup before y
             "x",
             "any",
             &format!(
-                "echo starting; (sleep 4; touch {}) & sleep 3; echo still running",
+                "echo starting; (sleep 8; touch {}) & sleep 6; echo still running",
                 marker.display()
             ),
         );
-        slow.timeout_seconds = 1;
+        // Two seconds, not one: on a busy machine the shell may not have printed "starting" yet.
+        slow.timeout_seconds = 2;
         let m = local("here", "/");
         let run = worktrees.setup(&m, wt.to_str().unwrap(), &slow).await;
         assert!(run.timed_out, "{run:?}");
@@ -415,7 +416,7 @@ stopped after 300 s, its timeout. Its output is in /l. Finish the setup before y
         assert!(!run.output.contains("still running"), "{run:?}");
         assert!(!run.output.contains("ioctl"), "{run:?}");
         assert!(std::path::Path::new(&run.log).exists());
-        tokio::time::sleep(Duration::from_secs(5)).await;
+        tokio::time::sleep(Duration::from_secs(9)).await;
         assert!(!marker.exists(), "the command's children kept running");
         let quick = setup("x", "any", "echo done; exit 3");
         let run = worktrees.setup(&m, wt.to_str().unwrap(), &quick).await;
