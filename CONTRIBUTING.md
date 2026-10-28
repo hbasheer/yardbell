@@ -20,6 +20,9 @@ binary at build time (in debug builds it is read from disk, so a page reload pic
 
 - `cargo fmt --check`, `cargo clippy --all-targets -- -D warnings` and `cargo test` all pass.
   CI runs the same three on Linux and macOS.
+- UI changes pass the browser tests: `cargo build && python3 tests/browser/run.py`. They need
+  Firefox and tmux, take about half a minute, and CI runs them on Linux. A new page or flow is
+  worth a test there; see [Development](docs/development.md#browser-tests).
 - New behavior comes with a test. Anything that runs a command goes through the `Runner` trait so
   tests can use `FakeRunner` instead of a real machine.
 - `src/snapshot.sh` must keep working on bash 3.2 (the macOS default). If you touch it, try

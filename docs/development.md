@@ -36,3 +36,29 @@ installers into a draft release on GitHub; try them, then publish it.
 
 Everything that runs a command goes through the `Runner` trait, so tests use a fake instead of real
 machines. See [CONTRIBUTING.md](../CONTRIBUTING.md).
+
+## Browser tests
+
+`tests/browser/` drives headless Firefox against a real Yardbell server, with only Python's standard
+library (WebDriver BiDi). It needs `firefox`, `tmux` and a debug build:
+
+```sh
+cargo build
+python3 tests/browser/run.py                 # the whole suite, about 30 seconds
+python3 tests/browser/run.py -k workspace    # only the tests whose name contains "workspace"
+python3 tests/browser/run.py --shots shots   # a screenshot of each failing test
+```
+
+Each run makes a temporary directory with a config, a state dir, two git repos for the machine's
+root, its own tmux server and a clean `HOME`, and removes it afterwards (`--keep` leaves it, with
+the server log). It logs in, opens every page, starts a plain shell session, types into the
+terminal and uses Copy text and Copy all, checks that overflowing Workspace tabs keep the current
+one in view, and shows saved Dispatch conversations at desktop and phone width. Any page error or
+`console.error` fails the test it happened in. Dispatch is never asked anything, and the server
+cannot find a real `claude`. Set `FIREFOX` or pass `--firefox` when Firefox is not on the `PATH`.
+CI runs it on Linux.
+
+## Dependency audit
+
+`cargo audit` runs in CI for `Cargo.lock`, `desktop/Cargo.lock` and `android/Cargo.lock`. Any
+advisory it is told to ignore is listed with its reason in `.github/workflows/ci.yml`.
