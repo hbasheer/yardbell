@@ -136,26 +136,31 @@ let appClipboard = Boolean(app?.clipboardManager);
 let pending = "";
 let noticeTimer = 0;
 
-function notice(text, offer) {
+function notice(text, { offer = "", ms = offer ? 8000 : 1600 } = {}) {
   const el = document.getElementById("notice");
   document.getElementById("notice-text").textContent = text;
   el.classList.toggle("ask", Boolean(offer));
   el.classList.add("show");
-  pending = offer || "";
+  pending = offer;
   clearTimeout(noticeTimer);
-  noticeTimer = setTimeout(() => el.classList.remove("show"), offer ? 8000 : 1600);
+  noticeTimer = setTimeout(() => el.classList.remove("show"), ms);
 }
 
+// Selecting the textarea takes the focus from the terminal, so it is handed back afterwards.
 function copyNow(text) {
+  const back = document.activeElement;
   const area = document.createElement("textarea");
   area.value = text;
   area.setAttribute("readonly", "");
   area.style.cssText = "position:fixed;top:0;left:0;opacity:0";
   document.body.append(area);
   area.select();
+  // select() alone selects nothing on iOS.
+  area.setSelectionRange(0, text.length);
   let ok = false;
   try { ok = document.execCommand("copy"); } catch {}
   area.remove();
+  back?.focus({ preventScroll: true });
   return ok;
 }
 
@@ -175,9 +180,11 @@ async function copy(text) {
   if (navigator.clipboard && window.isSecureContext) {
     try { await navigator.clipboard.writeText(text); ok = true; } catch {}
   }
-  if (!ok) ok = copyNow(text);
+  // tmux sends a copy to every viewer of the pane, and only the one in use may take the focus for
+  // the fallback: the desktop app gives the keyboard to a hidden page that does.
+  if (!ok && document.hasFocus()) ok = copyNow(text);
   if (ok) notice("Copied");
-  else notice("Selection ready", text);
+  else notice("Selection ready", { offer: text });
 }
 
 function decodeBase64(b64) {
@@ -198,7 +205,8 @@ document.getElementById("term").addEventListener("mouseup", () => {
 
 document.getElementById("notice-copy").addEventListener("click", () => {
   if (copyNow(pending)) notice("Copied");
-  term.focus();
+  else notice("Couldn't copy. Use Copy text to select it.", { ms: 5000 });
+  focusShown();
 });
 
 function screenText() {
@@ -209,19 +217,43 @@ function screenText() {
 }
 
 const textView = document.getElementById("text-view");
+const textCopy = document.getElementById("text-copy");
+const textShown = () => textView.classList.contains("show");
+
+// Keys go to what is on screen, never to the terminal under the screen text, where Esc would stop
+// the agent.
+function focusShown() {
+  if (textShown()) textCopy.focus();
+  else term.focus();
+}
+
 function showText() {
   document.getElementById("text-body").textContent = screenText();
   textView.classList.add("show");
+  focusShown();
 }
-document.getElementById("text-btn").addEventListener("click", showText);
-document.getElementById("text-close").addEventListener("click", () => {
+
+function closeText() {
   textView.classList.remove("show");
   term.focus();
+}
+
+document.getElementById("text-btn").addEventListener("click", showText);
+document.getElementById("text-close").addEventListener("click", closeText);
+textCopy.addEventListener("click", () => {
+  if (!copyNow(document.getElementById("text-body").textContent)) {
+    notice("Couldn't copy. Select the text and copy it.", { ms: 5000 });
+    return;
+  }
+  closeText();
+  notice("Copied");
 });
-document.getElementById("text-copy").addEventListener("click", () => {
-  const text = document.getElementById("text-body").textContent;
-  if (copyNow(text)) notice("Copied");
-});
+document.addEventListener("keydown", (e) => {
+  if (e.key !== "Escape" || !textShown()) return;
+  e.preventDefault();
+  e.stopPropagation();
+  closeText();
+}, true);
 
 async function paste() {
   try {
@@ -377,7 +409,7 @@ if (embedded) {
   window.addEventListener("message", (e) => {
     if (e.origin !== location.origin) return;
     if (e.data?.yardbell === "text") showText();
-    if (e.data?.yardbell === "focus") term.focus();
+    if (e.data?.yardbell === "focus") focusShown();
   });
   const WORKSPACE_KEYS = /^(Digit[1-9]|Backslash|Minus|KeyX|KeyT|BracketLeft|BracketRight|ArrowUp|ArrowDown)$/;
   document.addEventListener("keydown", (e) => {

@@ -78,7 +78,9 @@ The port of the web UI on the host. Change it if 4000 is taken. Needs a restart.
 
 ### `poll_seconds` (default `5`)
 
-How often Yardbell checks every machine. Lower is snappier, higher is quieter. Applies on the next
+How often Yardbell checks every machine. Open pages show each check as soon as it finishes, and a
+machine is checked again right after you start, stop or answer a session there, so this sets how
+soon a change made elsewhere shows. Lower is snappier, higher is quieter. Applies on the next
 check, no restart needed.
 
 ### `host_terminal` (default `none`)

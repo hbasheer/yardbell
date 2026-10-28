@@ -127,6 +127,20 @@ impl PhoneNotifications {
 pub const DISPATCH_MODELS: [&str; 3] = ["sonnet", "opus", "haiku"];
 const DISPATCH_INSTRUCTIONS_MAX: usize = 4000;
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Approval {
+    #[default]
+    Ask,
+    Auto,
+}
+
+impl Approval {
+    fn is_default(&self) -> bool {
+        *self == Approval::default()
+    }
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DispatchSettings {
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -135,6 +149,8 @@ pub struct DispatchSettings {
     pub agent: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub model: String,
+    #[serde(default, skip_serializing_if = "Approval::is_default")]
+    pub approval: Approval,
 }
 
 impl DispatchSettings {
@@ -769,10 +785,14 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(ok.dispatch.agent, "codex");
+        assert_eq!(ok.dispatch.approval, Approval::Ask, "asking is the default");
         assert_eq!(
             load_str(BASE).unwrap().dispatch,
             DispatchSettings::default()
         );
+        let auto = load_str(&format!("dispatch:\n  approval: auto\n{BASE}")).unwrap();
+        assert_eq!(auto.dispatch.approval, Approval::Auto);
+        assert!(load_str(&format!("dispatch:\n  approval: maybe\n{BASE}")).is_err());
         let cases = [
             ("agent: nope", "dispatch.agent \"nope\" is not a built-in agent or one listed under agents"),
             ("model: gpt-9", "dispatch.model must be one of sonnet, opus, haiku, or empty for Claude Code's default"),

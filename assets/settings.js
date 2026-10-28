@@ -136,6 +136,7 @@ function renderDispatch() {
   f.elements.instructions.value = d.instructions || "";
   f.elements.agent.value = d.agent || "";
   f.elements.model.value = d.model || "";
+  f.elements.approval.value = d.approval || "ask";
   loadInstalled();
 }
 
@@ -373,6 +374,7 @@ $("dispatch-form").addEventListener("submit", async (e) => {
       instructions: f.elements.instructions.value,
       agent: f.elements.agent.value,
       model: f.elements.model.value,
+      approval: f.elements.approval.value,
     });
     saved("Dispatch settings saved. They apply from the next message.");
     await load();

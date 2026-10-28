@@ -242,14 +242,25 @@ function dot(st) {
   return `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
 }
 
+// Every state the server pushes renders the sidebar, and writing the same markup again replaces
+// its buttons, which drops a click that lands in between. Only a change is written.
+const painted = new WeakMap();
+
+function paint(el, markup) {
+  if (painted.get(el) === markup) return;
+  painted.set(el, markup);
+  el.innerHTML = markup;
+}
+
 function renderSide() {
   const all = sessions().filter((s) => !s.stale);
   const counts = {};
   for (const s of all) counts[stateOf(s)] = (counts[stateOf(s)] || 0) + 1;
   const server = state.server;
-  $("server").innerHTML = server ? `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>` : "";
-  $("summary").textContent = ["blocked", "done", "working", "idle"]
+  paint($("server"), server ? `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>` : "");
+  const summary = ["blocked", "done", "working", "idle"]
     .filter((k) => counts[k]).map((k) => `${counts[k]} ${WORD[k]}`).join(" · ") || "No agents running";
+  if ($("summary").textContent !== summary) $("summary").textContent = summary;
 
   const inPane = new Map(leaves(tab().root).map((l, i) => [l.key, i + 1]));
   const row = (s) => {
@@ -265,7 +276,7 @@ function renderSide() {
   };
   let lastMachine = "";
   const folds = foldedMachines();
-  $("tree").innerHTML = projects().map((name) => {
+  paint($("tree"), projects().map((name) => {
     const mine = sessions().filter((s) => projectOf(s) === name);
     const current = name === project();
     const machine = machineOf(name);
@@ -279,7 +290,7 @@ function renderSide() {
     return `${head}<li${hide}><button type="button" class="ws-space${current ? " current" : ""}" data-space="${esc(name)}" title="${esc(spaceLabel(name))}"${current ? ' aria-current="true"' : ""}>
       ${dot(worst(mine))}<span class="rail-initial" aria-hidden="true">${esc(window.YardbellSide.initials(spaceLabel(name)))}</span><span class="ws-space-name">${esc(spaceLabel(name))}</span><span class="ws-count">${mine.filter((s) => !s.stale).length}</span>
     </button></li>${mine.length ? `<li${hide}><ul class="ws-terminals">${mine.map(row).join("")}</ul></li>` : ""}`;
-  }).join("") || `<li class="ws-empty">No sessions running. Start one with New session.</li>`;
+  }).join("") || `<li class="ws-empty">No sessions running. Start one with New session.</li>`);
 }
 
 const FOLDED_KEY = "yardbell.ws.folded";
@@ -297,15 +308,55 @@ function fold(machine, hide) {
 }
 
 let renaming = null;
+let tabsHtml = "";
+let shownTab = null;
+// Matches the fade style.css draws at an edge of the tab row, so a tab scrolled into view clears it.
+const TAB_FADE = 24;
+const reduceMotion = matchMedia("(prefers-reduced-motion: reduce)");
+
+function tabState(t) {
+  return worst(leaves(t.root).map((l) => sessionFor(l.key)).filter(Boolean));
+}
 
 function renderTabs() {
   if (renaming !== null) return;
   const sp = space();
-  $("tabs").innerHTML = sp.tabs.map((t, i) => {
-    const st = worst(leaves(t.root).map((l) => sessionFor(l.key)).filter(Boolean));
+  const strip = $("tabs");
+  const html = sp.tabs.map((t, i) => {
+    const st = tabState(t);
     const close = sp.tabs.length > 1 || leaves(t.root).some((l) => l.key) ? `<span class="ws-tab-close" data-close-tab="${i}" role="button" aria-label="Close tab ${esc(t.name)}" title="Close tab">×</span>` : "";
-    return `<div class="ws-tab${i === sp.tab ? " current" : ""}" role="tab" aria-selected="${i === sp.tab}" tabindex="0" data-tab="${i}" title="Double-click to rename, right-click for more">${st ? dot(st) : ""}<span class="ws-tab-name">${esc(t.name)}</span>${close}</div>`;
+    return `<div class="ws-tab${i === sp.tab ? " current" : ""}" role="tab" aria-selected="${i === sp.tab}" tabindex="0" data-tab="${i}" title="${esc(t.name)}&#10;Double-click to rename, right-click for more">${st ? dot(st) : ""}<span class="ws-tab-name">${esc(t.name)}</span>${close}</div>`;
   }).join("");
+  if (html !== tabsHtml) {
+    const focused = strip.contains(document.activeElement) ? document.activeElement.closest("[data-tab]")?.dataset.tab : undefined;
+    strip.innerHTML = html;
+    tabsHtml = html;
+    if (focused !== undefined && document.hasFocus()) strip.querySelector(`[data-tab="${focused}"]`)?.focus({ preventScroll: true });
+  }
+  markOverflow();
+  const id = sp.tabs[sp.tab].id;
+  if (id !== shownTab) revealTab(shownTab === null || reduceMotion.matches ? "auto" : "smooth");
+  shownTab = id;
+}
+
+function revealTab(behavior = "auto") {
+  const strip = $("tabs");
+  const el = strip.querySelector(".ws-tab.current");
+  if (!el || strip.scrollWidth <= strip.clientWidth) return;
+  const box = strip.getBoundingClientRect();
+  const r = el.getBoundingClientRect();
+  const before = r.left - box.left - TAB_FADE;
+  const after = r.right - box.right + TAB_FADE;
+  if (before >= 0 && after <= 0) return;
+  strip.scrollTo({ left: strip.scrollLeft + (before < 0 ? before : Math.min(after, before)), behavior });
+}
+
+function markOverflow() {
+  const strip = $("tabs");
+  const room = strip.scrollWidth - strip.clientWidth;
+  strip.classList.toggle("more-left", room > 1 && strip.scrollLeft > 1);
+  strip.classList.toggle("more-right", room > 1 && strip.scrollLeft < room - 1);
+  $("tab-list").hidden = room <= 1;
 }
 
 function rects(node, box, out = { panes: [], splits: [] }) {
@@ -395,7 +446,7 @@ async function startHere(leaf, agent) {
     const res = await fetch("/sessions", {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json" },
-      body: JSON.stringify({ machine: where.machine, folder: where.label, agent }),
+      body: JSON.stringify({ machine: where.machine, folder: where.label, agent, wait: true }),
     });
     const data = await res.json().catch(() => ({}));
     if (!res.ok) throw new Error(data.error || `Could not start the agent (${res.status})`);
@@ -608,29 +659,39 @@ function toast(message) {
   toast.timer = setTimeout(() => el.classList.remove("show"), 5000);
 }
 
-function showMenu(rect, items) {
+function showMenu(rect, items, trigger = null) {
   let el = $("ws-menu");
   if (!el) {
     el = document.createElement("div");
     el.id = "ws-menu";
-    el.className = "menu";
+    el.className = "menu ws-menu";
     el.setAttribute("role", "menu");
     el.addEventListener("click", (e) => {
       const item = e.target.closest("[data-i]");
       if (!item) return;
       const run = el.actions[Number(item.dataset.i)];
-      closeMenu();
+      closeMenu(e.detail === 0);
       run();
+    });
+    el.addEventListener("keydown", (e) => {
+      if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
+      e.preventDefault();
+      const all = [...el.querySelectorAll("[role=menuitem]")];
+      const i = all.indexOf(document.activeElement);
+      all[(i + (e.key === "ArrowDown" ? 1 : all.length - 1)) % all.length].focus();
     });
     document.body.append(el);
   }
+  el.trigger?.setAttribute("aria-expanded", "false");
+  el.trigger = trigger;
+  trigger?.setAttribute("aria-expanded", "true");
   el.actions = items.map((it) => it.run);
-  el.innerHTML = items.map((it, i) => `<button type="button" role="menuitem" data-i="${i}"${it.danger ? ' class="danger"' : ""}>${esc(it.label)}</button>`).join("");
+  el.innerHTML = items.map((it, i) => `<button type="button" role="menuitem" data-i="${i}"${it.danger ? ' class="danger"' : ""}${it.current ? ' aria-current="true"' : ""}>${it.state ? dot(it.state) : ""}<span class="menu-label">${esc(it.label)}</span>${it.state ? `<span class="ws-item-word ${it.state}">${esc(WORD[it.state])}</span>` : ""}</button>`).join("");
   el.hidden = false;
   const width = el.offsetWidth;
   el.style.left = `${Math.max(8, Math.min(rect.right - width, innerWidth - width - 8))}px`;
   el.style.top = `${Math.min(rect.bottom + 4, innerHeight - el.offsetHeight - 8)}px`;
-  el.querySelector("[role=menuitem]").focus();
+  (el.querySelector('[aria-current="true"]') || el.querySelector("[role=menuitem]")).focus();
 }
 
 function renameTab(i) {
@@ -652,6 +713,7 @@ function renameTab(i) {
     const name = input.value.trim();
     if (keep && name) t.name = name;
     renaming = null;
+    tabsHtml = "";
     save();
     render();
   };
@@ -665,18 +727,22 @@ function renameTab(i) {
   input.addEventListener("dblclick", (e) => e.stopPropagation());
 }
 
-function closeMenu() {
+function closeMenu(refocus = false) {
   const el = $("ws-menu");
-  if (el) el.hidden = true;
+  if (!el || el.hidden) return;
+  el.hidden = true;
+  el.trigger?.setAttribute("aria-expanded", "false");
+  if (refocus) el.trigger?.focus();
+  el.trigger = null;
 }
 
 document.addEventListener("pointerdown", (e) => {
-  if (!e.target.closest("#ws-menu")) closeMenu();
+  if (!e.target.closest("#ws-menu") && !$("ws-menu")?.trigger?.contains(e.target)) closeMenu();
 }, true);
 document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") closeMenu();
+  if (e.key === "Escape") closeMenu(Boolean($("ws-menu")?.contains(document.activeElement)));
 });
-window.addEventListener("resize", closeMenu);
+window.addEventListener("resize", () => closeMenu());
 
 function newTab() {
   if (!state) return;
@@ -695,12 +761,11 @@ function newTab() {
         const res = await fetch("/sessions", {
           method: "POST",
           headers: { "Content-Type": "application/json", Accept: "application/json" },
-          body: JSON.stringify(body),
+          body: JSON.stringify({ ...body, wait: true }),
         });
         const data = await res.json().catch(() => ({}));
         if (!res.ok) throw new Error(data.error || `Could not start the session (${res.status})`);
         const key = `${body.machine}/${data.name}`;
-        await fetch("/refresh", { method: "POST", headers: { Accept: "application/json" } }).catch(() => {});
         await load();
         open(key);
       } catch (err) {
@@ -861,6 +926,43 @@ $("tabs").addEventListener("contextmenu", (e) => {
   ]);
 });
 
+$("tabs").addEventListener("keydown", (e) => {
+  const t = e.target.closest("[data-tab]");
+  if (!t || (e.key !== "Enter" && e.key !== " ")) return;
+  e.preventDefault();
+  const i = Number(t.dataset.tab);
+  if (i !== space().tab) switchTab(i);
+});
+
+$("tabs").addEventListener("wheel", (e) => {
+  const strip = $("tabs");
+  if (e.ctrlKey || e.shiftKey || Math.abs(e.deltaX) >= Math.abs(e.deltaY) || strip.scrollWidth <= strip.clientWidth) return;
+  e.preventDefault();
+  strip.scrollLeft += e.deltaY * (e.deltaMode === WheelEvent.DOM_DELTA_LINE ? 16 : e.deltaMode === WheelEvent.DOM_DELTA_PAGE ? strip.clientWidth : 1);
+}, { passive: false });
+
+$("tabs").addEventListener("scroll", markOverflow, { passive: true });
+
+new ResizeObserver(() => {
+  markOverflow();
+  revealTab();
+}).observe($("tabs").parentElement);
+
+$("tab-list").addEventListener("click", (e) => {
+  const button = e.currentTarget;
+  if ($("ws-menu")?.trigger === button) {
+    closeMenu();
+    return;
+  }
+  const sp = space();
+  showMenu(button.getBoundingClientRect(), sp.tabs.map((t, i) => ({
+    label: t.name,
+    state: tabState(t),
+    current: i === sp.tab,
+    run: () => { if (i !== space().tab) switchTab(i); },
+  })), button);
+});
+
 $("new-tab").addEventListener("click", newTab);
 $("side-new").addEventListener("click", newTab);
 
@@ -943,7 +1045,7 @@ async function load() {
 restore();
 if (phone.matches) document.body.classList.add("ws-picking");
 load();
-setInterval(load, 3000);
+window.YardbellLive.follow(load, 3000);
 
 const DISPATCH_KEY = "yardbell.dispatch";
 

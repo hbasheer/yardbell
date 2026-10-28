@@ -25,7 +25,7 @@ impl PortStatus for FakePorts {
 struct Rig {
     app: Arc<AppState>,
     fake: Arc<FakeRunner>,
-    refreshes: Arc<std::sync::atomic::AtomicUsize>,
+    refreshes: Arc<std::sync::Mutex<Vec<Option<String>>>>,
     now: Arc<std::sync::Mutex<std::time::Instant>>,
     _dir: tempfile::TempDir,
 }
@@ -33,6 +33,20 @@ struct Rig {
 impl Rig {
     fn advance(&self, secs: u64) {
         *self.now.lock().unwrap() += std::time::Duration::from_secs(secs);
+    }
+
+    fn refreshed(&self) -> Vec<Option<String>> {
+        self.refreshes.lock().unwrap().clone()
+    }
+
+    async fn rechecked(&self) -> Vec<Option<String>> {
+        for _ in 0..20 {
+            if !self.refreshed().is_empty() {
+                break;
+            }
+            tokio::task::yield_now().await;
+        }
+        self.refreshed()
     }
 }
 
@@ -109,7 +123,7 @@ fn rig() -> Rig {
         state.clone(),
         dir.path().join("id_ed25519"),
     ));
-    let refreshes = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let refreshes = Arc::new(std::sync::Mutex::new(Vec::new()));
     let services = Services {
         state,
         ports: Arc::new(FakePorts),
@@ -129,9 +143,9 @@ fn rig() -> Rig {
         )),
         refresh: {
             let refreshes = refreshes.clone();
-            Arc::new(move || {
-                refreshes.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-                Box::pin(async {})
+            Arc::new(move |machine: Option<String>| {
+                let refreshes = refreshes.clone();
+                Box::pin(async move { refreshes.lock().unwrap().push(machine) })
             })
         },
     };
@@ -231,6 +245,37 @@ async fn shared_nav_script_is_served_to_logged_in_pages() {
             "{page}"
         );
         assert!(html.contains(r#"id="nav-machines""#), "{page}");
+    }
+}
+
+#[tokio::test]
+async fn pages_that_show_the_state_load_the_live_script_first() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/live.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellLive"));
+    for (page, user) in [
+        ("dashboard.html", "/nav.js"),
+        ("dispatch.html", "/nav.js"),
+        ("settings.html", "/nav.js"),
+        ("add.html", "/nav.js"),
+        ("workspace.html", "/workspace.js"),
+    ] {
+        let html = String::from_utf8(Assets::get(page).unwrap().data.into_owned()).unwrap();
+        let live = html
+            .find(r#"<script src="/live.js"></script>"#)
+            .unwrap_or_else(|| panic!("{page} does not load live.js"));
+        let later = html.find(&format!(r#"<script src="{user}"></script>"#));
+        assert!(later.is_some_and(|at| live < at), "{page}");
     }
 }
 
@@ -1084,14 +1129,14 @@ async fn refresh_runs_a_check_of_every_machine_now() {
         .unwrap();
     let (status, _, body) = send(&r.app, req).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(r.refreshed(), [None]);
     let (status, _, _) = send(
         &r.app,
         Request::post("/refresh").body(Body::empty()).unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
-    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(r.refreshed(), [None]);
 }
 
 #[tokio::test]
@@ -1441,7 +1486,8 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "start_session",
             "read_session",
             "send_to_session",
-            "stop_session"
+            "stop_session",
+            "review_session"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;
@@ -1479,7 +1525,7 @@ async fn mcp_start_session_passes_the_task_and_refreshes() {
     assert_eq!(started["name"], "hp-eng-1301");
     let call = r.fake.calls().pop().unwrap();
     assert!(call.last().unwrap().contains("fix the inbox"), "{call:?}");
-    assert_eq!(r.refreshes.load(std::sync::atomic::Ordering::SeqCst), 1);
+    assert_eq!(r.refreshed(), [Some("hp".to_string())]);
 }
 
 #[tokio::test]
@@ -1560,6 +1606,465 @@ async fn dispatch_routes_need_login_and_check_conversation_ids() {
     let (status, _, body) = send(&r.app, post("/dispatch/clear", "{}")).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, r#"{"kept":0}"#);
+}
+
+async fn dispatch_conversation(r: &Rig) -> String {
+    let script = r._dir.path().join("claude");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\necho '{\"type\":\"result\",\"is_error\":false,\"result\":\"ok\"}'\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+    r.fake.stub(
+        "command -v claude",
+        Output::ok_with(&format!("{}\n", script.display())),
+    );
+    let (id, mut rx) = r
+        .app
+        .dispatch
+        .ask(
+            None,
+            "fix the inbox",
+            4000,
+            &crate::config::DispatchSettings::default(),
+            None,
+        )
+        .await
+        .unwrap();
+    while rx.recv().await.is_some() {}
+    id
+}
+
+async fn dispatch_tool(
+    r: &Rig,
+    conversation: Option<&str>,
+    name: &str,
+    args: serde_json::Value,
+) -> serde_json::Value {
+    let mut req = Request::post("/mcp")
+        .header(header::HOST, "localhost:4000")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", r.app.dispatch.token()),
+        );
+    if let Some(conversation) = conversation {
+        req = req.header(crate::dispatch::CONVERSATION_HEADER, conversation);
+    }
+    let body = rpc("tools/call", json!({ "name": name, "arguments": args }));
+    let res = router(r.app.clone())
+        .oneshot(req.body(Body::from(body.to_string())).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    serde_json::from_slice::<serde_json::Value>(&bytes).unwrap()["result"].clone()
+}
+
+async fn step_post(
+    r: &Rig,
+    cookie: &str,
+    url: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    let req = Request::post(url)
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, _, text) = send(&r.app, req).await;
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+fn last_event(r: &Rig, id: &str) -> serde_json::Value {
+    r.app.dispatch.get(id).unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .clone()
+}
+
+fn ran(r: &Rig, command: &str) -> bool {
+    r.fake
+        .calls()
+        .iter()
+        .any(|call| call.join(" ").contains(command))
+}
+
+#[tokio::test]
+async fn dispatch_steps_wait_for_approval_then_run_once() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let start = json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox" });
+    let result = dispatch_tool(&r, Some(&id), "start_session", start.clone()).await;
+    assert_eq!(result["isError"], false, "{result}");
+    let note = result["content"][0]["text"].as_str().unwrap();
+    assert!(
+        note.starts_with("Not run yet. This is now proposal "),
+        "{note}"
+    );
+    assert!(
+        !ran(&r, "tmux new"),
+        "nothing runs before the person approves"
+    );
+    let step = last_event(&r, &id);
+    assert_eq!(
+        (&step["role"], &step["status"], &step["by"], &step["input"]),
+        (
+            &json!("action"),
+            &json!("pending"),
+            &json!("dispatch"),
+            &start
+        )
+    );
+    let step_id = step["id"].as_str().unwrap().to_string();
+
+    let mistake = dispatch_tool(
+        &r,
+        Some(&id),
+        "start_session",
+        json!({ "machine": "hp", "folder": "nope" }),
+    )
+    .await;
+    assert_eq!(mistake["isError"], true);
+    assert_eq!(mistake["content"][0]["text"], "hp has no folder nope");
+    let lost = dispatch_tool(
+        &r,
+        None,
+        "stop_session",
+        json!({ "machine": "hp", "name": "x" }),
+    )
+    .await;
+    assert_eq!(lost["isError"], true);
+    assert_eq!(
+        r.app.dispatch.pending(&id),
+        std::slice::from_ref(&step_id),
+        "neither became a step"
+    );
+
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301\n"));
+    let url = format!("/dispatch/conversations/{id}/actions/{step_id}");
+    let (status, done) = step_post(&r, &c, &url, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "approved");
+    assert_eq!(done["result"]["ok"], true);
+    assert_eq!(done["result"]["session"]["name"], "hp-eng-1301");
+    assert!(ran(&r, "fix the inbox"));
+    assert_eq!(r.refreshed(), [Some("hp".to_string())]);
+    assert_eq!(
+        r.app.dispatch.get(&id).unwrap()["sessions"][0]["name"],
+        "hp-eng-1301"
+    );
+    let (status, again) = step_post(&r, &c, &url, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(again["error"], "this step was already approved");
+    for bad in [
+        "/dispatch/conversations/{id}/actions/../x",
+        "/dispatch/conversations/{id}/actions/abc",
+    ] {
+        let (status, _) = step_post(
+            &r,
+            &c,
+            &bad.replace("{id}", &id),
+            json!({ "decision": "approve" }),
+        )
+        .await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{bad}");
+    }
+}
+
+#[tokio::test]
+async fn dispatch_steps_can_be_edited_rejected_or_approved_together() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let propose = |name: &'static str, args: serde_json::Value| {
+        let (r, id) = (&r, id.clone());
+        async move {
+            dispatch_tool(r, Some(&id), name, args).await;
+            last_event(r, &id)["id"].as_str().unwrap().to_string()
+        }
+    };
+    let start = propose(
+        "start_session",
+        json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox" }),
+    )
+    .await;
+    let answer = propose(
+        "send_to_session",
+        json!({ "machine": "hp", "name": "hp-eng-1301", "text": "yes" }),
+    )
+    .await;
+    let url = |step: &str| format!("/dispatch/conversations/{id}/actions/{step}");
+
+    let (status, body) = step_post(
+        &r,
+        &c,
+        &url(&start),
+        json!({ "decision": "approve", "input": { "machine": "nope", "folder": "slot2" } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "no machine named nope");
+    assert_eq!(
+        r.app.dispatch.pending(&id).len(),
+        2,
+        "a bad edit decides nothing"
+    );
+
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301\n"));
+    let edited =
+        json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox and add a test" });
+    let (status, done) = step_post(
+        &r,
+        &c,
+        &url(&start),
+        json!({ "decision": "approve", "input": edited }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "edited");
+    assert_eq!(done["original"]["prompt"], "fix the inbox");
+    assert!(ran(&r, "fix the inbox and add a test"));
+
+    let (status, rejected) =
+        step_post(&r, &c, &url(&answer), json!({ "decision": "reject" })).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(rejected["status"], "rejected");
+    assert!(!ran(&r, "send-keys"), "a rejected step never runs");
+    let (status, _) = step_post(&r, &c, &url(&answer), json!({ "decision": "maybe" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    r.fake.stub("kill-session", Output::ok_with(""));
+    for name in ["hp-a", "hp-b"] {
+        propose("stop_session", json!({ "machine": "hp", "name": name })).await;
+    }
+    let (status, all) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/actions"),
+        json!({ "decision": "approve" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert!(all
+        .as_array()
+        .unwrap()
+        .iter()
+        .all(|e| e["result"]["ok"] == true));
+    assert!(ran(&r, "kill-session -t '=hp-a'") && ran(&r, "kill-session -t '=hp-b'"));
+    assert_eq!(r.app.dispatch.list()[0]["waiting"], 0);
+}
+
+#[tokio::test]
+async fn with_approval_off_dispatch_steps_run_at_once_and_are_recorded() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    r.app
+        .settings
+        .set_dispatch(crate::config::DispatchSettings {
+            approval: crate::config::Approval::Auto,
+            ..Default::default()
+        })
+        .unwrap();
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301\n"));
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "start_session",
+        json!({ "machine": "hp", "folder": "slot2", "prompt": "fix the inbox" }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let started: serde_json::Value =
+        serde_json::from_str(result["content"][0]["text"].as_str().unwrap()).unwrap();
+    assert_eq!(started["name"], "hp-eng-1301");
+    let step = last_event(&r, &id);
+    assert_eq!(
+        (&step["status"], &step["told"]),
+        (&json!("auto"), &json!(true))
+    );
+    assert_eq!(step["result"]["session"]["name"], "hp-eng-1301");
+    assert!(r.app.dispatch.pending(&id).is_empty());
+}
+
+#[tokio::test]
+async fn a_review_is_requested_approved_and_its_findings_sent_back() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let finished = |name: &str, review: Option<crate::dispatch::ReviewOf>, screen: &str| {
+        r.app.dispatch.report(
+            &crate::dispatch::Change {
+                conversation: id.clone(),
+                machine: "hp".into(),
+                name: name.into(),
+                path: "/r/slots/slot2".into(),
+                state: "idle",
+                review,
+            },
+            screen,
+        );
+        r.app.dispatch.get(&id).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .len()
+            - 1
+    };
+    let card = finished("hp-eng-1301", None, "Done.");
+    let (status, step) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/reviews"),
+        json!({ "card": card }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{step}");
+    assert_eq!(
+        (&step["by"], &step["status"]),
+        (&json!("you"), &json!("pending"))
+    );
+    assert_eq!(
+        step["review"],
+        json!({ "machine": "hp", "name": "hp-eng-1301", "path": "/r/slots/slot2", "branch": "eng-1301-inbox" })
+    );
+    assert_eq!(step["input"]["path"], "/r/slots/slot2");
+    assert!(step["input"]["prompt"]
+        .as_str()
+        .unwrap()
+        .starts_with("Review the work on branch eng-1301-inbox in this folder"));
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/reviews"),
+        json!({ "card": 0 }),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::NOT_FOUND,
+        "the first event is a message"
+    );
+
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301-2\n"));
+    let (status, started) = step_post(
+        &r,
+        &c,
+        &format!(
+            "/dispatch/conversations/{id}/actions/{}",
+            step["id"].as_str().unwrap()
+        ),
+        json!({ "decision": "approve" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{started}");
+    let tracked = r.app.dispatch.get(&id).unwrap()["sessions"].clone();
+    assert_eq!(tracked[0]["name"], "hp-eng-1301-2");
+    assert_eq!(tracked[0]["review"]["name"], "hp-eng-1301");
+
+    let of: crate::dispatch::ReviewOf = serde_json::from_value(step["review"].clone()).unwrap();
+    let screen = "⏺ YARDBELL REVIEW\n  verdict: changes needed\n  summary: Two problems.\n  - high: src/inbox.rs:40: The unread count can go negative.\n  - low: README.md: Mention the new flag.\n  END REVIEW";
+    let review = finished("hp-eng-1301-2", Some(of), screen);
+    let url = format!("/dispatch/conversations/{id}/reviews/{review}");
+    let (status, _) = step_post(&r, &c, &url, json!({ "decision": "send", "findings": [] })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = step_post(&r, &c, &url, json!({ "decision": "send", "findings": [7] })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    r.fake.stub("send-keys", Output::ok_with(""));
+    let (status, sent) =
+        step_post(&r, &c, &url, json!({ "decision": "send", "findings": [0] })).await;
+    assert_eq!(status, StatusCode::OK, "{sent}");
+    assert_eq!(sent["outcome"]["decision"], "sent",);
+    assert_eq!(sent["outcome"]["to"], "hp-eng-1301");
+    let typed = r
+        .fake
+        .calls()
+        .iter()
+        .map(|c| c.join(" "))
+        .find(|c| c.contains("send-keys"))
+        .unwrap();
+    assert!(typed.contains("'=hp-eng-1301:'"), "{typed}");
+    assert!(typed.contains("found this problem. Fix it,"), "{typed}");
+    assert!(
+        typed.contains("The unread count can go negative."),
+        "{typed}"
+    );
+    assert!(!typed.contains("Mention the new flag"), "{typed}");
+    let (status, _) = step_post(&r, &c, &url, json!({ "decision": "dismiss" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+}
+
+#[tokio::test]
+async fn dispatch_can_ask_for_a_review_of_a_running_session() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "review_session",
+        json!({ "machine": "hp", "name": "hp-eng-1301", "focus": "the unread count" }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let step = last_event(&r, &id);
+    assert_eq!(step["tool"], "start_session");
+    assert_eq!(step["review"]["branch"], "eng-1301-inbox");
+    assert!(step["input"]["prompt"]
+        .as_str()
+        .unwrap()
+        .contains("Pay special attention to this: the unread count"));
+    let missing = dispatch_tool(
+        &r,
+        Some(&id),
+        "review_session",
+        json!({ "machine": "hp", "name": "hp-nope" }),
+    )
+    .await;
+    assert_eq!(
+        missing["content"][0]["text"],
+        "no session named hp-nope on hp"
+    );
+}
+
+#[tokio::test]
+async fn an_answer_to_a_waiting_session_is_kept_in_the_conversation() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    r.app.dispatch.report(
+        &crate::dispatch::Change {
+            conversation: id.clone(),
+            machine: "hp".into(),
+            name: "hp-eng-1301".into(),
+            path: "/r/slots/slot2".into(),
+            state: "blocked",
+            review: None,
+        },
+        "Run the migration?\n ❯ 1. Yes\n   2. No",
+    );
+    let card = r.app.dispatch.get(&id).unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .len()
+        - 1;
+    let url = format!("/dispatch/conversations/{id}/answers");
+    let (status, _) = step_post(&r, &c, &url, json!({ "card": card, "key": "7" })).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    r.fake.stub("send-keys", Output::ok_with(""));
+    let (status, answered) = step_post(&r, &c, &url, json!({ "card": card, "key": "2" })).await;
+    assert_eq!(status, StatusCode::OK, "{answered}");
+    assert_eq!(answered["answer"]["label"], "No");
+    assert!(ran(&r, "send-keys -t '=hp-eng-1301:' -l '2'"));
+    let (status, again) = step_post(&r, &c, &url, json!({ "card": card, "key": "1" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(again["error"], "it was already answered with No");
 }
 
 #[tokio::test]
@@ -1743,4 +2248,133 @@ async fn stop_process_ends_only_agents_outside_tmux() {
             .count(),
         1
     );
+}
+
+#[tokio::test]
+async fn actions_check_their_machine_again_without_waiting_for_it() {
+    let r = rig();
+    r.fake.stub("kill-session", Output::ok_with(""));
+    let c = cookie(&r.app).await;
+    let stop = Request::post("/sessions/hp/hp-eng-1301/stop")
+        .header(header::COOKIE, &c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&r.app, stop).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(r.rechecked().await, [Some("hp".to_string())]);
+
+    let r = rig();
+    r.fake.stub("send-keys", Output::ok_with(""));
+    let c = cookie(&r.app).await;
+    let keys = Request::post("/sessions/hp/hp-eng-1301/keys")
+        .header(header::COOKIE, &c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(r#"{"keys":"1"}"#))
+        .unwrap();
+    let (status, _, body) = send(&r.app, keys).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(r.rechecked().await, [Some("hp".to_string())]);
+}
+
+#[tokio::test]
+async fn a_failed_stop_checks_nothing() {
+    let r = rig();
+    r.fake
+        .stub("kill-session", Output::failed(1, "can't find session"));
+    let c = cookie(&r.app).await;
+    let req = Request::post("/sessions/hp/hp-x/stop")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(r.rechecked().await.is_empty());
+}
+
+#[tokio::test]
+async fn a_new_session_can_wait_until_its_machine_was_checked() {
+    let r = rig();
+    r.fake.stub("tmux new", Output::ok_with(""));
+    let (status, body) = post_session(&r, r#"{"machine":"hp","folder":"slot2","wait":true}"#).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(r.refreshed(), [Some("hp".to_string())], "answered first");
+
+    let r = rig();
+    r.fake.stub("tmux new", Output::ok_with(""));
+    let (status, body) = post_session(&r, r#"{"machine":"hp","folder":"slot2"}"#).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(r.rechecked().await, [Some("hp".to_string())]);
+}
+
+#[tokio::test]
+async fn forgetting_an_ended_session_tells_open_pages() {
+    let r = rig();
+    let changes = r.app.state.changes();
+    let c = cookie(&r.app).await;
+    let req = Request::post("/ended/hp:hp-x/forget")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, _) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changes.has_changed().unwrap());
+}
+
+async fn serve(r: &Rig) -> SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let svc = router(r.app.clone()).into_make_service_with_connect_info::<SocketAddr>();
+    tokio::spawn(async move { axum::serve(listener, svc).await });
+    addr
+}
+
+async fn open_live(
+    addr: SocketAddr,
+    cookie: &str,
+    origin: &str,
+) -> (String, tokio::net::TcpStream) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let req = format!(
+        "GET /state/live HTTP/1.1\r\nHost: {addr}\r\nOrigin: {origin}\r\nCookie: {cookie}\r\n\
+         Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
+         Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
+    );
+    socket.write_all(req.as_bytes()).await.unwrap();
+    let mut head = Vec::new();
+    let mut byte = [0u8; 1];
+    while !head.ends_with(b"\r\n\r\n") {
+        socket.read_exact(&mut byte).await.unwrap();
+        head.push(byte[0]);
+    }
+    (String::from_utf8_lossy(&head).into_owned(), socket)
+}
+
+async fn next_text(socket: &mut tokio::net::TcpStream) -> String {
+    use tokio::io::AsyncReadExt;
+    let mut head = [0u8; 2];
+    socket.read_exact(&mut head).await.unwrap();
+    assert_eq!(head[0], 0x81, "a whole text frame");
+    let mut body = vec![0u8; (head[1] & 0x7f) as usize];
+    socket.read_exact(&mut body).await.unwrap();
+    String::from_utf8(body).unwrap()
+}
+
+#[tokio::test]
+async fn open_pages_hear_about_changes_on_a_socket() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let addr = serve(&r).await;
+    let page = format!("http://{addr}");
+    let (head, _) = open_live(addr, "", &page).await;
+    assert!(!head.starts_with("HTTP/1.1 101"), "{head}");
+    let (head, _) = open_live(addr, &c, "http://elsewhere.example").await;
+    assert!(head.starts_with("HTTP/1.1 403"), "{head}");
+    let (head, mut socket) = open_live(addr, &c, &page).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    r.app.state.forget("hp:hp-x");
+    let text = tokio::time::timeout(Duration::from_secs(2), next_text(&mut socket))
+        .await
+        .expect("no message after the state changed");
+    assert!(text.parse::<u64>().is_ok(), "{text}");
 }

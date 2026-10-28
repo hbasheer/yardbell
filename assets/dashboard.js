@@ -4,6 +4,7 @@ import { repeat } from "/vendor/lit-html/directives/repeat.js";
 const $ = (id) => document.getElementById(id);
 const onHost = ["localhost", "127.0.0.1"].includes(location.hostname);
 const Nav = window.YardbellNav;
+const Live = window.YardbellLive;
 const NewSession = window.YardbellNewSession;
 let current = null;
 let lastJson = "";
@@ -114,23 +115,31 @@ function renderMeshBanner(mesh) {
 function memory(m) {
   const h = m.health;
   if (!m.up || !h || !h.mem_total_kb) return "";
-  const used = Math.min(h.mem_used_kb / h.mem_total_kb, 1);
-  const agents = Math.min(h.agent_kb / h.mem_total_kb, used);
-  const otherKb = Math.max(h.mem_used_kb - h.agent_kb, 0);
-  const freeKb = Math.max(h.mem_total_kb - h.mem_used_kb, 0);
+  // RSS counts shared pages once per process, so the per-account sums can exceed what is in use.
+  const usedKb = Math.min(h.mem_used_kb, h.mem_total_kb);
+  const agentKb = Math.min(h.agent_kb, usedKb);
+  const split = h.user_kb > 0;
+  const mineKb = split ? Math.min(Math.max(h.user_kb, agentKb), usedKb) : agentKb;
+  const yoursKb = mineKb - agentKb;
+  const othersKb = usedKb - mineKb;
+  const freeKb = Math.max(h.mem_total_kb - usedKb, 0);
+  const share = (kb) => ((kb / h.mem_total_kb) * 100).toFixed(1);
   const pct = Nav.memPct(m);
   const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
-  const label = `Memory ${pct}% used of ${gb(h.mem_total_kb)} GB: agents ${gb(h.agent_kb)} GB, other ${gb(otherKb)} GB, free ${gb(freeKb)} GB`;
+  const parts = [["agents", "Agents", agentKb]];
+  if (split) parts.push(["mine", "Your other processes", yoursKb]);
+  if (!split || othersKb > 0) parts.push(["other", split ? "Other accounts" : "Other", othersKb]);
+  parts.push(["free", "Free", freeKb]);
+  const label = `Memory ${pct}% used of ${gb(h.mem_total_kb)} GB: ` + parts.map(([, name, kb]) => `${name.toLowerCase()} ${gb(kb)} GB`).join(", ");
   return html`<div class="mem${level}">
     <div class="mem-head"><span>Memory <span class="mem-pct">${pct}% used</span> of ${gb(h.mem_total_kb)} GB</span></div>
     <div class="mem-bar" role="img" aria-label=${label}>
-      <span class="mem-agents" style="width:${(agents * 100).toFixed(1)}%"></span>
-      <span class="mem-other" style="width:${((used - agents) * 100).toFixed(1)}%"></span>
+      <span class="mem-agents" style="width:${share(agentKb)}%"></span>
+      ${split ? html`<span class="mem-mine" style="width:${share(yoursKb)}%"></span>` : ""}
+      <span class="mem-other" style="width:${share(othersKb)}%"></span>
     </div>
     <div class="mem-legend">
-      <span><i class="key agents"></i>Agents ${gb(h.agent_kb)} GB</span>
-      <span><i class="key other"></i>Other ${gb(otherKb)} GB</span>
-      <span><i class="key free"></i>Free ${gb(freeKb)} GB</span>
+      ${parts.map(([key, name, kb]) => html`<span><i class="key ${key}"></i>${name} ${gb(kb)} GB</span>`)}
     </div>
   </div>`;
 }
@@ -347,6 +356,25 @@ function render(state) {
   renderGroups(state);
 }
 
+// A stopped session leaves the list as soon as the stop succeeds. A state fetched before the
+// server checked its machine again still lists it, so it stays out until a state without it.
+const LEAVING_FOR = 15000;
+const leaving = new Map();
+let fetched = null;
+
+function withoutLeaving(state) {
+  const now = Date.now();
+  const listed = new Set(state.sessions.map((s) => s.id));
+  for (const [id, at] of leaving) if (now - at > LEAVING_FOR || !listed.has(id)) leaving.delete(id);
+  if (!leaving.size) return state;
+  return { ...state, sessions: state.sessions.filter((s) => !leaving.has(s.id)) };
+}
+
+function leave(id) {
+  leaving.set(id, Date.now());
+  if (fetched) render((current = withoutLeaving(fetched)));
+}
+
 async function refresh() {
   try {
     const res = await fetch("/state", { headers: { Accept: "application/json" } });
@@ -359,7 +387,8 @@ async function refresh() {
     if (text !== lastJson || Date.now() - lastRender > 30000) {
       lastJson = text;
       lastRender = Date.now();
-      current = JSON.parse(text);
+      fetched = JSON.parse(text);
+      current = withoutLeaving(fetched);
       render(current);
     }
   } catch {
@@ -465,19 +494,13 @@ document.querySelector(".segmented").addEventListener("click", (e) => {
   applyFilters();
 });
 
-// /state is the server's last machine check, which can be poll_seconds old, so after an action
-// that changes sessions the machines are checked again before the list is drawn.
-async function checkNow() {
-  await api("POST", "/refresh");
-  await refresh();
-}
-
 $("refresh-btn").addEventListener("click", async (e) => {
   const b = e.currentTarget;
   b.disabled = true;
   b.classList.add("spinning");
   try {
-    await checkNow();
+    await api("POST", "/refresh");
+    await refresh();
   } catch (err) {
     toast(err.message);
   } finally {
@@ -608,7 +631,7 @@ function openNew(machine) {
     defaultAgent: current?.default_agent,
     onError: toast,
     onStart: (body) => startAndOpen(body)
-      .then(() => checkNow().catch(() => refresh()))
+      .then(() => Live.soon())
       .catch((err) => toast(err.message)),
   });
 }
@@ -683,7 +706,7 @@ document.addEventListener("click", async (e) => {
       const url = `/term/${encodeURIComponent(machine)}/${encodeURIComponent(res.name)}`;
       if (tab) tab.location.href = url; else location.href = url;
       toast(`Moved ${folder} into tmux`, "ok");
-      checkNow().catch(() => refresh());
+      Live.soon();
     } catch (err) {
       if (tab) tab.close();
       toast(err.message);
@@ -696,9 +719,11 @@ document.addEventListener("click", async (e) => {
   try {
     if (act === "stop") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}/stop`);
+      leave(`${machine}:${name}`);
       toast(`Stopped ${name}`, "ok");
     } else if (act === "stop-pid") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(pid)}/stop-process`);
+      leave(`${machine}:${pid}`);
       toast(`Stopped ${agentLabel(agent)} in ${folder}`, "ok");
     } else if (act === "host") {
       await api("POST", `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}/host-terminal`);
@@ -707,7 +732,7 @@ document.addEventListener("click", async (e) => {
     } else if (act === "forget") {
       await api("POST", `/ended/${encodeURIComponent(id)}/forget`);
     }
-    checkNow().catch(() => refresh());
+    Live.soon();
   } catch (err) {
     toast(err.message);
   } finally {
@@ -731,5 +756,5 @@ if (window.__TAURI__) {
 }
 
 refresh();
-setInterval(refresh, 5000);
+Live.follow(refresh, 5000);
 setInterval(tick, 1000);

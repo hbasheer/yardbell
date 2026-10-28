@@ -5,6 +5,76 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- The memory bar splits what is used into your agents, your other processes and other accounts, so
+  on a server shared without per-account memory limits you can see that the memory is someone
+  else's. The percentage and the memory alert still cover the whole machine.
+- Under an account memory limit, file cache and reclaimable kernel memory no longer count as used.
+  The kernel drops them when the limit is reached, so a shared dev server showed 40% when your
+  processes used 12%.
+- Fixed: copying from the terminal could leave it ignoring the keyboard until the session was
+  opened again. **Copy all** now copies and goes back to the live terminal, Esc closes the screen
+  text, and keys typed while it shows no longer reach the terminal hidden underneath. When the
+  browser's own copy has to step in (over plain `http`, in the desktop app's Workspace panes, or for
+  a selection tmux copies), the keyboard goes back to the terminal, and a tab or pane you are not
+  using no longer takes it. When copying fails, a message says how to copy instead.
+- Fixed: closing, reloading or reconnecting a terminal could type a newline and Ctrl-D into its
+  session, which ended a plain shell and sent stray keys to an agent.
+- Workspace: tabs that do not fit in the row are no longer out of reach. The row scrolls sideways
+  with the mouse wheel, a trackpad or a swipe, fades at an edge that has more tabs behind it, and
+  gets a button at its end that lists every open tab with its state, so you can jump to any of
+  them. The tab you switch to always scrolls into view, whether you click it, pick it from the
+  sidebar or the list, start a new session, press Alt+[ or Alt+], or reload the page.
+- Workspace: tabs are 140 to 220px wide, and a long name ends in an ellipsis with the full name in
+  its tooltip. Enter or Space opens the tab that has keyboard focus.
+- Dispatch: the dot and label in the small chips under a message, such as **Checked machines**,
+  sit in the middle of the chip again in the desktop app, which drew them 3px too high.
+- Dispatch on a phone: the last lines of a conversation are no longer hidden behind the message
+  box, which used to sit above its place with an empty strip under it that never scrolled away. The
+  box now sits at the bottom of the screen, above the home indicator, and stays above the on-screen
+  keyboard while the conversation keeps its newest message in view. It also uses larger text there,
+  so an iPhone no longer zooms in when you tap it.
+- Dispatch's message box works more like Commslayer's. Type `/` to pick one of your tasks, or `@` to
+  name a machine, session or folder; the Tasks and @ buttons in the box open the same lists. A
+  picked task's text goes into the box, so you can change it before sending. What you type is kept
+  for each conversation until you send it, also after a reload, and Arrow Up in an empty box brings
+  back earlier messages.
+- Dispatch: Enter still sends and Shift+Enter starts a new line, and Ctrl+Enter (⌘+Enter on a Mac)
+  now sends too. In a wide window, click the hint beside the Send button to send with Ctrl+Enter
+  instead, so Enter starts a new line. On a phone, Enter starts a new line and the Send button
+  sends. While Dispatch is working, Stop takes the place of Send.
+- Dispatch asks before it acts. Starting, stopping or typing into a session is now a step in the
+  conversation that waits for you: approve it, edit it first (machine, folder, branch, agent, task
+  or text), or reject it, and nothing runs until you approve. Several waiting steps can be
+  approved or rejected at once. Sending a new message withdraws the steps you have not decided
+  on, and Dispatch hears what happened to each step with your next message. To have Dispatch go
+  ahead on its own as before, change **Before Dispatch starts, stops or types into a session** in
+  Settings, Dispatch.
+- Dispatch: **Review branch** prepares a reviewer for the same folder, which you can start as it
+  is or with another agent or instructions. When it finishes, its findings come back as a review
+  with a verdict, a summary and each problem with its file and severity. Pick the ones that matter
+  and send them to the session that did the work, or dismiss the review. Ask Dispatch to review a
+  session and it proposes the same reviewer.
+- Dispatch keeps a record of every decision in the conversation: which steps you approved, edited
+  or rejected and when, what each one did, the answers you picked for a waiting session, and what
+  you did with a review. The cards show it after a reload and on another device, and a conversation
+  in the sidebar says how many steps wait for you.
+- Conversations from earlier versions open as before, with the sessions they started shown as
+  steps that ran without asking.
+- Open pages update as soon as Yardbell has checked a machine. The server tells each page over a
+  websocket when something changed, so a session that starts, ends or waits for you shows within
+  a moment of the check, instead of on the page's own 3 to 10 second timer on top of it. A page
+  that cannot open the websocket polls as before.
+- After you start, stop, answer or move a session, Yardbell checks that machine again right away
+  and every open page and device shows the result. A stopped session leaves the dashboard as soon
+  as the stop succeeds. Before, each page asked for a check of every machine and waited for the
+  slowest one.
+- Each machine is shown as soon as its own check finishes, so a slow or unreachable machine no
+  longer holds up the others.
+- A page in a hidden browser tab, or behind another tab in the desktop app, stops fetching and
+  catches up the moment it is shown again.
+- The sidebar's machine list, and the Workspace sidebar, are only redrawn when they change, so a
+  click or hover there is no longer lost to a refresh every few seconds.
+
 ## [0.6.7] - 2026-10-27
 
 - On a machine shared with other people, only your own agent sessions are listed. Other accounts'
