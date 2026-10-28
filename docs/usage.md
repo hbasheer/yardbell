@@ -192,10 +192,13 @@ servers listed under **MCP servers** in Settings, so with Linear added there,
 **Plan my Linear tickets** reads your open tickets and plans them.
 
 The **Claude usage** card at the bottom of the main sidebar shows how much of your Claude plan's
-5-hour and weekly limits is used, and when each resets. Claude Code reports these numbers each time
-Dispatch replies, so the card shows the figures from the last reply, and appears after the first one.
-The limits belong to the Claude account signed in on the machine running Yardbell, and agent
-sessions using the same account count towards them too.
+5-hour and weekly limits is used, and when each resets. Every 5 minutes Yardbell asks Anthropic for
+the same figures Claude Code's `/usage` shows, using the Claude Code sign-in on the machine running
+Yardbell (`~/.claude/.credentials.json`, or the Keychain on macOS), so every session on that account
+counts. It only reads the sign-in and never renews it; when the sign-in has expired because Claude
+Code has not run for a while, the card keeps the figures from Dispatch's last reply and says how old
+they are. A limit whose reset time has passed shows as reset until the next check. The circular
+arrow on the card checks right away; when it cannot, the card's tooltip says why.
 
 The **Tasks** list in Dispatch's sidebar sends a task in one click. Five come with Yardbell:
 **What's going on?** summarises every machine and session, **Who needs me?** lists the sessions

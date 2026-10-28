@@ -864,6 +864,14 @@ body.resizing { cursor: col-resize; user-select: none; }
 .usage-fill.warn { background: var(--warn); }
 .usage-fill.bad { background: var(--bad); }
 .usage-reset { font-size: 11px; color: var(--muted); }
+.usage-age { font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
+.usage-tools { display: inline-flex; align-items: center; gap: 2px; }
+.usage-refresh { display: inline-grid; place-items: center; width: 22px; height: 22px; margin: -3px -4px -3px 0; padding: 0; border: 0; border-radius: 6px; background: none; color: var(--muted); cursor: pointer; }
+.usage-refresh:hover { background: var(--hover); color: var(--ink); }
+.usage-refresh:disabled { cursor: progress; }
+.usage-refresh .icon { width: 13px; height: 13px; }
+.usage-refresh.spinning .icon { animation: spin 0.9s linear infinite; }
+@media (prefers-reduced-motion: reduce) { .usage-refresh.spinning .icon { animation: none; } }
 #nav-usage { margin: auto 0 12px; }
 #nav-usage + .side-foot { margin-top: 0; }
 @media (prefers-reduced-motion: reduce) { .convos-head .chevron { transition: none; } }
