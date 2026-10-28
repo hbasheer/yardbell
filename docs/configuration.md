@@ -209,9 +209,8 @@ Every key is optional. The values above are the defaults. Older configs may stil
 
 ### `mcp_servers` (optional)
 
-Other MCP servers that Claude Code sessions started by Yardbell get, through `--mcp-config`.
-Nothing is written on the machines. The **MCP servers for sessions** section of the Settings page
-edits this list.
+Other MCP servers that Claude Code sessions started by Yardbell get, through `--mcp-config`. The
+**MCP servers for sessions** section of the Settings page edits this list.
 
 ```yaml
 mcp_servers:
@@ -224,9 +223,13 @@ mcp_servers:
     machines: [mini]                                   # optional; empty means every machine
 ```
 
-Each server needs either `command` or `url`. The values, tokens included, are on the agent's
-command line, so other users of that machine can see them in its process list while the session
-runs.
+Each server needs either `command` or `url`. The values often hold tokens, so they never go on a
+command line, where every account on the machine could read them with `ps`. When a Claude Code
+session starts, Yardbell sends the machine's servers over ssh's standard input into
+`~/.cache/yardbell/mcp/mcp-<hash>.json` on that machine (`$XDG_CACHE_HOME` if it is set), a file
+only your account can read in a folder only your account can open, and passes Claude Code that
+file's path. Every start and resume writes it again, sessions with the same servers share one file,
+and files left by an older list are removed after 30 days.
 
 ### `dispatch` (optional)
 
@@ -300,8 +303,10 @@ If you write entries yourself, test them from the host with `ssh -o BatchMode=ye
 | `phone_notifications.topic` | Settings, "Set up" | a generated name, `yardbell-` and 24 random letters and digits |
 | `mcp_token` | Settings, "Agent tools (MCP)" | `yb_` and 40 random letters and digits; absent means the MCP server is off |
 
-Keep `yardbell.yml` private (`chmod 600`): the cookie key can forge a login, the MCP token can
-start sessions, and the notification topic and token are secrets too.
+Keep `yardbell.yml` private: the cookie key can forge a login, the MCP token can start sessions,
+and the notification topic and token and the `mcp_servers` tokens are secrets too. Yardbell saves
+it and its `.bak-` copies readable only by your account (mode 600). A file you wrote yourself keeps
+its mode until Yardbell first saves it, so run `chmod 600` on it.
 
 ## 6. What applies when
 

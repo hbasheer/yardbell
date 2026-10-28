@@ -3,6 +3,8 @@ use crate::config::{HostTerminal, Machine};
 use crate::shell::{expand_home, login_shell, quote, without_shell_noise, Duration, Runner};
 use crate::ssh::Ssh;
 use crate::viewers::Plan;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 
 const ACTION_TIMEOUT: Duration = Duration::from_secs(10);
@@ -145,6 +147,22 @@ fn start_script(m: &Machine, name: &str, folder_path: &str, run: &str, agent: &A
     )
 }
 
+// The config holds MCP servers' tokens, so it goes on stdin into a file only the account can
+// read, never on a command line, which ps shows to every account. Named after its contents, so
+// sessions with the same servers share a file and two Yardbell servers never overwrite each
+// other's. Every start rewrites it, and files from an older config go after 30 days.
+fn mcp_config_script(config: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    config.hash(&mut hasher);
+    format!(
+        "umask 077; d=\"${{XDG_CACHE_HOME:-$HOME/.cache}}/yardbell/mcp\"; f=\"$d/mcp-{:016x}.json\"; \
+         {{ mkdir -p \"$d\" && chmod 700 \"$d\" && cat > \"$f.$$\" && mv -f \"$f.$$\" \"$f\"; }} || {{ rm -f \"$f.$$\"; exit 1; }}; \
+         find \"$d\" -name 'mcp-*.json' -mtime +30 -exec rm -f '{{}}' + 2>/dev/null; \
+         echo \"$f\"",
+        hasher.finish()
+    )
+}
+
 pub struct Sessions {
     runner: Arc<dyn Runner>,
     ssh: Ssh,
@@ -172,12 +190,29 @@ impl Sessions {
         };
         // --mcp-config takes several values, so it goes last or it would swallow the task.
         if let Some(config) = mcp_config {
-            run = format!("{run} --mcp-config {}", quote(config));
+            let file = self.write_mcp_config(m, config).await?;
+            run = format!("{run} --mcp-config {}", quote(&file));
         }
         let script = start_script(m, &name, folder_path, &run, agent);
         let out = self.output(m, &login_shell(&script)).await?;
         let started = out.lines().map(str::trim).rfind(|line| !line.is_empty());
         Ok(started.map_or(name, str::to_string))
+    }
+
+    async fn write_mcp_config(&self, m: &Machine, config: &str) -> Result<String, String> {
+        let failed = format!("cannot write the MCP config on {}", m.name);
+        let out = self
+            .output_with_input(m, &mcp_config_script(config), Some(config.to_string()))
+            .await
+            .map_err(|e| match e.trim() {
+                "" => failed.clone(),
+                e => format!("{failed}: {e}"),
+            })?;
+        out.lines()
+            .map(str::trim)
+            .rfind(|line| line.starts_with('/'))
+            .map(str::to_string)
+            .ok_or(failed)
     }
 
     pub async fn stop(&self, m: &Machine, name: &str) -> Result<(), String> {
@@ -246,9 +281,18 @@ impl Sessions {
     }
 
     async fn output(&self, m: &Machine, cmd: &str) -> Result<String, String> {
+        self.output_with_input(m, cmd, None).await
+    }
+
+    async fn output_with_input(
+        &self,
+        m: &Machine,
+        cmd: &str,
+        input: Option<String>,
+    ) -> Result<String, String> {
         let out = self
             .runner
-            .run(self.ssh.command(m, cmd), None, ACTION_TIMEOUT)
+            .run(self.ssh.command(m, cmd), input, ACTION_TIMEOUT)
             .await;
         if out.ok() {
             return Ok(out.stdout);
@@ -496,32 +540,102 @@ mod tests {
         );
     }
 
+    const MCP_CONFIG: &str = r#"{"mcpServers":{"linear":{"type":"http","url":"https://mcp.linear.app/mcp","headers":{"Authorization":"Bearer lin_api_secret"}}}}"#;
+
+    fn task_with_mcp(agent: &Agent) -> Launch<'_> {
+        Launch {
+            folder_path: "/r/app",
+            ticket: "-",
+            folder_label: "app",
+            agent,
+            start: Start::Task("fix login"),
+            mcp_config: Some(MCP_CONFIG),
+        }
+    }
+
     #[tokio::test]
-    async fn mcp_config_goes_after_the_task() {
+    async fn the_mcp_config_goes_on_stdin_and_only_its_path_after_the_task() {
+        for local in [true, false] {
+            let fake = Arc::new(FakeRunner::default());
+            fake.stub("tmux new", Output::ok_with(""));
+            fake.stub(
+                "yardbell/mcp",
+                Output::ok_with("/home/u/.cache/yardbell/mcp/mcp-1.json\n"),
+            );
+            sessions(fake.clone())
+                .create(&machine(local), task_with_mcp(&claude()))
+                .await
+                .unwrap();
+            for call in fake.calls() {
+                assert!(!call.join(" ").contains("lin_api_secret"), "{call:?}");
+            }
+            assert_eq!(fake.inputs(), vec![Some(MCP_CONFIG.to_string()), None]);
+            let script = start_script(
+                &machine(local),
+                "hp-app",
+                "/r/app",
+                "claude 'fix login' --mcp-config '/home/u/.cache/yardbell/mcp/mcp-1.json'",
+                &claude(),
+            );
+            assert!(last_command(&fake).ends_with(&crate::shell::login_shell(&script)));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_session_does_not_start_when_its_mcp_config_cannot_be_written() {
         let fake = Arc::new(FakeRunner::default());
-        fake.stub("tmux new", Output::ok_with(""));
-        sessions(fake.clone())
-            .create(
-                &machine(false),
-                Launch {
-                    folder_path: "/r/app",
-                    ticket: "-",
-                    folder_label: "app",
-                    agent: &claude(),
-                    start: Start::Task("fix login"),
-                    mcp_config: Some(r#"{"mcpServers":{}}"#),
-                },
-            )
-            .await
-            .unwrap();
-        let script = start_script(
-            &machine(false),
-            "hp-app",
-            "/r/app",
-            r#"claude 'fix login' --mcp-config '{"mcpServers":{}}'"#,
-            &claude(),
+        fake.stub(
+            "yardbell/mcp",
+            Output::failed(1, "mkdir: cannot create directory: Permission denied\n"),
         );
-        assert!(last_command(&fake).ends_with(&crate::shell::login_shell(&script)));
+        let err = sessions(fake.clone())
+            .create(&machine(false), task_with_mcp(&claude()))
+            .await
+            .unwrap_err();
+        assert_eq!(
+            err,
+            "cannot write the MCP config on hp: mkdir: cannot create directory: Permission denied"
+        );
+        assert_eq!(fake.calls().len(), 1);
+    }
+
+    #[test]
+    fn the_mcp_config_file_is_readable_only_by_the_account() {
+        use std::io::Write;
+        use std::os::unix::fs::PermissionsExt;
+        let cache = tempfile::tempdir().unwrap();
+        let dir = cache.path().join("yardbell/mcp");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let stale = dir.join("mcp-0000000000000000.json");
+        std::fs::File::create(&stale)
+            .unwrap()
+            .set_modified(std::time::SystemTime::now() - Duration::from_secs(40 * 24 * 3600))
+            .unwrap();
+        let mut child = std::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("umask 000; {}", mcp_config_script(MCP_CONFIG)))
+            .env("XDG_CACHE_HOME", cache.path())
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(MCP_CONFIG.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success());
+        let file = std::path::PathBuf::from(String::from_utf8(out.stdout).unwrap().trim());
+        assert_eq!(file.parent().unwrap(), dir);
+        assert_eq!(std::fs::read_to_string(&file).unwrap(), MCP_CONFIG);
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&file), 0o600);
+        assert_eq!(mode(&dir), 0o700);
+        assert!(!stale.exists());
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(), 1);
     }
 
     #[tokio::test]

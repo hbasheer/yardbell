@@ -197,6 +197,12 @@ impl Settings {
             stamp(&self.clock)
         ));
         std::fs::copy(&self.cfg_path, &backup)
+            .and_then(|_| {
+                std::fs::set_permissions(
+                    &backup,
+                    std::os::unix::fs::PermissionsExt::from_mode(crate::config::PRIVATE_FILE),
+                )
+            })
             .map_err(|e| format!("cannot back up yardbell.yml: {e}"))?;
         Ok(backup)
     }
@@ -527,6 +533,35 @@ mod tests {
             "Host hp\n  HostName 100.64.0.11\n"
         );
         assert!(s.undo().is_err(), "nothing left to undo");
+    }
+
+    #[test]
+    fn a_readable_config_and_its_backup_become_private_on_save() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cfg_path = dir.path().join("yardbell.yml");
+        cfg().save(&cfg_path).unwrap();
+        std::fs::set_permissions(&cfg_path, std::fs::Permissions::from_mode(0o644)).unwrap();
+        let s = Settings::new(cfg_path.clone(), dir.path().join("ssh"), clock());
+        s.set_mcp_servers(vec![crate::config::McpServer {
+            name: "linear".into(),
+            command: String::new(),
+            url: "https://mcp.linear.app/mcp".into(),
+            env: BTreeMap::new(),
+            headers: BTreeMap::from([("Authorization".into(), "Bearer lin_api_x".into())]),
+            machines: Vec::new(),
+        }])
+        .unwrap();
+        let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&cfg_path), 0o600);
+        let backups: Vec<_> = std::fs::read_dir(dir.path())
+            .unwrap()
+            .flatten()
+            .map(|e| e.path())
+            .filter(|p| p.to_string_lossy().contains(".bak-"))
+            .collect();
+        assert_eq!(backups.len(), 1);
+        assert_eq!(mode(&backups[0]), 0o600);
     }
 
     #[test]

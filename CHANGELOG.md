@@ -5,6 +5,16 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Security: the tokens of the MCP servers for sessions, such as a Linear API key, no longer appear
+  on the agent's command line. On a machine shared with other people, anyone could read them with
+  `ps` while a Claude Code session ran. Yardbell now sends the list over ssh's standard input into a
+  file only your account can read, `~/.cache/yardbell/mcp/` on that machine, and gives Claude Code
+  its path. Sessions that are already running keep the old command line until they are restarted,
+  so restart them and replace any token that was exposed.
+- Security: `yardbell.yml` and its backups are saved readable only by your account. They were
+  readable by every account on the host, and they hold the login cookie key, the MCP token and the
+  MCP servers' tokens.
+
 ## [0.6.9] - 2026-10-28
 
 - The memory bar always shows the whole machine. On a server where your account has its own memory

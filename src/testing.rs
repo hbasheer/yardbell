@@ -8,6 +8,7 @@ use std::time::Duration;
 pub struct FakeRunner {
     stubs: Mutex<Vec<(String, Output)>>,
     calls: Mutex<Vec<Vec<String>>>,
+    inputs: Mutex<Vec<Option<String>>>,
     spawned: Mutex<Vec<(u32, Vec<String>, bool)>>,
 }
 
@@ -18,6 +19,10 @@ impl FakeRunner {
 
     pub fn calls(&self) -> Vec<Vec<String>> {
         self.calls.lock().unwrap().clone()
+    }
+
+    pub fn inputs(&self) -> Vec<Option<String>> {
+        self.inputs.lock().unwrap().clone()
     }
 
     pub fn spawned(&self) -> Vec<(u32, Vec<String>, bool)> {
@@ -48,11 +53,12 @@ impl Runner for FakeRunner {
     fn run(
         &self,
         argv: Vec<String>,
-        _stdin: Option<String>,
+        stdin: Option<String>,
         _timeout: Duration,
     ) -> BoxFuture<'_, Output> {
         let out = self.lookup(&argv);
         self.calls.lock().unwrap().push(argv);
+        self.inputs.lock().unwrap().push(stdin);
         Box::pin(async move { out })
     }
 

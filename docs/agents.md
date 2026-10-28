@@ -66,8 +66,11 @@ claude mcp add --transport http --scope user yardbell http://100.64.0.10:4000/mc
 
 **MCP servers for sessions** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code
-sessions that Yardbell starts get them through `--mcp-config`, so nothing is written on the
-machines. Other agents configure MCP their own way and do not get them.
+sessions that Yardbell starts get them through `--mcp-config`, without touching the agent's own
+settings. Their tokens never appear on a command line: Yardbell writes the list to a file only your
+account can read on that machine and gives Claude Code its path, see
+[`mcp_servers`](configuration.md#mcp_servers-optional). Other agents configure MCP their own way
+and do not get them.
 
 ## Making every session openable
 
