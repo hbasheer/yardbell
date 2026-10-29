@@ -134,6 +134,8 @@ pub struct Record {
     pub questions: Vec<Question>,
     pub parked: Option<Parked>,
     pub failed: String,
+    pub failed_at: Option<Stage>,
+    pub sent: String,
     pub findings: Vec<String>,
     pub qa_report: String,
     pub outcome: String,

@@ -224,6 +224,17 @@ Its report:\n\n{report}\n\nFix what it found, run the tests, and commit."
     )
 }
 
+pub fn fix_with(answer: &str, what: &str) -> String {
+    with_result(
+        &format!(
+            "The person who owns this ticket says:\n\n{}\n\n{what}\n\nDo what they say, run the \
+tests, and commit.",
+            answer.trim()
+        ),
+        "",
+    )
+}
+
 pub fn qa(r: &Record, t: &TicketText, cfg: &Cfg) -> String {
     let how = if cfg.qa_instructions.trim().is_empty() {
         String::new()
