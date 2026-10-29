@@ -1,4 +1,6 @@
 mod github;
+#[allow(dead_code)]
+mod gitlab;
 mod remote;
 
 pub use github::GitHub;
@@ -328,6 +330,7 @@ pub fn telling_line(log: &str) -> String {
             .iter()
             .any(|w| low.contains(w))
             && !low.starts_with("process completed with exit code")
+            && !low.starts_with("error: job failed: exit code")
     };
     lines
         .iter()

@@ -1,0 +1,20 @@
+[0KRunning with gitlab-runner 17.5.0 (abcdef12)[0;m
+section_start:1730000000:prepare_executor[0K[0K[36;1mPreparing the "docker" executor[0;m
+section_end:1730000005:prepare_executor[0K
+section_start:1730000005:step_script[0K[0K[36;1mExecuting "step_script" stage of the job script[0;m
+[32;1m$ bundle exec rspec spec/requests/login_spec.rb[0;m
+Downloading 10%Downloading 55%Downloading 100%
+Randomized with seed 4242
+.F
+
+Failures:
+
+  1) Login redirects back after sign in
+     Failure/Error: expect(response).to redirect_to("/dashboard")
+       Expected response to be a redirect to </dashboard> but was a redirect to </>.
+
+Finished in 0.42 seconds
+[31m2 examples, 1 failure[0m
+section_end:1730000042:step_script[0K
+[31;1mERROR: Job failed: exit code 1
+[0;m
