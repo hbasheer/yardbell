@@ -289,8 +289,10 @@ summary on weekdays at 08:30", "save this as a task" or "run the Tickets trigger
 is a card like any other step. A settings card shows the area before and after as a word diff,
 checked as Settings checks it, and **Edit** opens the value as JSON. Leave each `(hidden)` as it
 is: it keeps the saved credential. **Open in Settings** goes to the section. Once saved, Settings'
-**Undo** reverses it. Changes to Dispatch's own settings always wait for you, even when your rules
-allow every step; a rule can still refuse them. Security settings, machines being added or removed,
+**Undo** reverses it. Changes to Dispatch's own settings, and changes that put a saved secret to a new use, always wait
+for you, even when your rules allow every step; a rule can still refuse them. A saved credential
+stays with its server or host: if Dispatch changes where an entry points, it has to be entered
+again in Settings. Security settings, machines being added or removed,
 secrets and the passcode are never changed this way.
 
 Dispatch asks before it acts. Each step that starts, stops or types into a session appears as a

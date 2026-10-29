@@ -280,7 +280,9 @@ function changeBody(e) {
   const own = e.tool === "change_settings" && i.area === "dispatch"
     ? html`<p class="step-card-text muted">Dispatch's own settings always wait for you.</p>` : nothing;
   const shown = i.diff ? changeDiff(i.diff) : html`<p class="step-card-text step-card-mono">${e.tool === "save_task" ? i.text : JSON.stringify(i.value, null, 2)}</p>`;
-  return html`<div class="step-card-body">${shown}${own}</div>`;
+  const secrets = i.secrets?.length
+    ? html`<p class="step-card-text">It uses saved secrets: ${i.secrets.map((s, n) => html`${n ? ", " : ""}<code>${s}</code>`)}. A change that uses a saved secret always waits for you.</p>` : nothing;
+  return html`<div class="step-card-body">${shown}${secrets}${own}</div>`;
 }
 
 // The change as a diff of the memory: the entry it removes and the one it adds.

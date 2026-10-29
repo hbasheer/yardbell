@@ -251,7 +251,7 @@ fn mask(text: &str) -> String {
 }
 
 // Every saved secret value, so an answer can be checked for one that slipped into free text.
-fn saved_values(app: &AppState) -> Vec<String> {
+pub fn saved_values(app: &AppState) -> Vec<String> {
     let Ok(store) = app.secrets() else {
         return Vec::new();
     };
@@ -348,7 +348,19 @@ async fn settings(app: &AppState, area: &str) -> Result<Value, ApiError> {
 
 // A changeable area as read_settings shows it, with every credential hidden.
 pub fn shown_area(app: &AppState, cfg: &Config, area: &str) -> Value {
-    sweep(value_of(cfg, area), &saved_values(app))
+    area_shown(cfg, area, &saved_values(app))
+}
+
+pub fn area_shown(cfg: &Config, area: &str, saved: &[String]) -> Value {
+    sweep(value_of(cfg, area), saved)
+}
+
+// Free text with every saved secret value and known token shape hidden.
+pub fn scrubbed(text: &str, saved: &[String]) -> String {
+    match sweep(Value::String(text.to_string()), saved) {
+        Value::String(s) => s,
+        _ => String::new(),
+    }
 }
 
 fn value_of(cfg: &Config, area: &str) -> Value {

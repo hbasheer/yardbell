@@ -422,3 +422,60 @@ async fn an_unknown_trigger_says_so() {
     );
     assert!(r.app.dispatch.pending(&id).is_empty());
 }
+
+#[tokio::test]
+async fn a_refused_change_never_quotes_a_kept_credential() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let path = r._dir.path().join("yardbell.yml");
+    let mut cfg = Config::load(&path).unwrap();
+    cfg.agents = vec![crate::agents::Agent {
+        name: "mine".into(),
+        label: Some("Mine".into()),
+        command: "ANTHROPIC_API_KEY=sk-inline-real-999 claude".into(),
+        resume: "claude --continue".into(),
+        process: Some("claude".into()),
+        prompt_arg: None,
+    }];
+    cfg.save(&path).unwrap();
+    let read = dispatch_tool(&r, Some(&id), "read_settings", json!({ "area": "agents" })).await;
+    let mut value = answer(&read)["value"].clone();
+    value["custom"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("process");
+    let result = change(&r, &id, "agents", value).await;
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(
+        text(&result).contains("must be a plain program name"),
+        "{result}"
+    );
+    assert!(!text(&result).contains("sk-inline-real-999"), "{result}");
+    let conversation = r.app.dispatch.get(&id).unwrap().to_string();
+    assert!(!conversation.contains("sk-inline-real-999"));
+}
+
+#[tokio::test]
+async fn a_change_that_uses_a_saved_secret_always_waits() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "allow", json!([]));
+    let read = dispatch_tool(
+        &r,
+        Some(&id),
+        "read_settings",
+        json!({ "area": "pull_requests" }),
+    )
+    .await;
+    let mut value = answer(&read)["value"].clone();
+    value["gitlab"] = json!([{ "host": "git.example.org", "token": "${secret:gitlab}" }]);
+    let result = change(&r, &id, "pull_requests", value).await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert!(text(&result).starts_with("Not run yet"), "{result}");
+    let step = last_event(&r, &id);
+    assert_eq!(
+        step["input"]["secrets"],
+        json!(["${secret:gitlab} in gitlab[0].token"])
+    );
+    assert!(saved(&r).pull_requests.gitlab.is_empty());
+}

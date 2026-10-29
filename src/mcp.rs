@@ -442,7 +442,10 @@ async fn dispatch_step(
     let (default, rules) = (cfg.dispatch.approval, &cfg.dispatch.rules);
     let verdict = match name {
         "remember" => crate::dispatch::decide_memory(default, rules),
-        "change_settings" if input["area"] == "dispatch" => {
+        "change_settings"
+            if input["area"] == "dispatch"
+                || input["secrets"].as_array().is_some_and(|s| !s.is_empty()) =>
+        {
             crate::dispatch::decide_always_wait(default, rules, &step)
         }
         _ => crate::dispatch::decide_step(default, rules, &step),
@@ -771,11 +774,12 @@ pub(crate) fn plan(
     }
     if name == "change_settings" {
         let change: SettingsChange = arg(args)?;
-        check_settings(cfg, &change)?;
-        let before = crate::mcp_read::shown_area(app, cfg, &change.area);
+        check_settings(app, cfg, &change)?;
+        let saved = crate::mcp_read::saved_values(app);
+        let before = crate::mcp_read::area_shown(cfg, &change.area, &saved);
         let diff = crate::mcp_change::diff(&before, &change.value);
-        let input =
-            json!({ "area": change.area, "value": change.value, "before": before, "diff": diff });
+        let secrets = crate::mcp_change::secret_uses(cfg, &change.area, &change.value, &saved);
+        let input = json!({ "area": change.area, "value": change.value, "before": before, "diff": diff, "secrets": secrets });
         return Ok((name.to_string(), input, None));
     }
     if name == "save_task" {
@@ -804,7 +808,7 @@ struct SettingsChange {
     before: Value,
 }
 
-fn check_settings(cfg: &Config, change: &SettingsChange) -> Result<(), ApiError> {
+fn check_settings(app: &AppState, cfg: &Config, change: &SettingsChange) -> Result<(), ApiError> {
     let area = change.area.as_str();
     match area {
         "security" => {
@@ -826,14 +830,19 @@ fn check_settings(cfg: &Config, change: &SettingsChange) -> Result<(), ApiError>
         }
         _ => {}
     }
-    crate::mcp_change::check(cfg, area, &change.value)
-        .map(|_| ())
-        .map_err(|problems| {
-            bad(format!(
-                "Not proposed, correct this and send the whole area again: {}",
-                problems.join("; ")
-            ))
-        })
+    crate::mcp_change::check(
+        cfg,
+        area,
+        &change.value,
+        &crate::mcp_read::saved_values(app),
+    )
+    .map(|_| ())
+    .map_err(|problems| {
+        bad(format!(
+            "Not proposed, correct this and send the whole area again: {}",
+            problems.join("; ")
+        ))
+    })
 }
 
 #[derive(Deserialize)]
@@ -885,7 +894,7 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
             Ok(())
         }
         "remember" => check_memory(app, &arg(input.clone())?),
-        "change_settings" => check_settings(cfg, &arg(input.clone())?),
+        "change_settings" => check_settings(app, cfg, &arg(input.clone())?),
         "save_task" => check_task(&arg(input.clone())?),
         "run_trigger" => check_trigger(cfg, input["name"].as_str().unwrap_or_default()),
         tool if crate::web::worktrees_api::TOOLS.contains(&tool) => {
@@ -1113,8 +1122,9 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
 // The change is applied to the area as it is now. When the area moved on after the card was
 // drawn, the outcome says so and shows what was replaced.
 fn change_settings(app: &AppState, change: SettingsChange) -> Result<Value, ApiError> {
-    let now = crate::mcp_read::shown_area(app, &app.config()?, &change.area);
-    crate::mcp_change::apply(&app.settings, &change.area, change.value).map_err(bad)?;
+    let saved = crate::mcp_read::saved_values(app);
+    let now = crate::mcp_read::area_shown(&app.config()?, &change.area, &saved);
+    crate::mcp_change::apply(&app.settings, &change.area, change.value, &saved).map_err(bad)?;
     app.settings.note_last(&format!(
         "Dispatch changed the {} settings.",
         change.area.replace('_', " ")

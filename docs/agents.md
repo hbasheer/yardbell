@@ -96,7 +96,7 @@ Dispatch also has tools that change things, each a step its approval setting and
 | Tool | What it does |
 |---|---|
 | `remember` | proposes a change to its own [memory](usage.md#memory) |
-| `change_settings` | replaces one changeable area (every `read_settings` area except `security` and `about`) with an edited copy, checked as Settings checks it and saved so Settings' Undo reverses it; a `(hidden)` left as it is keeps the saved value; machines are never added or removed; the `dispatch` area always waits for you |
+| `change_settings` | replaces one changeable area (every `read_settings` area except `security` and `about`) with an edited copy, checked as Settings checks it and saved so Settings' Undo reverses it; a `(hidden)` left as it is keeps the saved value; machines are never added or removed; text around a `(hidden)` cannot be edited, and an entry whose url, host or command changes loses its kept credentials; the `dispatch` area, and any change that adds a `${secret:NAME}` reference, always wait for you |
 | `save_task` | saves a new task, or a new version of one |
 | `run_trigger` | runs a trigger now, as Settings' Run now does |
 
