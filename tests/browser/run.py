@@ -1593,6 +1593,12 @@ class Suite:
         if self.wait_minutes() != 7:
             raise Failure(f"yardbell.yml waits {self.wait_minutes()} minutes")
         self.check_errors("the settings card")
+        b.click("#dispatch-log .step-card.done .step-card-outcome a")
+        b.wait("!document.getElementById('undo-bar').hidden && document.getElementById('undo-text').textContent === 'Dispatch changed the phone settings.'", "Undo for Dispatch's change in Settings")
+        b.click("#undo-btn")
+        b.wait("document.getElementById('undo-title').textContent === 'Undone.'", "the change undone")
+        if self.wait_minutes() == 7:
+            raise Failure("Undo left the change in yardbell.yml")
 
     def test_dispatch_change_settings_edit(self):
         b = self.b

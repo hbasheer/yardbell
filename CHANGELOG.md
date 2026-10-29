@@ -23,6 +23,14 @@ and the project uses [Semantic Versioning](https://semver.org).
   conversations, saved tasks, pipelines and their runs, Insights, pull and merge requests with
   their CI, and usage. They change nothing, and no secret is ever shown: a setting that uses one
   shows its `${secret:NAME}` reference, any other credential shows `(hidden)`.
+- **Dispatch can change Yardbell's settings, tasks and triggers.** Ask in plain words and Dispatch
+  proposes a card: the settings area before and after as a word diff, a task's new text, or a
+  trigger to run now. Settings' own checks run first, so a mistake goes back to Dispatch rather
+  than to you. **Edit** changes the value on the card, **Open in Settings** goes to the section,
+  and Settings' **Undo** reverses a saved change. Saved credentials stay saved: a `(hidden)` value
+  sent back as it is keeps them, and none ever reaches a card or a conversation. Changes to
+  Dispatch's own settings always wait for you; a rule can refuse them but never let them run
+  alone. Dispatch rules can name the new steps `change_settings`, `save_task` and `run_trigger`.
 - On a phone, Settings and Log out in the header show as their icons, to make room for Pipelines.
 
 ## [0.7.10] - 2026-10-29

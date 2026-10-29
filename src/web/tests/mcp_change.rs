@@ -104,6 +104,22 @@ async fn allow_applies_at_once_and_undo_restores() {
 }
 
 #[tokio::test]
+async fn settings_offers_undo_for_a_change_dispatch_made() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let c = cookie(&r.app).await;
+    set_rules(&r, "allow", json!([]));
+    change(&r, &id, "phone", phone(9)).await;
+    let (data, _) = get_settings(&r, &c).await;
+    assert_eq!(data["can_undo"], true);
+    assert_eq!(data["undo_note"], "Dispatch changed the phone settings.");
+
+    r.app.settings.set_triggers(Vec::new()).unwrap();
+    let (data, _) = get_settings(&r, &c).await;
+    assert!(data["undo_note"].is_null(), "{data}");
+}
+
+#[tokio::test]
 async fn the_dispatch_area_always_waits() {
     let r = rig();
     let id = dispatch_conversation(&r).await;

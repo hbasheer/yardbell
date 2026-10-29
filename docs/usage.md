@@ -284,6 +284,15 @@ much Claude usage is left?" or "which pull requests have failing CI?". It reads 
 other conversations, your saved tasks, pipelines and their runs, Insights, pull and merge requests
 and usage; these reads change nothing and never show a secret.
 
+It can change Yardbell too: "phone me only after 10 minutes", "add a trigger that runs Morning
+summary on weekdays at 08:30", "save this as a task" or "run the Tickets trigger now". Each change
+is a card like any other step. A settings card shows the area before and after as a word diff,
+checked as Settings checks it, and **Edit** opens the value as JSON. Leave each `(hidden)` as it
+is: it keeps the saved credential. **Open in Settings** goes to the section. Once saved, Settings'
+**Undo** reverses it. Changes to Dispatch's own settings always wait for you, even when your rules
+allow every step; a rule can still refuse them. Security settings, machines being added or removed,
+secrets and the passcode are never changed this way.
+
 Dispatch asks before it acts. Each step that starts, stops or types into a session appears as a
 card with the machine, folder, branch, agent and task (or the text to type), and waits for you:
 

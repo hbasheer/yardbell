@@ -395,6 +395,10 @@ async function load() {
   await loadSetups();
   await loadMemory().catch((err) => toast(err.message));
   if (!data.can_undo) $("undo-btn").hidden = true;
+  else if (data.undo_note && $("undo-bar").hidden) {
+    saved(data.undo_note);
+    $("undo-title").textContent = "Changed by Dispatch.";
+  }
 }
 
 $("preview-btn").addEventListener("click", async (e) => {

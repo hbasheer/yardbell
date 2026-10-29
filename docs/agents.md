@@ -91,8 +91,17 @@ that uses one shows its `${secret:NAME}` reference, and any other credential sho
 | `list_pulls` | pull and merge requests for watched branches, with review state, CI and failing jobs |
 | `read_usage` | Claude and Codex usage as the sidebar shows it |
 
-Dispatch also has `remember`, which proposes a change to its own [memory](usage.md#memory). Other
-clients do not see it, and calling it from one is refused.
+Dispatch also has tools that change things, each a step its approval setting and rules decide:
+
+| Tool | What it does |
+|---|---|
+| `remember` | proposes a change to its own [memory](usage.md#memory) |
+| `change_settings` | replaces one changeable area (every `read_settings` area except `security` and `about`) with an edited copy, checked as Settings checks it and saved so Settings' Undo reverses it; a `(hidden)` left as it is keeps the saved value; machines are never added or removed; the `dispatch` area always waits for you |
+| `save_task` | saves a new task, or a new version of one |
+| `run_trigger` | runs a trigger now, as Settings' Run now does |
+
+Other clients do not see these, and calling one from them is refused until changes from outside
+clients can wait in a Proposals inbox.
 
 **MCP servers for sessions** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code

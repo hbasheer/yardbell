@@ -97,6 +97,8 @@ pub struct MeshApply {
 struct Undo {
     config: PathBuf,
     ssh: Option<PathBuf>,
+    // Who made the change, when it was not the person on the Settings page.
+    note: Option<String>,
 }
 
 fn stamp(clock: &Clock) -> String {
@@ -386,6 +388,20 @@ impl Settings {
         }
     }
 
+    pub fn note_last(&self, note: &str) {
+        if let Some(undo) = self.last.lock().expect("settings lock").as_mut() {
+            undo.note = Some(note.to_string());
+        }
+    }
+
+    pub fn undo_note(&self) -> Option<String> {
+        self.last
+            .lock()
+            .expect("settings lock")
+            .as_ref()
+            .and_then(|u| u.note.clone())
+    }
+
     pub fn can_undo(&self) -> bool {
         self.last.lock().expect("settings lock").is_some()
     }
@@ -416,6 +432,7 @@ impl Settings {
         *self.last.lock().expect("settings lock") = Some(Undo {
             config: backup,
             ssh,
+            note: None,
         });
         Ok(())
     }

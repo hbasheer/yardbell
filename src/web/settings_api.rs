@@ -102,7 +102,8 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
                 .map(|ip| format!("http://{ip}:{}/mcp", cfg.port))
                 .collect::<Vec<_>>(),
         },
-        "can_undo": app.settings.can_undo(),
+                "can_undo": app.settings.can_undo(),
+        "undo_note": app.settings.undo_note(),
         "service_installed": crate::service::installed(),
     }))
     .into_response())
