@@ -19,8 +19,9 @@ pub use actions::{changes_something, valid_id as valid_action_id, By};
 pub use diff::{Op as DiffOp, Part as DiffPart};
 pub use follow::Change;
 pub use group::{
-    clash as group_clash, clash_message as group_clash_message, plan as plan_group, ChildStart,
-    Due as GroupDue, Opened as GroupOpened, Place as GroupPlace, Plan as GroupPlan,
+    clash as group_clash, clash_message as group_clash_message, parse as parse_result,
+    plan as plan_group, with_request as with_result_request, ChildStart, Due as GroupDue,
+    Opened as GroupOpened, Outcome as GroupOutcome, Place as GroupPlace, Plan as GroupPlan,
     MAX_CHILDREN as GROUP_MAX, MAX_MINUTES as GROUP_MAX_MINUTES, MIN_CHILDREN as GROUP_MIN,
 };
 pub use mcp_config::CONVERSATION_HEADER;

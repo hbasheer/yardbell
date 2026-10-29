@@ -153,3 +153,64 @@ pub struct Ticket {
     #[serde(default)]
     pub state: String,
 }
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Triage {
+    pub machine: String,
+    pub folder: String,
+    pub branch: String,
+    pub reason: String,
+    pub questions: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct Finding {
+    pub severity: String,
+    pub place: String,
+    pub text: String,
+}
+
+// What the watcher, the runner or the person saw happen to one ticket.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Seen {
+    Tick,
+    Admitted,
+    Triaged(Result<Triage, String>),
+    Started(Result<String, String>),
+    Idle {
+        outcome: crate::dispatch::GroupOutcome,
+        verdict: Option<bool>,
+    },
+    NoResult(String),
+    Waiting(String),
+    Reviewed {
+        findings: Vec<Finding>,
+    },
+    Sent(Result<(), String>),
+    Pushed(Result<(), String>),
+    Opened(Result<PullRef, String>),
+    Moved(Result<(), String>),
+    Summarised(Result<(String, String), String>),
+    Answer(String),
+    Retry,
+    Drop,
+    Closed(String),
+    Offline,
+    Refused(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum Effect {
+    Triage,
+    Implement,
+    Review,
+    Send(String),
+    Answer(String),
+    MoveToTest,
+    Push,
+    OpenPull,
+    MoveLinear,
+    Summarise,
+    Notify(String),
+    StopSessions,
+}
