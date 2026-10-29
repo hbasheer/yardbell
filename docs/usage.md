@@ -97,7 +97,8 @@ with the main checkout's path in `$YARDBELL_MAIN_CHECKOUT`, for example `bin/set
 minutes unless you set another) is stopped with everything it started, and the agent starts anyway:
 its task gets a note that the setup did not finish and where the log is. The row's mark lasts until
 Yardbell restarts; the log stays until the worktree is removed. A reused worktree does not run the
-setup again.
+setup again. [Worktree setup](automation.md#worktree-setup) has examples, such as a Rails app that
+needs `.env` and `bundle install`.
 
 The footer always says where the session will start. Yardbell starts the agent inside a new tmux
 session through your login shell, so your PATH and environment apply, then opens its terminal.
@@ -248,7 +249,9 @@ optionally a folder (a name from the folder list or a path, with `*` for any par
 then allows it, asks you, or denies it. Deny always wins. Otherwise the rule that names the most of
 step, machine and folder wins, so the order of the list does not matter. A card that a rule
 decided says so at the bottom, like "Your rule: start sessions on devbox in acme/*". A denied step
-never becomes a card: Dispatch is told which rule refused it and says so in its reply.
+never becomes a card: Dispatch is told which rule refused it and says so in its reply. How rules,
+your instructions and Dispatch's memory work together, with examples, is in
+[Dispatch rules, instructions and memory](automation.md#dispatch-rules-instructions-and-memory).
 **Groups** start several sessions as one step, for example "try three approaches to this bug" or
 "run the same task in api and web". Dispatch proposes them with its `start_group` tool, and they
 appear as one card: each child has its own label, machine, folder, branch, agent and task. Your
@@ -380,7 +383,8 @@ Yardbell was not running at one or more scheduled times, it runs the task once w
 and the conversation says which time it is late for. Each trigger's row in Settings shows the next
 run, the last run with a link to its conversation, and anything wrong, such as a missing secret or
 `gh` not logged in. **Run now** starts a scheduled task at once, and **Check now** asks Linear or
-GitHub at once. The switch turns a trigger off or on.
+GitHub at once. The switch turns a trigger off or on. [Triggers](automation.md#triggers) has
+examples for Linear tickets, review requests and schedules, and what triggers do not cover.
 
 Dispatch follows the sessions it starts. When one finishes, stops to wait for an answer, or ends,
 the conversation gets a card with the last lines of its screen. A waiting agent's choices, such as

@@ -89,6 +89,8 @@ Then add the other machines from **Add machine** in the UI, or list them in `yar
   server.
 - [Running Yardbell](docs/running.md): how it works, requirements, mesh VPNs, ports, commands,
   Docker and security.
+- [Triggers, worktree setup and rules](docs/automation.md): start Dispatch tasks on a schedule or
+  for new tickets, prepare each new worktree, and decide what Dispatch may do, with examples.
 - [Configuration](docs/configuration.md): every setting in `yardbell.yml`.
 - [Troubleshooting](docs/troubleshooting.md) and [Development](docs/development.md).
 
