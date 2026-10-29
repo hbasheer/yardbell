@@ -88,7 +88,7 @@ pub struct AppState {
     installed: std::sync::Mutex<HashMap<String, (Instant, Vec<String>)>>,
     servers: tokio::sync::Mutex<Option<(Instant, Vec<crate::discover::Found>)>>,
     refresh: Refresh,
-    updates: crate::about::Updates,
+    pub(crate) updates: crate::about::Updates,
     started: Instant,
     started_at: u64,
     clock: Clock,

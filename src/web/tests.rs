@@ -12,6 +12,7 @@ use std::path::Path;
 use tower::ServiceExt;
 
 mod insights;
+mod mcp_read;
 mod memory;
 mod pipeline;
 mod worktrees;

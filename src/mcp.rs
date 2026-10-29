@@ -175,7 +175,7 @@ fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> 
 fn tools() -> Vec<Value> {
     let machine = json!({ "type": "string", "description": "Machine name from list_machines" });
     let session = json!({ "type": "string", "description": "tmux session name from list_sessions or start_session" });
-    vec![
+    let mut all = vec![
         tool(
             "list_machines",
             "Every machine: whether it is up (and why not), memory total and free in GB, the share used by agents, load average, CPU count and how many agent sessions run there.",
@@ -346,7 +346,9 @@ fn tools() -> Vec<Value> {
             }),
             &["change", "reason"],
         ),
-    ]
+    ];
+    all.extend(crate::mcp_read::tools());
+    all
 }
 
 async fn call(app: &AppState, params: &Value, caller: &Caller) -> Value {
@@ -978,6 +980,9 @@ struct SessionRef {
 }
 
 async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiError> {
+    if let Some(answer) = crate::mcp_read::read(app, name, &args).await {
+        return answer;
+    }
     let cfg = app.config()?;
     let view = app.state.view(&cfg, app.ports.as_ref(), "localhost");
     let wanted = |m: &str, filter: &str| filter.is_empty() || m == filter;
