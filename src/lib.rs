@@ -15,6 +15,7 @@ pub mod mcp;
 pub mod mesh;
 pub mod onboarding;
 pub mod phone;
+pub mod pipeline;
 pub mod poller;
 pub mod probe;
 pub mod pulls;
