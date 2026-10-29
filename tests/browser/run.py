@@ -1260,11 +1260,17 @@ class Suite:
         b.js(f"[...document.querySelectorAll('{card} .btn')].find((x) => x.textContent === 'Insights').click()")
         b.wait("document.querySelector('.ins-dialog .ins-list')", "the seeded timeline")
         text = b.js("document.querySelector('.ins-dialog').innerText")
-        for expected in ("Insights for hp-old-run", "Working 25 min", "Waiting for you 5 min, 1 time", "Idle 10 min",
-                         "Test results 0 passed, 1 failed", "Bash: npm test", "Tests: 1 failed, 4 passed, 5 total",
-                         "Failed", "Ended", "Fix the login redirect", f"From the task {OLD_TASK}, version 1"):
+        for expected in ("Insights for hp-old-run", "Status\nEnded", "Folder\ndemo-app", "Bash: npm test",
+                         "Tests: 1 failed, 4 passed, 5 total", "Failed", "Ended", "Fix the login redirect",
+                         f"From the task {OLD_TASK}, version 1"):
             if expected not in text:
                 raise Failure(f"Insights do not show {expected!r}:\n{text}")
+        stats = b.js("[...document.querySelectorAll('.ins-dialog .ins-stat')].map((x) => [...x.children].slice(0, 3).map((c) => c.textContent.trim()).join(' | ')).join('; ')")
+        if stats != ("Working | 25 min | 63% of the time; Waiting for you | 5 min | 1 time, 12% of the time; "
+                     "Idle | 10 min | 25% of the time; Test results | 1 run | 0 passed, 1 failed"):
+            raise Failure(f"the totals read {stats}")
+        if not b.js("document.querySelector('.ins-dialog .ins-list > li.ins-day')"):
+            raise Failure("the timeline does not name the day of a session from an earlier day")
         states = b.js("[...document.querySelectorAll('.ins-dialog .ins-period .ins-text')].map((x) => x.textContent).join()")
         if states != "Working,Waiting for you,Working,Idle,Ended":
             raise Failure(f"the timeline's periods are {states!r}")

@@ -1,8 +1,17 @@
 (function () {
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const SHOWN = 80;
+  const STATES = ["working", "waiting", "idle"];
   const WORDS = { working: "Working", waiting: "Waiting for you", idle: "Idle" };
   const TONES = { working: "ok", waiting: "warn", idle: "" };
+  const MEANS = {
+    working: "The agent was busy: thinking, editing files or running commands.",
+    waiting: "It stopped at a question or a permission prompt until you answered.",
+    idle: "Nothing was happening, usually because it had finished and was at its prompt.",
+  };
+  const NOW = { active: "working now", blocked: "waiting for you now", idle: "idle now" };
+  const TOOL = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5 6 8l-3 3.5M8 11.5h5"/></svg>';
+  const FLASK = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5h4M6.5 2.5v4L3 12.5a1 1 0 0 0 .9 1.5h8.2a1 1 0 0 0 .9-1.5L9.5 6.5v-4"/></svg>';
 
   function duration(secs) {
     const mins = Math.floor(secs / 60);
@@ -12,66 +21,141 @@
     return mins % 60 ? `${h} h ${mins % 60} min` : `${h} h`;
   }
 
+  function amount(secs) {
+    if (!secs) return "0 min";
+    return secs < 60 ? "<1 min" : duration(secs);
+  }
+
   function clock(stamp) {
     const d = new Date(stamp);
     if (Number.isNaN(d.getTime())) return "";
-    const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    return d.toDateString() === new Date().toDateString() ? time : `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${time}`;
+    return d.toDateString() === new Date().toDateString() ? hour(stamp) : `${d.toLocaleDateString([], { day: "numeric", month: "short" })}, ${hour(stamp)}`;
+  }
+
+  function hour(stamp) {
+    const d = new Date(stamp);
+    return Number.isNaN(d.getTime()) ? "" : d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+
+  function day(stamp) {
+    const d = new Date(stamp);
+    if (Number.isNaN(d.getTime())) return "";
+    const today = new Date();
+    if (d.toDateString() === today.toDateString()) return "Today";
+    const yesterday = new Date(today.getFullYear(), today.getMonth(), today.getDate() - 1);
+    if (d.toDateString() === yesterday.toDateString()) return "Yesterday";
+    const year = d.getFullYear() === today.getFullYear() ? undefined : "numeric";
+    return d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long", year });
   }
 
   function times(n, one, many = `${one}s`) {
     return `${n} ${n === 1 ? one : many}`;
   }
 
-  function summary(data) {
+  // Whole percentages that add up to 100, so the three shares never read as 101%.
+  function shares(values) {
+    const total = values.reduce((a, b) => a + b, 0);
+    if (!total) return values.map(() => 0);
+    const raw = values.map((v) => (v * 100) / total);
+    const out = raw.map(Math.floor);
+    const left = 100 - out.reduce((a, b) => a + b, 0);
+    raw.map((v, i) => [v - out[i], i]).sort((a, b) => b[0] - a[0]).slice(0, left).forEach(([, i]) => out[i]++);
+    return out;
+  }
+
+  function facts(data) {
     const t = data.timeline;
-    if (!t) return `<p class="ins-since">Yardbell has not recorded this session yet. Its timeline starts with the next check.</p>`;
-    const since = t.started ? `Started ${esc(clock(t.since))}` : `Running when Yardbell started watching it, ${esc(clock(t.since))}`;
-    const end = t.ended ? ` · Ended ${esc(clock(t.ended))}` : data.live ? "" : " · No longer running";
+    const status = t?.ended ? "Ended" : data.live ? (NOW[data.activity] ? `Running, ${NOW[data.activity]}` : "Running") : "No longer running";
+    const items = [
+      ["Status", status],
+      t && [t.started ? "Started" : "Watched since", clock(t.since)],
+      t?.ended && ["Ended", clock(t.ended)],
+      ["Machine", data.machine],
+      t?.folder && ["Folder", t.folder],
+      t?.branch && ["Branch", t.branch],
+      t?.agent && ["Agent", t.agent],
+    ].filter(Boolean);
+    const note = t && !t.started
+      ? `<p class="help ins-note">It was already running when Yardbell started watching it, so the figures below start at ${esc(clock(t.since))}.</p>`
+      : "";
+    return `<dl class="ins-facts">${items.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>${note}`;
+  }
+
+  function spent(t) {
+    const secs = STATES.map((s) => t.totals[s]);
+    const total = secs.reduce((a, b) => a + b, 0);
+    const pct = shares(secs);
     const waits = t.periods.filter((p) => p.state === "waiting").length;
+    const tiles = STATES.map((state, i) => {
+      const share = secs[i] ? `${pct[i] ? pct[i] : "under 1"}% of the time` : "";
+      const count = state === "waiting" ? (waits ? times(waits, "time") : "Never waited") : "";
+      const sub = [count, share].filter(Boolean).join(", ");
+      return `<div class="ins-stat"><dt><span class="dot ${TONES[state]}"></span>${WORDS[state]}</dt>
+        <dd class="ins-figure">${esc(amount(secs[i]))}</dd>${sub ? `<dd class="ins-sub">${esc(sub)}</dd>` : ""}<dd class="ins-means">${MEANS[state]}</dd></div>`;
+    });
+    tiles.push(tested(t));
+    const all = duration(total);
+    const span = total ? `${esc(all[0].toUpperCase() + all.slice(1))} in all, from ${esc(clock(t.since))} to ${t.ended ? esc(clock(t.ended)) : "now"}. ` : "";
+    return `<h3 class="ins-head">Time spent</h3>
+      <p class="help ins-note">${span}How long the session spent in each state Yardbell tracks. The bar below draws each stretch to scale, oldest on the left.</p>
+      <dl class="ins-stats">${tiles.join("")}</dl>${bar(t)}`;
+  }
+
+  function tested(t) {
     const tests = t.runs.filter((r) => r.ok !== undefined);
     const failed = tests.filter((r) => r.ok === false).length;
-    const parts = [
-      `<span><span class="dot ok"></span><span>Working <b>${esc(duration(t.totals.working))}</b></span></span>`,
-      `<span><span class="dot warn"></span><span>Waiting for you <b>${esc(duration(t.totals.waiting))}</b>${waits ? `, ${esc(times(waits, "time"))}` : ""}</span></span>`,
-      `<span><span class="dot"></span><span>Idle <b>${esc(duration(t.totals.idle))}</b></span></span>`,
-    ];
-    if (tests.length) parts.push(`<span><span>Test results <b>${tests.length - failed} passed</b>${failed ? `, <b class="ins-bad">${failed} failed</b>` : ""}</span></span>`);
-    return `<p class="ins-since">${since}${end}</p><p class="ins-totals">${parts.join("")}</p>${bar(t)}`;
+    const head = `<dt><span class="ins-mark">${FLASK}</span>Test results</dt>`;
+    if (!tests.length) {
+      return `<div class="ins-stat">${head}<dd class="ins-figure">None</dd><dd class="ins-means">No test runner's summary showed on the screen, such as one from cargo test, npm test or pytest.</dd></div>`;
+    }
+    const sub = `${tests.length - failed} passed, ${failed ? `<b class="ins-bad">${failed} failed</b>` : "0 failed"}`;
+    return `<div class="ins-stat">${head}<dd class="ins-figure">${esc(times(tests.length, "run"))}</dd><dd class="ins-sub">${sub}</dd><dd class="ins-means">Summaries a test runner printed on the screen, each marked Passed or Failed in the timeline.</dd></div>`;
   }
 
   function bar(t) {
     const total = t.periods.reduce((n, p) => n + p.seconds, 0);
     if (!total) return "";
-    return `<div class="ins-bar" aria-hidden="true">${t.periods.map((p) => `<span class="ins-seg ${p.state}" style="flex-grow:${Math.max(p.seconds, total / 400)}" title="${esc(`${WORDS[p.state]}, ${duration(p.seconds)} from ${clock(p.from)}`)}"></span>`).join("")}</div>`;
+    return `<div class="ins-bar" aria-hidden="true">${t.periods.map((p) => `<span class="ins-seg ${p.state}" style="flex-grow:${Math.max(p.seconds, total / 400)}" title="${esc(`${WORDS[p.state]}, ${duration(p.seconds)} from ${clock(p.from)}`)}"></span>`).join("")}</div>
+      <div class="ins-axis" aria-hidden="true"><span>${esc(clock(t.periods[0].from))}</span><span>${t.ended ? esc(clock(t.ended)) : "Now"}</span></div>`;
   }
 
   function runRow(r, at) {
     const result = r.ok === true ? `<span class="ins-result ok">Passed</span>` : r.ok === false ? `<span class="ins-result bad">Failed</span>` : "";
-    const glyph = r.kind === "test"
-      ? '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5h4M6.5 2.5v4L3 12.5a1 1 0 0 0 .9 1.5h8.2a1 1 0 0 0 .9-1.5L9.5 6.5v-4"/></svg>'
-      : '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5 6 8l-3 3.5M8 11.5h5"/></svg>';
-    return `<li class="ins-run is-${r.kind}"><span class="ins-time">${esc(at)}</span><span class="ins-mark" title="${r.kind === "test" ? "Test run" : "Tool call"}">${glyph}</span><span class="ins-text"><code>${esc(r.text)}</code></span>${result}</li>`;
+    const kind = r.kind === "test" ? "Test run" : "Tool call";
+    return `<li class="ins-run is-${r.kind}"><span class="ins-time">${esc(at)}</span><span class="ins-mark" title="${kind}" aria-label="${kind}">${r.kind === "test" ? FLASK : TOOL}</span><span class="ins-text"><code>${esc(r.text)}</code></span>${result}</li>`;
   }
 
   function periodRow(p) {
-    const lasting = p.to ? duration(p.seconds) : `${duration(p.seconds)} so far`;
-    return `<li class="ins-period ${p.state}"><span class="ins-time">${esc(clock(p.from))}</span><span class="ins-mark"><span class="dot ${TONES[p.state]}"></span></span><span class="ins-text">${WORDS[p.state]}</span><span class="ins-len">${esc(lasting)}</span></li>`;
+    const lasting = p.to ? `for ${duration(p.seconds)}` : `${duration(p.seconds)} so far`;
+    return `<li class="ins-period ${p.state}"><span class="ins-time">${esc(hour(p.from))}</span><span class="ins-mark"><span class="dot ${TONES[p.state]}"></span></span><span class="ins-text">${WORDS[p.state]}</span><span class="ins-len">${esc(lasting)}</span></li>`;
   }
 
   function rows(data, all) {
     const t = data.timeline;
-    if (!t) return "";
     const items = [
       ...t.periods.map((p) => ({ at: p.from, html: periodRow(p) })),
-      ...t.runs.map((r) => ({ at: r.at, html: runRow(r, clock(r.at)) })),
+      ...t.runs.map((r) => ({ at: r.at, html: runRow(r, hour(r.at)) })),
     ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
-    if (t.ended) items.push({ at: t.ended, html: `<li class="ins-period ended"><span class="ins-time">${esc(clock(t.ended))}</span><span class="ins-mark"></span><span class="ins-text">Ended</span></li>` });
+    if (t.ended) items.push({ at: t.ended, html: `<li class="ins-period ended"><span class="ins-time">${esc(hour(t.ended))}</span><span class="ins-mark"></span><span class="ins-text">Ended</span></li>` });
     if (!items.length) return "";
     const hidden = all ? 0 : Math.max(0, items.length - SHOWN);
     const more = hidden ? `<li class="ins-more"><button class="link-btn" type="button" data-ins="all">Show ${hidden} earlier</button></li>` : "";
     const cut = t.dropped ? `<li class="ins-more">${esc(times(t.dropped, "older change"))} no longer kept.</li>` : "";
-    return `<h3 class="ins-head">Timeline</h3><ol class="ins-list">${cut}${more}${items.slice(hidden).map((i) => i.html).join("")}</ol>`;
+    let last = "";
+    const dated = items.slice(hidden).map((i) => {
+      const d = day(i.at);
+      const head = d && d !== last ? `<li class="ins-day">${esc(d)}</li>` : "";
+      last = d;
+      return head + i.html;
+    });
+    return `<h3 class="ins-head">Timeline</h3>
+      <p class="help ins-note">Each change between working, waiting and idle with how long it lasted, and each <span class="ins-key">${TOOL}tool call</span> and <span class="ins-key">${FLASK}test run</span> Yardbell saw, oldest first.</p>
+      <ol class="ins-list">${cut}${more}${dated.join("")}</ol>`;
+  }
+
+  function empty(data) {
+    return `<div class="ins-empty"><p class="ins-empty-title">Nothing recorded yet</p>
+      <p>Yardbell builds this timeline from its regular checks of ${esc(data.machine)}. It has not checked this session since it appeared, so the first entries come with the next check. Open Insights again in a moment.</p></div>`;
   }
 
   function earlier(data) {
@@ -87,14 +171,14 @@
       ? `<p class="help ins-note">From the task <strong>${esc(data.from.name)}</strong>, version ${data.from.version}${data.from.current !== data.from.version ? `. It is at version ${data.from.current} now` : ""}.</p>`
       : "";
     if (!data.task) return from;
-    return `<h3 class="ins-head">Task</h3><pre class="ins-task">${esc(data.task)}</pre>${from}`;
+    return `<h3 class="ins-head">Task</h3><p class="help ins-note">The prompt this session started with.</p><pre class="ins-task">${esc(data.task)}</pre>${from}`;
   }
 
   function body(data, all) {
     const t = data.timeline;
-    const where = [data.machine, t?.folder, t?.branch].filter(Boolean).map(esc);
-    return `<div class="ins-top"><h2>Insights for ${esc(data.name)}</h2><p class="ins-where">on ${where.join(" · ")}</p></div>
-      <div class="ins-body">${summary(data)}${rows(data, all)}${earlier(data)}${task(data)}</div>
+    const record = t ? `${spent(t)}${rows(data, all)}` : empty(data);
+    return `<div class="ins-top"><h2>Insights for ${esc(data.name)}</h2><p class="ins-where">What Yardbell saw of this session while it watched it.</p></div>
+      <div class="ins-body">${facts(data)}${record}${earlier(data)}${task(data)}</div>
       <div class="dialog-foot">
         <p class="where">Asks Dispatch to read this session and propose a clearer prompt for next time.</p>
         <button class="btn quiet" type="button" data-ins="close">Close</button>
@@ -119,6 +203,7 @@
     dialog.className = "ins-dialog";
     dialog.setAttribute("aria-label", `Insights for ${name}`);
     dialog.innerHTML = `<div class="ins-top"><h2>Insights for ${esc(name)}</h2><p class="ins-where">Reading ${esc(name)} on ${esc(machine)}…</p></div>
+      <div class="ins-body"></div>
       <div class="dialog-foot"><p class="where"></p><button class="btn quiet" type="button" data-ins="close">Close</button></div>`;
     document.body.append(dialog);
     const back = document.activeElement;

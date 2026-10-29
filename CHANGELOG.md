@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Insights** opens in a larger dialog, up to 880px wide and 920px tall, that scrolls inside and
+  fits small windows. Its facts (status, machine, folder, branch, agent) are labelled, **Time
+  spent** shows Working, Waiting for you, Idle and Test results as tiles with units, each one's
+  share of the time and a line on what it means, and the bar has its start and end times. The
+  timeline is grouped under the day, so a session from an earlier day no longer crowds its times
+  into the text. A session Yardbell has not recorded yet says so and when its timeline starts.
 - Dispatch shows the agent and model it runs on, such as `Codex · gpt-6.1-sol`, beside its heading,
   for the open conversation or for new ones, and its intro and the note on a conversation that
   stays on its agent name the model too. The label leads to the setting.
