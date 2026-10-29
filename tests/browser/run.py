@@ -1894,6 +1894,28 @@ class Suite:
         b.js("[...document.querySelectorAll('.pl-history-preview button')].find((x) => x.textContent.trim() === 'Restore').click()")
         b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
 
+    def test_builder_on_a_phone(self):
+        b = self.b
+        b.viewport(390, 844, 3)
+        try:
+            self.open_builder()
+            if b.js("(() => { const l = document.querySelector('.pl-library'); return !!l && l.getBoundingClientRect().width > 0; })()"):
+                raise Failure("the library takes room on a phone")
+            if b.js("document.querySelector('.pl-canvas').getBoundingClientRect().width") < 380:
+                raise Failure("the canvas does not take the width on a phone")
+            b.click("#pl-add-step")
+            b.wait("document.querySelector('#pl-add-sheet .pl-lib-item[data-kind=\"agent\"]')", "the Add step sheet")
+            b.click('#pl-add-sheet .pl-lib-item[data-kind="agent"]')
+            b.wait("!document.querySelector('#pl-add-sheet') && document.querySelector('.pl-node.kind-agent.selected')", "the new step, with the sheet closed")
+            b.wait("document.querySelector('.pl-inspector.sheet') && document.querySelector('.pl-inspector.sheet').getBoundingClientRect().height > 100", "the step in a bottom sheet")
+            b.click("#pl-sheet-done")
+            b.wait("!document.querySelector('.pl-inspector.sheet')", "the sheet closed")
+            if b.js("document.documentElement.scrollWidth") > b.js("innerWidth"):
+                raise Failure("the builder scrolls sideways on a phone")
+            self.check_errors("the builder on a phone")
+        finally:
+            b.viewport(1280, 800)
+
     def test_pipeline_run_graph_and_waiting_box(self):
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-a"))

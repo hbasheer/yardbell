@@ -510,6 +510,35 @@ function pickTrigger(kind) {
   select("@start");
 }
 
+const phone = window.matchMedia("(max-width: 760px)");
+phone.addEventListener?.("change", () => draw());
+let addSheet = false;
+
+function libraryGroups() {
+  return LIBRARY.map(([group, items]) => html`<h3>${group}</h3>
+    <ul>${items.map(([kind, iconKind, name, hint]) => html`<li>
+      <button type="button" class="pl-lib-item" data-kind=${kind} data-group=${group}
+          @pointerdown=${group === "Start when" || phone.matches ? nothing : (e) => carry(e, kind)}
+          @click=${(e) => {
+            if (e.currentTarget.dataset.dragged) return delete e.currentTarget.dataset.dragged;
+            addSheet = false;
+            return group === "Start when" ? pickTrigger(kind) : addStep(kind);
+          }}>
+        <span class="pl-kind-icon">${icon(iconKind)}</span>
+        <span><b>${name}</b><small>${hint}</small></span>
+      </button>
+    </li>`)}</ul>`);
+}
+
+function addSheetView() {
+  if (!addSheet) return nothing;
+  return html`<div class="pl-sheet-backdrop" @click=${() => { addSheet = false; draw(); }}></div>
+    <div class="pl-sheet pl-library" id="pl-add-sheet" role="dialog" aria-label="Add a step">
+      <div class="pl-library-head"><span>Add a step</span><button class="btn quiet" type="button" @click=${() => { addSheet = false; draw(); }}>Close</button></div>
+      ${libraryGroups()}
+    </div>`;
+}
+
 function library() {
   const fold = () => { libraryOpen = !libraryOpen; remember("yb-pipeline-library", libraryOpen); draw(); };
   if (!libraryOpen) {
@@ -517,18 +546,7 @@ function library() {
   }
   return html`<aside class="pl-library" aria-label="Steps you can add">
     <div class="pl-library-head"><span>Steps</span><button class="btn quiet" type="button" title="Hide the steps" aria-label="Hide the steps" @click=${fold}>${chevron("left")}</button></div>
-    ${LIBRARY.map(([group, items]) => html`<h3>${group}</h3>
-      <ul>${items.map(([kind, iconKind, name, hint]) => html`<li>
-        <button type="button" class="pl-lib-item" data-kind=${kind} data-group=${group}
-            @pointerdown=${group === "Start when" ? nothing : (e) => carry(e, kind)}
-            @click=${(e) => {
-              if (e.currentTarget.dataset.dragged) return delete e.currentTarget.dataset.dragged;
-              return group === "Start when" ? pickTrigger(kind) : addStep(kind);
-            }}>
-          <span class="pl-kind-icon">${icon(iconKind)}</span>
-          <span><b>${name}</b><small>${hint}</small></span>
-        </button>
-      </li>`)}</ul>`)}
+    ${libraryGroups()}
   </aside>`;
 }
 
@@ -833,10 +851,13 @@ function inspector() {
       <p>${draft.steps.length} ${draft.steps.length === 1 ? "step" : "steps"} · ${triggerWords(draft.trigger)}</p>
     </div>`;
   }
-  return html`<aside class="pl-inspector" id="pl-inspector" aria-label="Selected step">
+  if (phone.matches && !selected) return nothing;
+  return html`<aside class=${`pl-inspector ${phone.matches ? "sheet" : ""}`} id="pl-inspector" aria-label="Selected step">
     <div class="pl-inspector-head">
       <span>${step ? "Step" : selected === "@start" ? "Trigger" : selected?.startsWith("line:") ? "Line" : "Pipeline"}</span>
-      <button class="btn quiet" type="button" title="Hide the panel" aria-label="Hide the panel" @click=${() => { inspectorOpen = false; draw(); }}>${chevron("right")}</button>
+      ${phone.matches
+        ? html`<button class="btn primary" type="button" id="pl-sheet-done" @click=${() => select(null)}>Done</button>`
+        : html`<button class="btn quiet" type="button" title="Hide the panel" aria-label="Hide the panel" @click=${() => { inspectorOpen = false; draw(); }}>${chevron("right")}</button>`}
     </div>
     <div class="pl-inspector-body">${body}</div>
   </aside>`;
@@ -850,11 +871,15 @@ function buildTab(d) {
       <button class="btn" type="button" title="Undo (Ctrl+Z)" aria-label="Undo" ?disabled=${!past.length} @click=${undo}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4 2.5 7l3 3 M2.5 7h7a4 4 0 0 1 0 8H8"></path></svg></button>
       <button class="btn" type="button" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" ?disabled=${!future.length} @click=${redo}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 4l3 3-3 3 M13.5 7h-7a4 4 0 0 0 0 8H8"></path></svg></button>
       <button class="btn" type="button" id="pl-tidy" title="Line the steps up" ?disabled=${!draft.steps.length} @click=${tidy}>Tidy</button>
-    </div>`;
+    </div>
+    <button class="btn pl-add-fab pl-canvas-bar" type="button" id="pl-add-step" @click=${() => { addSheet = true; draw(); }}>
+      <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"></path></svg>Add step
+    </button>`;
   return html`<div class=${`pl-build ${libraryOpen ? "" : "no-library"} ${inspectorOpen ? "" : "no-inspector"}`}>
     ${library()}
     ${canvas({ def: draft, editable: true, selected, problems, on: handlers, key: `${d.id}:build`, bar })}
     ${addMenuView()}
+    ${addSheetView()}
     ${inspectorOpen ? inspector() : html`<span></span>`}
   </div>`;
 }

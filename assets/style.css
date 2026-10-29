@@ -2034,6 +2034,29 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
 .pl-inspector-foot { display: flex; justify-content: flex-end; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--line); }
 .pl-canvas-hint { position: absolute; top: 50%; left: 50%; margin: 0; padding: 10px 14px; transform: translate(-50%, -50%); border: 1px dashed var(--line-strong); border-radius: var(--radius); background: var(--surface); color: var(--muted); font-size: 13px; pointer-events: none; }
 @media (prefers-reduced-motion: reduce) { .pl-build { transition: none; } }
+.pl-add-fab, .pl-sheet, .pl-sheet-backdrop, #pl-sheet-done { display: none; }
+@media (max-width: 760px) {
+  .pl-bar { gap: 6px; padding: 8px 10px; }
+  .pl-back span, .pl-version, #pl-full, .pl-bar .danger { display: none; }
+  .pl-name { order: 1; flex: 1 1 0; min-width: 0; max-width: none; }
+  #pl-save { order: 2; }
+  .pl-bar-space { order: 3; flex: 0 0 100%; height: 0; }
+  .pl-bar > .switch { order: 4; }
+  .pl-bar .pl-tabs { order: 5; margin-left: 0; }
+  #pl-run-now { order: 6; margin-left: auto; }
+  .pl-build, .pl-build.no-library, .pl-build.no-inspector, .pl-build.no-library.no-inspector { grid-template-columns: minmax(0, 1fr); }
+  .pl-build > .pl-library { display: none; }
+  .pl-minimap { display: none; }
+  .pl-add-fab.pl-canvas-bar { display: inline-flex; bottom: 12px; right: 12px; gap: 6px; height: 36px; padding: 0 14px; box-shadow: var(--card-shadow); }
+  .pl-sheet-backdrop { display: block; position: fixed; inset: 0; z-index: 16; background: rgb(0 0 0 / 0.3); }
+  .pl-sheet.pl-library { display: block; position: fixed; left: 0; right: 0; bottom: 0; z-index: 17; max-height: 70dvh; overflow: auto; border-radius: 16px 16px 0 0; border: 0; padding-bottom: env(safe-area-inset-bottom); }
+  .pl-inspector.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 17; max-height: 70dvh; border: 0; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 24px -8px rgb(26 26 26 / 0.3); padding-bottom: env(safe-area-inset-bottom); }
+  .pl-inspector.sheet #pl-sheet-done { display: inline-flex; }
+  .pl-body { overflow: auto; }
+  .pl-body .pl-run-view { height: auto; }
+  .pl-history-view { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 320px; }
+  .pl-history-view .pl-history { border-right: 0; border-bottom: 1px solid var(--line); }
+}
 .pl-title-name { min-width: 0; overflow-wrap: anywhere; }
 .pl-tabs { justify-self: start; }
 
