@@ -431,8 +431,10 @@ from your avatar, **Edit profile**, **Access tokens**, and save it under **Secre
 `url` is for an instance whose web address differs from the host in your remote, such as another
 port. The token is sent only to that address, in a header, and never goes over ssh, into
 `pulls.json` or a log. When GitLab refuses the token, or its secret is missing, that host is asked
-again after 10 minutes and Yardbell's log says why; `yardbell doctor` signs in to each host and
-names the account or the problem. A merge request shows as `!12`, its pipeline as CI, and a
+again after 10 minutes and Yardbell's log says why; a project the token may not read leaves only
+that branch without a badge. `yardbell doctor` signs in to each host and names the account or the
+problem. When a pipeline fails without a failed job of its own, for example through a downstream
+pipeline, the card names the failed bridge job or the pipeline. A merge request shows as `!12`, its pipeline as CI, and a
 reviewer asking for changes or approving as on GitHub. A request for changes without a comment
 changes the badge but posts no card, and only the newest 500 comments of
 one merge request are watched.

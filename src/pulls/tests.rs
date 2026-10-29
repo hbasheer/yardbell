@@ -1125,3 +1125,45 @@ async fn a_merge_request_with_many_comments_posts_each_once() {
     }
     assert_eq!(rig.pull_cards(&dispatch).len(), 1, "only note 511 is new");
 }
+
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn the_refused_token_warning_names_no_token() {
+    let stub = serve(Answers::default()).await;
+    let rig = gitlab_rig(&stub);
+    std::fs::write(rig.root.join("secrets.yml"), "gitlab: glpat-bad\n").unwrap();
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    // Other tests on other threads may have marked the warning's callsite as unwanted.
+    tracing::callsite::rebuild_interest_cache();
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(log.contains("refused the token in secret gitlab"), "{log}");
+    assert!(!log.contains("glpat"), "{log}");
+}

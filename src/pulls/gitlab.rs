@@ -70,8 +70,11 @@ pub enum Answer {
     Failed(String),
 }
 
+// A 401 means the token itself is refused, for every project on the host; a 403 only that this
+// token may not read one thing, such as one project or its jobs.
 enum Problem {
     Refused(String),
+    Forbidden,
     NotFound,
     Failed(String),
 }
@@ -81,20 +84,30 @@ impl From<Problem> for Answer {
         match p {
             Problem::Refused(m) => Answer::Refused(m),
             Problem::Failed(m) => Answer::Failed(m),
+            Problem::Forbidden => Answer::Failed("GitLab answered 403".into()),
             Problem::NotFound => Answer::Failed("GitLab answered 404".into()),
         }
     }
 }
 
-fn refused(access: &GitLabAccess) -> String {
+fn the_token(access: &GitLabAccess) -> String {
     if access.secret.is_empty() {
-        format!("GitLab at {} refused its token", access.host)
+        "its token".into()
     } else {
-        format!(
-            "GitLab at {} refused the token in secret {}",
-            access.host, access.secret
-        )
+        format!("the token in secret {}", access.secret)
     }
+}
+
+fn refused(access: &GitLabAccess) -> String {
+    format!("GitLab at {} refused {}", access.host, the_token(access))
+}
+
+fn forbidden(access: &GitLabAccess, what: &str) -> String {
+    format!(
+        "GitLab at {} does not let {} read {what}",
+        access.host,
+        the_token(access)
+    )
 }
 
 // reqwest's own message is only "error sending request"; the reason (a name that does not resolve,
@@ -173,9 +186,8 @@ impl GitLab {
             .map_err(|e| unanswered(&access.host, e))?;
         match res.status() {
             s if s.is_success() => Ok(res),
-            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
-                Err(Problem::Refused(refused(access)))
-            }
+            StatusCode::UNAUTHORIZED => Err(Problem::Refused(refused(access))),
+            StatusCode::FORBIDDEN => Err(Problem::Forbidden),
             StatusCode::NOT_FOUND => Err(Problem::NotFound),
             s => Err(Problem::Failed(format!(
                 "GitLab at {} answered {s}",
@@ -233,6 +245,7 @@ impl GitLab {
             .await
             .map_err(|p| match p {
                 Problem::Refused(m) | Problem::Failed(m) => m,
+                Problem::Forbidden => forbidden(access, "its account"),
                 Problem::NotFound => not_gitlab(),
             })?;
         serde_json::from_str::<User>(&body)
@@ -249,6 +262,7 @@ impl GitLab {
                 "project {project} not found on {}, or the token cannot see it",
                 access.host
             )),
+            Err(Problem::Forbidden) => Answer::Failed(forbidden(access, project)),
             Err(p) => p.into(),
         }
     }
@@ -284,17 +298,8 @@ impl GitLab {
         let one = self.text(access, &mr, &[]).await.map_err(gone)?;
         let mut pull = parse_mr(&one).map_err(unreadable)?;
         if pull.ci == Ci::Failing {
-            if let Some(id) = pipeline_id(&one) {
-                let id = id.to_string();
-                let jobs = self
-                    .text(
-                        access,
-                        &["projects", project, "pipelines", id.as_str(), "jobs"],
-                        &[("scope[]", "failed"), ("per_page", PAGE)],
-                    )
-                    .await
-                    .map_err(gone)?;
-                pull.failed = failed_checks(&jobs).map_err(unreadable)?;
+            if let Some((id, web)) = pipeline(&one) {
+                pull.failed = self.failed_in(access, project, id, &web).await?;
             }
         }
         let part = |name: &'static str| [&mr[..], &[name]].concat();
@@ -364,6 +369,40 @@ impl GitLab {
         Ok(Some(out))
     }
 
+    // A pipeline can fail through a downstream pipeline, which shows as a failed bridge rather
+    // than a job, or before any job ran; the card then names what it can, down to the pipeline.
+    async fn failed_in(
+        &self,
+        access: &GitLabAccess,
+        project: &str,
+        id: u64,
+        web: &str,
+    ) -> Result<Vec<Check>, Problem> {
+        let id = id.to_string();
+        let failed = [("scope[]", "failed"), ("per_page", PAGE)];
+        let list = |what: &'static str| ["projects", project, "pipelines", id.as_str(), what];
+        let mut checks = match self.text(access, &list("jobs"), &failed).await {
+            Ok(jobs) => failed_checks(&jobs).map_err(unreadable)?,
+            Err(Problem::Forbidden | Problem::NotFound) => Vec::new(),
+            Err(p) => return Err(p),
+        };
+        if checks.is_empty() {
+            match self.text(access, &list("bridges"), &failed).await {
+                Ok(bridges) => checks = failed_checks(&bridges).unwrap_or_default(),
+                Err(Problem::Refused(m)) => return Err(Problem::Refused(m)),
+                Err(_) => {}
+            }
+        }
+        if checks.is_empty() {
+            checks.push(Check {
+                name: format!("pipeline #{id}"),
+                url: web.to_string(),
+                log: String::new(),
+            });
+        }
+        Ok(checks)
+    }
+
     pub async fn failure_log(&self, access: &GitLabAccess, project: &str, check: &Check) -> String {
         let Some(id) = job_id(&check.url) else {
             return String::new();
@@ -380,7 +419,13 @@ impl GitLab {
             return String::new();
         };
         let mut kept: Vec<u8> = Vec::new();
-        while let Ok(Some(chunk)) = res.chunk().await {
+        loop {
+            let chunk = match res.chunk().await {
+                Ok(Some(chunk)) => chunk,
+                Ok(None) => break,
+                // Its end is the part worth quoting, and a log cut off mid-way has none.
+                Err(_) => return String::new(),
+            };
             kept.extend_from_slice(&chunk);
             if kept.len() > 2 * TRACE_KEEP {
                 kept.drain(..kept.len() - TRACE_KEEP);
@@ -393,12 +438,16 @@ impl GitLab {
     }
 }
 
-pub(super) fn pipeline_id(mr_json: &str) -> Option<u64> {
-    serde_json::from_str::<serde_json::Value>(mr_json)
-        .ok()?
-        .get("head_pipeline")?
-        .get("id")?
-        .as_u64()
+pub(super) fn pipeline(mr_json: &str) -> Option<(u64, String)> {
+    let mr = serde_json::from_str::<serde_json::Value>(mr_json).ok()?;
+    let p = mr.get("head_pipeline")?;
+    Some((
+        p.get("id")?.as_u64()?,
+        p.get("web_url")
+            .and_then(|w| w.as_str())
+            .unwrap_or_default()
+            .to_string(),
+    ))
 }
 
 #[derive(Deserialize, Default)]
@@ -414,6 +463,8 @@ fn name(who: &Option<Who>) -> String {
 #[derive(Deserialize)]
 struct Listed {
     iid: u64,
+    #[serde(default)]
+    state: String,
     #[serde(default)]
     source_project_id: Option<u64>,
     #[serde(default)]
@@ -500,12 +551,18 @@ struct RawDiscussion {
     notes: Vec<RawNote>,
 }
 
-// A merge request opened from a fork can share the branch's name; it is someone else's.
+// A merge request opened from a fork can share the branch's name; it is someone else's. An open
+// one wins over a newer merged or closed one, as gh does.
 pub(super) fn pick_mr(list_json: &str) -> Result<Option<u64>, String> {
     let list: Vec<Listed> = serde_json::from_str(list_json).map_err(|e| e.to_string())?;
-    Ok(list
+    let ours: Vec<&Listed> = list
         .iter()
-        .find(|m| m.source_project_id == m.target_project_id)
+        .filter(|m| m.source_project_id == m.target_project_id)
+        .collect();
+    Ok(ours
+        .iter()
+        .find(|m| m.state == "opened")
+        .or(ours.first())
         .map(|m| m.iid))
 }
 
@@ -663,6 +720,18 @@ mod tests {
     #[test]
     fn the_merge_request_from_this_project_is_picked() {
         assert_eq!(pick_mr(MRS).unwrap(), Some(12));
+        let merged_later = r#"[
+            {"iid": 5, "state": "merged", "source_project_id": 17, "target_project_id": 17},
+            {"iid": 12, "state": "opened", "source_project_id": 17, "target_project_id": 17}
+        ]"#;
+        assert_eq!(
+            pick_mr(merged_later).unwrap(),
+            Some(12),
+            "an open one first"
+        );
+        let only_closed =
+            r#"[{"iid": 5, "state": "closed", "source_project_id": 17, "target_project_id": 17}]"#;
+        assert_eq!(pick_mr(only_closed).unwrap(), Some(5));
         assert_eq!(pick_mr("[]").unwrap(), None);
         assert!(pick_mr("{").is_err());
     }
@@ -819,6 +888,7 @@ pub(crate) mod stub {
         pub discussions: (u16, String),
         pub trace: (u16, String),
         pub user: (u16, String),
+        pub bridges: (u16, String),
         pub next_page: bool,
     }
 
@@ -834,6 +904,7 @@ pub(crate) mod stub {
                 discussions: ok(include_str!("../../tests/fixtures/gitlab_discussions.json")),
                 trace: ok(include_str!("../../tests/fixtures/gitlab_trace.txt")),
                 user: ok(r#"{"id":1,"username":"me-bot"}"#),
+                bridges: ok("[]"),
                 next_page: false,
             }
         }
@@ -891,6 +962,8 @@ pub(crate) mod stub {
         let a = s.answers.lock().unwrap();
         let (status, body) = if path.ends_with("/trace") {
             &a.trace
+        } else if path.ends_with("/bridges") {
+            &a.bridges
         } else if path.ends_with("/jobs") {
             &a.jobs
         } else if path.ends_with("/reviewers") {
@@ -1024,19 +1097,135 @@ mod http_tests {
     #[tokio::test]
     async fn a_refused_token_is_named_without_the_token() {
         let stub = serve(Answers::default()).await;
-        for token in ["glpat-bad", "glpat-forbidden"] {
-            let got = GitLab::new()
-                .fetch(&stub.access(token), "commslayer/app", "eng-2")
+        let got = GitLab::new()
+            .fetch(&stub.access("glpat-bad"), "commslayer/app", "eng-2")
+            .await;
+        let Answer::Refused(msg) = got else {
+            panic!("{got:?}");
+        };
+        assert_eq!(
+            msg,
+            "GitLab at git.commslayer.com refused the token in secret gitlab"
+        );
+        assert!(!msg.contains("glpat"));
+    }
+
+    #[tokio::test]
+    async fn a_forbidden_project_fails_only_that_branch() {
+        let stub = serve(Answers::default()).await;
+        let got = GitLab::new()
+            .fetch(&stub.access("glpat-forbidden"), "commslayer/app", "eng-2")
+            .await;
+        assert!(
+            matches!(&got, Answer::Failed(m) if m == "GitLab at git.commslayer.com does not let the token in secret gitlab read commslayer/app"),
+            "{got:?}"
+        );
+        assert_eq!(
+            GitLab::new().whoami(&stub.access("glpat-forbidden")).await,
+            Err("GitLab at git.commslayer.com does not let the token in secret gitlab read its account".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn jobs_hidden_from_the_token_name_the_pipeline() {
+        let stub = serve(Answers {
+            jobs: (403, r#"{"message":"403 Forbidden"}"#.into()),
+            ..Answers::default()
+        })
+        .await;
+        let got = GitLab::new()
+            .fetch(&stub.access("glpat-good"), "commslayer/app", "eng-2")
+            .await;
+        let Answer::Pull(p) = got else {
+            panic!("{got:?}");
+        };
+        assert_eq!(p.failed[0].name, "pipeline #501");
+    }
+
+    #[tokio::test]
+    async fn a_pipeline_failed_downstream_names_its_bridge_or_itself() {
+        let stub = serve(Answers {
+            jobs: (200, "[]".into()),
+            bridges: (
+                200,
+                r#"[{"id":9100,"name":"deploy-child","stage":"deploy","status":"failed","allow_failure":false,"web_url":"https://git.commslayer.com/commslayer/app/-/pipelines/777"}]"#.into(),
+            ),
+            ..Answers::default()
+        })
+        .await;
+        let gl = GitLab::new();
+        let access = stub.access("glpat-good");
+        let Answer::Pull(p) = gl.fetch(&access, "commslayer/app", "eng-2").await else {
+            panic!("no pull");
+        };
+        assert_eq!(
+            p.failed,
+            [Check {
+                name: "deploy / deploy-child".into(),
+                url: "https://git.commslayer.com/commslayer/app/-/pipelines/777".into(),
+                log: String::new(),
+            }]
+        );
+        stub.answers.lock().unwrap().bridges = (200, "[]".into());
+        let Answer::Pull(p) = gl.fetch(&access, "commslayer/app", "eng-2").await else {
+            panic!("no pull");
+        };
+        assert_eq!(
+            p.failed,
+            [Check {
+                name: "pipeline #501".into(),
+                url: "https://git.commslayer.com/commslayer/app/-/pipelines/501".into(),
+                log: String::new(),
+            }]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_trace_cut_off_mid_way_gives_no_log() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let (mut sock, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = sock.read(&mut buf).await;
+            let _ = sock
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 100000\r\n\r\nthe middle of a log\n",
+                )
                 .await;
-            let Answer::Refused(msg) = got else {
-                panic!("{token}: {got:?}");
-            };
-            assert_eq!(
-                msg,
-                "GitLab at git.commslayer.com refused the token in secret gitlab"
-            );
-            assert!(!msg.contains("glpat"));
-        }
+        });
+        let access = GitLabAccess {
+            host: "git.commslayer.com".into(),
+            api: format!("http://{addr}/api/v4"),
+            secret: "gitlab".into(),
+            token: Ok("glpat-good".into()),
+        };
+        let check = Check {
+            name: "test / rspec".into(),
+            url: "https://git.commslayer.com/commslayer/app/-/jobs/9001".into(),
+            log: String::new(),
+        };
+        let log = GitLab::new()
+            .failure_log(&access, "commslayer/app", &check)
+            .await;
+        assert_eq!(
+            log, "",
+            "a log cut off mid-way is not quoted from its middle"
+        );
+    }
+
+    #[tokio::test]
+    async fn an_answer_that_is_not_gitlab_says_so() {
+        let stub = serve(Answers {
+            user: (200, "<html>sign in</html>".into()),
+            ..Answers::default()
+        })
+        .await;
+        assert_eq!(
+            GitLab::new().whoami(&stub.access("glpat-good")).await,
+            Err("git.commslayer.com did not answer as GitLab does".into())
+        );
     }
 
     #[tokio::test]

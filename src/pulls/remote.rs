@@ -35,7 +35,7 @@ pub fn parse(url: &str) -> Option<Repo> {
 
 pub fn remote_command(branch: &str) -> String {
     format!(
-        "r=$(git config --get {} || echo origin); git config --get \"remote.$r.url\"",
+        "r=$(git config --get {} || echo origin); git remote get-url \"$r\"",
         quote(&format!("branch.{branch}.remote"))
     )
 }
@@ -130,6 +130,10 @@ mod tests {
         assert!(call.contains("cd '/r/app'"), "{call}");
         assert!(call.contains("branch.eng-1.remote"), "{call}");
         assert!(call.contains("|| echo origin"), "{call}");
+        assert!(
+            call.contains("git remote get-url"),
+            "applies url.*.insteadOf: {call}"
+        );
 
         let failing = Arc::new(FakeRunner::default());
         failing.stub("git config --get", Output::failed(1, ""));

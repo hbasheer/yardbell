@@ -156,8 +156,13 @@ pub fn untold(card: &mut Value) -> Option<String> {
     }
     card["told"] = json!(true);
     let pull = &card["pull"];
+    let (kind, mark) = if text(pull, "forge") == "gitlab" {
+        ("Merge request", '!')
+    } else {
+        ("Pull request", '#')
+    };
     let subject = format!(
-        "Pull request #{} ({}) of {} on {}",
+        "{kind} {mark}{} ({}) of {} on {}",
         pull["number"],
         text(pull, "title"),
         text(card, "name"),
@@ -309,5 +314,16 @@ mod tests {
             "{told}"
         );
         assert_eq!(super::untold(&mut c), None);
+    }
+
+    #[test]
+    fn dispatch_hears_a_merge_request_called_one() {
+        let mut c = card("ci:2");
+        c["pull"]["forge"] = json!("gitlab");
+        let told = super::untold(&mut c).unwrap();
+        assert!(
+            told.starts_with("Merge request !7 (Fix login) of hp-app on hp failed CI on test."),
+            "{told}"
+        );
     }
 }

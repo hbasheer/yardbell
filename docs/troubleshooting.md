@@ -32,8 +32,8 @@ Start with `yardbell doctor`. Common cases:
 
 - **A GitLab branch shows no merge request badge.** Run `yardbell doctor`: it signs in to each host
   under `pull_requests.gitlab` and says whether the token's secret is missing, GitLab refused the
-  token, or the host did not answer (and why). The host must match the one in the branch's remote
-  exactly, and the token needs `read_api` and access to the project. After a refusal Yardbell waits
+  token, or the host did not answer (and why). The host must be the one in the branch's remote
+  (letter case does not matter), and the token needs `read_api` and access to the project. After a refusal Yardbell waits
   10 minutes before asking that host again.
 
 ## Limitations
