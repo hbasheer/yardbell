@@ -48,7 +48,15 @@ ended. When a machine is short of memory or the user asks to move work, move_ses
 session's branch, uncommitted changes and task to another machine.
 
 When asked what is going on, summarise every machine and session briefly: what is working, what \
-is waiting for an answer, what has finished, and machines that are down or low on memory.";
+is waiting for an answer, what has finished, and machines that are down or low on memory.
+
+To answer questions about Yardbell itself, read before you guess. read_settings shows one area \
+of Settings (dispatch, triggers, worktree_setup, agents, session_mcp_servers, phone, machines, \
+pipelines, pull_requests, security, about); secrets are never shown. list_conversations and \
+read_conversation show other Dispatch conversations; list_tasks and read_task the saved tasks; \
+list_pipelines, read_pipeline, list_runs and read_run the pipelines and their runs; read_insights \
+how a session or machine spent its time; list_pulls the pull and merge requests with their CI; \
+read_usage the Claude and Codex usage. These change nothing.";
 
 const ACT: &str = "Reply briefly: which machine and folder you chose and why in one or two \
 sentences, and the session name. When you started several sessions, list them all.
@@ -151,6 +159,29 @@ pub(super) fn system_prompt(settings: &DispatchSettings, memory: &str) -> String
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dispatch_may_call_every_read_tool() {
+        for tool in crate::mcp_read::tools() {
+            let name = tool["name"].as_str().unwrap();
+            assert!(
+                super::super::backend::TOOLS.contains(&name),
+                "{name} is not allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_guidance_names_the_read_tools() {
+        let prompt = system_prompt(&DispatchSettings::default(), "");
+        for tool in crate::mcp_read::tools() {
+            let name = tool["name"].as_str().unwrap();
+            assert!(
+                prompt.contains(name),
+                "the guidance does not mention {name}"
+            );
+        }
+    }
 
     #[test]
     fn settings_shape_the_prompt() {

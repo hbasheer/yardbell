@@ -18,6 +18,11 @@ and the project uses [Semantic Versioning](https://semver.org).
   back through every saved version. Its settings write the new `pipelines` section of
   `yardbell.yml`. `yardbell doctor` checks what each pipeline
   that is on needs.
+- **Dispatch can read all of Yardbell.** New read tools on Yardbell's MCP server, for Dispatch and
+  any connected client, return each area of Settings (with what it may be set to), Dispatch
+  conversations, saved tasks, pipelines and their runs, Insights, pull and merge requests with
+  their CI, and usage. They change nothing, and no secret is ever shown: a setting that uses one
+  shows its `${secret:NAME}` reference, any other credential shows `(hidden)`.
 - On a phone, Settings and Log out in the header show as their icons, to make room for Pipelines.
 
 ## [0.7.10] - 2026-10-29

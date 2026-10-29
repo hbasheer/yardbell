@@ -77,6 +77,20 @@ server to `~/.claude.json` by hand.
 | `push_branch` | push a branch, never forced, after a scan for keys, tokens and saved secret values |
 | `move_session` | move a session's branch, uncommitted changes and task to another machine, without committing or pushing |
 
+These read Yardbell's own settings and data, change nothing, and never show a secret: a setting
+that uses one shows its `${secret:NAME}` reference, and any other credential shows `(hidden)`.
+
+| Tool | What it does |
+|---|---|
+| `read_settings` | one area of Settings with what it may be set to: `dispatch`, `triggers`, `worktree_setup`, `agents`, `session_mcp_servers`, `phone`, `machines`, `pipelines`, `pull_requests`, `security` or `about` |
+| `list_conversations`, `read_conversation` | Dispatch conversations and who started each; one conversation's newest 20 turns, long text clipped |
+| `list_tasks`, `read_task` | saved Dispatch tasks and their versions |
+| `list_pipelines`, `read_pipeline` | pipelines with their run counts; one definition and its versions |
+| `list_runs`, `read_run` | pipeline runs as summaries, newest first; one run in full |
+| `read_insights` | a session's working, waiting and idle time and its commands, or every session seen on a machine |
+| `list_pulls` | pull and merge requests for watched branches, with review state, CI and failing jobs |
+| `read_usage` | Claude and Codex usage as the sidebar shows it |
+
 Dispatch also has `remember`, which proposes a change to its own [memory](usage.md#memory). Other
 clients do not see it, and calling it from one is refused.
 

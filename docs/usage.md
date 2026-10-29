@@ -278,6 +278,12 @@ preferring the most free memory, the lowest load and the fewest running agents, 
 starting the default agent there with your task. Follow-up messages continue the same
 conversation, for example "what is that session doing now?" or "tell it yes".
 
+Dispatch also reads Yardbell itself, so you can ask about it in the same words: "which triggers
+run on weekdays?", "what did the review pipeline find on !87?", "why did that run stop?", "how
+much Claude usage is left?" or "which pull requests have failing CI?". It reads Settings, its
+other conversations, your saved tasks, pipelines and their runs, Insights, pull and merge requests
+and usage; these reads change nothing and never show a secret.
+
 Dispatch asks before it acts. Each step that starts, stops or types into a session appears as a
 card with the machine, folder, branch, agent and task (or the text to type), and waits for you:
 

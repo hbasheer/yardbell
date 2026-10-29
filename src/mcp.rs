@@ -21,7 +21,10 @@ scan_folder starts a read-only scan of a folder for dead code, test gaps or secu
 start_group starts several sessions as one group whose results Dispatch gathers, \
 integrate_branches merges several branches into a new one, push_branch pushes a branch after a \
 secret scan, remove_worktree removes a finished worktree, and move_session moves a session's \
-branch, uncommitted changes and task to another machine.";
+branch, uncommitted changes and task to another machine. read_settings, list_conversations, \
+read_conversation, list_tasks, read_task, list_pipelines, read_pipeline, list_runs, read_run, \
+read_insights, list_pulls and read_usage read Yardbell's settings and data and change nothing; \
+secrets are never shown.";
 
 pub fn token_matches(expected: &str, given: &str) -> bool {
     let (a, b) = (expected.as_bytes(), given.as_bytes());
