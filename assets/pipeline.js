@@ -202,7 +202,7 @@ function settingsForm() {
         <input type="number" name="minutes" min="10" max="1440" .value=${String(s.minutes)} @input=${(e) => set("minutes", e.target.value)}></label>
     </div>
     <div class="pl-notes">
-      <p class="pl-field-head">QA notes per folder <span>Added to every QA step that tests that folder, such as how to run its specs.</span></p>
+      <p class="pl-field-head">QA notes per folder <span>Added to every agent step working in that folder, such as how to run its specs and console.</span></p>
       <ul>${notes.map((n, i) => html`<li class="pl-note">
         <input name="folder" placeholder="acme/web" aria-label="Folder" .value=${n.folder} @input=${(e) => setNote(i, "folder", e.target.value)}>
         <input name="note" placeholder="Run bin/rspec, then check the page in the browser" aria-label="Note" .value=${n.note} @input=${(e) => setNote(i, "note", e.target.value)}>
@@ -309,21 +309,113 @@ function graph(d, run) {
       edges.push(svg`<path class=${`pl-edge ${outcome} ${taken ? "taken" : ""}`} d=${edgePath(s, at[to])} marker-end=${taken ? "url(#pl-arrow-taken)" : "url(#pl-arrow)"}></path>`);
     }
   }
-  return html`<div class="pl-canvas" aria-label="Steps of this run">
-    <div class="pl-canvas-inner" style=${`width:${width}px;height:${height}px`}>
-      <svg width=${width} height=${height} aria-hidden="true">
-        <defs>${["", "-taken"].map((k) => svg`<marker id=${`pl-arrow${k}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 8 4 0 8z" class=${`pl-arrowhead${k}`}></path></marker>`)}</defs>
-        ${edges}
-      </svg>
-      ${d.steps.map((s) => {
-        const n = nodeState(run, s);
-        return html`<div class=${`pl-node ${n.cls}`} data-step=${s.id} style=${`left:${s.x}px;top:${s.y}px`}>
-          <b>${n.mark || run ? html`<span class="pl-mark" aria-hidden="true">${n.mark}</span>` : nothing}${s.name}</b>
-          <small>${n.note}</small>
-        </div>`;
-      })}
+  const key = `${d.id}:${d.version}:${run?.id || ""}`;
+  return html`<div class="pl-canvas" aria-label="Steps of this run" data-key=${key} data-width=${width} data-height=${height}
+      @pointerdown=${grab} @pointermove=${drag} @pointerup=${letGo} @pointercancel=${letGo} @wheel=${wheel}>
+    <div class="pl-pan">
+      <div class="pl-canvas-inner" style=${`width:${width}px;height:${height}px`}>
+        <svg width=${width} height=${height} aria-hidden="true">
+          <defs>${["", "-taken"].map((k) => svg`<marker id=${`pl-arrow${k}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 8 4 0 8z" class=${`pl-arrowhead${k}`}></path></marker>`)}</defs>
+          ${edges}
+        </svg>
+        ${d.steps.map((s) => {
+          const n = nodeState(run, s);
+          return html`<div class=${`pl-node ${n.cls}`} data-step=${s.id} style=${`left:${s.x}px;top:${s.y}px`}>
+            <b>${n.mark || run ? html`<span class="pl-mark" aria-hidden="true">${n.mark}</span>` : nothing}${s.name}</b>
+            <small>${n.note}</small>
+          </div>`;
+        })}
+      </div>
+    </div>
+    <div class="pl-zoom" @pointerdown=${(e) => e.stopPropagation()}>
+      <button class="btn" type="button" aria-label="Zoom out" @click=${(e) => zoomBy(e, 1 / 1.25)}>−</button>
+      <button class="btn" type="button" @click=${(e) => fit(e.target.closest(".pl-canvas"))}>Fit</button>
+      <button class="btn" type="button" aria-label="Zoom in" @click=${(e) => zoomBy(e, 1.25)}>+</button>
     </div>
   </div>`;
+}
+
+// Where each graph is panned and zoomed to, by canvas key, so a refresh keeps it.
+const views = new Map();
+let held = null;
+
+function place(canvas) {
+  const v = views.get(canvas.dataset.key);
+  canvas.querySelector(".pl-pan").style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.k})`;
+  canvas.style.backgroundPosition = `${v.x}px ${v.y}px`;
+  canvas.style.backgroundSize = `${20 * v.k}px ${20 * v.k}px`;
+}
+
+// Fits the whole graph when it is small enough to read, and otherwise shows it at a readable size
+// centred on the step the run is at.
+function fit(canvas) {
+  const cw = canvas.clientWidth, ch = canvas.clientHeight;
+  const w = Number(canvas.dataset.width), h = Number(canvas.dataset.height);
+  const whole = Math.min(1, (cw - 32) / w, (ch - 16) / h);
+  const k = whole >= 0.75 ? whole : 0.85;
+  let x = (cw - w * k) / 2, y = Math.max(8, (ch - h * k) / 2);
+  const node = canvas.querySelector(".pl-node.waiting, .pl-node.now") || canvas.querySelector(".pl-node");
+  if (w * k > cw && node) x = cw / 2 - (node.offsetLeft + node.offsetWidth / 2) * k;
+  if (h * k > ch && node) y = ch / 2 - (node.offsetTop + node.offsetHeight / 2) * k;
+  views.set(canvas.dataset.key, { x, y, k });
+  place(canvas);
+}
+
+function zoomAt(canvas, factor, px, py) {
+  const v = views.get(canvas.dataset.key);
+  const k = Math.min(1.5, Math.max(0.3, v.k * factor));
+  views.set(canvas.dataset.key, { k, x: px - ((px - v.x) * k) / v.k, y: py - ((py - v.y) * k) / v.k });
+  place(canvas);
+}
+
+function zoomBy(e, factor) {
+  const canvas = e.target.closest(".pl-canvas");
+  zoomAt(canvas, factor, canvas.clientWidth / 2, canvas.clientHeight / 2);
+}
+
+function grab(e) {
+  if (e.button !== 0) return;
+  const canvas = e.currentTarget;
+  held = { id: e.pointerId, x: e.clientX, y: e.clientY };
+  try {
+    canvas.setPointerCapture(e.pointerId);
+  } catch {}
+  canvas.classList.add("grabbing");
+}
+
+function drag(e) {
+  if (!held || held.id !== e.pointerId) return;
+  const canvas = e.currentTarget;
+  const v = views.get(canvas.dataset.key);
+  views.set(canvas.dataset.key, { ...v, x: v.x + e.clientX - held.x, y: v.y + e.clientY - held.y });
+  held = { ...held, x: e.clientX, y: e.clientY };
+  place(canvas);
+}
+
+function letGo(e) {
+  held = null;
+  e.currentTarget.classList.remove("grabbing");
+}
+
+// A trackpad pinch arrives as a wheel event with ctrlKey; two-finger scrolling pans.
+function wheel(e) {
+  const canvas = e.currentTarget;
+  e.preventDefault();
+  if (e.ctrlKey || e.metaKey) {
+    const r = canvas.getBoundingClientRect();
+    zoomAt(canvas, Math.exp(-e.deltaY / 200), e.clientX - r.left, e.clientY - r.top);
+    return;
+  }
+  const v = views.get(canvas.dataset.key);
+  views.set(canvas.dataset.key, { ...v, x: v.x - e.deltaX, y: v.y - e.deltaY });
+  place(canvas);
+}
+
+function canvases() {
+  for (const canvas of document.querySelectorAll(".pl-canvas")) {
+    if (views.has(canvas.dataset.key)) place(canvas);
+    else fit(canvas);
+  }
 }
 
 function act(run, what, body) {
@@ -638,26 +730,13 @@ function pipelineView() {
     ${tab === "steps" ? stepsTab() : tab === "history" ? historyTab() : runsTab(d)}`;
 }
 
-let centred = "";
-
-// Brings the step a run is at into view once, when the run is first shown.
-function centre() {
-  const canvas = document.querySelector(".pl-run-view .pl-canvas");
-  const node = canvas?.querySelector(".pl-node.waiting, .pl-node.now");
-  const run = document.querySelector(".pl-run-item.sel")?.dataset.id || "";
-  if (!node || run === centred) return;
-  centred = run;
-  canvas.scrollLeft = node.offsetLeft - (canvas.clientWidth - node.offsetWidth) / 2;
-  canvas.scrollTop = node.offsetTop - (canvas.clientHeight - node.offsetHeight) / 2;
-}
-
 function draw() {
   const root = $("pl-root");
   if (!data) return;
   const id = params().get("p");
   document.title = id && def ? `${def.name} · Pipelines · Yardbell` : "Pipelines · Yardbell";
   render(id && def ? pipelineView() : listView(), root);
-  centre();
+  canvases();
 }
 
 async function load() {

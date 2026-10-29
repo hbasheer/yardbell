@@ -1706,6 +1706,15 @@ class Suite:
                 raise Failure(f"the {step} node is not {cls}")
         if b.js("document.querySelectorAll('.pl-canvas svg path').length") < 5:
             raise Failure("the graph does not draw the lines between steps")
+        if b.js("getComputedStyle(document.querySelector('.pl-canvas')).overflow") != "hidden":
+            raise Failure("the graph scrolls instead of panning")
+        fitted = b.js("document.querySelector('.pl-pan').style.transform")
+        b.js("document.querySelector('.pl-canvas').dispatchEvent(new WheelEvent('wheel', { deltaX: 80, deltaY: 30, bubbles: true, cancelable: true }))")
+        if b.js("document.querySelector('.pl-pan').style.transform") == fitted:
+            raise Failure("two-finger scrolling does not pan the graph")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        if b.js("document.querySelector('.pl-pan').style.transform") != fitted:
+            raise Failure("Fit does not bring the graph back")
         box = "#pl-need"
         b.wait(f"document.querySelector('{box}')?.textContent.includes('Which window is right?')", "the agent's question")
         b.click(f"{box} textarea")

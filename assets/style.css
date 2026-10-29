@@ -1998,10 +1998,14 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
 .pl-dot.run { background: var(--accent); }
 .pl-dot.wait { background: var(--warn); }
 
-.pl-canvas { position: relative; min-width: 0; min-height: 260px; overflow: auto; background-color: var(--bg); background-image: radial-gradient(var(--line-strong) 1px, transparent 1px); background-size: 20px 20px; }
+.pl-canvas { position: relative; min-width: 0; min-height: 260px; overflow: hidden; cursor: grab; touch-action: pan-y; user-select: none; background-color: var(--bg); background-image: radial-gradient(var(--line-strong) 1px, transparent 1px); background-size: 20px 20px; }
 .pl-run-view .pl-canvas { border: 0; }
 .pl-steps-tab + .pl-canvas, .pl-empty + .pl-canvas { height: 300px; border: 1px solid var(--line); border-radius: var(--radius); }
+.pl-canvas.grabbing { cursor: grabbing; }
+.pl-pan { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
 .pl-canvas-inner { position: relative; }
+.pl-zoom { position: absolute; right: 10px; bottom: 10px; display: flex; gap: 4px; }
+.pl-zoom .btn { min-width: 32px; justify-content: center; box-shadow: var(--card-shadow); }
 .pl-canvas svg { position: absolute; inset: 0; overflow: visible; }
 .pl-edge { fill: none; stroke: var(--line-strong); stroke-width: 1.6; }
 .pl-edge.fail { stroke-dasharray: 5 4; }
