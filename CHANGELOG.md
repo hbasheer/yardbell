@@ -13,6 +13,16 @@ and the project uses [Semantic Versioning](https://semver.org).
   tells GitHub from GitLab by the remote each branch pushes to, and asks GitLab's API from its own
   machine. `yardbell doctor` signs in to each GitLab host and names the account or the problem.
 
+## [0.7.8] - 2026-10-29
+
+- The Dispatch page is laid out like an app on a wide screen: a column beside the chat with
+  **Chats** and **Tasks** tabs and **+** for a new conversation, and a header with the open
+  conversation's title, the agent and model it runs on, and **Settings**. Only the conversation and
+  the list scroll, each on its own, so the header and the message box stay in view. The eight
+  default tasks no longer push the conversations aside, and the page no longer repeats the
+  Dashboard link the sidebar has.
+- The README and the guide show the new Dispatch page and the Workspace with its Dispatch tabs.
+
 ## [0.7.7] - 2026-10-29
 
 - The Workspace sidebar matches the other pages: the same header with the collapse button beside

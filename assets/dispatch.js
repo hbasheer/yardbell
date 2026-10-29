@@ -179,6 +179,8 @@ function convoItem(c) {
 function renderList() {
   $("clear-all").hidden = !conversations.length;
   countTab("convos", conversations.length);
+  const open = conversations.find((c) => c.id === current);
+  render(html`${open?.trigger ? html`<span class="convo-trigger" title="Started by the trigger ${open.trigger}" aria-label="Started by a trigger">${ICONS.trigger}</span>` : nothing}${open?.title || "New conversation"}`, $("chat-title"));
   render(conversations.length
     ? repeat(conversations, (c) => c.id, convoItem)
     : html`<li><p class="convo-empty">No conversations yet.</p></li>`, $("convo-list"));
@@ -211,8 +213,8 @@ async function loadList() {
 }
 
 function scrollDown() {
-  const main = document.querySelector(".main");
-  main.scrollTo({ top: main.scrollHeight });
+  const s = scroller();
+  s.scrollTo({ top: s.scrollHeight });
   window.scrollTo({ top: document.body.scrollHeight });
 }
 
@@ -886,9 +888,12 @@ window.YardbellLive.follow(() => {
   }
 }, 5000);
 
+// Wide, the chat column scrolls on its own; narrow, the page or its main area does.
 function scroller() {
-  const main = document.querySelector(".main");
-  return getComputedStyle(main).overflowY === "visible" ? document.scrollingElement : main;
+  for (const el of [$("dispatch-chat"), document.querySelector(".main")]) {
+    if (getComputedStyle(el).overflowY !== "visible") return el;
+  }
+  return document.scrollingElement;
 }
 
 const compose = composer(form, {
@@ -981,36 +986,34 @@ resizer.addEventListener("keydown", (e) => {
 
 setSideWidth(Number(remembered(WIDTH_KEY)) || SIDE_WIDTH.normal, false);
 
-// Narrow, the chat and the two lists take turns under tabs, so each list stays open and folding
-// is left to the wide layout.
-const FOLDED_KEY = "yardbell.dispatch.folded";
-const folded = new Set((remembered(FOLDED_KEY) || "").split(",").filter(Boolean));
-const unfold = () => { for (const id of ["convos", "tasks"]) $(id).open = narrow.matches || !folded.has(id); };
+// The tabs pick what shows: narrow, the chat or one list; wide, which list sits beside the chat.
+// Either way a list is always open, so its heading does not fold it.
 for (const id of ["convos", "tasks"]) {
-  $(id).addEventListener("toggle", () => {
-    if (narrow.matches) return;
-    if ($(id).open) folded.delete(id);
-    else folded.add(id);
-    remember(FOLDED_KEY, folded.size ? [...folded].join(",") : null);
-  });
+  $(id).open = true;
   $(id).querySelector("summary").addEventListener("click", (e) => {
-    if (narrow.matches && !e.target.closest("button")) e.preventDefault();
+    if (!e.target.closest("button")) e.preventDefault();
   });
 }
-unfold();
-narrow.addEventListener("change", unfold);
 
 function tabList() {
   return [...document.querySelectorAll("#dispatch-tabs [role=tab]")];
 }
 
 function showTab(name, focus = false) {
-  $("dispatch").dataset.tab = name;
+  const d = $("dispatch");
+  d.dataset.tab = name;
+  if (name !== "chat") d.dataset.list = name;
+  paintTabs(focus ? name : "");
+}
+
+function paintTabs(focus = "") {
+  const d = $("dispatch");
+  const on = narrow.matches ? d.dataset.tab : d.dataset.list;
   for (const t of tabList()) {
-    const on = t.dataset.tab === name;
-    t.setAttribute("aria-selected", String(on));
-    t.tabIndex = on ? 0 : -1;
-    if (on && focus) t.focus();
+    const picked = t.dataset.tab === on;
+    t.setAttribute("aria-selected", String(picked));
+    t.tabIndex = picked ? 0 : -1;
+    if (picked && t.dataset.tab === focus) t.focus();
   }
 }
 
@@ -1021,13 +1024,15 @@ function countTab(name, n) {
 for (const t of tabList()) t.addEventListener("click", () => showTab(t.dataset.tab));
 $("dispatch-tabs").addEventListener("keydown", (e) => {
   const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
-  const tabs = tabList();
+  const tabs = tabList().filter((t) => t.getClientRects().length > 0);
   const at = tabs.indexOf(document.activeElement);
   if (!step || at < 0) return;
   e.preventDefault();
   showTab(tabs[(at + step + tabs.length) % tabs.length].dataset.tab, true);
 });
 $("tab-new").addEventListener("click", () => $("new-chat").click());
+narrow.addEventListener("change", () => paintTabs());
+$("dispatch").dataset.list = "convos";
 showTab("chat");
 const handedOver = window.YardbellInsights.takeOver();
 loadRunsOn();

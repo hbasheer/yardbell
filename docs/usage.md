@@ -317,8 +317,7 @@ Yardbell's state folder, under `dispatch/`, readable only by your account: a hea
 the next change. If a hand edit takes it over the cap, Dispatch reads the entries that fit and
 Settings says how many were left out.
 
-Every conversation is kept in a list beside the chat (under **Chats** in the Workspace panel and on a
-phone), also after a restart, so you can go back to
+Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
 conversation never stops the sessions it started. The agent Dispatch runs on must be installed and
 signed in on the host.
@@ -469,7 +468,14 @@ and weekly limits as Codex recorded them after Dispatch's last reply on it, read
 session files under `~/.codex/sessions`. Codex has no way to ask for them in between, so there is no
 refresh arrow, and when the figures cannot be read the card says they are not available.
 
-The **Tasks** list in Dispatch's sidebar sends a task in one click. Eight come with Yardbell:
+On a wide screen the Dispatch page keeps a column beside the chat with two tabs, **Chats** for your
+conversations and **Tasks** for your saved tasks, and **+** for a new conversation. The open
+conversation's title, the agent and model it runs on, and **Settings** stay at the top while the
+conversation scrolls, and the message box stays at the bottom. In the Workspace panel and on a phone
+the page is too narrow for a column, so **Chat**, **Chats** and **Tasks** are three tabs that take
+turns.
+
+The **Tasks** list in Dispatch sends a task in one click. Eight come with Yardbell:
 **What's going on?** summarises every machine and session, **Who needs me?** lists the sessions
 waiting for an answer, **Plan my Linear tickets** plans your open tickets, **Review finished
 branches** proposes a reviewer for each branch of an idle or ended session, **Tidy up
