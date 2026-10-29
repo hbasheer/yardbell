@@ -7,7 +7,7 @@ use regex::Regex;
 use serde::Deserialize;
 use std::sync::{Arc, OnceLock};
 
-const FIELDS: &str = "number,url,title,state,isDraft,reviewDecision,headRefOid,author,statusCheckRollup,comments,reviews";
+const FIELDS: &str = "number,url,title,state,isDraft,reviewDecision,headRefOid,author,statusCheckRollup,comments,reviews,createdAt";
 const VIEW_TIMEOUT: Duration = Duration::from_secs(20);
 const LOG_TIMEOUT: Duration = Duration::from_secs(30);
 const NO_GH: i32 = 127;
@@ -207,6 +207,8 @@ struct RawPull {
     comments: Option<Vec<RawComment>>,
     #[serde(default)]
     reviews: Option<Vec<RawReview>>,
+    #[serde(default)]
+    created_at: Option<String>,
 }
 
 #[derive(PartialEq)]
@@ -291,9 +293,16 @@ pub fn parse_view(json: &str) -> Result<Pull, String> {
             place: String::new(),
         });
     }
+    let mut approvers: Vec<String> = Vec::new();
     for r in raw.reviews.unwrap_or_default() {
         let who = login(&r.author);
         let kind = match r.state.as_deref().unwrap_or_default() {
+            "APPROVED" => {
+                if theirs(&who) && !approvers.contains(&who) {
+                    approvers.push(who);
+                }
+                continue;
+            }
             "CHANGES_REQUESTED" => "changes_requested",
             "COMMENTED" => "review",
             _ => continue,
@@ -326,6 +335,8 @@ pub fn parse_view(json: &str) -> Result<Pull, String> {
         author,
         notes,
         url: raw.url,
+        created: raw.created_at.unwrap_or_default(),
+        approvers,
     })
 }
 

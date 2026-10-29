@@ -44,6 +44,9 @@ fn a_pull_request_is_read_from_gh() {
     );
     assert_eq!(p.title, "Fix the login redirect");
     assert_eq!(p.author, "hb");
+    assert_eq!(p.created, "2026-10-28T09:00:00Z");
+    assert_eq!(p.approvers, ["carol"], "who approved, from the reviews");
+    assert!(super::github::view_command("x").contains("createdAt"));
     assert_eq!(p.ci, Ci::Failing, "one failed, one still running");
     assert_eq!(
         p.failed,
@@ -1166,4 +1169,162 @@ async fn the_refused_token_warning_names_no_token() {
     let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
     assert!(log.contains("refused the token in secret gitlab"), "{log}");
     assert!(!log.contains("glpat"), "{log}");
+}
+
+fn note(id: &str, kind: &str, author: &str, place: &str) -> Note {
+    Note {
+        id: id.into(),
+        kind: kind.into(),
+        author: author.into(),
+        body: "Off by one".into(),
+        url: format!("https://github.com/acme/app/pull/12#{id}"),
+        place: place.into(),
+    }
+}
+
+fn texts(events: &[crate::insights::Event]) -> Vec<&str> {
+    events.iter().map(|e| e.text.as_str()).collect()
+}
+
+#[test]
+fn timeline_entries_say_what_changed() {
+    let mut p = pull("passing", "a", &[]);
+    p.review = String::new();
+    p.approvers.clear();
+    let first = timeline_events(None, &p, &[]);
+    assert_eq!(
+        first,
+        [crate::insights::Event {
+            at: Some("2026-10-28T09:00:00Z".into()),
+            text: "Pull request #12 opened: Fix the login redirect".into(),
+            early: "Pull request #12 already open: Fix the login redirect".into(),
+            url: p.url.clone(),
+        }]
+    );
+    let (seen, _) = observe(None, &p, "2026-10-28");
+    assert!(
+        timeline_events(Some(&seen), &p, &[]).is_empty(),
+        "nothing changed"
+    );
+
+    let mut drafted = p.clone();
+    drafted.draft = true;
+    let (seen_draft, _) = observe(None, &drafted, "2026-10-28");
+    assert_eq!(
+        texts(&timeline_events(Some(&seen_draft), &p, &[])),
+        ["Marked ready for review"]
+    );
+
+    let mut approved = p.clone();
+    approved.review = "approved".into();
+    approved.approvers = vec!["carol".into(), "dave".into()];
+    assert_eq!(
+        texts(&timeline_events(Some(&seen), &approved, &[])),
+        ["carol and dave approved"]
+    );
+
+    let reviewed = Change::Reviewed(vec![
+        note("r1", "changes_requested", "bob", ""),
+        note("c1", "inline", "bob", "src/a.rs:3"),
+    ]);
+    let got = timeline_events(Some(&seen), &p, &[reviewed]);
+    assert_eq!(
+        texts(&got),
+        ["bob asked for changes", "bob commented on src/a.rs:3"]
+    );
+    assert_eq!(got[1].url, "https://github.com/acme/app/pull/12#c1");
+    let many = Change::Reviewed(vec![
+        note("c2", "comment", "alice", ""),
+        note("c3", "inline", "bob", "src/a.rs:9"),
+        note("c4", "comment", "alice", ""),
+    ]);
+    assert_eq!(
+        texts(&timeline_events(Some(&seen), &p, &[many])),
+        ["3 new comments from alice and bob"]
+    );
+
+    for (state, said) in [
+        ("merged", "Pull request #12 merged"),
+        ("closed", "Pull request #12 closed"),
+    ] {
+        let mut done = p.clone();
+        done.state = state.into();
+        assert_eq!(texts(&timeline_events(Some(&seen), &done, &[])), [said]);
+    }
+    let mut gitlab = p.clone();
+    gitlab.forge = "gitlab".into();
+    gitlab.state = "merged".into();
+    assert_eq!(
+        texts(&timeline_events(Some(&seen), &gitlab, &[])),
+        ["Merge request !12 merged"]
+    );
+
+    let older = Seen {
+        ci: Ci::Passing,
+        ..Seen::default()
+    };
+    assert!(
+        timeline_events(Some(&older), &approved, &[]).is_empty(),
+        "what an older Yardbell remembered says nothing about the review"
+    );
+}
+
+#[tokio::test]
+async fn the_session_timeline_gets_its_pull_request_once_across_restarts() {
+    let rig = Rig::new("");
+    let insights = Arc::new(crate::insights::Insights::load(
+        rig.root.join("state/insights.json"),
+    ));
+    insights.observe(
+        "hp",
+        &rig.state.snapshot("hp").unwrap(),
+        chrono::Local::now(),
+    );
+    rig.fake
+        .stub(BRANCH, Output::ok_with(&view_with("passing", "abc", &[])));
+    let (pulls, dispatch) = (rig.pulls().with_insights(insights.clone()), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    let mut approved: Value = serde_json::from_str(&view_with("passing", "abc", &[])).unwrap();
+    approved["reviewDecision"] = json!("APPROVED");
+    approved["reviews"] =
+        json!([{"id": "PRR_1", "state": "APPROVED", "author": {"login": "carol"}, "body": ""}]);
+    rig.fake
+        .restub(BRANCH, Output::ok_with(&approved.to_string()));
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 130),
+        )
+        .await;
+    rig.pulls()
+        .with_insights(insights.clone())
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 260),
+        )
+        .await;
+    let rec = insights.record("hp", "hp-app").unwrap();
+    let entries: Vec<&str> = rec
+        .marks
+        .iter()
+        .filter(|m| m.kind == crate::insights::Kind::Pull)
+        .map(|m| m.text.as_str())
+        .collect();
+    assert_eq!(
+        entries,
+        [
+            "Pull request #12 already open: Fix the login redirect",
+            "carol approved"
+        ],
+        "the fixture's pull request is older than the session; nothing twice after a restart"
+    );
 }

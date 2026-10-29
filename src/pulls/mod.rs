@@ -8,6 +8,7 @@ pub use remote::{Remotes, Repo};
 
 use crate::config::{Config, Machine};
 use crate::dispatch::Dispatch;
+use crate::insights::{Event, Insights};
 use crate::secrets::Secrets;
 use crate::state::State;
 use futures::future::BoxFuture;
@@ -78,6 +79,8 @@ pub struct Pull {
     pub head: String,
     pub author: String,
     pub notes: Vec<Note>,
+    pub created: String,
+    pub approvers: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -208,6 +211,16 @@ pub struct Seen {
     pub notes: Vec<String>,
     #[serde(default)]
     pub day: String,
+    #[serde(default)]
+    pub state: String,
+    #[serde(default)]
+    pub draft: bool,
+    #[serde(default)]
+    pub review: String,
+    // Whether state, draft and review were remembered: an older Yardbell did not, and a change
+    // against what it never knew is no change.
+    #[serde(default)]
+    pub known: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -248,6 +261,10 @@ pub fn observe(seen: Option<&Seen>, pull: &Pull, day: &str) -> (Seen, Vec<Change
             },
             notes: pull.notes.iter().map(|n| n.id.clone()).collect(),
             day: day.to_string(),
+            state: pull.state.clone(),
+            draft: pull.draft,
+            review: pull.review.clone(),
+            known: true,
         };
         return (next, Vec::new());
     };
@@ -255,6 +272,10 @@ pub fn observe(seen: Option<&Seen>, pull: &Pull, day: &str) -> (Seen, Vec<Change
     let mut next = seen.clone();
     next.ci = pull.ci;
     next.day = day.to_string();
+    next.state = pull.state.clone();
+    next.draft = pull.draft;
+    next.review = pull.review.clone();
+    next.known = true;
     let mut changes = Vec::new();
     if pull.ci == Ci::Failing && !seen.failures.contains(&failure) {
         next.failures.push(failure);
@@ -365,6 +386,104 @@ fn kind(p: &Pull) -> &'static str {
 pub fn noun(p: &Pull) -> String {
     let mark = if p.forge == "gitlab" { '!' } else { '#' };
     format!("{} {mark}{}", kind(p), p.number)
+}
+
+fn titled(p: &Pull) -> String {
+    let named = noun(p);
+    let mut letters = named.chars();
+    letters
+        .next()
+        .map(|first| first.to_uppercase().chain(letters).collect())
+        .unwrap_or_default()
+}
+
+fn both(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [one] => one.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
+fn now_entry(text: String, url: &str) -> Event {
+    Event {
+        at: None,
+        text,
+        early: String::new(),
+        url: url.to_string(),
+    }
+}
+
+// What the session's Insights timeline says about a check: the pull request found, then what
+// changed since the last check that a person reviewing it would care about.
+pub fn timeline_events(before: Option<&Seen>, pull: &Pull, changes: &[Change]) -> Vec<Event> {
+    let Some(before) = before else {
+        return vec![Event {
+            at: Some(pull.created.clone()).filter(|c| !c.is_empty()),
+            text: format!("{} opened: {}", titled(pull), pull.title),
+            early: format!("{} already open: {}", titled(pull), pull.title),
+            url: pull.url.clone(),
+        }];
+    };
+    if !before.known {
+        return Vec::new();
+    }
+    let mut out = Vec::new();
+    if before.draft && !pull.draft && pull.state == "open" {
+        out.push(now_entry("Marked ready for review".into(), &pull.url));
+    }
+    if pull.review == "approved" && before.review != "approved" {
+        let who = if pull.approvers.is_empty() {
+            "A reviewer".to_string()
+        } else {
+            both(&pull.approvers)
+        };
+        out.push(now_entry(format!("{who} approved"), &pull.url));
+    }
+    for change in changes {
+        let Change::Reviewed(notes) = change else {
+            continue;
+        };
+        let (asked, said): (Vec<&Note>, Vec<&Note>) =
+            notes.iter().partition(|n| n.kind == "changes_requested");
+        for n in asked {
+            out.push(now_entry(format!("{} asked for changes", n.author), &n.url));
+        }
+        match said.as_slice() {
+            [] => {}
+            [n] if n.place.is_empty() => {
+                out.push(now_entry(format!("{} commented", n.author), &n.url))
+            }
+            [n] => out.push(now_entry(
+                format!("{} commented on {}", n.author, n.place),
+                &n.url,
+            )),
+            [first, ..] => {
+                let mut authors: Vec<String> = Vec::new();
+                for n in &said {
+                    if !authors.contains(&n.author) {
+                        authors.push(n.author.clone());
+                    }
+                }
+                out.push(now_entry(
+                    format!("{} new comments from {}", said.len(), both(&authors)),
+                    &first.url,
+                ));
+            }
+        }
+    }
+    if pull.state != before.state {
+        let did = match pull.state.as_str() {
+            "merged" => "merged",
+            "closed" => "closed",
+            "open" => "reopened",
+            _ => "",
+        };
+        if !did.is_empty() {
+            out.push(now_entry(format!("{} {did}", titled(pull)), &pull.url));
+        }
+    }
+    out
 }
 
 pub fn ci_instruction(pull: &Pull, checks: &[Check]) -> String {
@@ -497,6 +616,7 @@ pub struct Pulls {
     remotes: Remotes,
     file: PathBuf,
     inner: Mutex<Inner>,
+    insights: Option<Arc<Insights>>,
 }
 
 fn today() -> String {
@@ -523,7 +643,13 @@ impl Pulls {
                 seen,
                 ..Inner::default()
             }),
+            insights: None,
         }
+    }
+
+    pub fn with_insights(mut self, insights: Arc<Insights>) -> Pulls {
+        self.insights = Some(insights);
+        self
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Inner> {
@@ -680,6 +806,7 @@ impl Pulls {
             .await;
         let day = today();
         let mut notices = Vec::new();
+        let mut entries: Vec<(String, String, Event)> = Vec::new();
         let mut changed = false;
         {
             let mut inner = self.lock();
@@ -727,9 +854,14 @@ impl Pulls {
                 // next full read would post them all as new.
                 let first_and_partial = |p: &Pull| partial && !inner.seen.contains_key(&p.url);
                 if let Some(p) = pull.as_ref().filter(|p| !first_and_partial(p)) {
-                    let before = inner.seen.get(&p.url);
-                    let (seen, changes) = observe(before, p, &day);
-                    if before != Some(&seen) {
+                    let before = inner.seen.get(&p.url).cloned();
+                    let (seen, changes) = observe(before.as_ref(), p, &day);
+                    for event in timeline_events(before.as_ref(), p, &changes) {
+                        for session in &t.sessions {
+                            entries.push((t.machine.clone(), session.clone(), event.clone()));
+                        }
+                    }
+                    if before.as_ref() != Some(&seen) {
                         changed = true;
                         inner.seen.insert(p.url.clone(), seen);
                     }
@@ -749,6 +881,12 @@ impl Pulls {
         }
         if changed {
             self.save();
+        }
+        if let Some(insights) = &self.insights {
+            let now = chrono::Local::now();
+            for (machine, session, event) in &entries {
+                insights.note(machine, session, event, now);
+            }
         }
         notices
     }

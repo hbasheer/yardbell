@@ -1,25 +1,134 @@
 {
-  "author": {"id": "MDQ6VXNlcjE=", "is_bot": false, "login": "hb", "name": "H B"},
+  "author": {
+    "id": "MDQ6VXNlcjE=",
+    "is_bot": false,
+    "login": "hb",
+    "name": "H B"
+  },
   "comments": [
-    {"id": "IC_kwDOAAAA01", "author": {"login": "alice"}, "authorAssociation": "MEMBER", "body": "Can you add a test for the redirect?", "createdAt": "2026-10-28T10:00:00Z", "includesCreatedEdit": false, "isMinimized": false, "minimizedReason": "", "reactionGroups": [], "url": "https://github.com/acme/app/pull/12#issuecomment-101", "viewerDidAuthor": false},
-    {"id": "IC_kwDOAAAA02", "author": {"login": "hb"}, "authorAssociation": "OWNER", "body": "Done.", "createdAt": "2026-10-28T10:05:00Z", "includesCreatedEdit": false, "isMinimized": false, "minimizedReason": "", "reactionGroups": [], "url": "https://github.com/acme/app/pull/12#issuecomment-102", "viewerDidAuthor": true},
-    {"id": "IC_kwDOAAAA03", "author": {"login": "spammer"}, "authorAssociation": "NONE", "body": "buy now", "createdAt": "2026-10-28T10:06:00Z", "includesCreatedEdit": false, "isMinimized": true, "minimizedReason": "spam", "reactionGroups": [], "url": "https://github.com/acme/app/pull/12#issuecomment-103", "viewerDidAuthor": false}
+    {
+      "id": "IC_kwDOAAAA01",
+      "author": {
+        "login": "alice"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "Can you add a test for the redirect?",
+      "createdAt": "2026-10-28T10:00:00Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/acme/app/pull/12#issuecomment-101",
+      "viewerDidAuthor": false
+    },
+    {
+      "id": "IC_kwDOAAAA02",
+      "author": {
+        "login": "hb"
+      },
+      "authorAssociation": "OWNER",
+      "body": "Done.",
+      "createdAt": "2026-10-28T10:05:00Z",
+      "includesCreatedEdit": false,
+      "isMinimized": false,
+      "minimizedReason": "",
+      "reactionGroups": [],
+      "url": "https://github.com/acme/app/pull/12#issuecomment-102",
+      "viewerDidAuthor": true
+    },
+    {
+      "id": "IC_kwDOAAAA03",
+      "author": {
+        "login": "spammer"
+      },
+      "authorAssociation": "NONE",
+      "body": "buy now",
+      "createdAt": "2026-10-28T10:06:00Z",
+      "includesCreatedEdit": false,
+      "isMinimized": true,
+      "minimizedReason": "spam",
+      "reactionGroups": [],
+      "url": "https://github.com/acme/app/pull/12#issuecomment-103",
+      "viewerDidAuthor": false
+    }
   ],
   "headRefOid": "abc1230000000000000000000000000000000000",
   "isDraft": false,
   "number": 12,
   "reviewDecision": "CHANGES_REQUESTED",
   "reviews": [
-    {"id": "PRR_kwDOBBBB01", "author": {"login": "bob"}, "authorAssociation": "MEMBER", "body": "", "submittedAt": "2026-10-28T10:10:00Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "CHANGES_REQUESTED", "commit": {"oid": "abc1230000000000000000000000000000000000"}},
-    {"id": "PRR_kwDOBBBB02", "author": {"login": "carol"}, "authorAssociation": "MEMBER", "body": "LGTM", "submittedAt": "2026-10-28T10:11:00Z", "includesCreatedEdit": false, "reactionGroups": [], "state": "APPROVED", "commit": {"oid": "abc1230000000000000000000000000000000000"}}
+    {
+      "id": "PRR_kwDOBBBB01",
+      "author": {
+        "login": "bob"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "",
+      "submittedAt": "2026-10-28T10:10:00Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "CHANGES_REQUESTED",
+      "commit": {
+        "oid": "abc1230000000000000000000000000000000000"
+      }
+    },
+    {
+      "id": "PRR_kwDOBBBB02",
+      "author": {
+        "login": "carol"
+      },
+      "authorAssociation": "MEMBER",
+      "body": "LGTM",
+      "submittedAt": "2026-10-28T10:11:00Z",
+      "includesCreatedEdit": false,
+      "reactionGroups": [],
+      "state": "APPROVED",
+      "commit": {
+        "oid": "abc1230000000000000000000000000000000000"
+      }
+    }
   ],
   "state": "OPEN",
   "statusCheckRollup": [
-    {"__typename": "CheckRun", "completedAt": "2026-10-28T10:02:00Z", "conclusion": "FAILURE", "detailsUrl": "https://github.com/acme/app/actions/runs/111/job/222", "name": "test", "startedAt": "2026-10-28T10:00:00Z", "status": "COMPLETED", "workflowName": "CI"},
-    {"__typename": "CheckRun", "completedAt": "0001-01-01T00:00:00Z", "conclusion": "", "detailsUrl": "https://github.com/acme/app/actions/runs/111/job/223", "name": "lint", "startedAt": "2026-10-28T10:00:00Z", "status": "IN_PROGRESS", "workflowName": "CI"},
-    {"__typename": "CheckRun", "completedAt": "2026-10-28T10:02:00Z", "conclusion": "CANCELLED", "detailsUrl": "https://github.com/acme/app/actions/runs/110/job/220", "name": "old", "startedAt": "2026-10-28T10:00:00Z", "status": "COMPLETED", "workflowName": "CI"},
-    {"__typename": "StatusContext", "context": "ci/circleci: build", "startedAt": "2026-10-28T10:00:00Z", "state": "SUCCESS", "targetUrl": "https://circleci.com/gh/acme/app/1"}
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-28T10:02:00Z",
+      "conclusion": "FAILURE",
+      "detailsUrl": "https://github.com/acme/app/actions/runs/111/job/222",
+      "name": "test",
+      "startedAt": "2026-10-28T10:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "0001-01-01T00:00:00Z",
+      "conclusion": "",
+      "detailsUrl": "https://github.com/acme/app/actions/runs/111/job/223",
+      "name": "lint",
+      "startedAt": "2026-10-28T10:00:00Z",
+      "status": "IN_PROGRESS",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "CheckRun",
+      "completedAt": "2026-10-28T10:02:00Z",
+      "conclusion": "CANCELLED",
+      "detailsUrl": "https://github.com/acme/app/actions/runs/110/job/220",
+      "name": "old",
+      "startedAt": "2026-10-28T10:00:00Z",
+      "status": "COMPLETED",
+      "workflowName": "CI"
+    },
+    {
+      "__typename": "StatusContext",
+      "context": "ci/circleci: build",
+      "startedAt": "2026-10-28T10:00:00Z",
+      "state": "SUCCESS",
+      "targetUrl": "https://circleci.com/gh/acme/app/1"
+    }
   ],
   "title": "Fix the login redirect",
-  "url": "https://github.com/acme/app/pull/12"
+  "url": "https://github.com/acme/app/pull/12",
+  "createdAt": "2026-10-28T09:00:00Z"
 }

@@ -60,6 +60,15 @@ async fn insights_route(
     } else {
         (Vec::new(), None)
     };
+    let pull = live
+        .as_ref()
+        .map(|s| (s.folder.clone(), s.branch.clone()))
+        .or_else(|| {
+            timeline
+                .as_ref()
+                .map(|t| (t.folder.clone(), t.branch.clone()))
+        })
+        .and_then(|(folder, branch)| app.state.pull_of(&m.name, &folder, &branch));
     let origin = app.dispatch.origin(&m.name, &name);
     let task = origin
         .as_ref()
@@ -94,6 +103,7 @@ async fn insights_route(
         "scrollback_error": scrollback,
         "task": task,
         "conversation": origin.map(|o| o.conversation),
+        "pull": pull,
         "suggest": suggest,
     });
     if let Some((task, version, current)) = from {

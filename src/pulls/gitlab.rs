@@ -310,6 +310,7 @@ impl GitLab {
             self.optional(access, &part("approvals")).await?
         };
         pull.review = review_of(reviewers.as_deref(), approvals.as_deref());
+        pull.approvers = approvers_of(reviewers.as_deref(), approvals.as_deref());
         // Without the token's own account its comments cannot be told apart, so none are read.
         let me = self.me(access).await;
         if me.is_empty() {
@@ -493,12 +494,16 @@ struct RawMr {
     author: Option<Who>,
     #[serde(default)]
     head_pipeline: Option<RawPipeline>,
+    #[serde(default)]
+    created_at: Option<String>,
 }
 
 #[derive(Deserialize)]
 struct RawReviewer {
     #[serde(default)]
     state: String,
+    #[serde(default)]
+    user: Option<Who>,
 }
 
 #[derive(Deserialize)]
@@ -596,6 +601,8 @@ pub(super) fn parse_mr(json: &str) -> Result<Pull, String> {
         head: raw.sha.unwrap_or_default(),
         author: name(&raw.author),
         notes: Vec::new(),
+        created: raw.created_at.unwrap_or_default(),
+        approvers: Vec::new(),
     })
 }
 
@@ -615,6 +622,35 @@ pub(super) fn review_of(reviewers_json: Option<&str>, approvals_json: Option<&st
     } else {
         String::new()
     }
+}
+
+pub(super) fn approvers_of(
+    reviewers_json: Option<&str>,
+    approvals_json: Option<&str>,
+) -> Vec<String> {
+    let approved: Vec<String> = approvals_json
+        .and_then(|j| serde_json::from_str::<RawApprovals>(j).ok())
+        .map(|a| {
+            a.approved_by
+                .iter()
+                .filter_map(|v| v["user"]["username"].as_str().map(str::to_string))
+                .collect()
+        })
+        .unwrap_or_default();
+    let reviewed: Vec<String> = reviewers_json
+        .and_then(|j| serde_json::from_str::<Vec<RawReviewer>>(j).ok())
+        .unwrap_or_default()
+        .into_iter()
+        .filter(|r| r.state == "approved")
+        .map(|r| name(&r.user))
+        .collect();
+    let mut out: Vec<String> = Vec::new();
+    for who in approved.into_iter().chain(reviewed) {
+        if !who.is_empty() && !out.contains(&who) {
+            out.push(who);
+        }
+    }
+    out
 }
 
 pub(super) fn failed_checks(jobs_json: &str) -> Result<Vec<Check>, String> {
@@ -747,6 +783,7 @@ mod tests {
         assert!(!p.draft);
         assert_eq!(p.head, format!("abc123{}", "0".repeat(34)));
         assert_eq!(p.author, "hb");
+        assert_eq!(p.created, "2026-09-03T19:03:36.713Z");
         assert_eq!(p.ci, Ci::Failing);
         for (state, want) in [
             ("opened", "open"),
@@ -790,6 +827,16 @@ mod tests {
         assert_eq!(review_of(None, Some(APPROVALS)), "approved");
         assert_eq!(review_of(None, Some(r#"{"approved":false}"#)), "");
         assert_eq!(review_of(None, None), "");
+        assert_eq!(approvers_of(Some(REVIEWERS), Some(APPROVALS)), ["rev2"]);
+        assert_eq!(
+            approvers_of(
+                Some(r#"[{"user":{"username":"rev3"},"state":"approved"}]"#),
+                Some(APPROVALS)
+            ),
+            ["rev2", "rev3"],
+            "an approving reviewer and an approver, once each"
+        );
+        assert!(approvers_of(None, None).is_empty());
         let no_rules =
             r#"{"approved":true,"approvals_required":0,"approvals_left":0,"approved_by":[]}"#;
         assert_eq!(

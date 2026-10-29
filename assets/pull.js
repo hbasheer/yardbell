@@ -21,15 +21,21 @@
     return p.forge === "gitlab" ? "Merge request" : "Pull request";
   }
 
-  function describe(p) {
-    const parts = [`${noun(p)} ${ref(p)}${p.title ? `: ${p.title}` : ""}${p.draft ? " (draft)" : ""}`];
-    if (p.state === "merged" || p.state === "closed") return `${parts[0]}. ${p.state === "merged" ? "Merged" : "Closed"}.`;
+  // What the badge's word leaves out: where CI and the review stand, or that it was merged or closed.
+  function details(p) {
+    if (p.state === "merged" || p.state === "closed") return [p.state === "merged" ? "Merged" : "Closed"];
+    const parts = [];
     const ci = { failing: p.forge === "gitlab" ? "Pipeline failing" : "CI failing", pending: "CI running", passing: "CI passing" }[p.ci];
     if (ci) parts.push(p.ci === "failing" && p.failed?.length ? `${ci} on ${p.failed.join(", ")}` : ci);
     const review = { approved: "Approved", changes_requested: "Changes requested", review_required: "Review required" }[p.review];
     if (review) parts.push(review);
-    return `${parts.join(". ")}.`;
+    return parts;
   }
 
-  window.YardbellPull = { status, describe, ref, noun };
+  function describe(p) {
+    const head = `${noun(p)} ${ref(p)}${p.title ? `: ${p.title}` : ""}${p.draft ? " (draft)" : ""}`;
+    return `${[head, ...details(p)].join(". ")}.`;
+  }
+
+  window.YardbellPull = { status, describe, details, ref, noun };
 })();

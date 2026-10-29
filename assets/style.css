@@ -1817,6 +1817,15 @@ dialog.ins-dialog:not([open]) { display: none; }
 .ins-facts dt { color: var(--muted); font-size: 12px; }
 .ins-facts dd { margin: 1px 0 0; color: var(--ink); font-size: 13px; overflow-wrap: anywhere; }
 .ins-facts + .ins-note { margin: 10px 0 0; }
+.ins-pull { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 10px; margin: 14px 0 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--side); font-size: 13px; }
+.ins-pull .ins-mark { align-self: center; }
+.ins-pull > a { min-width: 0; color: var(--ink); font-weight: 550; text-decoration: none; overflow-wrap: anywhere; }
+.ins-pull > a:hover { text-decoration: underline; }
+.ins-pull-ref { font: 12px var(--mono); color: var(--ink-2); }
+.ins-pull-says { flex-basis: 100%; color: var(--muted); font-size: 12px; }
+.ins-run.is-pull .ins-text a { color: var(--ink); text-decoration: none; }
+.ins-run.is-pull .ins-text a:hover { text-decoration: underline; }
+.ins-run.is-pull .ins-mark { color: var(--accent-text); }
 .ins-head { margin: 24px 0 2px; font-size: 14px; font-weight: 600; color: var(--ink); }
 .ins-note { margin: 0 0 10px; }
 .ins-key { white-space: nowrap; }

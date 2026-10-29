@@ -274,3 +274,99 @@ fn the_suggestion_names_the_session_its_task_and_what_happened() {
     assert!(ended.contains("does not know the task"));
     assert!(!ended.contains("saved task"));
 }
+
+#[test]
+fn pull_request_entries_go_into_the_session_timeline_with_their_link() {
+    let dir = tempfile::tempdir().unwrap();
+    let insights = Insights::load(dir.path().join("insights.json"));
+    insights.observe("hp", &snap(vec![], &[]), at(0, 0));
+    insights.observe(
+        "hp",
+        &snap(vec![session("hp-app", Activity::Active)], &[]),
+        at(1, 0),
+    );
+    let opened = Event {
+        at: Some(at(5, 0).to_rfc3339()),
+        text: "Pull request #12 opened: Fix the login redirect".into(),
+        early: "Pull request #12 already open: Fix the login redirect".into(),
+        url: "https://github.com/acme/app/pull/12".into(),
+    };
+    insights.note("hp", "hp-app", &opened, at(9, 0));
+    let approved = Event {
+        at: None,
+        text: "carol approved".into(),
+        early: String::new(),
+        url: "https://github.com/acme/app/pull/12".into(),
+    };
+    insights.note("hp", "hp-app", &approved, at(30, 0));
+    insights.note("hp", "nobody", &approved, at(30, 0));
+    assert!(
+        insights.record("hp", "nobody").is_none(),
+        "only a session Yardbell saw"
+    );
+
+    let t = insights.record("hp", "hp-app").unwrap().timeline(at(40, 0));
+    let pulls: Vec<(&str, &str, &str)> = t
+        .runs
+        .iter()
+        .filter(|m| m.kind == Kind::Pull)
+        .map(|m| (m.at.as_str(), m.text.as_str(), m.url.as_str()))
+        .collect();
+    let (five, thirty) = (at(5, 0).to_rfc3339(), at(30, 0).to_rfc3339());
+    assert_eq!(
+        pulls,
+        [
+            (
+                five.as_str(),
+                "Pull request #12 opened: Fix the login redirect",
+                "https://github.com/acme/app/pull/12"
+            ),
+            (
+                thirty.as_str(),
+                "carol approved",
+                "https://github.com/acme/app/pull/12"
+            ),
+        ]
+    );
+    assert_eq!(
+        t.totals.working,
+        39 * 60,
+        "an entry is not a change of state"
+    );
+
+    let reloaded = Insights::load(dir.path().join("insights.json"));
+    assert_eq!(
+        reloaded
+            .record("hp", "hp-app")
+            .unwrap()
+            .timeline(at(40, 0))
+            .runs
+            .len(),
+        2
+    );
+}
+
+#[test]
+fn a_pull_request_older_than_the_session_is_already_open_when_first_seen() {
+    let dir = tempfile::tempdir().unwrap();
+    let insights = Insights::load(dir.path().join("insights.json"));
+    insights.observe("hp", &snap(vec![], &[]), at(0, 0));
+    insights.observe(
+        "hp",
+        &snap(vec![session("hp-app", Activity::Active)], &[]),
+        at(10, 0),
+    );
+    let opened = Event {
+        at: Some("2026-10-27T09:00:00Z".into()),
+        text: "Pull request #12 opened: Fix".into(),
+        early: "Pull request #12 already open: Fix".into(),
+        url: "u".into(),
+    };
+    insights.note("hp", "hp-app", &opened, at(12, 0));
+    let rec = insights.record("hp", "hp-app").unwrap();
+    let mark = rec.marks.iter().find(|m| m.kind == Kind::Pull).unwrap();
+    assert_eq!(
+        (mark.at.clone(), mark.text.as_str()),
+        (at(12, 0).to_rfc3339(), "Pull request #12 already open: Fix")
+    );
+}

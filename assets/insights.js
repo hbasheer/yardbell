@@ -11,6 +11,7 @@
   };
   const NOW = { active: "working now", blocked: "waiting for you now", idle: "idle now" };
   const TOOL = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5 6 8l-3 3.5M8 11.5h5"/></svg>';
+  const PULL = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="4.5" cy="3.5" r="1.5"/><circle cx="4.5" cy="12.5" r="1.5"/><circle cx="11.5" cy="12.5" r="1.5"/><path d="M4.5 5v6M11.5 11V7a2 2 0 0 0-2-2H7"/></svg>';
   const FLASK = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5h4M6.5 2.5v4L3 12.5a1 1 0 0 0 .9 1.5h8.2a1 1 0 0 0 .9-1.5L9.5 6.5v-4"/></svg>';
 
   function duration(secs) {
@@ -78,7 +79,17 @@
     const note = t && !t.started
       ? `<p class="help ins-note">It was already running when Yardbell started watching it, so the figures below start at ${esc(clock(t.since))}.</p>`
       : "";
-    return `<dl class="ins-facts">${items.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>${note}`;
+    return `<dl class="ins-facts">${items.map(([k, v]) => `<div><dt>${k}</dt><dd>${esc(v)}</dd></div>`).join("")}</dl>${pulled(data.pull)}${note}`;
+  }
+
+  function pulled(p) {
+    if (!p) return "";
+    const P = window.YardbellPull;
+    const { word, tone } = P.status(p);
+    const says = P.details(p);
+    return `<div class="ins-pull"><span class="ins-mark" title="${esc(P.noun(p))}" aria-hidden="true">${PULL}</span>
+      <a href="${esc(p.url)}" target="_blank" rel="noopener"><span class="ins-pull-ref">${esc(P.ref(p))}</span> ${esc(p.title)}</a>
+      <span class="pr-badge ${tone}">${esc(word)}</span>${says.length ? `<span class="ins-pull-says">${esc(says.join(". "))}.</span>` : ""}</div>`;
   }
 
   function spent(t) {
@@ -120,6 +131,10 @@
   }
 
   function runRow(r, at) {
+    if (r.kind === "pull") {
+      const text = r.url ? `<a href="${esc(r.url)}" target="_blank" rel="noopener">${esc(r.text)}</a>` : esc(r.text);
+      return `<li class="ins-run is-pull"><span class="ins-time">${esc(at)}</span><span class="ins-mark" title="Pull request or merge request" aria-label="Pull request or merge request">${PULL}</span><span class="ins-text">${text}</span></li>`;
+    }
     const result = r.ok === true ? `<span class="ins-result ok">Passed</span>` : r.ok === false ? `<span class="ins-result bad">Failed</span>` : "";
     const kind = r.kind === "test" ? "Test run" : "Tool call";
     return `<li class="ins-run is-${r.kind}"><span class="ins-time">${esc(at)}</span><span class="ins-mark" title="${kind}" aria-label="${kind}">${r.kind === "test" ? FLASK : TOOL}</span><span class="ins-text"><code>${esc(r.text)}</code></span>${result}</li>`;
@@ -149,7 +164,7 @@
       return head + i.html;
     });
     return `<h3 class="ins-head">Timeline</h3>
-      <p class="help ins-note">Each change between working, waiting and idle with how long it lasted, and each <span class="ins-key">${TOOL}tool call</span> and <span class="ins-key">${FLASK}test run</span> Yardbell saw, oldest first.</p>
+      <p class="help ins-note">Each change between working, waiting and idle with how long it lasted, and each <span class="ins-key">${TOOL}tool call</span> and <span class="ins-key">${FLASK}test run</span> Yardbell saw${t.runs.some((r) => r.kind === "pull") ? `, and what happened to its <span class="ins-key">${PULL}pull request or merge request</span>` : ""}, oldest first.</p>
       <ol class="ins-list">${cut}${more}${dated.join("")}</ol>`;
   }
 

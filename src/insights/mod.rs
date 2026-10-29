@@ -30,6 +30,7 @@ pub enum Kind {
     Ended,
     Tool,
     Test,
+    Pull,
 }
 
 impl Kind {
@@ -42,7 +43,7 @@ impl Kind {
     }
 
     fn is_state(self) -> bool {
-        !matches!(self, Kind::Tool | Kind::Test)
+        !matches!(self, Kind::Tool | Kind::Test | Kind::Pull)
     }
 
     fn word(self) -> Option<&'static str> {
@@ -63,6 +64,19 @@ pub struct Mark {
     pub text: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub ok: Option<bool>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+}
+
+// Something that happened to the session's pull request or merge request. It goes at its own
+// time when that falls inside the timeline; one from before the session goes in when it is
+// noticed, with the words that say so.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Event {
+    pub at: Option<String>,
+    pub text: String,
+    pub early: String,
+    pub url: String,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
@@ -95,12 +109,17 @@ impl Record {
     }
 
     fn push(&mut self, at: &str, kind: Kind, run: Option<&Run>) {
-        self.marks.push(Mark {
+        self.keep(Mark {
             at: at.to_string(),
             kind,
             text: run.map(|r| r.text.clone()).unwrap_or_default(),
             ok: run.and_then(|r| r.ok),
+            url: String::new(),
         });
+    }
+
+    fn keep(&mut self, mark: Mark) {
+        self.marks.push(mark);
         if self.marks.len() > MAX_MARKS {
             let over = self.marks.len() - MAX_MARKS;
             self.marks.drain(1..=over);
@@ -229,6 +248,29 @@ impl Insights {
         if changed {
             self.save(&records);
         }
+    }
+
+    pub fn note(&self, machine: &str, name: &str, event: &Event, now: DateTime<Local>) {
+        let mut records = self.lock();
+        let Some(rec) = records.get_mut(&format!("{machine}:{name}")) else {
+            return;
+        };
+        let start = rec.marks.first().and_then(|m| parse(&m.at));
+        let (at, text) = match (event.at.as_deref().and_then(parse), start) {
+            (Some(when), Some(start)) if when >= start => {
+                (when.with_timezone(&Local).to_rfc3339(), event.text.clone())
+            }
+            (Some(_), _) => (now.to_rfc3339(), event.early.clone()),
+            (None, _) => (now.to_rfc3339(), event.text.clone()),
+        };
+        rec.keep(Mark {
+            at,
+            kind: Kind::Pull,
+            text,
+            ok: None,
+            url: event.url.clone(),
+        });
+        self.save(&records);
     }
 
     fn save(&self, records: &BTreeMap<String, Record>) {

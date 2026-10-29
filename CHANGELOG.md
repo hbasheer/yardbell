@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Insights** shows a session's pull request or merge request under its facts: the number and
+  title as a link, the state the badge shows, and where CI and the review stand. Its timeline says
+  what happened to it while the session ran: opened (or already open), marked ready for review,
+  approved and by whom, changes asked for, comments (with file and line for a comment on the code),
+  merged or closed, each linking to the pull request or the comment.
 - GitLab merge requests get what GitHub pull requests get: a badge next to the branch on the
   dashboard and in the Workspace, such as `!12` with its pipeline and review state, and a card in
   Dispatch when the pipeline starts failing (with the failed jobs and the end of their logs) or a
