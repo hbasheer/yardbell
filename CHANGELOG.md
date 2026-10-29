@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.10] - 2026-10-29
+
 - Dispatch's cards are shorter and easier to read. A review or scan groups its findings under
   **High**, **Medium** and **Low**, each leading with what is wrong and its `file:line` underneath;
   low findings start folded and unticked, and the button says **Send 4 findings** instead of the
