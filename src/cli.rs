@@ -255,6 +255,7 @@ pub async fn serve(
         .with_insights(insights.clone()),
     )
     .start(path.clone(), state.clone(), dispatch.clone());
+    let pipeline = Arc::new(crate::pipeline::Pipeline::new(dir.join("pipeline.json")));
     let triggers = Arc::new(crate::triggers::Triggers::new(
         Arc::new(crate::triggers::Live::new(runner.clone())),
         dir.join("triggers.json"),
@@ -297,6 +298,7 @@ pub async fn serve(
         dispatch,
         triggers,
         insights,
+        pipeline: pipeline.clone(),
         releases: crate::about::github(),
         refresh: Arc::new(move |machine: Option<String>| {
             let poller = poller.clone();
@@ -311,6 +313,10 @@ pub async fn serve(
         }),
     };
     let app = Arc::new(AppState::new(path, services, &cfg, Arc::new(Instant::now)));
+    pipeline.clone().start_loop(
+        app.clone(),
+        crate::pipeline::forge::Forge::new(runner.clone(), ssh.clone()),
+    );
     let mut servers = Vec::new();
     for ip in &binds {
         let addr: SocketAddr = format!("{ip}:{}", cfg.port)

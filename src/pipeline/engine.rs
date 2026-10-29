@@ -330,6 +330,7 @@ pub fn step(mut r: Record, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Reco
         }
         (_, Seen::Started(Err(e))) if working => again(r, &e, cfg, now),
         (_, Seen::NoResult(screen)) if working => again(r, &screen, cfg, now),
+        (_, Seen::Sent(Err(e))) if working => again(r, &e, cfg, now),
         (_, Seen::Waiting(screen)) if working => park(
             r,
             ParkKind::Asked,
@@ -1111,5 +1112,25 @@ pub(crate) mod tests {
         }
         let (r, did) = step(record(Stage::Done), Seen::Drop, &cfg(), at(5));
         assert_eq!((r.stage, did), (Stage::Done, vec![]));
+    }
+
+    #[test]
+    fn a_failed_send_runs_the_fix_again_once() {
+        let mut fix = record(Stage::Fix);
+        fix.sent = "Fix these".into();
+        let (r, did) = step(
+            fix,
+            Seen::Sent(Err("no such session".into())),
+            &cfg(),
+            at(5),
+        );
+        assert_eq!(
+            (r.stage, did),
+            (Stage::Fix, vec![Effect::Send("Fix these".into())])
+        );
+        let (r, _) = step(r, Seen::Sent(Err("no such session".into())), &cfg(), at(6));
+        assert_eq!(r.stage, Stage::Failed);
+        let (r, did) = step(record(Stage::Fix), Seen::Sent(Ok(())), &cfg(), at(5));
+        assert_eq!((r.stage, did), (Stage::Fix, vec![]));
     }
 }

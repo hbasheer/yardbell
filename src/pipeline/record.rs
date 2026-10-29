@@ -136,6 +136,7 @@ pub struct Record {
     pub failed: String,
     pub failed_at: Option<Stage>,
     pub sent: String,
+    pub pending: Option<Effect>,
     pub findings: Vec<String>,
     pub qa_report: String,
     pub outcome: String,
@@ -201,7 +202,8 @@ pub enum Seen {
     Refused(String),
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "effect", content = "text", rename_all = "snake_case")]
 pub enum Effect {
     Triage,
     Implement,

@@ -624,7 +624,7 @@ started or proposed.",
 // What the rules match a step on. The folder is the one the step works in: the folder it starts
 // in or scans, the folder of the session it reviews, or the folder of the session it stops or
 // types into.
-pub fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
+pub(crate) fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
     if called == "remember" {
         return Step {
             action: called.to_string(),

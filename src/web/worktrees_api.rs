@@ -139,6 +139,9 @@ pub struct MoveSession {
     pub task: Option<String>,
     #[serde(default)]
     pub stop_original: bool,
+    // A tester that checks the work and changes nothing, such as the pipeline's QA.
+    #[serde(default)]
+    pub read_only: bool,
 }
 
 pub fn arg<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ApiError> {
@@ -472,7 +475,7 @@ pub async fn move_session(app: &AppState, r: &MoveSession) -> Result<Value, ApiE
                 agent: &agent,
                 start: Start::Task(&prompt),
                 mcp_config: mcp.as_deref(),
-                read_only: false,
+                read_only: r.read_only,
             },
         )
         .await

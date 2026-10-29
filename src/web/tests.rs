@@ -158,6 +158,9 @@ fn rig() -> Rig {
         insights: Arc::new(crate::insights::Insights::load(
             dir.path().join("insights.json"),
         )),
+        pipeline: Arc::new(crate::pipeline::Pipeline::new(
+            dir.path().join("pipeline.json"),
+        )),
         refresh: {
             let refreshes = refreshes.clone();
             Arc::new(move |machine: Option<String>| {
