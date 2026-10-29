@@ -170,6 +170,15 @@ impl Insights {
         self.lock().get(&format!("{machine}:{name}")).cloned()
     }
 
+    pub fn timelines(&self, machine: &str, now: DateTime<Local>) -> Vec<Timeline> {
+        let prefix = format!("{machine}:");
+        self.lock()
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(_, r)| r.timeline(now))
+            .collect()
+    }
+
     // One check of a machine. Sessions on the first check after Yardbell started were already
     // running, so they count as seen rather than started, unless their timeline carries on from
     // before the restart.

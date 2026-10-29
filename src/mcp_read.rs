@@ -92,6 +92,27 @@ ${secret:name}, and any other credential shows (hidden).",
         "One run in full: each step's outcome, report and session, what it waits for, its pull request and its final report.",
         json!({ "id": { "type": "string", "description": "Run id from list_runs" } }),
         &["id"],
+    ),
+    tool(
+        "read_insights",
+        "What the Insights page knows: for one session its timeline of working, waiting and idle time and the commands it ran; for a machine, every session Yardbell has seen there.",
+        json!({
+            "machine": { "type": "string", "description": "Machine name from list_machines" },
+            "session": { "type": "string", "description": "tmux session name; leave out for the whole machine" },
+        }),
+        &["machine"],
+    ),
+    tool(
+        "list_pulls",
+        "Pull and merge requests for the branches Yardbell watches: number, title, state, review state, CI and the failing jobs.",
+        json!({ "machine": { "type": "string", "description": "Only this machine" } }),
+        &[],
+    ),
+    tool(
+        "read_usage",
+        "Claude and Codex usage as the sidebar shows it, and which of the two Dispatch runs on.",
+        json!({}),
+        &[],
     )]
 }
 
@@ -114,6 +135,12 @@ pub async fn read(app: &AppState, name: &str, args: &Value) -> Option<Result<Val
         "read_pipeline" => Some(pipeline(app, args["id"].as_str().unwrap_or_default())),
         "list_runs" => Some(Ok(runs(app, args))),
         "read_run" => Some(run(app, args["id"].as_str().unwrap_or_default())),
+        "read_insights" => Some(insights(app, args)),
+        "list_pulls" => Some(Ok(pulls(app, args["machine"].as_str().unwrap_or_default()))),
+        "read_usage" => Some(
+            app.config()
+                .map(|cfg| app.dispatch.usage_card(cfg.dispatch.runs_on)),
+        ),
         _ => None,
     }
 }
@@ -488,4 +515,55 @@ fn run(app: &AppState, id: &str) -> Result<Value, ApiError> {
     }
     let mut count = 0;
     Ok(clipped(value, &mut count))
+}
+
+fn insights(app: &AppState, args: &Value) -> Result<Value, ApiError> {
+    let machine = args["machine"].as_str().unwrap_or_default();
+    let now = chrono::Local::now();
+    match args["session"].as_str().filter(|s| !s.is_empty()) {
+        Some(name) => {
+            let record = app.insights.record(machine, name).ok_or_else(|| {
+                ApiError(StatusCode::NOT_FOUND, format!("Yardbell has seen no session {name} on {machine}; list_sessions shows the live ones"))
+            })?;
+            let mut count = 0;
+            Ok(clipped(
+                serde_json::to_value(record.timeline(now)).unwrap_or(Value::Null),
+                &mut count,
+            ))
+        }
+        None => {
+            let mut count = 0;
+            let sessions = clipped(
+                serde_json::to_value(app.insights.timelines(machine, now)).unwrap_or(Value::Null),
+                &mut count,
+            );
+            Ok(json!({ "machine": machine, "sessions": sessions }))
+        }
+    }
+}
+
+fn pulls(app: &AppState, machine: &str) -> Value {
+    Value::Array(
+        app.state
+            .pulls()
+            .into_iter()
+            .filter(|((m, _, _), _)| machine.is_empty() || m == machine)
+            .map(|((m, path, branch), p)| {
+                json!({
+                    "machine": m,
+                    "path": path,
+                    "branch": branch,
+                    "forge": p.forge,
+                    "number": p.number,
+                    "title": p.title,
+                    "state": p.state,
+                    "draft": p.draft,
+                    "review": p.review,
+                    "ci": p.ci,
+                    "failing_jobs": p.failed,
+                    "url": p.url,
+                })
+            })
+            .collect(),
+    )
 }

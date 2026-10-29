@@ -310,3 +310,101 @@ async fn an_unknown_pipeline_or_run_says_so() {
         );
     }
 }
+
+#[tokio::test]
+async fn insights_for_a_session_and_a_machine() {
+    let r = rig();
+    mcp_on(&r);
+    let session = crate::snapshot::Session {
+        machine: "hp".into(),
+        agent: "claude".into(),
+        pid: 42,
+        cwd: "/r/app".into(),
+        folder: "app".into(),
+        branch: "fix-login".into(),
+        ticket: "-".into(),
+        tmux: Some("hp-app".into()),
+        activity: crate::snapshot::Activity::Active,
+    };
+    let now = chrono::Local::now();
+    r.app.insights.observe(
+        "hp",
+        &Default::default(),
+        now - chrono::Duration::minutes(10),
+    );
+    let snap = crate::snapshot::Snapshot {
+        sessions: vec![session],
+        ..Default::default()
+    };
+    r.app
+        .insights
+        .observe("hp", &snap, now - chrono::Duration::minutes(5));
+    let one = answer(
+        &tool_call(
+            &r,
+            "read_insights",
+            json!({ "machine": "hp", "session": "hp-app" }),
+        )
+        .await,
+    );
+    assert_eq!(
+        (one["name"].clone(), one["branch"].clone()),
+        (json!("hp-app"), json!("fix-login")),
+        "{one}"
+    );
+    let all = answer(&tool_call(&r, "read_insights", json!({ "machine": "hp" })).await);
+    assert_eq!(all["sessions"][0]["name"], "hp-app", "{all}");
+    let none = tool_call(
+        &r,
+        "read_insights",
+        json!({ "machine": "hp", "session": "nope" }),
+    )
+    .await;
+    assert_eq!(none["isError"], true);
+}
+
+#[tokio::test]
+async fn pulls_from_the_cards() {
+    let r = rig();
+    mcp_on(&r);
+    r.app.state.set_pulls(
+        [(
+            (
+                "hp".to_string(),
+                "/r/app".to_string(),
+                "fix-login".to_string(),
+            ),
+            crate::pulls::PullView {
+                forge: "github".into(),
+                number: 12,
+                url: "https://github.com/acme/app/pull/12".into(),
+                title: "Fix login".into(),
+                state: "open".into(),
+                draft: false,
+                review: "changes_requested".into(),
+                ci: crate::pulls::Ci::Failing,
+                failed: vec!["rspec".into()],
+            },
+        )]
+        .into(),
+    );
+    let pulls = answer(&tool_call(&r, "list_pulls", json!({})).await);
+    assert_eq!(pulls[0]["number"], 12, "{pulls}");
+    assert_eq!(
+        (
+            pulls[0]["branch"].clone(),
+            pulls[0]["failing_jobs"][0].clone()
+        ),
+        (json!("fix-login"), json!("rspec"))
+    );
+    let other = answer(&tool_call(&r, "list_pulls", json!({ "machine": "pro" })).await);
+    assert_eq!(other, json!([]));
+}
+
+#[tokio::test]
+async fn usage_as_the_sidebar_shows_it() {
+    let r = rig();
+    mcp_on(&r);
+    let usage = answer(&tool_call(&r, "read_usage", json!({})).await);
+    assert!(usage.get("runs_on").is_some(), "{usage}");
+}

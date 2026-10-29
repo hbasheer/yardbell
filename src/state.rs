@@ -224,6 +224,17 @@ impl State {
             .cloned()
     }
 
+    pub fn pulls(&self) -> Vec<(crate::pulls::Key, crate::pulls::PullView)> {
+        let inner = self.inner.read().expect("state lock");
+        let mut all: Vec<_> = inner
+            .pulls
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
+    }
+
     pub fn set_pulls(&self, pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>) {
         let mut inner = self.inner.write().expect("state lock");
         if inner.pulls == pulls {
