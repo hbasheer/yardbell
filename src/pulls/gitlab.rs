@@ -1,4 +1,4 @@
-use super::{last_lines, Check, Ci, Note, Pull, LOG_BYTES, LOG_LINES};
+use super::{last_lines, Check, Ci, Note, Pull, LOG_BYTES, LOG_LINES, SEEN_NOTES};
 use crate::config::PullRequests;
 use crate::secrets::Secrets;
 use regex::Regex;
@@ -63,6 +63,8 @@ pub fn accesses(cfg: &PullRequests, secrets: &Result<Secrets, String>) -> Vec<Gi
 #[derive(Debug)]
 pub enum Answer {
     Pull(Box<Pull>),
+    // The merge request without its comments, which could not all be read this time.
+    Partial(Box<Pull>),
     NoPull,
     Refused(String),
     Failed(String),
@@ -240,7 +242,8 @@ impl GitLab {
 
     pub async fn fetch(&self, access: &GitLabAccess, project: &str, branch: &str) -> Answer {
         match self.fetch_pull(access, project, branch).await {
-            Ok(Some(pull)) => Answer::Pull(Box::new(pull)),
+            Ok(Some((pull, true))) => Answer::Pull(Box::new(pull)),
+            Ok(Some((pull, false))) => Answer::Partial(Box::new(pull)),
             Ok(None) => Answer::NoPull,
             Err(Problem::NotFound) => Answer::Failed(format!(
                 "project {project} not found on {}, or the token cannot see it",
@@ -255,7 +258,7 @@ impl GitLab {
         access: &GitLabAccess,
         project: &str,
         branch: &str,
-    ) -> Result<Option<Pull>, Problem> {
+    ) -> Result<Option<(Pull, bool)>, Problem> {
         let list = self
             .text(
                 access,
@@ -302,21 +305,33 @@ impl GitLab {
             self.optional(access, &part("approvals")).await?
         };
         pull.review = review_of(reviewers.as_deref(), approvals.as_deref());
+        // Without the token's own account its comments cannot be told apart, so none are read.
         let me = self.me(access).await;
-        pull.notes = self
+        if me.is_empty() {
+            return Ok(Some((pull, false)));
+        }
+        match self
             .discussions(access, &part("discussions"), &pull, &me)
-            .await?;
-        Ok(Some(pull))
+            .await?
+        {
+            Some(notes) => {
+                pull.notes = notes;
+                Ok(Some((pull, true)))
+            }
+            None => Ok(Some((pull, false))),
+        }
     }
 
-    // Only whole: a page that fails leaves no notes, so none is marked seen before it is read.
+    // Only whole: a page that fails leaves the comments unread, so none is marked seen before it
+    // is read. GitLab lists them oldest first, and only as many of the newest as are remembered
+    // are kept, or the oldest would turn new again each time.
     async fn discussions(
         &self,
         access: &GitLabAccess,
         segments: &[&str],
         pull: &Pull,
         me: &str,
-    ) -> Result<Vec<Note>, Problem> {
+    ) -> Result<Option<Vec<Note>>, Problem> {
         let mut out = Vec::new();
         for page in 1..=PAGES {
             let page = page.to_string();
@@ -330,7 +345,7 @@ impl GitLab {
             {
                 Ok(res) => res,
                 Err(Problem::Refused(m)) => return Err(Problem::Refused(m)),
-                Err(_) => return Ok(Vec::new()),
+                Err(_) => return Ok(None),
             };
             let next = res
                 .headers()
@@ -338,14 +353,15 @@ impl GitLab {
                 .and_then(|v| v.to_str().ok())
                 .is_some_and(|v| !v.trim().is_empty());
             let Ok(body) = res.text().await else {
-                return Ok(Vec::new());
+                return Ok(None);
             };
             out.extend(notes(&body, &pull.url, &pull.author, me));
             if !next {
                 break;
             }
         }
-        Ok(out)
+        out.drain(..out.len().saturating_sub(SEEN_NOTES));
+        Ok(Some(out))
     }
 
     pub async fn failure_log(&self, access: &GitLabAccess, project: &str, check: &Check) -> String {
@@ -435,9 +451,10 @@ struct RawReviewer {
 }
 
 #[derive(Deserialize)]
+// `approved` also means "no approval is required", so only an actual approver counts.
 struct RawApprovals {
     #[serde(default)]
-    approved: bool,
+    approved_by: Vec<serde_json::Value>,
 }
 
 #[derive(Deserialize)]
@@ -532,9 +549,10 @@ pub(super) fn review_of(reviewers_json: Option<&str>, approvals_json: Option<&st
     if reviewers.iter().any(|r| r.state == "requested_changes") {
         return "changes_requested".into();
     }
-    let approved = approvals_json
-        .and_then(|j| serde_json::from_str::<RawApprovals>(j).ok())
-        .is_some_and(|a| a.approved);
+    let approved = reviewers.iter().any(|r| r.state == "approved")
+        || approvals_json
+            .and_then(|j| serde_json::from_str::<RawApprovals>(j).ok())
+            .is_some_and(|a| !a.approved_by.is_empty());
     if approved {
         "approved".into()
     } else {
@@ -703,6 +721,15 @@ mod tests {
         assert_eq!(review_of(None, Some(APPROVALS)), "approved");
         assert_eq!(review_of(None, Some(r#"{"approved":false}"#)), "");
         assert_eq!(review_of(None, None), "");
+        let no_rules =
+            r#"{"approved":true,"approvals_required":0,"approvals_left":0,"approved_by":[]}"#;
+        assert_eq!(
+            review_of(None, Some(no_rules)),
+            "",
+            "approved by nobody is not approved"
+        );
+        let reviewed = r#"[{"user":{"username":"rev2"},"state":"approved"}]"#;
+        assert_eq!(review_of(Some(reviewed), Some(no_rules)), "approved");
     }
 
     #[test]
@@ -1054,8 +1081,8 @@ mod http_tests {
         let got = GitLab::new()
             .fetch(&stub.access("glpat-good"), "commslayer/app", "eng-2")
             .await;
-        let Answer::Pull(p) = got else {
-            panic!("{got:?}");
+        let Answer::Partial(p) = got else {
+            panic!("unread comments make a partial answer: {got:?}");
         };
         assert_eq!(p.review, "approved");
         assert!(p.notes.is_empty());

@@ -434,7 +434,8 @@ port. The token is sent only to that address, in a header, and never goes over s
 again after 10 minutes and Yardbell's log says why; `yardbell doctor` signs in to each host and
 names the account or the problem. A merge request shows as `!12`, its pipeline as CI, and a
 reviewer asking for changes or approving as on GitHub. A request for changes without a comment
-changes the badge but posts no card, and at most 500 comments of one merge request are read.
+changes the badge but posts no card, and only the newest 500 comments of
+one merge request are watched.
 
 ### `triggers` (optional)
 

@@ -479,6 +479,7 @@ enum Away {
 
 enum Got {
     Fetched(Fetched),
+    Partial(Box<Pull>),
     Refused(String, String),
 }
 
@@ -654,6 +655,7 @@ impl Pulls {
                             let got =
                                 match self.gitlab.fetch(access, &repo.project, &t.branch).await {
                                     Answer::Pull(pull) => Got::Fetched(Fetched::Found(pull)),
+                                    Answer::Partial(pull) => Got::Partial(pull),
                                     Answer::NoPull => Got::Fetched(Fetched::NoPull),
                                     Answer::Failed(why) => Got::Fetched(Fetched::Failed(why)),
                                     Answer::Refused(why) => {
@@ -682,8 +684,11 @@ impl Pulls {
         {
             let mut inner = self.lock();
             for (t, host, got) in fetched.into_iter().flatten() {
+                let partial = matches!(got, Got::Partial(_));
                 let (next, pull) = match got {
-                    Got::Fetched(Fetched::Found(pull)) => (now + every, Some(*pull)),
+                    Got::Fetched(Fetched::Found(pull)) | Got::Partial(pull) => {
+                        (now + every, Some(*pull))
+                    }
                     Got::Fetched(Fetched::NoPull) => (now + every, None),
                     Got::Fetched(Fetched::NoTool) => {
                         inner
@@ -718,7 +723,10 @@ impl Pulls {
                         (now + AWAY, None)
                     }
                 };
-                if let Some(p) = &pull {
+                // A first sighting without the comments would mark none of them seen, and the
+                // next full read would post them all as new.
+                let first_and_partial = |p: &Pull| partial && !inner.seen.contains_key(&p.url);
+                if let Some(p) = pull.as_ref().filter(|p| !first_and_partial(p)) {
                     let before = inner.seen.get(&p.url);
                     let (seen, changes) = observe(before, p, &day);
                     if before != Some(&seen) {

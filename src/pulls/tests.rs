@@ -1005,3 +1005,123 @@ async fn gitlab_cards_once_across_restarts_and_never_with_the_token() {
         assert!(!text.contains("glpat"), "{text}");
     }
 }
+
+#[tokio::test]
+async fn comments_first_seen_while_unreadable_are_not_posted_later() {
+    let stub = serve(Answers {
+        discussions: (500, "{}".into()),
+        ..Answers::default()
+    })
+    .await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    assert_eq!(
+        rig.forge_of("web").as_deref(),
+        Some("gitlab"),
+        "the badge still shows"
+    );
+    stub.answers.lock().unwrap().discussions = Answers::default().discussions;
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 130),
+        )
+        .await;
+    assert!(
+        rig.pull_cards(&dispatch).is_empty(),
+        "old comments are not new"
+    );
+    new_note(&stub);
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 260),
+        )
+        .await;
+    let cards = rig.pull_cards(&dispatch);
+    assert_eq!(cards.len(), 1);
+    let ids: Vec<&str> = cards[0]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["gitlab:399"]);
+}
+
+#[tokio::test]
+async fn own_comments_are_not_cards_when_the_account_is_unknown() {
+    let stub = serve(Answers {
+        user: (500, "{}".into()),
+        ..Answers::default()
+    })
+    .await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    let mut d: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/gitlab_discussions.json")).unwrap();
+    d.as_array_mut().unwrap().push(json!({
+        "id": "d9",
+        "notes": [{"id": 398, "body": "my own reply", "author": {"username": "me-bot"}, "system": false}]
+    }));
+    stub.answers.lock().unwrap().discussions = (200, d.to_string());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 130),
+        )
+        .await;
+    let cards = serde_json::to_string(&rig.pull_cards(&dispatch)).unwrap();
+    assert!(!cards.contains("my own reply"), "{cards}");
+}
+
+#[tokio::test]
+async fn a_merge_request_with_many_comments_posts_each_once() {
+    let many = |n: u64| {
+        let notes: Vec<Value> = (1..=n)
+            .map(|i| json!({"id": i, "body": format!("note {i}"), "author": {"username": "rev1"}, "system": false}))
+            .collect();
+        (200, json!([{"id": "big", "notes": notes}]).to_string())
+    };
+    let stub = serve(Answers {
+        discussions: many(510),
+        ..Answers::default()
+    })
+    .await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    stub.answers.lock().unwrap().discussions = many(511);
+    for secs in [130, 260, 390, 520] {
+        pulls
+            .round(
+                &rig.cfg,
+                &rig.secrets(),
+                &rig.state,
+                &dispatch,
+                later(start, secs),
+            )
+            .await;
+    }
+    assert_eq!(rig.pull_cards(&dispatch).len(), 1, "only note 511 is new");
+}
