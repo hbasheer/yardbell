@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.8] - 2026-10-29
+
 - The Dispatch page is laid out like an app on a wide screen: a column beside the chat with
   **Chats** and **Tasks** tabs and **+** for a new conversation, and a header with the open
   conversation's title, the agent and model it runs on, and **Settings**. Only the conversation and

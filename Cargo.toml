@@ -1,6 +1,6 @@
 [package]
 name = "yardbell"
-version = "0.7.7"
+version = "0.7.8"
 edition = "2021"
 description = "One page for AI coding agent sessions across all your machines: health, sessions, ports, and a terminal from any device."
 license = "MIT"
