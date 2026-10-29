@@ -284,10 +284,9 @@ mod tests {
         assert_eq!(err, "gh is not logged in on hp");
     }
 
-    async fn fake_gitlab(
-        status: StatusCode,
-        seen: Arc<Mutex<Vec<(String, String, String, String)>>>,
-    ) -> String {
+    type Requests = Arc<Mutex<Vec<(String, String, String, String)>>>;
+
+    async fn fake_gitlab(status: StatusCode, seen: Requests) -> String {
         let app = axum::Router::new().fallback(move |req: Request| {
             let seen = seen.clone();
             async move {
