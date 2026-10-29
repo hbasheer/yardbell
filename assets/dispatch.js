@@ -455,6 +455,7 @@ function draw() {
   render(!current && !events.length
     ? intro()
     : html`${triggerHead()}${backendNote()}${repeat(blocks(events), (b) => `${view}:${b.key}`, block)}${steps.waitingBar(events)}`, log);
+  steps.afterDraw();
 }
 
 async function loadRunsOn() {

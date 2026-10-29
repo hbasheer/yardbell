@@ -1,10 +1,11 @@
 import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 import { openHistory } from "/dispatch-tasks.js";
+import { canvas, fitAll, settle as fitCanvases, triggerWords } from "/pipeline-canvas.js";
 
 // Dispatch's steps that change something (start, stop or type into a session) and the results of
 // reviews, drawn as cards the person approves, edits, rejects or acts on.
 
-export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember", "change_settings", "save_task", "run_trigger"]);
+export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 const ICONS = {
   start_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
@@ -18,6 +19,10 @@ const ICONS = {
   change_settings: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 11.5h11"/><circle cx="5.5" cy="4.5" r="1.5"/><circle cx="10.5" cy="11.5" r="1.5"/></svg>`,
   save_task: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2.5h7l2 2v9h-9z"/><path d="M5.5 2.5v3.5h4.5V2.5M5.5 13.5v-4h5v4"/></svg>`,
   run_trigger: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9 2 4 9h4l-1 5 5-7H8z"/></svg>`,
+  save_pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="4" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/><path d="M5 8h2.5c1.5 0 1.5-4 3.5-4M7.5 8c1.5 0 1.5 4 3.5 4"/></svg>`,
+  set_pipeline_enabled: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="5" width="11" height="6" rx="3"/><circle cx="10.5" cy="8" r="1.5"/></svg>`,
+  run_pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
+  answer_run: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>`,
   review: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg>`,
   scan: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3M2.5 8h11"/></svg>`,
   file: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg>`,
@@ -46,9 +51,12 @@ const SETTINGS_AREAS = {
   session_mcp_servers: ["MCP servers for sessions", "/settings#servers"],
   phone: ["Phone notifications", "/settings#phone"],
   machines: ["Machines", "/settings#machines"],
-  pipelines: ["Pipelines", "/pipelines"],
+  pipelines: ["Pipelines", "/pipeline"],
   pull_requests: ["Pull requests", "/settings"],
 };
+const RUN_ACTIONS = { answer: "Answer", retry: "Retry", continue_pass: "Continue", continue_fail: "Continue", drop: "Drop" };
+const RUN_DONE = { queued: "Queued", running: "Running again", waiting: "Still waiting", done: "Finished", dropped: "Dropped" };
+const pipelineLink = (id, tab) => `/pipeline?p=${encodeURIComponent(id)}&tab=${tab}`;
 const areaName = (area) => SETTINGS_AREAS[area]?.[0] || area;
 const areaLink = (area) => SETTINGS_AREAS[area]?.[1] || "/settings";
 
@@ -181,6 +189,9 @@ function where(e) {
   if (e.tool === "change_settings") return `Settings, ${areaName(i.area)}`;
   if (e.tool === "save_task") return i.before ? "A new version of a saved task" : "A new task";
   if (e.tool === "run_trigger") return "Runs it now, as Run now in Settings does";
+  if (e.tool === "save_pipeline") return i.before ? `Pipelines, version ${i.before.version} to the next` : "Pipelines, a new pipeline, saved switched off";
+  if (e.tool === "set_pipeline_enabled" || e.tool === "run_pipeline") return html`Pipelines, <code>${i.id}</code>`;
+  if (e.tool === "answer_run") return `A run of ${i.pipeline}`;
   if (e.tool === "start_session") {
     const folder = i.folder || ctx.short(i.path);
     const branch = i.branch ? html` · <code>${i.branch}</code>${i.new_branch ? ` new${i.base ? ` from ${i.base}` : ""}` : ""}` : nothing;
@@ -244,6 +255,12 @@ function body(e) {
     case "save_task":
     case "run_trigger":
       return changeBody(e);
+    case "save_pipeline":
+      return pipelineBody(e);
+    case "set_pipeline_enabled":
+    case "run_pipeline":
+    case "answer_run":
+      return runBody(e);
     case "move_session":
       return html`<div class="step-card-body"><p class="step-card-text muted">The branch and its uncommitted changes go over ssh; nothing is committed or pushed. The same agent starts there with the task${i.stop_original ? ", and the original stops" : ""}.</p>
         ${i.task ? html`<p class="step-card-label">Task</p>${longText(e.id || i.task, i.task)}` : nothing}</div>`;
@@ -270,6 +287,49 @@ function changeDiff(parts) {
     : p.op === "del"
       ? html`<del><span class="visually-hidden">removed </span>${p.text}</del>`
       : html`<span>${trimmed(p.text, n === 0, n === parts.length - 1)}</span>`)}</div>`;
+}
+
+const OUTCOME_WORDS = { pass: "pass", fail: "fail", needs_you: "needs you", start: "start" };
+
+function pipelineBody(e) {
+  const i = e.input || {};
+  const c = i.changes || {};
+  const lists = [
+    c.trigger ? html`<li>The trigger changed: ${triggerWords(i.definition.trigger)}.</li>` : nothing,
+    c.added?.length ? html`<li>Steps added: ${c.added.join(", ")}.</li>` : nothing,
+    c.removed?.length ? html`<li>Steps removed: ${c.removed.join(", ")}.</li>` : nothing,
+    ...(c.changed || []).map((x) => html`<li>${x.step}: ${x.fields.join(", ")} changed.</li>`),
+  ];
+  return html`<div class="step-card-body">
+    <div class="step-card-pipeline">${canvas({ def: i.definition, key: `proposal-${e.id}` })}</div>
+    ${lists.some((l) => l !== nothing) ? html`<ul class="step-card-list">${lists}</ul>` : nothing}
+    ${c.lines?.length ? html`<ul class="step-card-list pipeline-lines">${c.lines.map((l) => html`<li>On ${OUTCOME_WORDS[l.outcome] || l.outcome}, ${l.from} went to ${l.was}, now goes to ${l.now}</li>`)}</ul>` : nothing}
+    ${(c.wording || []).map((w) => html`<p class="step-card-label">${w.step}: instructions</p>${changeDiff(w.diff)}`)}
+    <p class="step-card-text muted">A new or changed pipeline always waits for you.</p>
+  </div>`;
+}
+
+function runBody(e) {
+  const i = e.input || {};
+  if (e.tool === "set_pipeline_enabled") {
+    return html`<div class="step-card-body"><p class="step-card-text muted">${i.on ? "It starts runs on its own from now on, as its trigger says." : "It stops starting runs on its own; runs already going carry on."}</p></div>`;
+  }
+  if (e.tool === "run_pipeline") {
+    const subjects = [...(i.tickets || []), ...(i.prs || [])];
+    return html`<div class="step-card-body">
+      ${subjects.length ? html`<ul class="step-card-list">${subjects.map((s) => html`<li>${/^https?:/.test(s) ? html`<a href=${s} target="_blank" rel="noopener">${s}</a>` : html`<code>${s}</code>`}</li>`)}</ul>`
+        : html`<p class="step-card-text muted">One run with no ticket or pull request.</p>`}
+    </div>`;
+  }
+  const w = i.waiting || {};
+  return html`<div class="step-card-body">
+    <div class="run-waiting">
+      <p class="step-card-label">${i.subject}, at ${w.step}</p>
+      <p class="step-card-text">${w.reason}</p>
+      ${w.screen ? html`<details class="step-card-more"><summary>What the session showed</summary><p class="step-card-text step-card-mono">${w.screen}</p></details>` : nothing}
+    </div>
+    ${i.action === "answer" ? html`<p class="step-card-label">Answer</p><p class="step-card-text">${i.text}</p>` : nothing}
+  </div>`;
 }
 
 function changeBody(e) {
@@ -447,6 +507,20 @@ function outcome(e, state) {
     const name = e.input.name;
     return html`<p class="step-card-outcome">${ICONS.check}<span>Saved as version ${v?.version ?? 1}</span><button class="btn" type="button" @click=${() => openHistory({ name, customised: true, api: ctx.api, toast: ctx.toast, changed: () => ctx.decided() })}><span class="btn-label">See task</span></button></p>`;
   }
+  if (e.tool === "save_pipeline" && v) {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>Saved as version ${v.version}</span><a class="btn" href=${pipelineLink(v.saved, "build")}><span class="btn-label">Open pipeline</span></a></p>
+      ${v.note ? html`<p class="step-card-outcome step-card-warn">${v.note} It replaced version ${v.replaced}.</p>` : nothing}`;
+  }
+  if (e.tool === "set_pipeline_enabled" && v) {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>${v.enabled ? "Turned on" : "Turned off"}</span><a class="btn" href=${pipelineLink(v.id, "build")}><span class="btn-label">Open pipeline</span></a></p>`;
+  }
+  if (e.tool === "run_pipeline" && v) {
+    const n = v.runs?.length || 0;
+    return html`<p class="step-card-outcome">${ICONS.check}<span>Started ${n} ${n === 1 ? "run" : "runs"}</span><a class="btn" href=${pipelineLink(e.input.id, "runs")}><span class="btn-label">Open runs</span></a></p>`;
+  }
+  if (e.tool === "answer_run" && v) {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>${RUN_DONE[v.state] || "Done"}</span></p>`;
+  }
   if (e.tool === "run_trigger") {
     return html`<p class="step-card-outcome">${ICONS.check}<span>${v?.text || (v?.conversation ? "Started" : "Done")}</span>${v?.conversation ? html`<a class="btn" href=${`/dispatch?c=${encodeURIComponent(v.conversation)}`}><span class="btn-label">Open conversation</span></a>` : nothing}</p>`;
   }
@@ -475,8 +549,8 @@ function worktreeOutcome(tool, text) {
   }
 }
 
-const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers" };
-const UNPLACED = new Set(["remember", "change_settings", "save_task", "run_trigger"]);
+const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
+const UNPLACED = new Set(["remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 export function ruleText(r) {
   if (UNPLACED.has(r.action)) return RULE_STEPS[r.action];
@@ -537,7 +611,29 @@ function stepTitle(e) {
   if (e.tool === "change_settings") return `Change Settings: ${areaName(e.input?.area)}`;
   if (e.tool === "save_task") return `Save the task ${e.input?.name || ""}`.trim();
   if (e.tool === "run_trigger") return `Run the trigger ${e.input?.name || ""}`.trim();
+  if (e.tool === "save_pipeline") return `${e.input?.before ? "Change the pipeline" : "New pipeline:"} ${e.input?.definition?.name || ""}`.trim();
+  if (e.tool === "set_pipeline_enabled") return `${e.input?.on ? "Turn on" : "Turn off"} ${e.input?.name || ""}`.trim();
+  if (e.tool === "run_pipeline") return `Run ${e.input?.name || ""}`.trim();
+  if (e.tool === "answer_run") {
+    const a = e.input?.action;
+    const how = a === "continue_pass" ? " as passed" : a === "continue_fail" ? " as failed" : "";
+    return `${RUN_ACTIONS[a] || "Answer"} ${e.input?.subject || ""}${how}`.trim();
+  }
   return e.review ? "Start a review" : TITLES[e.tool] || e.tool;
+}
+
+// A pipeline drawn on a card shows whole the first time it is on the page.
+const fitted = new Set();
+
+export function afterDraw() {
+  const drawn = document.querySelectorAll(".step-card .pl-canvas");
+  if (!drawn.length) return;
+  fitCanvases();
+  for (const c of drawn) {
+    if (fitted.has(c.dataset.key)) continue;
+    fitted.add(c.dataset.key);
+    fitAll(c);
+  }
 }
 
 export function stepCard(e) {

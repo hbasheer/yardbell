@@ -39,6 +39,9 @@ SETTINGS_CHAT = "browsersettings1"
 SETTINGS_EDIT_CHAT = "browsersettings2"
 TASK_CHAT = "browsersavetask1"
 NEW_TASK = "Standup notes"
+PIPE_CHAT = "browserpipeline1"
+RUNS_CHAT = "browserpiperuns1"
+NEW_PIPELINE = "Ask then fix"
 REFUSED = "the user's Dispatch rule \"deny start_session on pro\" refuses it"
 PULL_SESSION = "hp-pull-test"
 FAKE_PR = {
@@ -336,6 +339,49 @@ def task_chat():
     ])
 
 
+# Dispatch proposed a pipeline: ask the person, then fix. `before` is how it read when proposed.
+def proposed_pipeline():
+    def define(fix_words, ask_fail):
+        return {
+            "id": "", "name": NEW_PIPELINE, "enabled": False, "version": 1,
+            "trigger": {"kind": "manual"}, "start": "plan",
+            "steps": [
+                {"id": "plan", "name": "Plan", "kind": "plan", "machines": [], "max_runs": 2,
+                 "next": {"pass": "ask", "fail": "wait", "needs_you": "wait"}, "x": -240, "y": 80},
+                {"id": "ask", "name": "Ask me", "kind": "wait", "message": "Go ahead?", "max_runs": 2,
+                 "next": {"pass": "fix", "fail": ask_fail, "needs_you": "wait"}, "x": 40, "y": 80},
+                {"id": "fix", "name": "Fix", "kind": "agent", "instructions": fix_words, "agent": "",
+                 "machine": {"name": MACHINE}, "workspace": {"kind": "new_worktree"}, "session": "new",
+                 "read_only": False, "mcp_servers": [], "max_runs": 2,
+                 "next": {"pass": "end", "fail": "wait", "needs_you": "wait"}, "x": 320, "y": 80},
+            ],
+        }
+    after, before = define("Fix the issue in {ticket}.", "fix"), define("Fix the bug in {ticket}.", "wait")
+    changes = {"trigger": False, "added": [], "removed": [], "changed": [{"step": "Fix", "fields": ["instructions"]}],
+               "lines": [{"from": "Ask me", "outcome": "fail", "was": "wait for you", "now": "Fix"}],
+               "wording": [{"step": "Fix", "diff": [{"op": "same", "text": "Fix the "}, {"op": "del", "text": "bug"},
+                                                   {"op": "add", "text": "issue"}, {"op": "same", "text": " in {ticket}."}]}]}
+    step = {"role": "action", "id": "pipestp1", "tool": "save_pipeline", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00", "input": {"definition": after, "before": before, "changes": changes}}
+    return conversation(PIPE_CHAT, "A pipeline that asks first", [
+        {"role": "user", "text": "Make a pipeline that asks me, then fixes"}, step])
+
+
+def run_steps_chat():
+    def step(id, tool, input):
+        return {"role": "action", "id": id, "tool": tool, "by": "dispatch", "status": "pending",
+                "at": "2026-01-01T10:00:00+00:00", "input": input}
+    return conversation(RUNS_CHAT, "Runs of the review pipeline", [
+        {"role": "user", "text": "Run the review on !87 and clear the old run"},
+        step("runstp01", "run_pipeline", {"id": "review", "name": "Review my merge requests", "tickets": [],
+                                          "prs": ["https://git.example.com/acme/app/-/merge_requests/87"]}),
+        step("ansstp01", "answer_run", {"id": "run-c", "action": "drop", "text": "",
+                                        "pipeline": "Review my merge requests", "subject": "COM-1284 Login redirect",
+                                        "waiting": {"kind": "needs_you", "step": "test", "reason": "Test needs you",
+                                                    "screen": "rspec: 3 examples, 1 failure"}}),
+    ])
+
+
 # Linear's GraphQL API as the Pipeline page's ticket picker asks it: my open tickets.
 LINEAR_TICKETS = [
     {"id": "u-12", "identifier": "COM-12", "title": "Redirect after login", "url": "https://linear.app/acme/issue/COM-12", "state": {"name": "Todo"}},
@@ -619,7 +665,8 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             json.dump({f"{MACHINE}:{OLD_RUN}": {"machine": MACHINE, "name": OLD_RUN, "agent": "shell", "folder": "demo-app",
                                                 "branch": "main", "marks": marks}}, f)
         for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
-                     settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat()):
+                     settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat(),
+                     proposed_pipeline(), run_steps_chat()):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -2200,6 +2247,45 @@ class Suite:
         for want in ("per_machine: 3", "minutes: 90", "demo-app: Run bin/rspec"):
             if want not in config:
                 raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
+
+    # Last, so the pipeline it saves cannot change what the Pipelines tests count.
+    def test_dispatch_save_pipeline_card(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={PIPE_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .pl-canvas .pl-node[data-step=\"fix\"]')", "the proposed pipeline drawn on the card")
+        seen = b.js(f"""(() => {{
+          const c = document.querySelector('{card}');
+          return {{ title: c.querySelector('.step-card-title strong').textContent,
+                   lines: c.querySelector('.pipeline-lines')?.textContent.replace(/\\s+/g, ' ').trim(),
+                   ins: c.querySelector('.change-diff ins')?.textContent,
+                   waits: c.textContent.includes('A new or changed pipeline always waits for you.') }};
+        }})()""")
+        if seen != {"title": f"Change the pipeline {NEW_PIPELINE}", "lines": "On fail, Ask me went to wait for you, now goes to Fix",
+                    "ins": "added issue", "waits": True}:
+            raise Failure(f"the card shows {seen}")
+        self.check_errors("the pipeline card")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome')?.textContent.includes('Saved as version 1')", "the pipeline saved")
+        href = b.js("document.querySelector('#dispatch-log .step-card.done .step-card-outcome a').getAttribute('href')")
+        if href != "/pipeline?p=ask-then-fix&tab=build":
+            raise Failure(f"Open pipeline goes to {href}")
+
+    def test_dispatch_run_cards(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={RUNS_CHAT}"))
+        b.wait("document.querySelectorAll('#dispatch-log .step-card.pending').length === 2", "both run cards")
+        titles = b.js("[...document.querySelectorAll('#dispatch-log .step-card .step-card-title strong')].map((t) => t.textContent)")
+        if titles != ["Run Review my merge requests", "Drop COM-1284 Login redirect"]:
+            raise Failure(f"the cards are titled {titles}")
+        reason = b.js("document.querySelector('[aria-label=\"Drop COM-1284 Login redirect\"] .run-waiting')?.textContent || ''")
+        if "Test needs you" not in reason:
+            raise Failure(f"the answer card shows {reason!r}")
+        b.click("[aria-label=\"Run Review my merge requests\"] .step-card-actions .btn.danger")
+        b.wait("document.querySelector('[aria-label=\"Run Review my merge requests\"].rejected')", "the run card rejected")
+        b.click("[aria-label=\"Drop COM-1284 Login redirect\"] .step-card-actions .btn.primary")
+        b.wait("document.querySelector('[aria-label=\"Drop COM-1284 Login redirect\"].failed .step-card-outcome')?.textContent.includes('has already ended')", "the drop refused, on the card")
+        self.check_errors("the run cards")
 
     def check_errors(self, where):
         if self.b.errors:

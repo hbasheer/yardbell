@@ -67,6 +67,10 @@ fn bad(message: String) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, message)
 }
 
+fn not_saved(list: Vec<String>) -> ApiError {
+    bad(format!("Not saved: {}", list.join("; ")))
+}
+
 fn problems(list: Vec<String>) -> ApiError {
     bad(format!(
         "Not proposed, correct this and send the whole pipeline again: {}",
@@ -238,7 +242,7 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
             } = arg(input)?;
             match existing(app, &definition.id) {
                 Some(current) => {
-                    let saved = library.save(definition, &cfg).map_err(problems)?;
+                    let saved = library.save(definition, &cfg).map_err(not_saved)?;
                     let mut out =
                         json!({ "saved": saved.id, "name": saved.name, "version": saved.version });
                     if before.is_some_and(|b| b.version != current.version) {
@@ -254,14 +258,14 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
                     definition.id = slug(&definition.name, &taken);
                     definition.version = 0;
                     definition.enabled = false;
-                    let saved = library.save(definition, &cfg).map_err(problems)?;
+                    let saved = library.save(definition, &cfg).map_err(not_saved)?;
                     json!({ "saved": saved.id, "name": saved.name, "version": saved.version })
                 }
             }
         }
         "set_pipeline_enabled" => {
             let e: Enabled = arg(input)?;
-            let def = library.set_enabled(&e.id, e.on, &cfg).map_err(problems)?;
+            let def = library.set_enabled(&e.id, e.on, &cfg).map_err(not_saved)?;
             json!({ "id": def.id, "enabled": def.enabled })
         }
         "run_pipeline" => {
