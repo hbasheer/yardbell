@@ -1,4 +1,5 @@
 pub mod engine;
+pub mod forge;
 pub mod linear;
 pub mod prompts;
 pub mod record;
