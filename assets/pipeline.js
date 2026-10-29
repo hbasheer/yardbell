@@ -1,5 +1,5 @@
 import { html, render, nothing } from "/vendor/lit-html/lit-html.js";
-import { canvas, settle, nodeState, KINDS, WORDS } from "/pipeline-canvas.js";
+import { canvas, settle, nodeState, triggerWords, icon, KINDS, WORDS } from "/pipeline-canvas.js";
 
 const $ = (id) => document.getElementById(id);
 const OUTCOMES = [["pass", "On pass"], ["fail", "On fail"], ["needs_you", "On needs you"]];
@@ -89,17 +89,6 @@ function label(run) {
   return [pr, ticket].filter(Boolean).join(" ") || `Run started ${clock(run.started)}`;
 }
 
-function triggerWords(t) {
-  switch (t?.kind) {
-    case "schedule": return `On the schedule ${t.schedule || "(not set)"}${t.state ? `, my open tickets in ${t.state}` : ""}`;
-    case "linear":
-      if (t.states?.length) return `When a Linear ticket${t.assigned ? " of mine" : ""} moves to ${t.states.join(" or ")}`;
-      return "When a Linear ticket is assigned to me";
-    case "github_review": return "When someone asks me to review a GitHub pull request";
-    case "gitlab_reviewer": return `When a GitLab merge request on ${t.host || "a host you pick"} adds me as reviewer`;
-    default: return "By hand";
-  }
-}
 
 const isStep = (d, id) => d.steps.some((s) => s.id === id);
 const nameOf = (d, id) => d.steps.find((s) => s.id === id)?.name || id;
@@ -164,7 +153,7 @@ function card(p) {
 function newPipeline(template) {
   doing(async () => {
     const d = await api("POST", "/api/pipelines", { template });
-    go(`p=${encodeURIComponent(d.id)}&tab=steps`);
+    go(`p=${encodeURIComponent(d.id)}&tab=build`);
   });
 }
 
@@ -430,7 +419,7 @@ function stepForm(step, d, redraw) {
   </fieldset>`;
 }
 
-function triggerForm(d, redraw) {
+function triggerFields(d, redraw) {
   const t = d.trigger;
   const kinds = [["manual", "By hand"], ["schedule", "On a schedule"], ["linear", "A Linear ticket"], ["github_review", "A GitHub review request"], ["gitlab_reviewer", "A GitLab merge request reviewer"]];
   const setKind = (k) => {
@@ -438,9 +427,8 @@ function triggerForm(d, redraw) {
     redraw();
   };
   return html`<fieldset class="pl-step-form pl-trigger-form">
-    <legend>Pipeline</legend>
+    <legend>Start when</legend>
     <div class="pl-fields">
-      ${field("Name", html`<input name="pipeline_name" .value=${d.name} @input=${(e) => { d.name = e.target.value; redraw(); }}>`)}
       ${field("Starts", html`<select name="trigger" @change=${(e) => setKind(e.target.value)}>${kinds.map(([k, l]) => html`<option value=${k} ?selected=${t.kind === k}>${l}</option>`)}</select>`)}
       ${t.kind === "schedule" ? html`
         ${field("Schedule", html`<input name="schedule" placeholder="weekdays 02:00" .value=${t.schedule || ""} @input=${(e) => { t.schedule = e.target.value; redraw(); }}>`)}
@@ -468,22 +456,106 @@ function save() {
     } catch (err) {
       if (!err.problems?.length) throw err;
       problems = err.problems;
+      inspectorOpen = true;
     }
   });
 }
 
-function stepsTab() {
+const LIBRARY = [
+  ["Start when", [["manual", "start", "By hand", "From Run now"], ["schedule", "start", "Schedule", "Weekdays, every day, a time"], ["linear", "start", "Linear ticket", "Assigned to me, or a state"], ["github_review", "start", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "start", "GitLab reviewer", "An MR adds me as reviewer"]]],
+  ["Agent", [["agent", "agent", "Agent step", "Your instructions, on a machine"], ["plan", "plan", "Plan", "Picks machine, folder and branch"]]],
+  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["linear", "linear", "Linear", "Move the ticket, or draft a comment"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
+  ["You", [["wait", "wait", "Wait for me", "Continues when you say"]]],
+];
+
+let selected = null;
+let libraryOpen = remembered("yb-pipeline-library", true);
+let inspectorOpen = true;
+
+function remembered(key, fallback) {
+  try {
+    const v = localStorage.getItem(key);
+    return v === null ? fallback : v === "1";
+  } catch {
+    return fallback;
+  }
+}
+
+function remember(key, on) {
+  try {
+    localStorage.setItem(key, on ? "1" : "0");
+  } catch {}
+}
+
+function select(id) {
+  selected = id;
+  if (id) inspectorOpen = true;
+  draw();
+}
+
+function pickTrigger(kind) {
+  draft.trigger = kind === "schedule" ? { kind, schedule: "", state: "" } : kind === "linear" ? { kind, assigned: true, states: [] } : kind === "gitlab_reviewer" ? { kind, host: data.gitlab_hosts[0] || "" } : { kind };
+  select("@start");
+}
+
+function library() {
+  const fold = () => { libraryOpen = !libraryOpen; remember("yb-pipeline-library", libraryOpen); draw(); };
+  if (!libraryOpen) {
+    return html`<aside class="pl-library folded"><button class="btn quiet" type="button" title="Show the steps" aria-label="Show the steps" @click=${fold}>${chevron("right")}</button></aside>`;
+  }
+  return html`<aside class="pl-library" aria-label="Steps you can add">
+    <div class="pl-library-head"><span>Steps</span><button class="btn quiet" type="button" title="Hide the steps" aria-label="Hide the steps" @click=${fold}>${chevron("left")}</button></div>
+    ${LIBRARY.map(([group, items]) => html`<h3>${group}</h3>
+      <ul>${items.map(([kind, iconKind, name, hint]) => html`<li>
+        <button type="button" class="pl-lib-item" data-kind=${kind} data-group=${group} @click=${() => (group === "Start when" ? pickTrigger(kind) : addStep(kind))}>
+          <span class="pl-kind-icon">${icon(iconKind)}</span>
+          <span><b>${name}</b><small>${hint}</small></span>
+        </button>
+      </li>`)}</ul>`)}
+  </aside>`;
+}
+
+function chevron(way) {
+  return html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d=${way === "left" ? "M10 3.5 5.5 8l4.5 4.5" : "M6 3.5 10.5 8 6 12.5"}></path></svg>`;
+}
+
+function addStep() {
+  toast("Adding steps arrives with drag and drop");
+}
+
+function inspector() {
   const redraw = () => draw();
-  const changed = JSON.stringify(draft) !== JSON.stringify(def);
-  return html`<div class="pl-steps-tab">
-    ${problems.length ? html`<div class="pl-problems" id="pl-problems" role="alert"><p>Not saved. Fix these first:</p><ul>${problems.map((p) => html`<li>${p}</li>`)}</ul></div>` : nothing}
-    ${triggerForm(draft, redraw)}
-    ${draft.steps.map((s) => stepForm(s, draft, redraw))}
-    <div class="pl-save-bar">
-      <span>${changed ? "Unsaved changes" : "Saved"}</span>
-      <button class="btn quiet" type="button" ?disabled=${!changed || busy} @click=${() => { draft = structuredClone(def); problems = []; draw(); }}>Undo changes</button>
-      <button class="btn primary" type="button" id="pl-save" ?disabled=${busy} @click=${save}>Save</button>
+  const step = draft.steps.find((s) => s.id === selected);
+  const mine = step ? problems.filter((p) => p.startsWith(`${step.name}: `) || p === `${step.name} is never reached`) : [];
+  let body;
+  if (step) {
+    body = html`${mine.length ? html`<ul class="pl-inspector-problems" role="alert">${mine.map((p) => html`<li>${p.startsWith(`${step.name}: `) ? p.slice(step.name.length + 2) : p}</li>`)}</ul>` : nothing}${stepForm(step, draft, redraw)}`;
+  } else if (selected === "@start") {
+    body = triggerFields(draft, redraw);
+  } else {
+    body = html`<div class="pl-inspector-empty">
+      <p><b>${draft.name}</b></p>
+      <p>Click a step to edit it, or the Start when card for the trigger. Drag a step in from the library, or click one to add it.</p>
+      <p>${draft.steps.length} ${draft.steps.length === 1 ? "step" : "steps"} · ${triggerWords(draft.trigger)}</p>
+    </div>`;
+  }
+  return html`<aside class="pl-inspector" id="pl-inspector" aria-label="Selected step">
+    <div class="pl-inspector-head">
+      <span>${step ? "Step" : selected === "@start" ? "Trigger" : "Pipeline"}</span>
+      <button class="btn quiet" type="button" title="Hide the panel" aria-label="Hide the panel" @click=${() => { inspectorOpen = false; draw(); }}>${chevron("right")}</button>
     </div>
+    <div class="pl-inspector-body">${body}</div>
+  </aside>`;
+}
+
+function buildTab(d) {
+  const bar = html`${problems.length ? html`<div class="pl-problems pl-canvas-bar" id="pl-problems" role="alert"><p>Not saved. Fix these first:</p><ul>${problems.map((p) => html`<li>${p}</li>`)}</ul></div>` : nothing}
+    ${inspectorOpen ? nothing : html`<button class="btn pl-panel-toggle pl-canvas-bar" type="button" title="Show the panel" aria-label="Show the panel" @click=${() => { inspectorOpen = true; draw(); }}>${chevron("left")}</button>`}
+    ${draft.steps.length ? nothing : html`<p class="pl-canvas-hint">Drag a step here, or click one in the library.</p>`}`;
+  return html`<div class=${`pl-build ${libraryOpen ? "" : "no-library"} ${inspectorOpen ? "" : "no-inspector"}`}>
+    ${library()}
+    ${canvas({ def: draft, editable: true, selected, problems, on: { select }, key: `${d.id}:build`, bar })}
+    ${inspectorOpen ? inspector() : html`<span></span>`}
   </div>`;
 }
 
@@ -543,31 +615,39 @@ function removePipeline(d) {
   });
 }
 
+let full = remembered("yb-pipeline-full", true);
+
 function pipelineView() {
   const d = def;
-  const tab = params().get("tab") || "runs";
+  const runs = runsOf(d.id);
+  const tab = params().get("tab") || (runs.length ? "runs" : "build");
+  const changed = JSON.stringify(draft) !== JSON.stringify(def);
   const setTab = (t) => {
     const q = params();
     q.set("tab", t);
     history.replaceState(null, "", `${location.pathname}?${q}`);
     load().catch((err) => toast(err.message));
   };
-  const tabs = [["runs", "Runs"], ["steps", "Steps"], ["history", "History"]];
-  return html`
-    <button class="back-link" type="button" id="pl-back" @click=${() => go("")}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M10 3 5 8l5 5"/></svg>Pipelines</button>
-    <header class="main-head pl-title">
-      <h1 class="pl-title-name">${d.name}</h1>
+  const toggleFull = () => { full = !full; remember("yb-pipeline-full", full); draw(); };
+  const tabs = [["build", "Build"], ["runs", runs.length ? `Runs ${runs.length}` : "Runs"], ["history", "History"]];
+  return html`<div class=${`pl-builder ${full ? "full" : ""}`}>
+    <header class="pl-bar">
+      <button class="btn quiet pl-back" type="button" id="pl-back" title="Back to Pipelines" @click=${() => go("")}>${chevron("left")}<span>Pipelines</span></button>
+      <input class="pl-name pl-title-name" aria-label="Pipeline name" .value=${draft.name} @input=${(e) => { draft.name = e.target.value; draw(); }}>
       ${onOff(d)}
       <span class="pl-version">v${d.version}</span>
-      <div class="pl-head-actions">
-        <button class="btn quiet danger" type="button" @click=${() => removePipeline(d)}>Delete</button>
-        <button class="btn primary" type="button" id="pl-run-now" ?disabled=${busy} @click=${() => runNow(d)}>Run now</button>
-      </div>
+      <div class="segmented pl-tabs" role="tablist">${tabs.map(([t, l]) => html`<button type="button" role="tab" aria-selected=${tab === t ? "true" : "false"} @click=${() => setTab(t)}>${l}</button>`)}</div>
+      <span class="pl-bar-space"></span>
+      <button class="btn quiet" type="button" id="pl-full" aria-pressed=${full ? "true" : "false"} title=${full ? "Exit full screen" : "Full screen"} aria-label=${full ? "Exit full screen" : "Full screen"} @click=${toggleFull}>
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d=${full ? "M6.5 2.5v4h-4 M9.5 2.5v4h4 M6.5 13.5v-4h-4 M9.5 13.5v-4h4" : "M2.5 6.5v-4h4 M13.5 6.5v-4h-4 M2.5 9.5v4h4 M13.5 9.5v4h-4"}></path></svg>
+      </button>
+      <button class="btn quiet danger" type="button" @click=${() => removePipeline(d)}>Delete</button>
+      <button class="btn" type="button" id="pl-run-now" ?disabled=${busy} @click=${() => runNow(d)}>Run now</button>
+      <button class="btn primary" type="button" id="pl-save" ?disabled=${busy || !changed} @click=${save}>${changed ? "Save" : "Saved"}</button>
     </header>
-    <p class="pl-trigger">${triggerWords(d.trigger)}</p>
     ${show.runNow ? runNowPanel(d) : nothing}
-    <div class="segmented pl-tabs" role="tablist">${tabs.map(([t, l]) => html`<button type="button" role="tab" aria-selected=${tab === t ? "true" : "false"} @click=${() => setTab(t)}>${l}</button>`)}</div>
-    ${tab === "steps" ? stepsTab() : tab === "history" ? historyTab() : runsTab(d)}`;
+    <div class="pl-body">${tab === "build" ? buildTab(d) : tab === "history" ? historyTab() : runsTab(d)}</div>
+  </div>`;
 }
 
 function draw() {

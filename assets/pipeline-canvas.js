@@ -1,7 +1,7 @@
 import { html, svg, nothing } from "/vendor/lit-html/lit-html.js";
 
 export const NODE_W = 220;
-export const NODE_H = 96;
+export const NODE_H = 124;
 const START_GAP = 280;
 const MIN_ZOOM = 0.25;
 const MAX_ZOOM = 2;
@@ -162,8 +162,9 @@ function fit(canvas, whole = false) {
   const all = Math.min(1, (cw - 32) / w, (ch - 32) / h);
   const k = whole ? Math.max(MIN_ZOOM, all) : all >= 0.75 ? all : 0.85;
   let x = (cw - w * k) / 2, y = Math.max(16, (ch - h * k) / 2);
-  const node = canvas.querySelector(".pl-node.waiting, .pl-node.now, .pl-node.selected") || canvas.querySelector(".pl-node");
-  if (!whole && w * k > cw && node) x = cw / 2 - (node.offsetLeft + node.offsetWidth / 2) * k;
+  const focus = canvas.querySelector(".pl-node.waiting, .pl-node.now, .pl-node.selected");
+  const node = focus || canvas.querySelector(".pl-node");
+  if (!whole && w * k > cw) x = focus ? cw / 2 - (focus.offsetLeft + focus.offsetWidth / 2) * k : 16;
   if (!whole && h * k > ch && node) y = ch / 2 - (node.offsetTop + node.offsetHeight / 2) * k;
   setView(canvas, { x, y, k });
 }
@@ -275,23 +276,54 @@ function minimap(d, lay, run) {
   </svg>`;
 }
 
+export function triggerWords(t) {
+  switch (t?.kind) {
+    case "schedule": return `On the schedule ${t.schedule || "(not set)"}${t.state ? `, my open tickets in ${t.state}` : ""}`;
+    case "linear":
+      if (t.states?.length) return `When a Linear ticket${t.assigned ? " of mine" : ""} moves to ${t.states.join(" or ")}`;
+      return "When a Linear ticket is assigned to me";
+    case "github_review": return "When someone asks me to review a GitHub pull request";
+    case "gitlab_reviewer": return `When a GitLab merge request on ${t.host || "a host you pick"} adds me as reviewer`;
+    default: return "By hand, from Run now";
+  }
+}
+
+const TRIGGER_TAGS = { manual: "by hand", schedule: "schedule", linear: "Linear", github_review: "GitHub", gitlab_reviewer: "GitLab" };
+
+// Every card says the same four things in the same places: what it is, who does it, what it does
+// (or how far the run got) and where.
+export function describe(s) {
+  switch (s.kind) {
+    case "agent": return { who: s.read_only ? "Agent · read only" : "Agent", does: s.instructions || "No instructions yet", tags: [machineWord(s), workspaceWord(s)] };
+    case "plan": return { who: "Agent · Dispatch", does: "Picks the machine, folder and branch, or asks you", tags: [s.machines?.length ? s.machines.join(" or ") : "any machine"] };
+    case "push": return { who: "Yardbell", does: "Pushes the branch and opens a draft pull or merge request", tags: ["secret check", "never forced"] };
+    case "linear": return { who: "Yardbell · Linear", does: s.action === "move" ? `Moves the ticket to ${s.state || "a state you pick"}` : "Drafts a comment for you to post", tags: [s.action === "move" ? "move" : "comment draft"] };
+    case "report": return { who: "Yardbell · Dispatch", does: "Writes what the run found and tells you", tags: ["phone notification"] };
+    case "wait": return { who: "You", does: s.message || "Waits until you continue it", tags: ["needs you"] };
+    default: return { who: "", does: "", tags: [] };
+  }
+}
+
+function body({ iconKind, name, mark, who, does, tags }) {
+  return html`<div class="pl-node-head">
+      <span class="pl-kind-icon">${icon(iconKind)}</span>
+      <b>${name}</b>
+      ${mark ? html`<span class="pl-mark" aria-hidden="true">${mark}</span>` : nothing}
+    </div>
+    <small class="pl-node-kind">${who}</small>
+    <p class="pl-node-text">${does}</p>
+    <div class="pl-node-tags">${tags.map((t) => html`<span>${t}</span>`)}</div>`;
+}
+
 function card(s, { run, editable, selected, problems, on, ox, oy }) {
   const n = nodeState(run, s);
   const problem = problems?.some((p) => p.startsWith(`${s.name}: `) || p === `${s.name} is never reached`);
-  const kind = s.kind === "agent" ? `Agent${s.read_only ? " · read only" : ""}` : s.kind === "linear" ? (s.action === "move" ? `Linear · move to ${s.state || "?"}` : "Linear · comment draft") : KINDS[s.kind];
-  const text = run ? n.note : s.kind === "agent" ? s.instructions : s.kind === "wait" ? s.message : "";
+  const d = describe(s);
   const cls = ["pl-node", `kind-${s.kind}`, n.cls, editable ? "editable" : "", selected === s.id ? "selected" : "", problem ? "problem" : ""].join(" ");
   return html`<div class=${cls} data-step=${s.id} style=${`left:${s.x + ox}px;top:${s.y + oy}px`}
       @click=${editable ? (e) => { e.stopPropagation(); on?.select?.(s.id); } : nothing}>
     ${editable ? html`<span class="pl-port in" aria-hidden="true"></span>` : nothing}
-    <div class="pl-node-head">
-      <span class="pl-kind-icon">${icon(s.kind)}</span>
-      <b>${s.name}</b>
-      ${run && n.mark ? html`<span class="pl-mark" aria-hidden="true">${n.mark}</span>` : nothing}
-    </div>
-    <small class="pl-node-kind">${kind}</small>
-    ${text ? html`<p class="pl-node-text">${text}</p>` : nothing}
-    ${editable && s.kind === "agent" ? html`<div class="pl-node-tags"><span>${machineWord(s)}</span><span>${workspaceWord(s)}</span></div>` : nothing}
+    ${body({ iconKind: s.kind, name: s.name, mark: run ? n.mark : "", who: d.who, does: run ? n.note : d.does, tags: d.tags })}
     ${editable ? OUTCOMES.map((o) => html`<span class=${`pl-port out ${o}`} data-outcome=${o} title=${`On ${LINE_WORDS[o]}`} style=${`top:${PORT_Y[o] * 100}%`}></span>`) : nothing}
   </div>`;
 }
@@ -327,8 +359,7 @@ export function canvas({ def: d, run = null, editable = false, selected = null, 
         <div class=${`pl-node pl-start ${editable && selected === "@start" ? "selected" : ""} ${editable ? "editable" : ""}`} data-step="@start"
             style=${`left:${lay.start.x + lay.ox}px;top:${lay.start.y + lay.oy}px`}
             @click=${editable ? (e) => { e.stopPropagation(); on?.select?.("@start"); } : nothing}>
-          <div class="pl-node-head"><span class="pl-kind-icon">${icon("start")}</span><b>Start when</b></div>
-          <small class="pl-node-kind">${trigger.kind === "manual" ? "By hand" : trigger.kind.replace("_", " ")}</small>
+          ${body({ iconKind: "start", name: "Start when", mark: "", who: "Trigger", does: triggerWords(trigger), tags: [TRIGGER_TAGS[trigger.kind] || "by hand", trigger.kind === "manual" ? "Run now" : "checked every 3 min"] })}
           ${editable ? html`<span class="pl-port out pass" data-outcome="start" title="The first step" style="top:50%"></span>` : nothing}
         </div>
         ${d.steps.map((s) => card(s, { run, editable, selected, problems, on, ox: lay.ox, oy: lay.oy }))}

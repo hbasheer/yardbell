@@ -1677,25 +1677,64 @@ class Suite:
         b.wait("document.querySelector('#pl-templates button')", "the templates")
         b.js("[...document.querySelectorAll('#pl-templates button')].find((x) => x.textContent.includes('Implement my Linear tickets')).click()")
         b.wait("new URLSearchParams(location.search).get('p') === 'implement-my-linear-tickets'", "the new pipeline opened")
-        b.wait("document.querySelector('.pl-title-name')?.textContent.trim() === 'Implement my Linear tickets'", "its name")
+        b.wait("document.querySelector('.pl-title-name')?.value === 'Implement my Linear tickets'", "its name")
         b.click("#pl-back")
         b.wait("document.querySelectorAll('.pl-card[data-id]').length === 2", "two pipeline cards")
 
-    def test_pipeline_steps_form_saves_and_shows_problems(self):
+    def test_builder_opens_full_screen_and_toggles(self):
         b = self.b
-        b.goto(self.url("/pipeline?p=review&tab=steps"))
-        form = '.pl-step-form[data-step="test"]'
-        b.wait(f"document.querySelector('{form}')", "the Test step's form")
+        b.js("localStorage.removeItem('yb-pipeline-full')")
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.querySelector('.pl-builder.full .pl-canvas.editable')", "the builder, full screen")
+        fills = "(() => { const r = document.querySelector('.pl-builder').getBoundingClientRect(); return Math.round(r.left) === 0 && Math.round(r.width) === innerWidth && Math.round(r.height) === innerHeight; })()"
+        if not b.js(fills):
+            raise Failure("the full-screen builder does not cover the window")
+        if b.js("document.querySelector('.pl-canvas').getBoundingClientRect().height") < b.js("innerHeight") * 0.7:
+            raise Failure("the canvas does not take the height of the window")
+        groups = b.js("[...document.querySelectorAll('.pl-library h3')].map((h) => h.textContent.trim()).join('|')")
+        if groups != "Start when|Agent|Yardbell|You":
+            raise Failure(f"the library groups read {groups}")
+        b.click("#pl-full")
+        b.wait("document.querySelector('.pl-builder:not(.full)') && document.querySelector('.side').getBoundingClientRect().width > 0", "the builder back in the page")
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-builder:not(.full) .pl-run-view')", "the Runs tab remembering the choice")
+        if b.js("document.querySelector('.pl-canvas').getBoundingClientRect().bottom") < b.js("innerHeight") - 40:
+            raise Failure("the Runs canvas does not reach the bottom of the window")
+        b.click("#pl-full")
+        b.wait("document.querySelector('.pl-builder.full .pl-run-view')", "the Runs tab full screen")
+        self.check_errors("the builder shell")
+
+    def test_builder_inspector_edits_and_saves(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.querySelector('.pl-node[data-step=\"test\"]')", "the Test card")
+        if b.js("document.querySelector('#pl-inspector')?.textContent.includes('Click a step')") is not True:
+            raise Failure("the inspector does not say what to do with nothing selected")
+        b.click('.pl-node[data-step="test"]')
+        b.wait("document.querySelector('#pl-inspector .pl-step-form[data-step=\"test\"]')", "the Test step in the inspector")
         version = self.api("GET", "/api/pipelines/review")["version"]
-        self.set_field(f"{form} input[name=name]", "Test on hp")
+        self.set_field('#pl-inspector input[name=name]', "Test on hp")
+        b.wait("document.querySelector('.pl-node[data-step=\"test\"] b').textContent === 'Test on hp'", "the card renamed as you type")
         b.click("#pl-save")
         b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {version + 1})()", "the new version saved")
-        b.wait(f"document.querySelector('.pl-version').textContent.includes('v{version + 1}')", "the version on the page")
-        self.set_field('.pl-step-form[data-step="report"] input[name=max_runs]', "0")
+        b.wait("document.getElementById('pl-save').disabled", "Save showing it is saved")
+        b.click('.pl-node[data-step="@start"]')
+        b.wait("document.querySelector('#pl-inspector select[name=trigger]')", "the trigger in the inspector")
+        self.check_errors("the inspector")
+
+    def test_builder_save_problems_ring_the_step(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.click('.pl-node[data-step="report"]')
+        b.wait("document.querySelector('#pl-inspector input[name=max_runs]')", "Report to me in the inspector")
+        self.set_field('#pl-inspector input[name=max_runs]', "0")
         b.click("#pl-save")
-        b.wait("document.getElementById('pl-problems')?.textContent.includes('Report to me: max_runs must be from 1 to 10')",
-               "the checks' problem shown with the form")
-        self.check_errors("the Steps tab")
+        b.wait("document.getElementById('pl-problems')?.textContent.includes('Report to me: max_runs must be from 1 to 10')", "the problem over the canvas")
+        if not b.js("document.querySelector('.pl-node[data-step=\"report\"]').classList.contains('problem')"):
+            raise Failure("the step the problem names is not ringed")
+        if "max_runs must be from 1 to 10" not in b.js("document.querySelector('#pl-inspector .pl-inspector-problems')?.textContent || ''"):
+            raise Failure("the inspector does not show the step's problem")
+        self.check_errors("save problems")
 
     def test_pipeline_run_graph_and_waiting_box(self):
         b = self.b
