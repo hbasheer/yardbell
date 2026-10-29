@@ -97,7 +97,7 @@ pub fn seen(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::engine::tests::{at, record};
+    use crate::pipeline::legacy_engine::tests::{at, record};
     use crate::snapshot::Activity;
     use crate::state::{MachineView, SessionView};
     use serde_json::json;

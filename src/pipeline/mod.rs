@@ -2,6 +2,7 @@ pub mod definition;
 pub mod engine;
 pub mod forge;
 pub mod legacy;
+pub mod legacy_engine;
 pub mod legacy_store;
 pub mod library;
 pub mod linear;
@@ -123,7 +124,7 @@ impl Pipeline {
             return;
         };
         let before = r.stage;
-        let (mut r, effects) = engine::step(r, seen, cfg, now);
+        let (mut r, effects) = legacy_engine::step(r, seen, cfg, now);
         let (step, notes) = first_step(effects);
         if step.is_some() {
             r.pending = step;
@@ -175,7 +176,7 @@ impl Pipeline {
             .get(id)
             .ok_or_else(|| format!("{id} is not in the pipeline"))?;
         allowed(&r)?;
-        let (mut r, effects) = engine::step(r, seen, &self.known_cfg(), Local::now());
+        let (mut r, effects) = legacy_engine::step(r, seen, &self.known_cfg(), Local::now());
         r.pending = first_step(effects).0;
         self.store.put(r.clone());
         Ok(r)
@@ -226,7 +227,7 @@ impl Pipeline {
         *self.cfg.lock().expect("pipeline cfg") = Some(cfg.clone());
         let view = world.view();
         let up = |m: &str| view.machines.iter().any(|x| x.name == m && x.up);
-        for id in engine::admit(&self.store.all(), cfg, &up) {
+        for id in legacy_engine::admit(&self.store.all(), cfg, &up) {
             if !self.busy(&id) {
                 self.apply(world.as_ref(), &id, Seen::Admitted, cfg, now);
             }

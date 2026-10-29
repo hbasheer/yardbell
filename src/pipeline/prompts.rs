@@ -328,8 +328,8 @@ pub fn parse_summary(reply: &str) -> Result<(String, String), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::engine::tests::{cfg, record};
     use crate::pipeline::legacy::Stage;
+    use crate::pipeline::legacy_engine::tests::{cfg, record};
 
     fn ticket() -> TicketText {
         TicketText {

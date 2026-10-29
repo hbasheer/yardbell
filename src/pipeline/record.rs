@@ -81,6 +81,7 @@ pub struct StepState {
     pub details: Vec<String>,
     pub started: String,
     pub ended: String,
+    pub answer: String,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -103,6 +104,7 @@ impl RunState {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum WaitKind {
+    Asking,
     NeedsYou,
     Stopped,
     RunLimit,
@@ -120,7 +122,7 @@ impl WaitKind {
     pub fn answerable(&self) -> bool {
         matches!(
             self,
-            WaitKind::NeedsYou | WaitKind::Questions | WaitKind::NoResult
+            WaitKind::NeedsYou | WaitKind::Asking | WaitKind::Questions | WaitKind::NoResult
         )
     }
 }
@@ -182,7 +184,8 @@ pub struct Run {
     pub retried: bool,
     pub tries: u32,
     pub next_try: Option<String>,
-    pub waiting_machine: Option<String>,
+    pub slot: Option<String>,
+    pub offline_since: Option<String>,
     pub questions: Vec<Question>,
     pub pull: Option<PullRef>,
     pub notes: Vec<String>,

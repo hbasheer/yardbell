@@ -1,128 +1,16 @@
-use super::legacy::{
-    Effect, Entry, Finding, ParkKind, Parked, Question, Record, Seen, Stage, Triage,
-};
-use super::prompts;
-use crate::config::Pipeline as Cfg;
-use crate::dispatch::GroupOutcome;
+use super::definition::{MachineChoice, Outcome, Step, StepKind, END, WAIT};
+use super::record::{Effect, Entry, Question, Run, RunState, Seen, WaitKind, Waiting};
+use crate::config::Pipelines as Cfg;
 use chrono::{DateTime, Duration, Local};
 use std::collections::HashMap;
 
-pub const TRIAGE_AT_ONCE: usize = 2;
 const OFFLINE_MINUTES: i64 = 30;
 const RETRY_MINUTES: [i64; 4] = [1, 2, 4, 8];
-const FAILED_LINES: usize = 10;
-const SCREEN_LINES: usize = 12;
-
-fn to(mut r: Record, stage: Stage, note: &str, now: &DateTime<Local>) -> Record {
-    r.stage = stage;
-    r.stage_since = now.to_rfc3339();
-    r.retried = false;
-    r.history.push(Entry {
-        stage,
-        at: now.to_rfc3339(),
-        note: note.to_string(),
-    });
-    r
-}
-
-fn open(findings: &[Finding]) -> Vec<Finding> {
-    findings
-        .iter()
-        .filter(|f| matches!(f.severity.as_str(), "high" | "medium"))
-        .cloned()
-        .collect()
-}
-
-fn report(outcome: &GroupOutcome) -> String {
-    std::iter::once(outcome.summary.clone())
-        .chain(outcome.details.iter().map(|d| format!("- {d}")))
-        .filter(|l| !l.trim().is_empty())
-        .collect::<Vec<_>>()
-        .join("\n")
-}
-
-fn after_pull(cfg: &Cfg) -> Effect {
-    if cfg.linear_state.is_empty() {
-        Effect::Summarise
-    } else {
-        Effect::MoveLinear
-    }
-}
-
-fn done_words(r: &Record) -> String {
-    match &r.pull {
-        Some(p) => format!("{} is done: draft #{} is open", r.id, p.number),
-        None => format!("{} is done", r.id),
-    }
-}
+const SCREEN_LINES: usize = 10;
 
 fn tail(text: &str, lines: usize) -> String {
     let all: Vec<&str> = text.trim_end().lines().collect();
     all[all.len().saturating_sub(lines)..].join("\n")
-}
-
-fn park(
-    mut r: Record,
-    kind: ParkKind,
-    reason: String,
-    screen: String,
-    now: &DateTime<Local>,
-) -> (Record, Vec<Effect>) {
-    let words = if kind.answerable() {
-        format!("{} needs your answer", r.id)
-    } else {
-        format!("{} stopped: {reason}", r.id)
-    };
-    r.parked = Some(Parked {
-        kind,
-        reason: reason.clone(),
-        from: r.stage,
-        screen: tail(&screen, SCREEN_LINES),
-    });
-    (
-        to(r, Stage::Parked, &reason, now),
-        vec![Effect::Notify(words)],
-    )
-}
-
-fn fail(mut r: Record, text: &str, now: &DateTime<Local>) -> (Record, Vec<Effect>) {
-    r.failed_at = Some(r.stage);
-    r.failed = tail(text, FAILED_LINES);
-    let words = format!("{} failed in {}", r.id, r.stage.word());
-    (to(r, Stage::Failed, "", now), vec![Effect::Notify(words)])
-}
-
-// A stage that ended without a usable result runs once more before the ticket fails.
-fn again(mut r: Record, text: &str, cfg: &Cfg, now: &DateTime<Local>) -> (Record, Vec<Effect>) {
-    if r.retried {
-        return fail(r, text, now);
-    }
-    r.retried = true;
-    let effects = effect_for(&r, r.stage, cfg);
-    (r, effects)
-}
-
-fn effect_for(r: &Record, stage: Stage, cfg: &Cfg) -> Vec<Effect> {
-    let done = |step: &str| r.finished.iter().any(|f| f == step);
-    match stage {
-        Stage::Triage => vec![Effect::Triage],
-        Stage::Implement => vec![Effect::Implement],
-        Stage::Review => vec![Effect::Review],
-        Stage::Fix => vec![Effect::Send(r.sent.clone())],
-        Stage::Qa => vec![Effect::MoveToTest],
-        Stage::Finish if !done("push") => vec![Effect::Push],
-        Stage::Finish if !done("pull") => vec![Effect::OpenPull],
-        Stage::Finish if !done("linear") => vec![after_pull(cfg)],
-        Stage::Finish => vec![Effect::Summarise],
-        _ => vec![],
-    }
-}
-
-fn asks(o: &GroupOutcome) -> bool {
-    o.summary.trim_end().ends_with('?')
-        || o.details
-            .last()
-            .is_some_and(|d| d.trim_end().ends_with('?'))
 }
 
 fn elapsed(since: &str, now: &DateTime<Local>) -> Option<i64> {
@@ -138,342 +26,388 @@ fn duration(minutes: i64) -> String {
     }
 }
 
-fn send(
-    mut r: Record,
-    fix_for: Stage,
-    text: String,
-    note: &str,
-    now: &DateTime<Local>,
-) -> (Record, Vec<Effect>) {
-    r.fix_for = Some(fix_for);
-    r.sent = text.clone();
-    (to(r, Stage::Fix, note, now), vec![Effect::Send(text)])
+fn current(run: &Run) -> Option<Step> {
+    run.def().step(&run.step).cloned()
 }
 
-fn answer(mut r: Record, text: String, now: &DateTime<Local>) -> (Record, Vec<Effect>) {
-    let Some(p) = r.parked.clone().filter(|p| p.kind.answerable()) else {
-        return (r, vec![]);
+fn name_of(run: &Run, id: &str) -> String {
+    run.def()
+        .step(id)
+        .map_or_else(|| id.to_string(), |s| s.name.clone())
+}
+
+fn wait(
+    mut run: Run,
+    kind: WaitKind,
+    step: &str,
+    reason: String,
+    screen: &str,
+) -> (Run, Vec<Effect>) {
+    let text = if kind.answerable() {
+        format!("{} needs your answer", run.subject.label())
+    } else {
+        format!("{} stopped: {reason}", run.subject.label())
     };
-    r.parked = None;
-    match p.kind {
-        ParkKind::Questions => {
-            for q in r.questions.iter_mut().filter(|q| q.answer.is_empty()) {
+    run.state = RunState::Waiting;
+    run.step = step.to_string();
+    run.slot = None;
+    run.waiting = Some(Waiting {
+        kind,
+        step: step.to_string(),
+        reason,
+        screen: tail(screen, SCREEN_LINES),
+    });
+    (run, vec![Effect::Notify { text }])
+}
+
+fn machine_for(run: &Run, step: &Step) -> String {
+    match &step.kind {
+        StepKind::Agent { machine, .. } => match machine {
+            MachineChoice::Name(m) => m.clone(),
+            MachineChoice::SameAs(other) => run
+                .steps
+                .get(other)
+                .map(|s| s.machine.clone())
+                .unwrap_or_default(),
+            MachineChoice::Pick(_) => run.place.machine.clone(),
+        },
+        _ => String::new(),
+    }
+}
+
+// Enters a step: an agent step waits for a slot on its machine, a built-in step runs at once.
+fn enter(mut run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Run, Vec<Effect>) {
+    let Some(step) = run.def().step(id).cloned() else {
+        let reason = format!("the step {id} does not exist in this version");
+        return wait(run, WaitKind::Stopped, id, reason, "");
+    };
+    let runs = run.steps.get(id).map_or(0, |s| s.runs);
+    if runs >= step.max_runs && !past_limit {
+        let times = if runs == 1 { "time" } else { "times" };
+        let reason = format!("{} ran {runs} {times}", step.name);
+        return wait(run, WaitKind::RunLimit, id, reason, "");
+    }
+    run.step = id.to_string();
+    run.step_since = now.to_rfc3339();
+    run.retried = false;
+    run.waiting = None;
+    run.slot = None;
+    run.history.push(Entry {
+        step: id.to_string(),
+        outcome: None,
+        at: now.to_rfc3339(),
+        note: String::new(),
+    });
+    let effect = match &step.kind {
+        StepKind::Agent { .. } => {
+            run.state = RunState::Queued;
+            run.slot = Some(machine_for(&run, &step));
+            return (run, vec![]);
+        }
+        StepKind::Wait { message } => {
+            let reason = if message.trim().is_empty() {
+                format!("{} waits for you to continue", step.name)
+            } else {
+                message.clone()
+            };
+            return wait(run, WaitKind::WaitStep, id, reason, "");
+        }
+        StepKind::Plan { .. } => Effect::Plan { step: id.into() },
+        StepKind::Push => Effect::Push { step: id.into() },
+        StepKind::Linear { .. } => Effect::Linear { step: id.into() },
+        StepKind::Report => Effect::Report { step: id.into() },
+    };
+    let st = run.state_of(id);
+    st.runs += 1;
+    st.started = now.to_rfc3339();
+    run.state = RunState::Running;
+    (run, vec![effect])
+}
+
+// Follows the line for an outcome from the current step.
+fn follow(mut run: Run, outcome: Outcome, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
+    let from = run.step.clone();
+    let Some(step) = current(&run) else {
+        let reason = format!("{from} does not exist");
+        return wait(run, WaitKind::Stopped, &from, reason, "");
+    };
+    let st = run.state_of(&from);
+    st.outcome = Some(outcome);
+    st.ended = now.to_rfc3339();
+    if let Some(last) = run.history.iter_mut().rev().find(|e| e.step == from) {
+        last.outcome = Some(outcome);
+    }
+    let report = run
+        .steps
+        .get(&from)
+        .map(|s| s.report.clone())
+        .unwrap_or_default();
+    match step.next.of(outcome) {
+        END => {
+            run.state = RunState::Done;
+            run.step = String::new();
+            run.slot = None;
+            run.waiting = None;
+            (run, vec![])
+        }
+        WAIT if outcome == Outcome::NeedsYou => {
+            let reason = format!("{} needs you", step.name);
+            wait(run, WaitKind::NeedsYou, &from, reason, &report)
+        }
+        WAIT => {
+            let reason = format!("{} {}", step.name, outcome.word());
+            wait(run, WaitKind::Stopped, &from, reason, &report)
+        }
+        to => {
+            let to = to.to_string();
+            enter(run, &to, now, false)
+        }
+    }
+}
+
+// A step that ended without a usable result runs once more before the run waits.
+fn again(mut run: Run, screen: &str) -> (Run, Vec<Effect>) {
+    let id = run.step.clone();
+    if run.retried {
+        let reason = format!("{} ended without a result", name_of(&run, &id));
+        return wait(run, WaitKind::NoResult, &id, reason, screen);
+    }
+    run.retried = true;
+    let effect = match current(&run).map(|s| s.kind) {
+        Some(StepKind::Plan { .. }) => Effect::Plan { step: id },
+        _ => Effect::Agent { step: id },
+    };
+    (run, vec![effect])
+}
+
+fn tick(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
+    let id = run.step.clone();
+    if run.state == RunState::Queued {
+        let offline = run
+            .offline_since
+            .as_deref()
+            .and_then(|since| elapsed(since, now))
+            .is_some_and(|m| m >= OFFLINE_MINUTES);
+        if offline {
+            let machine = run.slot.clone().unwrap_or_default();
+            return wait(
+                run,
+                WaitKind::Offline,
+                &id,
+                format!("{machine} is offline"),
+                "",
+            );
+        }
+        return (run, vec![]);
+    }
+    if run.state != RunState::Running {
+        return (run, vec![]);
+    }
+    if let Some(at) = run.next_try.clone() {
+        if elapsed(&at, now).is_some_and(|m| m >= 0) {
+            run.next_try = None;
+            return (run, vec![Effect::Plan { step: id }]);
+        }
+    }
+    let Some(step) = current(&run) else {
+        return (run, vec![]);
+    };
+    if !matches!(step.kind, StepKind::Agent { .. } | StepKind::Plan { .. }) {
+        return (run, vec![]);
+    }
+    let limit = step.minutes.unwrap_or(cfg.minutes) as i64;
+    match elapsed(&run.step_since, now).filter(|m| *m > limit) {
+        Some(m) => {
+            let reason = format!("{} has run for {}", step.name, duration(m));
+            wait(run, WaitKind::TimeLimit, &id, reason, "")
+        }
+        None => (run, vec![]),
+    }
+}
+
+fn answer(mut run: Run, text: String, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
+    let Some(w) = run.waiting.clone().filter(|w| w.kind.answerable()) else {
+        return (run, vec![]);
+    };
+    match w.kind {
+        WaitKind::Questions => {
+            for q in run.questions.iter_mut().filter(|q| q.answer.is_empty()) {
                 q.answer = text.clone();
                 q.at = now.to_rfc3339();
             }
-            (to(r, Stage::Triage, "answered", now), vec![Effect::Triage])
+            enter(run, &w.step, now, true)
         }
-        ParkKind::Asked => (to(r, p.from, "answered", now), vec![Effect::Answer(text)]),
-        ParkKind::Findings => {
-            let what = format!(
-                "The findings still open:\n{}",
-                r.findings
-                    .iter()
-                    .map(|f| format!("- {f}"))
-                    .collect::<Vec<_>>()
-                    .join("\n")
-            );
-            let sent = prompts::fix_with(&text, &what);
-            send(r, Stage::Review, sent, "answered", now)
+        WaitKind::Asking => {
+            run.waiting = None;
+            run.state = RunState::Running;
+            let machine = run.steps.get(&w.step).map(|s| s.machine.clone());
+            run.slot = machine;
+            (run, vec![Effect::Answer { step: w.step, text }])
         }
         _ => {
-            let what = format!("QA's report:\n{}", r.qa_report);
-            let sent = prompts::fix_with(&text, &what);
-            send(r, Stage::Qa, sent, "answered", now)
+            run.state_of(&w.step).answer = text;
+            enter(run, &w.step, now, true)
         }
     }
 }
 
-fn retry(mut r: Record, cfg: &Cfg, now: &DateTime<Local>) -> (Record, Vec<Effect>) {
-    if r.stage == Stage::Failed {
-        let Some(stage) = r.failed_at.take() else {
-            return (r, vec![]);
-        };
-        r.failed.clear();
-        let effects = effect_for(&r, stage, cfg);
-        return (to(r, stage, "retried", now), effects);
-    }
-    let Some(p) = r.parked.take() else {
-        return (r, vec![]);
-    };
-    if p.kind == ParkKind::Offline {
-        r.machine.clear();
-        r.folder.clear();
-        r.branch.clear();
-        r.waiting = None;
-        return (
-            to(r, Stage::Queued, "retried: triage picks again", now),
-            vec![],
-        );
-    }
-    let session_runs = matches!(p.kind, ParkKind::Asked | ParkKind::TooLong)
-        && matches!(
-            p.from,
-            Stage::Implement | Stage::Review | Stage::Fix | Stage::Qa
-        );
-    let effects = if session_runs {
-        vec![]
-    } else {
-        effect_for(&r, p.from, cfg)
-    };
-    (to(r, p.from, "retried", now), effects)
+pub fn start(run: Run, now: DateTime<Local>) -> (Run, Vec<Effect>) {
+    let first = run.def().start.clone();
+    enter(run, &first, &now, false)
 }
 
-fn tick(mut r: Record, cfg: &Cfg, now: &DateTime<Local>) -> (Record, Vec<Effect>) {
-    if r.stage == Stage::Triage {
-        if let Some(at) = &r.next_try {
-            if elapsed(at, now).is_some_and(|m| m >= 0) {
-                r.next_try = None;
-                return (r, vec![Effect::Triage]);
-            }
-        }
-    }
-    if r.stage == Stage::Queued {
-        if let Some(since) = &r.waiting {
-            if elapsed(since, now).is_some_and(|m| m >= OFFLINE_MINUTES) {
-                let reason = format!("{} is offline", r.machine);
-                return park(r, ParkKind::Offline, reason, String::new(), now);
-            }
-        }
-        return (r, vec![]);
-    }
-    if matches!(
-        r.stage,
-        Stage::Triage | Stage::Implement | Stage::Review | Stage::Fix | Stage::Qa
-    ) {
-        if let Some(m) = elapsed(&r.stage_since, now).filter(|m| *m > cfg.stage_minutes as i64) {
-            let reason = format!("{} has run for {}", r.stage.word(), duration(m));
-            return park(r, ParkKind::TooLong, reason, String::new(), now);
-        }
-    }
-    (r, vec![])
-}
-
-pub fn step(mut r: Record, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Record, Vec<Effect>) {
+pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, Vec<Effect>) {
     let now = &now;
-    let working = matches!(
-        r.stage,
-        Stage::Implement | Stage::Review | Stage::Fix | Stage::Qa
-    );
-    match (r.stage, seen) {
-        (Stage::Done | Stage::Dropped, _) => (r, vec![]),
-        (_, Seen::Drop) => (to(r, Stage::Dropped, "", now), vec![Effect::StopSessions]),
-        (_, Seen::Retry) => retry(r, cfg, now),
-        (Stage::Parked, Seen::Answer(text)) => answer(r, text, now),
-        (Stage::Parked | Stage::Failed, _) => (r, vec![]),
-        (_, Seen::Tick) => tick(r, cfg, now),
-        (_, Seen::Closed(_)) => {
-            let reason = format!("{} was closed in Linear", r.id);
-            park(r, ParkKind::Closed, reason, String::new(), now)
+    if !run.state.active() {
+        return (run, vec![]);
+    }
+    let waiting = run.state == RunState::Waiting;
+    let id = run.step.clone();
+    match seen {
+        Seen::Drop => {
+            run.state = RunState::Dropped;
+            run.slot = None;
+            (run, vec![Effect::StopSessions])
         }
-        (_, Seen::Refused(reason)) => park(r, ParkKind::Refused, reason, String::new(), now),
-        (Stage::Queued, Seen::Offline) if !r.machine.is_empty() => {
-            r.waiting.get_or_insert_with(|| now.to_rfc3339());
-            (r, vec![])
+        Seen::Retry if waiting => {
+            let at = run.waiting.take().map_or(id, |w| w.step);
+            enter(run, &at, now, true)
         }
-        (Stage::Queued, Seen::Admitted) if r.machine.is_empty() => {
-            (to(r, Stage::Triage, "", now), vec![Effect::Triage])
+        Seen::Continue(outcome) if waiting => {
+            if let Some(w) = run.waiting.take() {
+                run.step = w.step;
+            }
+            follow(run, outcome, now)
         }
-        (Stage::Queued, Seen::Admitted) => {
-            r.waiting = None;
-            let note = format!("on {}", r.machine);
-            (to(r, Stage::Implement, &note, now), vec![Effect::Implement])
+        Seen::Answer(text) if waiting => answer(run, text, now),
+        _ if waiting => (run, vec![]),
+        Seen::Tick => tick(run, cfg, now),
+        Seen::Offline if run.state == RunState::Queued => {
+            run.offline_since.get_or_insert_with(|| now.to_rfc3339());
+            (run, vec![])
         }
-        (Stage::Triage, Seen::Triaged(Ok(t))) if !t.questions.is_empty() => {
+        Seen::Admitted if run.state == RunState::Queued => {
+            run.offline_since = None;
+            run.state = RunState::Running;
+            let machine = run.slot.clone().unwrap_or_default();
+            let st = run.state_of(&id);
+            st.runs += 1;
+            st.started = now.to_rfc3339();
+            st.machine = machine;
+            (run, vec![Effect::Agent { step: id }])
+        }
+        Seen::Closed(_) => {
+            let reason = format!("{} was closed in Linear", run.subject.label());
+            wait(run, WaitKind::Closed, &id, reason, "")
+        }
+        Seen::Refused(reason) => wait(run, WaitKind::Refused, &id, reason, ""),
+        Seen::Planned(Ok(plan)) if !plan.questions.is_empty() => {
             let at = now.to_rfc3339();
-            r.questions.extend(t.questions.iter().map(|q| Question {
-                asked: q.clone(),
-                answer: String::new(),
-                at: at.clone(),
-            }));
-            let reason = format!(
-                "Triage has {} {}",
-                t.questions.len(),
-                if t.questions.len() == 1 {
-                    "question"
-                } else {
-                    "questions"
-                }
-            );
-            park(r, ParkKind::Questions, reason, String::new(), now)
+            run.questions
+                .extend(plan.questions.iter().map(|q| Question {
+                    asked: q.clone(),
+                    answer: String::new(),
+                    at: at.clone(),
+                }));
+            let n = plan.questions.len();
+            let word = if n == 1 { "question" } else { "questions" };
+            let reason = format!("{} has {n} {word}", name_of(&run, &id));
+            wait(run, WaitKind::Questions, &id, reason, "")
         }
-        (Stage::Triage, Seen::Triaged(Ok(t))) => {
-            let Triage {
-                machine,
-                folder,
-                branch,
-                reason,
-                ..
-            } = t;
-            r.machine = machine;
-            r.folder = folder;
-            r.branch = branch;
-            r.reason = reason.clone();
-            r.tries = 0;
-            (to(r, Stage::Queued, &reason, now), vec![])
+        Seen::Planned(Ok(plan)) => {
+            run.place.machine = plan.machine;
+            run.place.folder = plan.folder;
+            run.place.branch = plan.branch;
+            run.tries = 0;
+            run.state_of(&id).report = plan.reason;
+            follow(run, Outcome::Pass, now)
         }
-        (Stage::Triage, Seen::Triaged(Err(e))) if e.starts_with("Linear") => {
-            r.tries += 1;
-            let wait = RETRY_MINUTES[(r.tries as usize - 1).min(RETRY_MINUTES.len() - 1)];
-            r.next_try = Some((*now + Duration::minutes(wait)).to_rfc3339());
-            (r, vec![])
+        Seen::Planned(Err(e)) if e.starts_with("Linear") => {
+            run.tries += 1;
+            let at = (run.tries as usize - 1).min(RETRY_MINUTES.len() - 1);
+            run.next_try = Some((*now + Duration::minutes(RETRY_MINUTES[at])).to_rfc3339());
+            (run, vec![])
         }
-        (Stage::Triage, Seen::Triaged(Err(e))) => again(r, &e, cfg, now),
-        (stage, Seen::Started(Ok(name))) => {
-            match stage {
-                Stage::Implement => r.sessions.implement = name,
-                Stage::Review => r.sessions.review = name,
-                Stage::Qa => r.sessions.qa = name,
-                _ => {}
-            }
-            (r, vec![])
+        Seen::Planned(Err(e)) => again(run, &e),
+        Seen::Started {
+            step,
+            result: Ok((session, machine, path)),
+        } => {
+            let st = run.state_of(&step);
+            st.session = session;
+            st.machine = machine;
+            st.path = path;
+            (run, vec![])
         }
-        (_, Seen::Started(Err(e))) if working => again(r, &e, cfg, now),
-        (_, Seen::NoResult(screen)) if working => again(r, &screen, cfg, now),
-        (_, Seen::Sent(Err(e))) if working => again(r, &e, cfg, now),
-        (_, Seen::Waiting(screen)) if working => park(
-            r,
-            ParkKind::Asked,
+        Seen::Started { result: Err(e), .. } => again(run, &e),
+        Seen::NoResult { screen, .. } => again(run, &screen),
+        Seen::Sent(Err(e)) => again(run, &e),
+        Seen::Waiting { step, screen } => wait(
+            run,
+            WaitKind::Asking,
+            &step,
             "The agent is asking something".into(),
-            screen,
-            now,
+            &screen,
         ),
-        (Stage::Implement | Stage::Fix | Stage::Qa, Seen::Idle { outcome, verdict })
-            if outcome.status == "failed" && verdict.is_none() =>
-        {
-            if asks(&outcome) {
-                return park(
-                    r,
-                    ParkKind::Asked,
-                    "The agent is asking something".into(),
-                    report(&outcome),
-                    now,
-                );
-            }
-            again(r, &report(&outcome), cfg, now)
+        Seen::Ended {
+            step,
+            outcome,
+            report,
+            details,
+        } => {
+            let st = run.state_of(&step);
+            st.report = report;
+            st.details = details;
+            run.step = step;
+            follow(run, outcome, now)
         }
-        (Stage::Implement, Seen::Idle { outcome, .. }) => {
-            r.outcome = outcome.summary.clone();
-            (to(r, Stage::Review, "", now), vec![Effect::Review])
-        }
-        (Stage::Fix, Seen::Idle { outcome, .. }) => {
-            r.outcome = outcome.summary.clone();
-            if r.fix_for == Some(Stage::Qa) {
-                (to(r, Stage::Qa, "", now), vec![Effect::MoveToTest])
-            } else {
-                (to(r, Stage::Review, "", now), vec![Effect::Review])
-            }
-        }
-        (Stage::Review, Seen::Reviewed { findings }) => {
-            let open = open(&findings);
-            if open.is_empty() {
-                return (to(r, Stage::Qa, "", now), vec![Effect::MoveToTest]);
-            }
-            r.findings = open
-                .iter()
-                .map(|f| format!("{} {}", f.place, f.text).trim().to_string())
-                .collect();
-            if r.round >= cfg.review_rounds {
-                let reason = format!(
-                    "Review still found {} after {} {}",
-                    count(open.len(), "problem", "problems"),
-                    r.round,
-                    if r.round == 1 { "round" } else { "rounds" }
-                );
-                return park(r, ParkKind::Findings, reason, String::new(), now);
-            }
-            r.round += 1;
-            let note = format!("round {}", r.round);
-            let text = prompts::fix_findings(&open);
-            send(r, Stage::Review, text, &note, now)
-        }
-        (Stage::Qa, Seen::Idle { outcome, verdict }) => {
-            if verdict == Some(true) {
-                return (to(r, Stage::Finish, "", now), vec![Effect::Push]);
-            }
-            r.qa_report = report(&outcome);
-            if r.qa_tries >= cfg.qa_retries {
-                let reason = format!(
-                    "QA still fails after {}",
-                    count(r.qa_tries as usize, "fix", "fixes")
-                );
-                return park(r, ParkKind::QaFailed, reason, String::new(), now);
-            }
-            r.qa_tries += 1;
-            let text = prompts::fix_qa(&r.qa_report);
-            send(r, Stage::Qa, text, "after QA", now)
-        }
-        (Stage::Finish, Seen::Pushed(Ok(()))) => {
-            r.finished.push("push".into());
-            (r, vec![Effect::OpenPull])
-        }
-        (Stage::Finish, Seen::Pushed(Err(e))) => park(r, ParkKind::Push, e, String::new(), now),
-        (Stage::Finish, Seen::Opened(opened)) => {
+        Seen::Pushed(Ok(())) => (run, vec![Effect::OpenPull { step: id }]),
+        Seen::Pushed(Err(e)) => wait(run, WaitKind::Push, &id, e, ""),
+        Seen::Opened(opened) => {
             match opened {
-                Ok(pull) => {
-                    r.pull = Some(pull);
-                    r.finished.push("pull".into());
-                }
-                Err(e) => r.notes.push(format!("The draft was not opened: {e}")),
+                Ok(pull) => run.pull = Some(pull),
+                Err(e) => run.notes.push(format!("The draft was not opened: {e}")),
             }
-            (r, vec![after_pull(cfg)])
+            follow(run, Outcome::Pass, now)
         }
-        (Stage::Finish, Seen::Moved(moved)) => {
-            match moved {
-                Ok(()) => r.finished.push("linear".into()),
-                Err(e) => r
-                    .notes
-                    .push(format!("The ticket was not moved in Linear: {e}")),
-            }
-            (r, vec![Effect::Summarise])
+        Seen::Linear(Ok(())) => follow(run, Outcome::Pass, now),
+        Seen::Linear(Err(e)) => {
+            run.notes.push(format!("Linear: {e}"));
+            follow(run, Outcome::Fail, now)
         }
-        (Stage::Finish, Seen::Summarised(written)) => {
+        Seen::Reported(written) => {
             match written {
-                Ok((summary, comment)) => {
-                    r.summary = summary;
-                    r.linear_comment = comment;
-                }
-                Err(e) => {
-                    r.notes.push(format!("No summary was written: {e}"));
-                    r.summary = r.notes.join("\n");
-                }
+                Ok(text) => run.report = text,
+                Err(e) => run.notes.push(format!("No report was written: {e}")),
             }
-            let words = done_words(&r);
-            (to(r, Stage::Done, "", now), vec![Effect::Notify(words)])
+            follow(run, Outcome::Pass, now)
         }
-        (_, _) => (r, vec![]),
+        _ => (run, vec![]),
     }
 }
 
-fn count(n: usize, one: &str, many: &str) -> String {
-    format!("{n} {}", if n == 1 { one } else { many })
-}
-
-// Which queued tickets may move on now, oldest first. Triage needs no machine, so only a few
-// run at once; a ticket with a machine waits for a slot on it.
-pub fn admit(records: &[Record], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<String> {
-    let since = |r: &Record| DateTime::parse_from_rfc3339(&r.stage_since).ok();
-    let mut queued: Vec<&Record> = records
+// Which queued runs may start their agent step now, oldest first, as slots on their machines
+// allow.
+pub fn admit(runs: &[Run], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<String> {
+    let since = |r: &Run| DateTime::parse_from_rfc3339(&r.step_since).ok();
+    let mut busy: HashMap<&str, u32> = HashMap::new();
+    for r in runs.iter().filter(|r| r.state == RunState::Running) {
+        if let Some(m) = &r.slot {
+            *busy.entry(m.as_str()).or_default() += 1;
+        }
+    }
+    let mut queued: Vec<&Run> = runs
         .iter()
-        .filter(|r| r.stage == Stage::Queued)
+        .filter(|r| r.state == RunState::Queued)
         .collect();
     queued.sort_by_key(|r| since(r));
-    let mut triaging = records.iter().filter(|r| r.stage == Stage::Triage).count();
-    let mut busy: HashMap<&str, u32> = HashMap::new();
-    for r in records.iter().filter(|r| r.stage.on_machine()) {
-        *busy.entry(r.machine.as_str()).or_default() += 1;
-    }
     let mut out = Vec::new();
     for r in queued {
-        if r.machine.is_empty() {
-            if triaging < TRIAGE_AT_ONCE {
-                triaging += 1;
-                out.push(r.id.clone());
-            }
+        let Some(m) = r.slot.as_deref() else {
             continue;
-        }
-        let used = busy.entry(r.machine.as_str()).or_default();
-        if up(&r.machine) && *used < cfg.per_machine {
+        };
+        let used = busy.entry(m).or_default();
+        if up(m) && *used < cfg.per_machine {
             *used += 1;
             out.push(r.id.clone());
         }
@@ -484,653 +418,470 @@ pub fn admit(records: &[Record], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<St
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::dispatch::GroupOutcome;
-    use crate::pipeline::legacy::{ParkKind, Parked, PullRef, Question};
+    use crate::pipeline::record::{Plan, PullRef, RunState, Subject, TicketRef, WaitKind};
     use chrono::TimeZone;
 
     pub(crate) fn cfg() -> Cfg {
-        Cfg {
-            machines: vec!["hp".into(), "mini".into()],
-            test_machine: "devbox".into(),
-            per_machine: 2,
-            review_rounds: 2,
-            qa_retries: 1,
-            stage_minutes: 120,
-            linear_state: "In Review".into(),
-            qa_instructions: String::new(),
-        }
+        Cfg::default()
     }
 
     pub(crate) fn at(minute: u32) -> DateTime<Local> {
         Local.with_ymd_and_hms(2026, 10, 29, 9, minute, 0).unwrap()
     }
 
-    pub(crate) fn record(stage: Stage) -> Record {
-        Record {
-            id: "COM-1".into(),
-            title: "Fix the login".into(),
-            stage,
-            stage_since: at(0).to_rfc3339(),
-            ..Record::default()
+    pub(crate) fn run_of(template: &str) -> Run {
+        let def = crate::pipeline::templates::all()
+            .into_iter()
+            .find(|d| d.name == template)
+            .unwrap();
+        Run {
+            id: "r1".into(),
+            pipeline: def.id.clone(),
+            pipeline_name: def.name.clone(),
+            definition: Some(def),
+            subject: Subject {
+                ticket: Some(TicketRef {
+                    linear_id: "u-1".into(),
+                    id: "COM-1".into(),
+                    title: "Fix the login".into(),
+                    url: "https://linear.app/acme/issue/COM-1".into(),
+                }),
+                pr: None,
+            },
+            step_since: at(0).to_rfc3339(),
+            ..Run::default()
         }
     }
 
-    pub(crate) fn outcome(status: &'static str) -> GroupOutcome {
-        GroupOutcome {
-            status,
-            summary: "Made the change and ran the tests.".into(),
-            branch: "com-1-fix-the-login".into(),
-            details: vec!["12 passed".into()],
-        }
-    }
-
-    fn finding(severity: &str, place: &str, text: &str) -> Finding {
-        Finding {
-            severity: severity.into(),
-            place: place.into(),
-            text: text.into(),
-        }
-    }
-
-    fn triage() -> Triage {
-        Triage {
+    fn plan() -> Plan {
+        Plan {
             machine: "hp".into(),
             folder: "acme/app".into(),
             branch: "com-1-fix-the-login".into(),
-            reason: "hp has acme/app and the most room".into(),
+            reason: "hp has acme/app".into(),
             questions: vec![],
         }
     }
 
-    #[test]
-    fn a_ticket_walks_every_stage_to_done() {
-        let cfg = cfg();
-        let mut r = record(Stage::Queued);
-        let steps: Vec<(Seen, Stage, Vec<Effect>)> = vec![
-            (Seen::Admitted, Stage::Triage, vec![Effect::Triage]),
-            (Seen::Triaged(Ok(triage())), Stage::Queued, vec![]),
-            (Seen::Admitted, Stage::Implement, vec![Effect::Implement]),
-            (
-                Seen::Started(Ok("hp-app-com-1".into())),
-                Stage::Implement,
-                vec![],
-            ),
-            (
-                Seen::Idle {
-                    outcome: outcome("done"),
-                    verdict: None,
-                },
-                Stage::Review,
-                vec![Effect::Review],
-            ),
-            (
-                Seen::Started(Ok("hp-app-com-1-review".into())),
-                Stage::Review,
-                vec![],
-            ),
-            (
-                Seen::Reviewed { findings: vec![] },
-                Stage::Qa,
-                vec![Effect::MoveToTest],
-            ),
-            (
-                Seen::Started(Ok("devbox-app-com-1".into())),
-                Stage::Qa,
-                vec![],
-            ),
-            (
-                Seen::Idle {
-                    outcome: outcome("done"),
-                    verdict: Some(true),
-                },
-                Stage::Finish,
-                vec![Effect::Push],
-            ),
-            (Seen::Pushed(Ok(())), Stage::Finish, vec![Effect::OpenPull]),
-            (
-                Seen::Opened(Ok(PullRef {
-                    url: "https://github.com/acme/app/pull/12".into(),
-                    number: 12,
-                })),
-                Stage::Finish,
-                vec![Effect::MoveLinear],
-            ),
-            (Seen::Moved(Ok(())), Stage::Finish, vec![Effect::Summarise]),
-        ];
-        for (seen, stage, effects) in steps {
+    fn ended(step: &str, outcome: Outcome) -> Seen {
+        Seen::Ended {
+            step: step.into(),
+            outcome,
+            report: format!("{step} {}", outcome.word()),
+            details: vec![],
+        }
+    }
+
+    fn agent(step: &str) -> Vec<Effect> {
+        vec![Effect::Agent { step: step.into() }]
+    }
+
+    // Feeds each seen in turn and checks the effects and where the run is after each.
+    fn walk(mut run: Run, steps: Vec<(Seen, Vec<Effect>, &str, RunState)>) -> Run {
+        for (seen, effects, at_step, state) in steps {
             let label = format!("{seen:?}");
-            let (next, did) = step(r, seen, &cfg, at(5));
-            assert_eq!(next.stage, stage, "after {label}");
-            assert_eq!(did, effects, "after {label}");
-            r = next;
-        }
-        assert_eq!(r.machine, "hp");
-        assert_eq!(r.folder, "acme/app");
-        assert_eq!(r.branch, "com-1-fix-the-login");
-        assert_eq!(r.sessions.implement, "hp-app-com-1");
-        assert_eq!(r.sessions.review, "hp-app-com-1-review");
-        assert_eq!(r.sessions.qa, "devbox-app-com-1");
-        assert_eq!(r.finished, vec!["push", "pull", "linear"]);
-        assert_eq!(r.pull.as_ref().unwrap().number, 12);
-        let (done, did) = step(
-            r,
-            Seen::Summarised(Ok(("Fixed it.".into(), "Fixed in #12.".into()))),
-            &cfg,
-            at(6),
-        );
-        assert_eq!(done.stage, Stage::Done);
-        assert_eq!(done.summary, "Fixed it.");
-        assert_eq!(done.linear_comment, "Fixed in #12.");
-        assert!(matches!(&did[..], [Effect::Notify(text)] if text.contains("COM-1")));
-        let stages: Vec<Stage> = done.history.iter().map(|e| e.stage).collect();
-        assert_eq!(
-            stages,
-            vec![
-                Stage::Triage,
-                Stage::Queued,
-                Stage::Implement,
-                Stage::Review,
-                Stage::Qa,
-                Stage::Finish,
-                Stage::Done
-            ]
-        );
-        assert_eq!(done.stage_since, at(6).to_rfc3339());
-    }
-
-    #[test]
-    fn review_findings_go_back_to_the_implementer() {
-        let (r, did) = step(
-            record(Stage::Review),
-            Seen::Reviewed {
-                findings: vec![finding("high", "src/login.rs:42", "The redirect loops.")],
-            },
-            &cfg(),
-            at(5),
-        );
-        assert_eq!(r.stage, Stage::Fix);
-        assert_eq!(r.round, 1);
-        assert_eq!(r.fix_for, Some(Stage::Review));
-        match &did[..] {
-            [Effect::Send(text)] => {
-                assert!(
-                    text.contains("The redirect loops.") && text.contains("src/login.rs:42"),
-                    "{text}"
-                )
-            }
-            other => panic!("{other:?}"),
-        }
-        let (r, did) = step(
-            r,
-            Seen::Idle {
-                outcome: outcome("done"),
-                verdict: None,
-            },
-            &cfg(),
-            at(6),
-        );
-        assert_eq!(r.stage, Stage::Review);
-        assert_eq!(did, vec![Effect::Review]);
-    }
-
-    #[test]
-    fn only_low_findings_count_as_ready() {
-        let (r, did) = step(
-            record(Stage::Review),
-            Seen::Reviewed {
-                findings: vec![finding("low", "", "Typo."), finding("low", "a.rs", "Name.")],
-            },
-            &cfg(),
-            at(5),
-        );
-        assert_eq!(r.stage, Stage::Qa);
-        assert_eq!(did, vec![Effect::MoveToTest]);
-    }
-
-    #[test]
-    fn a_qa_fail_sends_the_report_back_once() {
-        let mut failed = outcome("done");
-        failed.details = vec!["checkout_spec.rb: 1 failure".into()];
-        let (r, did) = step(
-            record(Stage::Qa),
-            Seen::Idle {
-                outcome: failed,
-                verdict: Some(false),
-            },
-            &cfg(),
-            at(5),
-        );
-        assert_eq!(r.stage, Stage::Fix);
-        assert_eq!(r.fix_for, Some(Stage::Qa));
-        assert_eq!(r.qa_tries, 1);
-        assert!(r.qa_report.contains("checkout_spec.rb: 1 failure"));
-        assert!(matches!(&did[..], [Effect::Send(text)] if text.contains("checkout_spec.rb")));
-        let (r, did) = step(
-            r,
-            Seen::Idle {
-                outcome: outcome("done"),
-                verdict: None,
-            },
-            &cfg(),
-            at(6),
-        );
-        assert_eq!(r.stage, Stage::Qa);
-        assert_eq!(did, vec![Effect::MoveToTest]);
-    }
-
-    #[test]
-    fn no_linear_state_skips_the_move() {
-        let mut cfg = cfg();
-        cfg.linear_state.clear();
-        let (_, did) = step(
-            record(Stage::Finish),
-            Seen::Opened(Ok(PullRef {
-                url: "u".into(),
-                number: 1,
-            })),
-            &cfg,
-            at(5),
-        );
-        assert_eq!(did, vec![Effect::Summarise]);
-    }
-
-    #[test]
-    fn a_failed_pull_is_noted_and_the_ticket_finishes() {
-        let cfg = cfg();
-        let (r, did) = step(
-            record(Stage::Finish),
-            Seen::Opened(Err("gh is not logged in on hp".into())),
-            &cfg,
-            at(5),
-        );
-        assert!(r
-            .notes
-            .iter()
-            .any(|n| n.contains("gh is not logged in on hp")));
-        assert!(r.pull.is_none());
-        assert_eq!(did, vec![Effect::MoveLinear]);
-        let (r, _) = step(r, Seen::Moved(Ok(())), &cfg, at(5));
-        let (r, _) = step(r, Seen::Summarised(Err("no reply".into())), &cfg, at(6));
-        assert_eq!(r.stage, Stage::Done);
-        assert!(r.summary.contains("gh is not logged in on hp"));
-    }
-
-    #[test]
-    fn admit_respects_slots_and_order() {
-        let cfg = cfg();
-        let queued = |id: &str, minute: u32, machine: &str| Record {
-            id: id.into(),
-            stage: Stage::Queued,
-            stage_since: at(minute).to_rfc3339(),
-            machine: machine.into(),
-            ..Record::default()
-        };
-        let mut busy = queued("COM-0", 0, "hp");
-        busy.stage = Stage::Implement;
-        let records = vec![
-            queued("COM-3", 3, "hp"),
-            queued("COM-1", 1, "hp"),
-            queued("COM-2", 2, "hp"),
-            busy,
-        ];
-        assert_eq!(admit(&records, &cfg, &|_| true), vec!["COM-1"]);
-        assert!(admit(&records, &cfg, &|_| false).is_empty());
-
-        let mut triaging = queued("COM-0", 0, "");
-        triaging.stage = Stage::Triage;
-        let records = vec![
-            queued("COM-6", 6, ""),
-            queued("COM-5", 5, ""),
-            queued("COM-7", 7, ""),
-            triaging,
-        ];
-        assert_eq!(admit(&records, &cfg, &|_| true), vec!["COM-5"]);
-    }
-
-    fn parked(r: &Record) -> (ParkKind, Stage) {
-        let p = r.parked.as_ref().expect("parked");
-        assert_eq!(r.stage, Stage::Parked);
-        (p.kind, p.from)
-    }
-
-    fn notified(did: &[Effect]) -> bool {
-        did.iter()
-            .any(|e| matches!(e, Effect::Notify(t) if t.contains("COM-1")))
-    }
-
-    #[test]
-    fn questions_park_the_ticket() {
-        let mut t = triage();
-        t.questions = vec!["Which page?".into(), "Keep old links?".into()];
-        let (r, did) = step(record(Stage::Triage), Seen::Triaged(Ok(t)), &cfg(), at(5));
-        assert_eq!(parked(&r), (ParkKind::Questions, Stage::Triage));
-        assert_eq!(r.questions.len(), 2);
-        assert_eq!(r.questions[0].asked, "Which page?");
-        assert!(notified(&did));
-    }
-
-    #[test]
-    fn a_linear_failure_waits_and_tries_again() {
-        let cfg = cfg();
-        let err = || Seen::Triaged(Err("Linear did not answer: timeout".into()));
-        let (r, did) = step(record(Stage::Triage), err(), &cfg, at(0));
-        assert_eq!(r.stage, Stage::Triage);
-        assert!(did.is_empty());
-        assert_eq!(r.next_try.as_deref(), Some(at(1).to_rfc3339().as_str()));
-        let (r, did) = step(r, Seen::Tick, &cfg, at(0));
-        assert!(did.is_empty(), "too early");
-        let (r, did) = step(r, Seen::Tick, &cfg, at(1));
-        assert_eq!(did, vec![Effect::Triage]);
-        assert!(r.next_try.is_none());
-        let (r, _) = step(r, err(), &cfg, at(1));
-        assert_eq!(r.next_try.as_deref(), Some(at(3).to_rfc3339().as_str()));
-        let (r, _) = step(r, err(), &cfg, at(3));
-        let (r, _) = step(r, err(), &cfg, at(7));
-        let (r, _) = step(r, err(), &cfg, at(15));
-        assert_eq!(r.next_try.as_deref(), Some(at(23).to_rfc3339().as_str()));
-        assert_eq!(r.stage, Stage::Triage);
-    }
-
-    #[test]
-    fn a_waiting_session_parks_with_its_screen() {
-        for stage in [Stage::Implement, Stage::Fix, Stage::Review, Stage::Qa] {
-            let (r, did) = step(
-                record(stage),
-                Seen::Waiting("Allow edit?\n❯ 1. Yes".into()),
-                &cfg(),
-                at(5),
+            let (next, did) = step(run, seen, &cfg(), at(5));
+            assert_eq!(did, effects, "effects after {label}");
+            assert_eq!(
+                (next.step.as_str(), next.state),
+                (at_step, state),
+                "after {label}"
             );
-            assert_eq!(parked(&r), (ParkKind::Asked, stage));
-            assert!(r.parked.as_ref().unwrap().screen.contains("Allow edit?"));
-            assert!(notified(&did));
+            run = next;
         }
+        run
     }
 
     #[test]
-    fn a_failed_result_with_a_question_parks() {
-        let mut o = outcome("failed");
-        o.summary = "The ticket names two pages. Which one should redirect?".into();
-        let (r, _) = step(
-            record(Stage::Implement),
-            Seen::Idle {
-                outcome: o,
-                verdict: None,
+    fn the_implement_template_walks_to_done() {
+        let (run, did) = start(run_of("Implement my Linear tickets"), at(0));
+        assert_eq!(
+            did,
+            vec![Effect::Plan {
+                step: "plan".into()
+            }]
+        );
+        use RunState::*;
+        let run = walk(
+            run,
+            vec![
+                (Seen::Planned(Ok(plan())), vec![], "implement", Queued),
+                (Seen::Admitted, agent("implement"), "implement", Running),
+                (
+                    Seen::Started {
+                        step: "implement".into(),
+                        result: Ok(("hp-1".into(), "hp".into(), "/r/w".into())),
+                    },
+                    vec![],
+                    "implement",
+                    Running,
+                ),
+                (ended("implement", Outcome::Pass), vec![], "review", Queued),
+                (Seen::Admitted, agent("review"), "review", Running),
+                (ended("review", Outcome::Fail), vec![], "fix", Queued),
+                (Seen::Admitted, agent("fix"), "fix", Running),
+                (ended("fix", Outcome::Pass), vec![], "review", Queued),
+                (Seen::Admitted, agent("review"), "review", Running),
+                (ended("review", Outcome::Pass), vec![], "qa", Queued),
+                (Seen::Admitted, agent("qa"), "qa", Running),
+                (
+                    ended("qa", Outcome::Pass),
+                    vec![Effect::Push {
+                        step: "push".into(),
+                    }],
+                    "push",
+                    Running,
+                ),
+                (
+                    Seen::Pushed(Ok(())),
+                    vec![Effect::OpenPull {
+                        step: "push".into(),
+                    }],
+                    "push",
+                    Running,
+                ),
+                (
+                    Seen::Opened(Ok(PullRef {
+                        url: "u".into(),
+                        number: 12,
+                    })),
+                    vec![Effect::Linear {
+                        step: "linear-move".into(),
+                    }],
+                    "linear-move",
+                    Running,
+                ),
+                (
+                    Seen::Linear(Ok(())),
+                    vec![Effect::Report {
+                        step: "report".into(),
+                    }],
+                    "report",
+                    Running,
+                ),
+                (Seen::Reported(Ok("All good.".into())), vec![], "", Done),
+            ],
+        );
+        assert_eq!(run.place.machine, "hp");
+        assert_eq!(run.steps["implement"].session, "hp-1");
+        assert_eq!(run.steps["review"].runs, 2);
+        assert_eq!(run.steps["qa"].machine, "devbox");
+        assert_eq!(run.pull.as_ref().unwrap().number, 12);
+        assert_eq!(run.report, "All good.");
+    }
+
+    #[test]
+    fn the_review_template_reports_a_fail() {
+        let (run, _) = start(run_of("Review my merge requests"), at(0));
+        use RunState::*;
+        let run = walk(
+            run,
+            vec![
+                (Seen::Planned(Ok(plan())), vec![], "understand", Queued),
+                (Seen::Admitted, agent("understand"), "understand", Running),
+                (
+                    ended("understand", Outcome::Pass),
+                    vec![],
+                    "root-cause",
+                    Queued,
+                ),
+                (Seen::Admitted, agent("root-cause"), "root-cause", Running),
+                (
+                    ended("root-cause", Outcome::Fail),
+                    vec![Effect::Report {
+                        step: "report".into(),
+                    }],
+                    "report",
+                    Running,
+                ),
+            ],
+        );
+        assert_eq!(run.steps["root-cause"].outcome, Some(Outcome::Fail));
+        assert_eq!(run.steps["root-cause"].report, "root-cause failed");
+    }
+
+    fn at_step(template: &str, id: &str) -> Run {
+        let mut run = run_of(template);
+        run.place.machine = "hp".into();
+        run.step = id.into();
+        run.state = RunState::Running;
+        run.slot = Some("hp".into());
+        run.state_of(id).runs = 1;
+        run.state_of(id).machine = "hp".into();
+        run
+    }
+
+    fn waiting(run: &Run) -> (WaitKind, String, String) {
+        assert_eq!(run.state, RunState::Waiting);
+        let w = run.waiting.as_ref().unwrap();
+        (w.kind, w.step.clone(), w.reason.clone())
+    }
+
+    #[test]
+    fn a_loop_stops_at_its_run_limit() {
+        let mut run = at_step("Implement my Linear tickets", "review");
+        run.state_of("fix").runs = 2;
+        let (run, did) = step(run, ended("review", Outcome::Fail), &cfg(), at(5));
+        assert_eq!(
+            waiting(&run),
+            (WaitKind::RunLimit, "fix".into(), "Fix ran 2 times".into())
+        );
+        assert!(matches!(&did[..], [Effect::Notify { text }] if text.contains("COM-1")));
+    }
+
+    #[test]
+    fn needs_you_waits_with_the_report() {
+        let run = at_step("Implement my Linear tickets", "implement");
+        let (run, _) = step(
+            run,
+            Seen::Ended {
+                step: "implement".into(),
+                outcome: Outcome::NeedsYou,
+                report: "Which page?".into(),
+                details: vec![],
             },
             &cfg(),
             at(5),
         );
-        assert_eq!(parked(&r), (ParkKind::Asked, Stage::Implement));
-        assert!(r
-            .parked
-            .unwrap()
-            .screen
-            .contains("Which one should redirect?"));
+        let (kind, step_id, _) = waiting(&run);
+        assert_eq!((kind, step_id.as_str()), (WaitKind::NeedsYou, "implement"));
+        assert_eq!(run.waiting.clone().unwrap().screen, "Which page?");
+        assert_eq!(run.slot, None, "a waiting run gives its machine slot back");
     }
 
     #[test]
-    fn no_result_runs_the_stage_once_more_then_fails() {
-        let cfg = cfg();
-        let (r, did) = step(
-            record(Stage::Implement),
-            Seen::NoResult("crashed".into()),
-            &cfg,
+    fn stop_line_waits_with_the_outcome() {
+        let run = at_step("Implement my Linear tickets", "implement");
+        let (run, _) = step(run, ended("implement", Outcome::Fail), &cfg(), at(5));
+        assert_eq!(
+            waiting(&run),
+            (
+                WaitKind::Stopped,
+                "implement".into(),
+                "Implement failed".into()
+            )
+        );
+    }
+
+    #[test]
+    fn continue_on_pass_and_fail_follow_their_lines() {
+        let run = at_step("Implement my Linear tickets", "implement");
+        let (run, _) = step(run, ended("implement", Outcome::Fail), &cfg(), at(5));
+        let (on_pass, _) = step(run.clone(), Seen::Continue(Outcome::Pass), &cfg(), at(6));
+        assert_eq!(
+            (on_pass.step.as_str(), on_pass.state),
+            ("review", RunState::Queued)
+        );
+        let (on_fail, _) = step(run, Seen::Continue(Outcome::Fail), &cfg(), at(6));
+        assert_eq!(
+            on_fail.state,
+            RunState::Waiting,
+            "implement's fail line goes to wait"
+        );
+    }
+
+    #[test]
+    fn retry_runs_the_step_again_past_its_limit_once() {
+        let mut run = at_step("Implement my Linear tickets", "review");
+        run.state_of("fix").runs = 2;
+        let (run, _) = step(run, ended("review", Outcome::Fail), &cfg(), at(5));
+        let (run, _) = step(run, Seen::Retry, &cfg(), at(6));
+        assert_eq!((run.step.as_str(), run.state), ("fix", RunState::Queued));
+        let (run, did) = step(run, Seen::Admitted, &cfg(), at(6));
+        assert_eq!(did, agent("fix"));
+        assert_eq!(run.steps["fix"].runs, 3);
+    }
+
+    #[test]
+    fn an_answer_reenters_the_step_with_it() {
+        let run = at_step("Implement my Linear tickets", "implement");
+        let (run, _) = step(
+            run,
+            Seen::Ended {
+                step: "implement".into(),
+                outcome: Outcome::NeedsYou,
+                report: "Which page?".into(),
+                details: vec![],
+            },
+            &cfg(),
             at(5),
         );
-        assert_eq!(r.stage, Stage::Implement);
-        assert!(r.retried);
-        assert_eq!(did, vec![Effect::Implement]);
+        let (run, _) = step(run, Seen::Answer("The account page".into()), &cfg(), at(6));
+        assert_eq!(
+            (run.step.as_str(), run.state),
+            ("implement", RunState::Queued)
+        );
+        assert_eq!(run.steps["implement"].answer, "The account page");
+    }
+
+    #[test]
+    fn an_answer_to_a_waiting_session_is_typed() {
+        let run = at_step("Implement my Linear tickets", "implement");
+        let (run, _) = step(
+            run,
+            Seen::Waiting {
+                step: "implement".into(),
+                screen: "Allow edit?".into(),
+            },
+            &cfg(),
+            at(5),
+        );
+        assert_eq!(waiting(&run).0, WaitKind::Asking);
+        let (run, did) = step(run, Seen::Answer("1".into()), &cfg(), at(6));
+        assert_eq!(
+            did,
+            vec![Effect::Answer {
+                step: "implement".into(),
+                text: "1".into()
+            }]
+        );
+        assert_eq!(run.state, RunState::Running);
+    }
+
+    #[test]
+    fn plan_questions_wait_and_an_answer_plans_again() {
+        let (run, _) = start(run_of("Implement my Linear tickets"), at(0));
+        let mut asks = plan();
+        asks.questions = vec!["Which page?".into()];
+        let (run, _) = step(run, Seen::Planned(Ok(asks)), &cfg(), at(1));
+        assert_eq!(
+            waiting(&run),
+            (
+                WaitKind::Questions,
+                "plan".into(),
+                "Plan has 1 question".into()
+            )
+        );
+        let (run, did) = step(run, Seen::Answer("The account page".into()), &cfg(), at(2));
+        assert_eq!(
+            did,
+            vec![Effect::Plan {
+                step: "plan".into()
+            }]
+        );
+        assert_eq!(run.questions[0].answer, "The account page");
+    }
+
+    #[test]
+    fn no_result_runs_once_more_then_waits() {
+        let run = at_step("Implement my Linear tickets", "implement");
+        let (run, did) = step(
+            run,
+            Seen::NoResult {
+                step: "implement".into(),
+                screen: "crashed".into(),
+            },
+            &cfg(),
+            at(5),
+        );
+        assert_eq!((did, run.state), (agent("implement"), RunState::Running));
         let screen: String = (1..=20).map(|n| format!("line {n}\n")).collect();
-        let (r, _) = step(r, Seen::NoResult(screen), &cfg, at(6));
-        assert_eq!(r.stage, Stage::Failed);
-        assert_eq!(r.failed_at, Some(Stage::Implement));
-        assert!(
-            r.failed.starts_with("line 11") && r.failed.ends_with("line 20"),
-            "{}",
-            r.failed
-        );
-        let (r, did) = step(
-            record(Stage::Qa),
-            Seen::Idle {
-                outcome: outcome("failed"),
-                verdict: None,
-            },
-            &cfg,
-            at(5),
-        );
-        assert_eq!((r.stage, did), (Stage::Qa, vec![Effect::MoveToTest]));
-        let mut fix = record(Stage::Fix);
-        fix.sent = "Fix these".into();
-        let (_, did) = step(fix, Seen::Started(Err("tmux died".into())), &cfg, at(5));
-        assert_eq!(did, vec![Effect::Send("Fix these".into())]);
-    }
-
-    #[test]
-    fn review_rounds_run_out() {
-        let mut r = record(Stage::Review);
-        r.round = 2;
-        let (r, did) = step(
-            r,
-            Seen::Reviewed {
-                findings: vec![finding("medium", "a.rs:1", "Still wrong.")],
+        let (run, _) = step(
+            run,
+            Seen::NoResult {
+                step: "implement".into(),
+                screen,
             },
             &cfg(),
-            at(5),
+            at(6),
         );
-        assert_eq!(parked(&r), (ParkKind::Findings, Stage::Review));
-        assert_eq!(r.findings, vec!["a.rs:1 Still wrong."]);
-        assert!(notified(&did));
+        assert_eq!(waiting(&run).0, WaitKind::NoResult);
+        assert!(run.waiting.unwrap().screen.starts_with("line 11"));
     }
 
     #[test]
-    fn qa_retries_run_out() {
-        let mut r = record(Stage::Qa);
-        r.qa_tries = 1;
-        let (r, _) = step(
-            r,
-            Seen::Idle {
-                outcome: outcome("done"),
-                verdict: Some(false),
-            },
-            &cfg(),
-            at(5),
-        );
-        assert_eq!(parked(&r), (ParkKind::QaFailed, Stage::Qa));
-        assert!(!r.qa_report.is_empty());
-    }
-
-    #[test]
-    fn a_refused_push_parks() {
-        let (r, did) = step(
-            record(Stage::Finish),
-            Seen::Pushed(Err("a key in config/secrets.yml".into())),
-            &cfg(),
-            at(5),
-        );
-        assert_eq!(parked(&r), (ParkKind::Push, Stage::Finish));
-        assert!(r
-            .parked
-            .as_ref()
-            .unwrap()
-            .reason
-            .contains("config/secrets.yml"));
-        assert!(notified(&did));
-        let (r, _) = step(
-            record(Stage::Implement),
-            Seen::Refused("deny start_session on hp".into()),
-            &cfg(),
-            at(5),
-        );
-        assert_eq!(parked(&r), (ParkKind::Refused, Stage::Implement));
-    }
-
-    #[test]
-    fn an_offline_machine_parks_after_30_minutes() {
-        let cfg = cfg();
-        let mut q = record(Stage::Queued);
-        q.machine = "hp".into();
-        let (r, _) = step(q, Seen::Offline, &cfg, at(0));
-        assert_eq!(r.waiting.as_deref(), Some(at(0).to_rfc3339().as_str()));
-        let (r, _) = step(r, Seen::Offline, &cfg, at(10));
-        assert_eq!(r.waiting.as_deref(), Some(at(0).to_rfc3339().as_str()));
-        let (r, _) = step(r, Seen::Tick, &cfg, at(29));
-        assert_eq!(r.stage, Stage::Queued);
-        let (r, _) = step(r, Seen::Tick, &cfg, at(30));
-        assert_eq!(parked(&r), (ParkKind::Offline, Stage::Queued));
-        assert_eq!(r.parked.unwrap().reason, "hp is offline");
-    }
-
-    #[test]
-    fn a_stage_that_runs_too_long_parks() {
-        let mut cfg = cfg();
-        cfg.stage_minutes = 10;
-        let (r, _) = step(record(Stage::Implement), Seen::Tick, &cfg, at(10));
-        assert_eq!(r.stage, Stage::Implement);
-        let (r, _) = step(r, Seen::Tick, &cfg, at(11));
-        assert_eq!(parked(&r), (ParkKind::TooLong, Stage::Implement));
-        assert_eq!(r.parked.unwrap().reason, "Implement has run for 11 min");
-        cfg.stage_minutes = 120;
-        let (r, _) = step(
-            record(Stage::Qa),
+    fn time_limit_waits() {
+        let mut run = at_step("Implement my Linear tickets", "implement");
+        run.step_since = at(0).to_rfc3339();
+        let (run, _) = step(
+            run,
             Seen::Tick,
-            &cfg,
+            &cfg(),
             at(0) + chrono::Duration::minutes(125),
         );
-        assert_eq!(r.parked.unwrap().reason, "QA has run for 2 h");
-    }
-
-    #[test]
-    fn a_ticket_closed_in_linear_parks() {
-        let (r, did) = step(
-            record(Stage::Review),
-            Seen::Closed("completed".into()),
-            &cfg(),
-            at(5),
-        );
-        assert_eq!(parked(&r), (ParkKind::Closed, Stage::Review));
-        assert_eq!(r.parked.unwrap().reason, "COM-1 was closed in Linear");
-        assert!(notified(&did));
-    }
-
-    fn park(kind: ParkKind, from: Stage) -> Record {
-        let mut r = record(Stage::Parked);
-        r.parked = Some(Parked {
-            kind,
-            reason: "x".into(),
-            from,
-            screen: String::new(),
-        });
-        r
-    }
-
-    #[test]
-    fn answers_go_where_the_ticket_stopped() {
-        let cfg = cfg();
-        let mut q = park(ParkKind::Questions, Stage::Triage);
-        q.questions = vec![Question {
-            asked: "Which page?".into(),
-            ..Question::default()
-        }];
-        let (r, did) = step(q, Seen::Answer("The account page".into()), &cfg, at(5));
-        assert_eq!((r.stage, did), (Stage::Triage, vec![Effect::Triage]));
-        assert_eq!(r.questions[0].answer, "The account page");
-        assert!(r.parked.is_none());
-
-        let (r, did) = step(
-            park(ParkKind::Asked, Stage::Qa),
-            Seen::Answer("Yes".into()),
-            &cfg,
-            at(5),
-        );
         assert_eq!(
-            (r.stage, did),
-            (Stage::Qa, vec![Effect::Answer("Yes".into())])
+            waiting(&run),
+            (
+                WaitKind::TimeLimit,
+                "implement".into(),
+                "Implement has run for 2 h".into()
+            )
         );
-
-        let mut f = park(ParkKind::Findings, Stage::Review);
-        f.findings = vec!["a.rs:1 Still wrong.".into()];
-        let (r, did) = step(f, Seen::Answer("Ignore the naming one".into()), &cfg, at(5));
-        assert_eq!((r.stage, r.fix_for), (Stage::Fix, Some(Stage::Review)));
-        assert!(
-            matches!(&did[..], [Effect::Send(t)] if t.contains("Ignore the naming one") && t.contains("Still wrong."))
-        );
-
-        let mut qa = park(ParkKind::QaFailed, Stage::Qa);
-        qa.qa_report = "spec fails".into();
-        let (r, did) = step(
-            qa,
-            Seen::Answer("The spec is outdated, update it".into()),
-            &cfg,
-            at(5),
-        );
-        assert_eq!((r.stage, r.fix_for), (Stage::Fix, Some(Stage::Qa)));
-        assert!(matches!(&did[..], [Effect::Send(t)] if t.contains("spec fails")));
     }
 
     #[test]
-    fn an_answer_to_a_push_park_is_ignored() {
-        let before = park(ParkKind::Push, Stage::Finish);
-        let (r, did) = step(before.clone(), Seen::Answer("hi".into()), &cfg(), at(5));
-        assert_eq!(r, before);
-        assert!(did.is_empty());
+    fn admit_respects_slots_per_machine() {
+        let queued = |id: &str, minute: u32, machine: &str| Run {
+            id: id.into(),
+            state: RunState::Queued,
+            step_since: at(minute).to_rfc3339(),
+            slot: Some(machine.into()),
+            ..Run::default()
+        };
+        let mut busy = queued("r0", 0, "hp");
+        busy.state = RunState::Running;
+        let runs = vec![
+            queued("r3", 3, "hp"),
+            queued("r1", 1, "hp"),
+            queued("r2", 2, "hp"),
+            busy,
+            queued("r4", 4, "devbox"),
+        ];
+        assert_eq!(admit(&runs, &cfg(), &|_| true), vec!["r1", "r4"]);
+        assert_eq!(admit(&runs, &cfg(), &|m| m == "devbox"), vec!["r4"]);
     }
 
     #[test]
-    fn retry_goes_back_and_offline_retry_triages_again() {
-        let cfg = cfg();
-        let (r, did) = step(
-            park(ParkKind::Push, Stage::Finish),
-            Seen::Retry,
-            &cfg,
-            at(5),
+    fn a_wait_step_continues_on_pass() {
+        let mut run = run_of("Implement my Linear tickets");
+        let def = run.definition.as_mut().unwrap();
+        let look = Step {
+            kind: StepKind::Wait {
+                message: "Look before pushing".into(),
+            },
+            id: "look".into(),
+            name: "Look".into(),
+            ..def.step("push").unwrap().clone()
+        };
+        let mut look = look;
+        look.next.pass = "push".into();
+        def.steps.push(look);
+        def.steps
+            .iter_mut()
+            .find(|s| s.id == "qa")
+            .unwrap()
+            .next
+            .pass = "look".into();
+        run.step = "qa".into();
+        run.state = RunState::Running;
+        let (run, _) = step(run, ended("qa", Outcome::Pass), &cfg(), at(5));
+        assert_eq!(
+            waiting(&run),
+            (
+                WaitKind::WaitStep,
+                "look".into(),
+                "Look before pushing".into()
+            )
         );
-        assert_eq!((r.stage, did), (Stage::Finish, vec![Effect::Push]));
-        let mut half = park(ParkKind::TooLong, Stage::Finish);
-        half.finished = vec!["push".into(), "pull".into()];
-        let (_, did) = step(half, Seen::Retry, &cfg, at(5));
-        assert_eq!(did, vec![Effect::MoveLinear]);
-        let mut off = park(ParkKind::Offline, Stage::Queued);
-        off.machine = "hp".into();
-        let (r, did) = step(off, Seen::Retry, &cfg, at(5));
-        assert_eq!(r.stage, Stage::Queued);
-        assert!(r.machine.is_empty() && did.is_empty());
-        let mut failed = record(Stage::Failed);
-        failed.failed_at = Some(Stage::Review);
-        let (r, did) = step(failed, Seen::Retry, &cfg, at(5));
-        assert_eq!((r.stage, did), (Stage::Review, vec![Effect::Review]));
+        let (run, did) = step(run, Seen::Continue(Outcome::Pass), &cfg(), at(6));
+        assert_eq!(
+            (run.step.as_str(), did),
+            (
+                "push",
+                vec![Effect::Push {
+                    step: "push".into()
+                }]
+            )
+        );
     }
 
     #[test]
     fn drop_stops_the_sessions() {
-        for stage in [
-            Stage::Queued,
-            Stage::Implement,
-            Stage::Parked,
-            Stage::Failed,
-        ] {
-            let (r, did) = step(record(stage), Seen::Drop, &cfg(), at(5));
-            assert_eq!((r.stage, did), (Stage::Dropped, vec![Effect::StopSessions]));
-        }
-        let (r, did) = step(record(Stage::Done), Seen::Drop, &cfg(), at(5));
-        assert_eq!((r.stage, did), (Stage::Done, vec![]));
-    }
-
-    #[test]
-    fn a_failed_send_runs_the_fix_again_once() {
-        let mut fix = record(Stage::Fix);
-        fix.sent = "Fix these".into();
-        let (r, did) = step(
-            fix,
-            Seen::Sent(Err("no such session".into())),
-            &cfg(),
-            at(5),
-        );
+        let run = at_step("Implement my Linear tickets", "implement");
+        let (run, did) = step(run, Seen::Drop, &cfg(), at(5));
         assert_eq!(
-            (r.stage, did),
-            (Stage::Fix, vec![Effect::Send("Fix these".into())])
+            (run.state, did),
+            (RunState::Dropped, vec![Effect::StopSessions])
         );
-        let (r, _) = step(r, Seen::Sent(Err("no such session".into())), &cfg(), at(6));
-        assert_eq!(r.stage, Stage::Failed);
-        let (r, did) = step(record(Stage::Fix), Seen::Sent(Ok(())), &cfg(), at(5));
-        assert_eq!((r.stage, did), (Stage::Fix, vec![]));
     }
 }

@@ -184,6 +184,31 @@ pub struct Pipeline {
     pub qa_instructions: String,
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Pipelines {
+    pub per_machine: u32,
+    pub minutes: u64,
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub qa_notes: BTreeMap<String, String>,
+}
+
+impl Default for Pipelines {
+    fn default() -> Self {
+        Pipelines {
+            per_machine: 2,
+            minutes: 120,
+            qa_notes: BTreeMap::new(),
+        }
+    }
+}
+
+impl Pipelines {
+    pub fn is_default(&self) -> bool {
+        *self == Pipelines::default()
+    }
+}
+
 fn default_per_machine() -> u32 {
     2
 }
@@ -489,6 +514,8 @@ pub struct Config {
     pub pull_requests: PullRequests,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pipeline: Option<Pipeline>,
+    #[serde(default, skip_serializing_if = "Pipelines::is_default")]
+    pub pipelines: Pipelines,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<crate::triggers::Trigger>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]

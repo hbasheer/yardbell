@@ -3,7 +3,7 @@ use super::prompts::TicketText;
 use super::run::World;
 use super::Pipeline;
 use crate::dispatch::ReviewOf;
-use crate::pipeline::engine::tests::cfg;
+use crate::pipeline::legacy_engine::tests::cfg;
 use crate::snapshot::Activity;
 use crate::state::{MachineView, SessionView, StateView};
 use futures::future::BoxFuture;
