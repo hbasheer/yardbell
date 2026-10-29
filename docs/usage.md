@@ -355,11 +355,12 @@ Dispatch also watches the pull requests and GitLab merge requests of your sessio
 session's CI goes from passing or running to failing, or a reviewer leaves a comment, a review or
 asks for changes, a card appears in the conversation that follows that session, or in a new
 conversation named after the pull request or merge request, which then follows the session. A CI
-card lists the failed checks (on GitLab, the failed jobs), with a link and the last lines of the
-failed log when GitHub Actions or GitLab has them. A review card shows each comment, with its file and
+card lists the failed checks (on GitLab, the failed jobs), each folded to its name and the line of
+its log that says what broke, with a link; open one for the last lines of the failed log when GitHub
+Actions or GitLab has them. A review card shows each comment, with its file and
 line for a comment on the code. **Send to session** types a short instruction into the session,
-like "CI failed on test for pull request #12: error: test failed. Fix it and push.", shown on the
-card before you send it. It is a step like Dispatch's own, so your rules for typing into sessions
+like "CI failed on test for pull request #12: error: test failed. Fix it and push.", which **What it
+sends** on the card shows before you send it. It is a step like Dispatch's own, so your rules for typing into sessions
 apply: it is sent at once, waits below for you to approve or edit it, or is refused. Each failure
 (one commit) and each comment gets one card, also after a restart, and a pull request seen for the
 first time only sets what is known, so old comments never turn into cards.
@@ -402,14 +403,15 @@ GitHub at once. The switch turns a trigger off or on. [Triggers](automation.md#t
 examples for Linear tickets, review requests and schedules, and what triggers do not cover.
 
 Dispatch follows the sessions it starts. When one finishes, stops to wait for an answer, or ends,
-the conversation gets a card with the last lines of its screen. A waiting agent's choices, such as
+the conversation gets a card with the last four lines of its screen (**Show all** opens the rest). A waiting agent's choices, such as
 Yes and No on a permission prompt, become buttons that answer it, and the card keeps the answer you
 picked. A finished or ended one has **Review branch**, which prepares a reviewer: a new session in
 the same folder that reviews the branch against the one it was made from, runs the tests and
 changes no files. Start it as it is, or edit its agent or instructions first. When the reviewer
 finishes, its findings come back as a review card with a verdict (ready, or changes needed), a
-summary, and each problem with its file and severity. Tick the ones that matter and **Send** them
-to the session that did the work, which gets them as one request to fix them and run the tests, or
+summary, and its findings under **High**, **Medium** and **Low**, each with its file and line.
+High and medium findings start ticked; low ones start folded and unticked. Tick the ones that matter
+and **Send** them to the session that did the work, which gets them as one request to fix them and run the tests, or
 **Dismiss** the review. Asking Dispatch to review a session proposes the same reviewer. A list at
 the top of the conversation shows every session it started and what each is doing now.
 
@@ -444,8 +446,8 @@ of its worktrees), optionally a folder inside it, and the kind. Asking Dispatch 
 tool, and your Dispatch rules decide it like a review (the rules call it **Start a scan**). Each way,
 the scanner is a new session in that folder that you start from its card, told to change no files,
 install nothing and run nothing that writes to the folder. Its findings come back as a scan card
-with the count of issues found (or **Clean**), a summary and each finding with its severity and
-`file:line`. Instead of **Changes**, a scan card has **Files**: the files its findings point at,
+with the count of issues found (or **Clean**), a summary and its findings grouped by severity like
+a review's, each with its `file:line`. Instead of **Changes**, a scan card has **Files**: the files its findings point at,
 read from the folder as it is now, 400 lines at a time, and a finding's `file:line` opens its file
 at that line. Only those files can be read, and never through a symbolic link or outside the
 folder. Pick the findings that matter and **Send** them to a session working in that folder, or

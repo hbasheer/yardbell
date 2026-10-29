@@ -427,7 +427,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         )
         session_card = {
             "role": "session", "machine": MACHINE, "name": "hp-demo-app", "path": repo, "state": "idle",
-            "screen": "Done.", "options": [], "at": "2026-01-01T10:00:00+00:00",
+            "screen": "\n".join(f"step {n}" for n in range(1, 9)), "options": [], "at": "2026-01-01T10:00:00+00:00",
         }
         scan = conversation(
             SCAN_CHAT,
@@ -879,6 +879,21 @@ class Suite:
         b.wait(f"document.querySelector('{card}')?.textContent.includes('Review of')", "the seeded review card")
         b.wait(f"(() => {{ const i = document.querySelector('{card} .finding-shots img'); return i && i.complete && i.naturalWidth === 640; }})()", "the screenshot thumbnail")
         b.wait(f"document.querySelector('{card} .finding-shot-error')?.textContent.includes('gone.png was not attached')", "the screenshot that was not kept")
+        groups = b.js(f"[...document.querySelectorAll('{card} .finding-group-head')].map((h) => h.textContent.trim().replace(/\\s+/g, ' '))")
+        if groups != ["High · 1", "Medium · 1", "Low · 1"]:
+            raise Failure(f"the findings are not grouped by severity: {groups}")
+        if b.js(f"document.querySelector('{card}').textContent.includes('Mention passkeys')"):
+            raise Failure("the low finding is not folded")
+        if b.js(f"document.querySelector('{card} .step-card-foot .btn.primary').textContent.trim()") != "Send 2 findings":
+            raise Failure("the high and medium findings are not the ones ticked")
+        if "/" in b.js(f"document.querySelector('{card} .step-card-where').textContent"):
+            raise Failure("the card names the whole path instead of the folder")
+        b.click(f"{card} .finding-group.low .finding-group-head")
+        b.wait(f"document.querySelector('{card}').textContent.includes('Mention passkeys')", "the low finding once opened")
+        if b.js(f"document.querySelector('{card} .finding-group.low input').checked"):
+            raise Failure("the low finding starts ticked")
+        b.click(f"{card} .finding-group.low .finding")
+        b.wait(f"document.querySelector('{card} .step-card-foot .btn.primary').textContent.trim() === 'Send 3 findings'", "the low finding to count once ticked")
         b.click(f"{card} .review-diff-toggle")
         b.wait(
             f"""(() => {{
@@ -923,6 +938,7 @@ class Suite:
         links = b.js(f"[...document.querySelectorAll('{card} .finding-place.link')].map((l) => l.textContent).join()")
         if links != "src/login.js:42,config/missing.yml:3":
             raise Failure(f"the finding links are {links!r}")
+        b.click(f"{card} .finding-group.low .finding-group-head")
         if b.js(f"[...document.querySelectorAll('{card} code.finding-place')].map((c) => c.textContent).join()") != "/etc/passwd:1":
             raise Failure("a place outside the folder is a link")
         b.click(f"{card} .finding-place.link")
@@ -937,13 +953,13 @@ class Suite:
             raise Failure("the Files panel does not count the files")
         b.click(f"{card} .diff-file-head[id$='missing.yml']")
         b.wait(f"document.querySelector('{card} .diff-msg.error')?.textContent.includes('config/missing.yml is not in the scanned folder')", "the missing file's error")
-        b.wait(f"document.querySelector('{card} .step-card-foot .btn.primary')?.textContent.trim().startsWith(document.querySelector('{card} .scan-target') ? 'Send 3 to' : 'Fix 3 in a new session')", "the send button once the sessions are read")
+        b.wait(f"document.querySelector('{card} .step-card-foot .btn.primary')?.textContent.trim() === (document.querySelector('{card} .scan-target') ? 'Send 2 findings' : 'Fix 2 in a new session')", "the send button once the sessions are read")
         if self.session and b.js(f"[...document.querySelectorAll('{card} .scan-target option')].map((o) => o.value).join()") != f"{self.session},":
             raise Failure("the shell session in demo-app is not offered")
         b.js(f"(() => {{ const s = document.querySelector('{card} .scan-target select'); if (s) {{ s.value = ''; s.dispatchEvent(new Event('change')); }} }})()")
-        b.wait(f"document.querySelector('{card} .step-card-foot .btn.primary')?.textContent.trim() === 'Fix 3 in a new session'", "the new session choice")
+        b.wait(f"document.querySelector('{card} .step-card-foot .btn.primary')?.textContent.trim() === 'Fix 2 in a new session'", "the new session choice")
         b.click(f"{card} .step-card-foot .btn.primary")
-        b.wait(f"document.querySelector('{card} .step-card-trail')?.textContent.startsWith('Asked for a new session to fix 3 findings')", "the card's outcome")
+        b.wait(f"document.querySelector('{card} .step-card-trail')?.textContent.startsWith('Asked for a new session to fix 2 findings')", "the card's outcome")
         b.wait(
             """(() => {
               const step = [...document.querySelectorAll('#dispatch-log .step-card.pending')].at(-1);
@@ -956,6 +972,11 @@ class Suite:
         b = self.b
         b.goto(self.url(f"/dispatch?c={SCAN_CHAT}"))
         b.wait("document.querySelector('#dispatch-log .session-card .scan-btn')", "Scan on the session card")
+        screen = "document.querySelector('#dispatch-log .session-card .session-screen').textContent.trim()"
+        if b.js(screen) != "step 5\nstep 6\nstep 7\nstep 8":
+            raise Failure(f"the session card shows more than the end of the screen: {b.js(screen)!r}")
+        b.click("#dispatch-log .session-card .session-screen-more")
+        b.wait(f"{screen}.startsWith('step 1\\n')", "the whole screen once opened")
         b.click("#dispatch-log .session-card .scan-btn")
         b.wait("!document.getElementById('scan-menu').hidden && document.activeElement?.closest('#scan-menu')", "the Scan menu with focus")
         if b.js("[...document.querySelectorAll('#scan-menu [role=menuitem] .scan-menu-item > span:first-child')].map((s) => s.textContent).join()") != "Dead code,Test gaps,Security":
@@ -1066,9 +1087,18 @@ class Suite:
         b.goto(self.url(f"/dispatch?c={PULL_CHAT}"))
         b.wait("document.querySelector('#dispatch-log .pull-card .badge.failed')?.textContent === 'CI failed'", "the CI failed card")
         text = b.js("document.querySelector('#dispatch-log .pull-card').innerText")
-        for expected in ("#12", "Fix the login redirect", "CI / test", "login::redirects ... FAILED", "echo pull''-sent"):
+        for expected in ("#12", "Fix the login redirect", "CI / test", "test login::redirects ... FAILED"):
             if expected not in text:
                 raise Failure(f"the card does not show {expected!r}:\n{text}")
+        for folded in ("error: test failed", "echo pull''-sent"):
+            if folded in text:
+                raise Failure(f"the card shows {folded!r} before it is opened:\n{text}")
+        b.click("#dispatch-log .pull-card .pull-check-head")
+        b.click("#dispatch-log .pull-card .pull-sends summary")
+        text = b.js("document.querySelector('#dispatch-log .pull-card').innerText")
+        for expected in ("error: test failed", "echo pull''-sent"):
+            if expected not in text:
+                raise Failure(f"the opened card does not show {expected!r}:\n{text}")
         b.click("#dispatch-log .pull-card .btn.primary")
         b.wait("document.querySelector('#dispatch-log article.step-card.pending')", "the send step waiting for approval")
         if b.js("document.querySelector('#dispatch-log article.step-card.pending .btn.primary').textContent.trim()") != "Send":

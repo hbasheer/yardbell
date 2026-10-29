@@ -5,6 +5,14 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Dispatch's cards are shorter and easier to read. A review or scan groups its findings under
+  **High**, **Medium** and **Low**, each leading with what is wrong and its `file:line` underneath;
+  low findings start folded and unticked, and the button says **Send 4 findings** instead of the
+  session's name. A session card shows the last four lines of its screen until you open the rest. A
+  CI card folds each failed check to its name and the line that says what broke, with the log one
+  click away, and the instruction **Send to session** types sits under **What it sends**. Cards name
+  the folder instead of its whole path, which shows on hover.
+
 ## [0.7.9] - 2026-10-29
 
 - **Insights** shows a session's pull request or merge request under its facts: the number and
