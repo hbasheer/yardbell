@@ -198,25 +198,14 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
             Err(Halt::Failed(e)) => vec![Seen::Sent(Err(e))],
         };
     }
+    // A step run again starts afresh; its earlier session would otherwise work in the same folder.
+    if let Some(old) = session(&view, &state.session) {
+        let input = json!({ "machine": old.machine, "name": state.session });
+        let _ = world.perform("stop_session", input).await;
+    }
     let mut input = match workspace {
         Workspace::NewWorktree => {
             let wanted = branch(run);
-            let adopted = view
-                .sessions
-                .iter()
-                .filter(|s| s.machine == machine && s.branch == wanted)
-                .filter(|s| {
-                    !run.steps
-                        .values()
-                        .any(|st| Some(&st.session) == s.tmux.as_ref())
-                })
-                .find_map(|s| Some((s.tmux.clone()?, s.machine.clone(), s.path.clone())));
-            if let Some(found) = adopted {
-                return vec![Seen::Started {
-                    step: step.id.clone(),
-                    result: Ok(found),
-                }];
-            }
             json!({
                 "machine": machine,
                 "folder": run.place.folder,
@@ -355,6 +344,43 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
         }
         Effect::Notify { text } => {
             world.notify(text);
+            vec![]
+        }
+        Effect::StopReadOnly => {
+            let view = world.view();
+            let def = run.def();
+            let writes = |name: &str| {
+                run.steps.iter().any(|(id, st)| {
+                    st.session == name
+                        && def.step(id).is_some_and(|s| {
+                            matches!(
+                                s.kind,
+                                StepKind::Agent {
+                                    read_only: false,
+                                    ..
+                                }
+                            )
+                        })
+                })
+            };
+            for (id, st) in &run.steps {
+                let read_only = def.step(id).is_some_and(|s| {
+                    matches!(
+                        s.kind,
+                        StepKind::Agent {
+                            read_only: true,
+                            ..
+                        }
+                    )
+                });
+                if !read_only || writes(&st.session) {
+                    continue;
+                }
+                if let Some(s) = session(&view, &st.session) {
+                    let input = json!({ "machine": s.machine, "name": st.session });
+                    let _ = world.perform("stop_session", input).await;
+                }
+            }
             vec![]
         }
         Effect::StopSessions => {

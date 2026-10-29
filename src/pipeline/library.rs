@@ -83,7 +83,12 @@ impl Library {
             .unwrap_or_default()
     }
 
+    // A new version of the pipeline. Whether it is on is not part of a version: an existing
+    // pipeline keeps its switch, which only set_enabled changes.
     pub fn save(&self, mut def: Definition, cfg: &Config) -> Result<Definition, Vec<String>> {
+        if let Some(current) = self.get(&def.id) {
+            def.enabled = current.enabled;
+        }
         check(&def, cfg)?;
         let mut files = self.lock();
         let file = files.entry(def.id.clone()).or_default();
@@ -166,7 +171,16 @@ impl Library {
             .get(id)
             .ok_or_else(|| vec![format!("there is no pipeline {id}")])?;
         def.enabled = enabled;
-        self.save(def, cfg)
+        check(&def, cfg)?;
+        let mut files = self.lock();
+        let file = files.entry(id.to_string()).or_default();
+        if let Some(newest) = file.history.first_mut() {
+            newest.definition.enabled = enabled;
+        }
+        let written = write(&self.dir, id, file);
+        drop(files);
+        written.map_err(|e| vec![e])?;
+        Ok(def)
     }
 
     pub fn restore(&self, id: &str, version: u32, cfg: &Config) -> Result<Definition, Vec<String>> {
@@ -314,6 +328,27 @@ mod tests {
             ("new-pipeline-2", "New pipeline 2")
         );
         assert_eq!(a.version, 1);
+    }
+
+    #[test]
+    fn switching_on_and_off_adds_no_version_and_restore_keeps_it() {
+        let (lib, _dir) = library();
+        let mut def = lib
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        def.steps[1].name = "Build it".into();
+        lib.save(def.clone(), &cfg()).unwrap();
+        let on = lib.set_enabled(&def.id, true, &cfg()).unwrap();
+        assert!(on.enabled);
+        assert_eq!(lib.history(&def.id).len(), 2, "a switch is not a version");
+        let restored = lib.restore(&def.id, 1, &cfg()).unwrap();
+        assert!(restored.enabled, "restoring keeps the pipeline on");
+        let mut stale = restored.clone();
+        stale.enabled = false;
+        assert!(
+            lib.save(stale, &cfg()).unwrap().enabled,
+            "saving keeps the switch"
+        );
     }
 
     #[test]

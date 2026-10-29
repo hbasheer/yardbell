@@ -34,8 +34,52 @@ impl Store {
     }
 
     pub fn put(&self, run: Run) {
-        self.lock().insert(run.id.clone(), run);
-        self.save();
+        let changed = self.lock().insert(run.id.clone(), run.clone()).as_ref() != Some(&run);
+        if changed {
+            self.save();
+        }
+    }
+
+    // Reads, changes and writes one run under the lock, so two changes never overwrite each other.
+    pub fn update<T>(&self, id: &str, change: impl FnOnce(&mut Run) -> T) -> Option<T> {
+        let (out, changed) = {
+            let mut runs = self.lock();
+            let run = runs.get_mut(id)?;
+            let before = run.clone();
+            let out = change(run);
+            (out, *run != before)
+        };
+        if changed {
+            self.save();
+        }
+        Some(out)
+    }
+
+    // Keeps the newest finished runs of each pipeline; active runs always stay.
+    pub fn prune(&self, keep: usize) {
+        let removed = {
+            let mut runs = self.lock();
+            let mut finished: Vec<(String, String, String)> = runs
+                .values()
+                .filter(|r| !r.state.active())
+                .map(|r| (r.pipeline.clone(), r.started.clone(), r.id.clone()))
+                .collect();
+            finished.sort_by(|a, b| a.0.cmp(&b.0).then(b.1.cmp(&a.1)));
+            let mut count: std::collections::HashMap<String, usize> = Default::default();
+            let mut gone = 0;
+            for (pipeline, _, id) in finished {
+                let n = count.entry(pipeline).or_default();
+                *n += 1;
+                if *n > keep {
+                    runs.remove(&id);
+                    gone += 1;
+                }
+            }
+            gone
+        };
+        if removed > 0 {
+            self.save();
+        }
     }
 
     pub fn remove_pipeline(&self, pipeline: &str) {
@@ -89,7 +133,8 @@ impl Store {
     }
 
     fn save(&self) {
-        let bytes = serde_json::to_vec_pretty(&*self.lock()).unwrap_or_default();
+        let runs = self.lock();
+        let bytes = serde_json::to_vec_pretty(&*runs).unwrap_or_default();
         let tmp = self.file.with_extension("tmp");
         let written = self
             .file
@@ -97,6 +142,7 @@ impl Store {
             .map_or(Ok(()), std::fs::create_dir_all)
             .and_then(|_| std::fs::write(&tmp, bytes))
             .and_then(|_| std::fs::rename(&tmp, &self.file));
+        drop(runs);
         if let Err(e) = written {
             tracing::warn!(error = %e, "could not save {}", self.file.display());
         }

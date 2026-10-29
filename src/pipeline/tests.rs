@@ -25,6 +25,7 @@ pub(crate) struct Fake {
     pub notes: Mutex<Vec<String>>,
     pub started: Mutex<u32>,
     pub ticket_fails: Mutex<bool>,
+    pub on_start: Mutex<Option<Box<dyn Fn() + Send>>>,
 }
 
 impl Fake {
@@ -135,6 +136,9 @@ impl World for Fake {
             self.call(format!("{tool} {input}"));
             match tool {
                 "start_session" | "move_session" => {
+                    if let Some(hook) = self.on_start.lock().unwrap().as_ref() {
+                        hook();
+                    }
                     let n = {
                         let mut s = self.started.lock().unwrap();
                         *s += 1;
@@ -311,6 +315,73 @@ fn mr(run: &mut Run) {
         project: "commslayer/app".into(),
         forge: "gitlab".into(),
     });
+}
+
+#[tokio::test]
+async fn retrying_an_agent_step_stops_its_old_session_first() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    run.place = crate::pipeline::record::Place {
+        machine: "hp".into(),
+        folder: "acme/app".into(),
+        branch: "com-1-fix".into(),
+        path: String::new(),
+    };
+    run.step = "implement".into();
+    run.state = RunState::Running;
+    let st = run.state_of("implement");
+    st.machine = "hp".into();
+    st.session = "hp-old".into();
+    st.runs = 2;
+    fake.session("hp", "hp-old", "com-1-fix", Activity::Idle);
+    act(
+        &fake,
+        &Pipelines::default(),
+        &run,
+        &Effect::Agent {
+            step: "implement".into(),
+        },
+    )
+    .await;
+    let calls = fake.calls();
+    let stop = calls
+        .iter()
+        .position(|c| c.starts_with("stop_session") && c.contains("hp-old"));
+    let start = calls.iter().position(|c| c.starts_with("start_session"));
+    assert!(
+        stop.is_some() && start.is_some() && stop < start,
+        "{calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_new_worktree_step_never_takes_over_another_session() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    run.place = crate::pipeline::record::Place {
+        machine: "hp".into(),
+        folder: "acme/app".into(),
+        branch: "com-1-fix".into(),
+        path: String::new(),
+    };
+    run.step = "implement".into();
+    run.state_of("implement").machine = "hp".into();
+    fake.session("hp", "hp-yours", "com-1-fix", Activity::Idle);
+    let seen = act(
+        &fake,
+        &Pipelines::default(),
+        &run,
+        &Effect::Agent {
+            step: "implement".into(),
+        },
+    )
+    .await;
+    assert!(
+        fake.calls().iter().any(|c| c.starts_with("start_session")),
+        "{:?}",
+        fake.calls()
+    );
+    assert!(!format!("{seen:?}").contains("hp-yours"), "{seen:?}");
 }
 
 #[tokio::test]
@@ -563,6 +634,104 @@ mod pipelines {
     }
 
     #[tokio::test]
+    async fn dropping_a_run_while_its_step_starts_stops_the_new_session() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.place = crate::pipeline::record::Place {
+            machine: "hp".into(),
+            folder: "acme/app".into(),
+            branch: "com-1-fix".into(),
+            path: String::new(),
+        };
+        run.step = "implement".into();
+        run.state = RunState::Running;
+        run.slot = Some("hp".into());
+        run.state_of("implement").machine = "hp".into();
+        run.pending = Some(Effect::Agent {
+            step: "implement".into(),
+        });
+        let id = run.id.clone();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        let (p2, id2) = (p.clone(), id.clone());
+        *fake.on_start.lock().unwrap() = Some(Box::new(move || {
+            p2.drop_run(&id2).unwrap();
+        }));
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.state, RunState::Dropped);
+        assert!(
+            fake.calls()
+                .iter()
+                .any(|c| c.starts_with("stop_session") && c.contains("hp-s1")),
+            "{:?}",
+            fake.calls()
+        );
+        assert_eq!(run.pending, None);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_pipeline_stops_its_runs_sessions() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.step = "implement".into();
+        run.state = RunState::Running;
+        run.pending = None;
+        let st = run.state_of("implement");
+        st.machine = "hp".into();
+        st.session = "hp-busy".into();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-busy", "com-1-fix", Activity::Active);
+        p.delete(&def.id).unwrap();
+        assert!(p.runs().is_empty());
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        assert!(
+            fake.calls()
+                .iter()
+                .any(|c| c.starts_with("stop_session") && c.contains("hp-busy")),
+            "{:?}",
+            fake.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn finished_runs_are_pruned_to_the_newest() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        for n in 0..60 {
+            let mut run = p
+                .start(&def.id, vec![ticket(&format!("COM-{n}"))], "you")
+                .unwrap()
+                .remove(0);
+            run.state = RunState::Done;
+            run.pending = None;
+            run.started = format!("2026-10-{:02}T09:00:00+00:00", 1 + n % 28);
+            p.put(run);
+        }
+        let fake = Arc::new(Fake::default());
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        assert_eq!(p.runs().len(), crate::pipeline::KEEP_FINISHED);
+    }
+
+    #[tokio::test]
     async fn starting_a_run_plans_it() {
         let (p, _dir) = pipelines();
         let def = p
@@ -594,8 +763,8 @@ mod pipelines {
         def.trigger = Trigger::GitlabReviewer {
             host: "git.commslayer.com".into(),
         };
-        def.enabled = true;
         let def = p.library().save(def, &cfg()).unwrap();
+        let def = p.library().set_enabled(&def.id, true, &cfg()).unwrap();
         let fakes = Fakes::default();
         let src = Sources {
             feeds: &fakes,
@@ -662,13 +831,11 @@ mod pipelines {
         );
         tick(&p, &fake, None, chrono::Local::now()).await;
         let run = p.run(&id).unwrap();
-        assert_eq!(run.steps["implement"].session, "hp-app-com-1");
-        assert!(run.pending.is_none());
-        assert!(
-            !fake.calls().iter().any(|c| c.starts_with("start_session")),
-            "{:?}",
-            fake.calls()
+        assert_eq!(
+            run.steps["implement"].session, "hp-s1",
+            "a session it did not start is left alone"
         );
+        assert!(run.pending.is_none());
     }
 
     #[tokio::test]

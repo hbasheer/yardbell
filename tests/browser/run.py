@@ -339,8 +339,10 @@ def review_pipeline():
     same = {"same_as": "understand"}
     return {
         "id": "review", "name": "Review my merge requests", "enabled": False, "version": 1,
-        "trigger": {"kind": "gitlab_reviewer", "host": "git.example.com"}, "start": "understand",
+        "trigger": {"kind": "gitlab_reviewer", "host": "git.example.com"}, "start": "plan",
         "steps": [
+            {"id": "plan", "name": "Plan", "kind": "plan", "machines": [], "max_runs": 2,
+             "next": {"pass": "understand", "fail": "wait", "needs_you": "wait"}, "x": -240, "y": 80},
             agent("understand", "Understand", 40, {"name": MACHINE}, {"kind": "new_worktree"},
                   {"pass": "root-cause", "fail": "report", "needs_you": "wait"}, "Read {ticket} and {pr}."),
             agent("root-cause", "Root cause", 320, same, {"kind": "same_as", "step": "understand"},
@@ -1853,8 +1855,10 @@ class Suite:
         b.click("#pl-templates button[data-empty]")
         b.wait("new URLSearchParams(location.search).get('tab') === 'build' && document.querySelector('.pl-canvas-hint')", "the empty pipeline on the canvas with its hint")
         pid = b.js("new URLSearchParams(location.search).get('p')")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"plan\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-plan.selected')", "Plan as the first step")
         b.js("document.querySelector('.pl-lib-item[data-kind=\"agent\"]').click()")
-        b.wait("document.querySelector('.pl-node.kind-agent.selected')", "the first step")
+        b.wait("document.querySelector('.pl-node.kind-agent.selected')", "the agent step after it")
         self.set_field('#pl-inspector select[name=machine_mode]', "name")
         b.wait("document.querySelector('#pl-inspector select[name=machine]')", "the machine to pick")
         self.set_field('#pl-inspector textarea[name=instructions]', "Say hello")
@@ -1862,8 +1866,10 @@ class Suite:
         b.wait("document.querySelector('.pl-node.kind-report.selected')", "Report to me after it")
         b.js("document.activeElement.blur()")
         b.key("s", "Control")
-        b.wait(f"(async () => (await (await fetch('/api/pipelines/{pid}')).json()).steps.length === 2)()", "the new pipeline saved with two steps")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/{pid}')).json()).steps.length === 3)()", "the new pipeline saved with three steps")
         b.click("#pl-run-now")
+        b.wait("document.querySelector('#pl-run-now-panel')", "the Run now panel")
+        b.js("[...document.querySelectorAll('#pl-run-now-panel button')].find((x) => x.textContent.trim() === 'Start').click()")
         b.wait(f"(async () => (await (await fetch('/api/pipelines/{pid}/runs')).json()).runs.length === 1)()", "Run now starting a run")
         self.check_errors("building from empty")
 
@@ -1917,6 +1923,73 @@ class Suite:
             self.check_errors("the builder on a phone")
         finally:
             b.viewport(1280, 800)
+
+    def test_builder_a_click_on_a_port_changes_nothing(self):
+        b = self.b
+        self.open_builder()
+        b.click('.pl-node[data-step="understand"] .pl-port.out.pass')
+        if not self.has_line("understand", "pass", "root-cause") or self.has_line("understand", "pass", "understand"):
+            raise Failure("clicking a port rewired the step")
+        b.drag('.pl-node[data-step="understand"] .pl-port.out.fail', '.pl-node[data-step="understand"]', steps=8)
+        if self.has_line("understand", "fail", "understand"):
+            raise Failure("dragging a port back onto its own card made a loop")
+
+    def test_builder_renaming_a_step_keeps_its_reports(self):
+        b = self.b
+        self.open_builder()
+        b.click('.pl-node[data-step="test"]')
+        b.wait("document.querySelector('#pl-inspector textarea[name=instructions]')", "the Test step")
+        self.set_field('#pl-inspector textarea[name=instructions]', "Use {report:Understand}")
+        b.click('.pl-node[data-step="understand"]')
+        b.wait("document.querySelector('#pl-inspector .pl-step-form[data-step=\"understand\"]')", "Understand")
+        self.set_field('#pl-inspector input[name=name]', "Understand it")
+        b.wait("document.querySelector('.pl-node[data-step=\"test\"] .pl-node-text').textContent.includes('{report:Understand it}')",
+               "the other step's {report:...} following the rename")
+
+    def test_builder_switching_on_survives_a_save(self):
+        b = self.b
+        made = self.api("POST", "/api/pipelines", {"template": "Implement my Linear tickets"})
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url(f"/pipeline?p={made['id']}&tab=build"))
+        b.wait("document.querySelector('.pl-node')", "the builder")
+        self.set_field(".pl-bar .pl-name", "Implement mine")
+        b.click(".pl-bar input.switch")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/{made['id']}')).json()).enabled)()", "the pipeline switched on")
+        b.click("#pl-save")
+        b.wait(f"(async () => {{ const d = await (await fetch('/api/pipelines/{made['id']}')).json(); return d.enabled && d.version === {made['version'] + 1}; }})()",
+               "the save keeping it on")
+
+    def test_builder_browser_back_asks_before_losing_changes(self):
+        b = self.b
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url("/pipeline"))
+        b.click('.pl-card[data-id="review"]')
+        b.wait("document.querySelector('.pl-builder')", "the pipeline")
+        b.js("[...document.querySelectorAll('.pl-builder [role=tab]')].find((t) => t.textContent.trim() === 'Build').click()")
+        b.wait("document.querySelector('.pl-canvas.editable')", "Build")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
+        b.js("window.__asked = ''; window.confirm = (m) => { window.__asked = m; return false; }")
+        b.js("history.back()")
+        b.wait("window.__asked === 'Leave without saving your changes?'", "the question")
+        b.wait("new URLSearchParams(location.search).get('p') === 'review' && document.querySelector('.pl-node.kind-wait')", "the change kept")
+
+    def test_run_now_on_a_manual_pipeline_takes_a_ticket(self):
+        b = self.b
+        made = self.api("POST", "/api/pipelines", {"empty": True})
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url(f"/pipeline?p={made['id']}&tab=build"))
+        b.click("#pl-run-now")
+        b.wait("document.querySelector('#pl-run-now-panel textarea')", "the Run now panel")
+        if b.js("[...document.querySelectorAll('#pl-run-now-panel button')].find((x) => x.textContent.trim().startsWith('Start')).disabled"):
+            raise Failure("a manual pipeline cannot start without a ticket")
+
+    def test_settings_no_longer_offers_the_ticket_pipeline(self):
+        b = self.b
+        b.goto(self.url("/settings"))
+        b.wait("document.querySelector('form')", "the settings page")
+        if b.js("!!document.querySelector('option[value=\"pipeline\"], input[name=pl_state]')"):
+            raise Failure("Settings still offers the removed ticket pipeline")
 
     def test_pipeline_run_graph_and_waiting_box(self):
         b = self.b
@@ -1978,8 +2051,8 @@ class Suite:
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-c"))
         b.wait("document.querySelector('.pl-minimap .pl-mini-view')", "the minimap")
-        if b.js("document.querySelectorAll('.pl-minimap .pl-mini-node').length") != 5:
-            raise Failure("the minimap does not show the Start node and the four steps")
+        if b.js("document.querySelectorAll('.pl-minimap .pl-mini-node').length") != 6:
+            raise Failure("the minimap does not show the Start node and the five steps")
         before = b.js("document.querySelector('.pl-pan').style.transform")
         box = b.js("(() => { const r = document.querySelector('.pl-minimap').getBoundingClientRect(); return [r.right - 8, r.bottom - 8]; })()")
         b.drag((box[0] - 1, box[1] - 1), (box[0], box[1]), steps=1)

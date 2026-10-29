@@ -252,6 +252,7 @@ pub enum Effect {
     Report { step: String },
     Notify { text: String },
     StopSessions,
+    StopReadOnly,
 }
 
 // What the watcher, the runner or the person saw happen to one run.

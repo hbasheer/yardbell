@@ -1,4 +1,5 @@
 use crate::config::Config;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
@@ -319,6 +320,7 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         .filter(|s| matches!(s.kind, StepKind::Plan { .. }))
         .map(|s| s.id.as_str())
         .collect();
+    let placeholder = Regex::new(r"\{report:([^}]+)\}").expect("static regex");
     for s in &def.steps {
         let name = &s.name;
         for (word, to) in s.next.lines() {
@@ -349,12 +351,23 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         };
         match &s.kind {
             StepKind::Agent {
+                instructions,
                 machine,
                 workspace,
                 session,
                 mcp_servers,
                 ..
             } => {
+                for c in placeholder.captures_iter(instructions) {
+                    let want = c[1].trim().to_lowercase();
+                    if !def
+                        .steps
+                        .iter()
+                        .any(|x| x.id == want || x.name.to_lowercase() == want)
+                    {
+                        out.push(format!("{name}: {} names no step", &c[0]));
+                    }
+                }
                 match machine {
                     MachineChoice::Name(m) if !known(m) => {
                         out.push(format!("{name}: machine {m} does not exist"));
@@ -375,6 +388,13 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                 match workspace {
                     Workspace::SameAs { step } => comes_before("same_as", step, &mut out),
                     Workspace::Copy { from } => comes_before("copy", from, &mut out),
+                    Workspace::NewWorktree
+                        if !earlier.iter().any(|e| plans.contains(e.as_str())) =>
+                    {
+                        out.push(format!(
+                            "{name}: a new worktree needs a Plan step before it on every path, to pick the folder"
+                        ));
+                    }
                     Workspace::NewWorktree => {}
                 }
                 if let SessionChoice::Continue(other) = session {
@@ -389,6 +409,24 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
             StepKind::Plan { machines } => {
                 for m in machines.iter().filter(|m| !known(m)) {
                     out.push(format!("{name}: machine {m} does not exist"));
+                }
+            }
+            StepKind::Push => {
+                let worktree = |id: &String| {
+                    def.step(id).is_some_and(|x| {
+                        matches!(
+                            x.kind,
+                            StepKind::Agent {
+                                workspace: Workspace::NewWorktree,
+                                ..
+                            }
+                        )
+                    })
+                };
+                if !earlier.iter().any(worktree) {
+                    out.push(format!(
+                        "{name}: needs a step that works in a new worktree before it on every path"
+                    ));
                 }
             }
             StepKind::Linear {
@@ -537,6 +575,52 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn check_names_report_placeholders_that_name_no_step() {
+        let mut steps = vec![
+            plan_step("plan"),
+            agent("a", "Understand", MachineChoice::Pick(vec![])),
+            agent("b", "Root cause", MachineChoice::SameAs("a".into())),
+        ];
+        steps[0].next.pass = "a".into();
+        steps[1].next.pass = "b".into();
+        if let StepKind::Agent { instructions, .. } = &mut steps[2].kind {
+            *instructions = "Check {report:Understand} and {report:Nope}".into();
+        }
+        assert_eq!(
+            problems(&def(steps)),
+            vec!["Root cause: {report:Nope} names no step"]
+        );
+    }
+
+    #[test]
+    fn a_new_worktree_and_a_push_need_a_plan_before_them() {
+        let mut steps = vec![
+            agent("a", "Implement", MachineChoice::Name("hp".into())),
+            Step {
+                kind: StepKind::Push,
+                ..agent("push", "Push", MachineChoice::Name("hp".into()))
+            },
+        ];
+        steps[0].next.pass = "push".into();
+        assert_eq!(
+            problems(&def(steps)),
+            vec!["Implement: a new worktree needs a Plan step before it on every path, to pick the folder"]
+        );
+        let mut alone = vec![
+            plan_step("plan"),
+            Step {
+                kind: StepKind::Push,
+                ..agent("push", "Push", MachineChoice::Name("hp".into()))
+            },
+        ];
+        alone[0].next.pass = "push".into();
+        assert_eq!(
+            problems(&def(alone)),
+            vec!["Push: needs a step that works in a new worktree before it on every path"]
+        );
+    }
+
+    #[test]
     fn check_names_each_problem() {
         let mut root = agent("root-cause", "Root cause", MachineChoice::Name("hp".into()));
         root.next.fail = "nowhere".into();
@@ -577,7 +661,11 @@ pub(crate) mod tests {
         ];
         assert!(problems(&def(lonely)).contains(&"Security is never reached".to_string()));
 
-        let mut gl = def(vec![agent("a", "A", MachineChoice::Name("hp".into()))]);
+        let report = Step {
+            kind: StepKind::Report,
+            ..agent("a", "A", MachineChoice::Name("hp".into()))
+        };
+        let mut gl = def(vec![report]);
         gl.trigger = Trigger::GitlabReviewer {
             host: "git.example.com".into(),
         };
@@ -592,7 +680,11 @@ pub(crate) mod tests {
 
     #[test]
     fn a_switched_off_pipeline_may_miss_its_trigger_host() {
-        let mut gl = def(vec![agent("a", "A", MachineChoice::Name("hp".into()))]);
+        let report = Step {
+            kind: StepKind::Report,
+            ..agent("a", "A", MachineChoice::Name("hp".into()))
+        };
+        let mut gl = def(vec![report]);
         gl.trigger = Trigger::GitlabReviewer {
             host: String::new(),
         };

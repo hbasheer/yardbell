@@ -396,7 +396,7 @@ function agentFields(step, others, redraw) {
         (v) => { step.session = v === "new" ? "new" : { continue: v.slice("continue:".length) }; redraw(); }, [["new", "A new session"]]))}
     </div>
     <label class="check"><input type="checkbox" name="read_only" .checked=${!!step.read_only} @change=${(e) => { step.read_only = e.target.checked; redraw(); }}>Read only: the agent may not change files, commit or push</label>
-    ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp")) : nothing}`;
+    ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "Saved with the step; agents do not get them yet.") : nothing}`;
 }
 
 function kindFields(step, others, redraw) {
@@ -415,13 +415,25 @@ function kindFields(step, others, redraw) {
   }
 }
 
+// A renamed step keeps the {report:Name} placeholders that point at it.
+function rename(d, step, name) {
+  const old = step.name.trim();
+  step.name = name;
+  if (!old) return;
+  const escaped = old.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const placeholder = new RegExp(`\\{report:\\s*${escaped}\\s*\\}`, "gi");
+  for (const s of d.steps) {
+    if (s.kind === "agent" && s.instructions) s.instructions = s.instructions.replace(placeholder, `{report:${name.trim()}}`);
+  }
+}
+
 function stepForm(step, d, redraw) {
   const others = d.steps.filter((s) => s.id !== step.id);
   const targets = [["end", "End the run"], ["wait", "Wait for me"]];
   return html`<fieldset class="pl-step-form" data-step=${step.id}>
     <legend>${step.name || step.id} <span>${KINDS[step.kind]}</span></legend>
     <div class="pl-fields">
-      ${field("Name", html`<input name="name" .value=${step.name} @input=${(e) => { step.name = e.target.value; redraw(); }}>`)}
+      ${field("Name", html`<input name="name" .value=${step.name} @input=${(e) => { rename(d, step, e.target.value); redraw(); }}>`)}
       ${field("Runs at most", html`<input type="number" name="max_runs" min="1" max="10" .value=${String(step.max_runs ?? 2)} @input=${(e) => { step.max_runs = Number(e.target.value); redraw(); }}>`)}
       ${step.kind === "agent" ? field("Minutes", html`<input type="number" name="minutes" min="10" max="1440" placeholder=${String(data.settings.minutes)} .value=${step.minutes == null ? "" : String(step.minutes)}
         @input=${(e) => { step.minutes = e.target.value === "" ? null : Number(e.target.value); redraw(); }}>`) : nothing}
@@ -922,7 +934,7 @@ function historyTab() {
 }
 
 function runNow(d) {
-  if (SUBJECTLESS.includes(d.trigger.kind)) {
+  if (d.trigger.kind === "schedule") {
     doing(async () => {
       await api("POST", `/api/pipelines/${encodeURIComponent(d.id)}/runs`, {});
       toast("Started", "ok");
@@ -936,6 +948,7 @@ function runNow(d) {
 
 function runNowPanel(d) {
   const linear = d.trigger.kind === "linear";
+  const optional = d.trigger.kind === "manual";
   const start = () => doing(async () => {
     const items = subjects.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
     const body = { tickets: items.filter((x) => !x.startsWith("https://")), prs: items.filter((x) => x.startsWith("https://")) };
@@ -946,11 +959,11 @@ function runNowPanel(d) {
     await load();
   });
   return html`<div class="pl-panel" id="pl-run-now-panel">
-    ${field(linear ? "Ticket ids" : "Merge or pull request links", html`<textarea rows="2" id="pl-subjects" placeholder=${linear ? "COM-1234 COM-1240" : "https://gitlab.example.com/group/app/-/merge_requests/87"}
-      .value=${subjects} @input=${(e) => { subjects = e.target.value; draw(); }}></textarea>`, "One run each. Ticket ids and links can be mixed.")}
+    ${field(optional ? "Ticket ids or links (optional)" : linear ? "Ticket ids" : "Merge or pull request links", html`<textarea rows="2" id="pl-subjects" placeholder=${linear || optional ? "COM-1234 COM-1240" : "https://gitlab.example.com/group/app/-/merge_requests/87"}
+      .value=${subjects} @input=${(e) => { subjects = e.target.value; draw(); }}></textarea>`, optional ? "One run each, or leave it empty for one run with no ticket." : "One run each. Ticket ids and links can be mixed.")}
     <div class="pl-panel-actions">
       <button class="btn quiet" type="button" @click=${() => { show.runNow = false; draw(); }}>Cancel</button>
-      <button class="btn primary" type="button" ?disabled=${busy || !subjects.trim()} @click=${start}>Start</button>
+      <button class="btn primary" type="button" ?disabled=${busy || (!optional && !subjects.trim())} @click=${start}>Start</button>
     </div>
   </div>`;
 }
@@ -1016,6 +1029,7 @@ function draw() {
   const id = params().get("p");
   document.title = id && def ? `${def.name} · Pipelines · Yardbell` : "Pipelines · Yardbell";
   render(id && def ? pipelineView() : listView(), root);
+  here = location.href;
   settle();
   inView(document.getElementById("pl-add-menu"));
 }
@@ -1049,6 +1063,7 @@ async function load() {
       const editing = draft && def && def.id === id && JSON.stringify(draft) !== JSON.stringify(def);
       def = found;
       if (!editing) draft = structuredClone(found);
+      draft.enabled = found.enabled;
       if (params().get("tab") === "history") versions = (await api("GET", `/api/pipelines/${encodeURIComponent(id)}/history`)).history;
     }
   } else {
@@ -1058,6 +1073,14 @@ async function load() {
   draw();
 }
 
-window.addEventListener("popstate", () => load().catch((err) => toast(err.message)));
+let here = location.href;
+
+window.addEventListener("popstate", () => {
+  if (unsaved() && params().get("p") !== def.id && !confirm("Leave without saving your changes?")) {
+    history.pushState(null, "", here);
+    return;
+  }
+  load().catch((err) => toast(err.message));
+});
 window.YardbellLive.follow(() => { if (!busy) load().catch(() => {}); }, 5000);
 load().catch((err) => toast(err.message));

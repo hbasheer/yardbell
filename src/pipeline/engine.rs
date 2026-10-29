@@ -148,7 +148,7 @@ fn follow(mut run: Run, outcome: Outcome, now: &DateTime<Local>) -> (Run, Vec<Ef
             run.step = String::new();
             run.slot = None;
             run.waiting = None;
-            (run, vec![])
+            (run, vec![Effect::StopReadOnly])
         }
         WAIT if outcome == Outcome::NeedsYou => {
             let reason = format!("{} needs you", step.name);
@@ -240,6 +240,7 @@ fn answer(mut run: Run, text: String, now: &DateTime<Local>) -> (Run, Vec<Effect
         WaitKind::Asking => {
             run.waiting = None;
             run.state = RunState::Running;
+            run.step_since = now.to_rfc3339();
             let machine = run.steps.get(&w.step).map(|s| s.machine.clone());
             run.slot = machine;
             (run, vec![Effect::Answer { step: w.step, text }])
@@ -289,6 +290,7 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
         Seen::Admitted if run.state == RunState::Queued => {
             run.offline_since = None;
             run.state = RunState::Running;
+            run.step_since = now.to_rfc3339();
             let machine = run.slot.clone().unwrap_or_default();
             let st = run.state_of(&id);
             st.runs += 1;
@@ -560,7 +562,12 @@ pub(crate) mod tests {
                     "report",
                     Running,
                 ),
-                (Seen::Reported(Ok("All good.".into())), vec![], "", Done),
+                (
+                    Seen::Reported(Ok("All good.".into())),
+                    vec![Effect::StopReadOnly],
+                    "",
+                    Done,
+                ),
             ],
         );
         assert_eq!(run.place.machine, "hp");
@@ -788,6 +795,45 @@ pub(crate) mod tests {
         );
         assert_eq!(waiting(&run).0, WaitKind::NoResult);
         assert!(run.waiting.unwrap().screen.starts_with("line 11"));
+    }
+
+    #[test]
+    fn the_time_limit_counts_from_when_a_step_starts_working() {
+        let mut run = at_step("Implement my Linear tickets", "implement");
+        run.state = RunState::Queued;
+        let later = at(0) + chrono::Duration::minutes(150);
+        let (run, _) = step(run, Seen::Admitted, &cfg(), later);
+        let (mut run, _) = step(
+            run,
+            Seen::Tick,
+            &cfg(),
+            later + chrono::Duration::minutes(5),
+        );
+        assert_eq!(run.state, RunState::Running, "{:?}", run.waiting);
+        run.state = RunState::Waiting;
+        run.waiting = Some(crate::pipeline::record::Waiting {
+            kind: WaitKind::Asking,
+            step: "implement".into(),
+            reason: "The agent is asking something".into(),
+            screen: String::new(),
+        });
+        let next_day = later + chrono::Duration::hours(20);
+        let (run, _) = step(run, Seen::Answer("yes".into()), &cfg(), next_day);
+        let (run, _) = step(
+            run,
+            Seen::Tick,
+            &cfg(),
+            next_day + chrono::Duration::minutes(5),
+        );
+        assert_eq!(run.state, RunState::Running, "{:?}", run.waiting);
+    }
+
+    #[test]
+    fn a_finished_run_stops_its_read_only_sessions() {
+        let run = at_step("Review my merge requests", "report");
+        let (run, did) = step(run, ended("report", Outcome::Pass), &cfg(), at(9));
+        assert_eq!(run.state, RunState::Done);
+        assert_eq!(did, vec![Effect::StopReadOnly]);
     }
 
     #[test]

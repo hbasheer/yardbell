@@ -25,6 +25,7 @@ use store::Store;
 use tokio::task::JoinHandle;
 
 const TICK: std::time::Duration = std::time::Duration::from_secs(10);
+pub const KEEP_FINISHED: usize = 50;
 
 pub struct Pipelines {
     library: Library,
@@ -35,6 +36,8 @@ pub struct Pipelines {
     cfg: Mutex<crate::config::Pipelines>,
     ticking: tokio::sync::Mutex<()>,
     linear: Mutex<Arc<linear::Linear>>,
+    // Sessions of runs that went with a deleted pipeline, stopped on the next round.
+    orphans: Mutex<Vec<(String, String)>>,
 }
 
 fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
@@ -60,6 +63,7 @@ impl Pipelines {
             cfg: Mutex::new(crate::config::Pipelines::default()),
             ticking: tokio::sync::Mutex::new(()),
             linear: Mutex::new(Arc::new(linear::Linear::new())),
+            orphans: Mutex::new(Vec::new()),
         }
     }
 
@@ -95,6 +99,18 @@ impl Pipelines {
 
     pub fn delete(&self, pipeline: &str) -> Result<(), String> {
         self.library.delete(pipeline)?;
+        let sessions = self
+            .store
+            .all()
+            .into_iter()
+            .filter(|r| r.pipeline == pipeline && r.state.active())
+            .flat_map(|r| r.steps.into_values())
+            .filter(|st| !st.session.is_empty())
+            .map(|st| (st.machine, st.session));
+        self.orphans
+            .lock()
+            .expect("pipelines orphans")
+            .extend(sessions);
         self.store.remove_pipeline(pipeline);
         Ok(())
     }
@@ -137,17 +153,33 @@ impl Pipelines {
     // Feeds what was seen to the engine and saves the result. The next step to carry out is
     // kept on the run, so a restart picks it up; notifications go out at once.
     fn apply(&self, world: &dyn World, id: &str, seen: Seen, now: chrono::DateTime<chrono::Local>) {
-        let Some(run) = self.store.get(id) else {
-            return;
-        };
         let cfg = self.cfg.lock().expect("pipelines cfg").clone();
-        let (mut run, effects) = engine::step(run, seen, &cfg, now);
-        let (step, notes) = first_step(effects);
-        if step.is_some() {
-            run.pending = step;
-        }
-        self.store.put(run);
-        for note in notes {
+        let notes = self.store.update(id, |run| {
+            // A session that started after the run was dropped is still stopped.
+            if let (
+                false,
+                Seen::Started {
+                    step,
+                    result: Ok((session, machine, path)),
+                },
+            ) = (run.state.active(), &seen)
+            {
+                let st = run.state_of(step);
+                st.session = session.clone();
+                st.machine = machine.clone();
+                st.path = path.clone();
+                run.pending = Some(Effect::StopSessions);
+                return Vec::new();
+            }
+            let (next, effects) = engine::step(run.clone(), seen, &cfg, now);
+            *run = next;
+            let (step, notes) = first_step(effects);
+            if step.is_some() {
+                run.pending = step;
+            }
+            notes
+        });
+        for note in notes.unwrap_or_default() {
             world.notify(&note);
         }
     }
@@ -158,16 +190,18 @@ impl Pipelines {
         seen: Seen,
         allowed: impl Fn(&Run) -> Result<(), String>,
     ) -> Result<Run, String> {
-        let run = self
-            .store
-            .get(id)
-            .ok_or_else(|| format!("{id} is not a run"))?;
-        allowed(&run)?;
         let cfg = self.cfg.lock().expect("pipelines cfg").clone();
-        let (mut run, effects) = engine::step(run, seen, &cfg, chrono::Local::now());
-        run.pending = first_step(effects).0;
-        self.store.put(run.clone());
-        Ok(run)
+        self.store
+            .update(id, |run| {
+                allowed(run)?;
+                let (next, effects) = engine::step(run.clone(), seen, &cfg, chrono::Local::now());
+                *run = next;
+                if let Some(step) = first_step(effects).0 {
+                    run.pending = Some(step);
+                }
+                Ok(run.clone())
+            })
+            .ok_or_else(|| format!("{id} is not a run"))?
     }
 
     fn waiting(run: &Run) -> Result<(), String> {
@@ -228,6 +262,18 @@ impl Pipelines {
             }
         }
         let view = world.view();
+        let orphans: Vec<_> = std::mem::take(&mut *self.orphans.lock().expect("pipelines orphans"));
+        for (machine, name) in orphans {
+            if view
+                .sessions
+                .iter()
+                .any(|s| s.tmux.as_deref() == Some(name.as_str()))
+            {
+                let input = serde_json::json!({ "machine": machine, "name": name });
+                let _ = world.perform("stop_session", input).await;
+            }
+        }
+        self.store.prune(KEEP_FINISHED);
         let up = |m: &str| view.machines.iter().any(|x| x.name == m && x.up);
         for id in engine::admit(&self.store.all(), cfg, &up) {
             if !self.busy(&id) {
@@ -296,10 +342,12 @@ impl Pipelines {
                 self.store.put(run.clone());
             }
             let seen = run::act(world.as_ref(), &cfg, &run, &effect).await;
-            if let Some(mut now) = self.store.get(&id) {
-                now.pending = None;
-                self.store.put(now);
-            }
+            // A person may have dropped the run meanwhile and left a step of their own.
+            self.store.update(&id, |now| {
+                if now.pending.as_ref() == Some(&effect) {
+                    now.pending = None;
+                }
+            });
             for s in seen {
                 self.apply(world.as_ref(), &id, s, chrono::Local::now());
             }

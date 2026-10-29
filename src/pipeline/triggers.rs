@@ -35,6 +35,8 @@ pub struct Sources<'a> {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Kept {
+    // The trigger this was watched with; a different one starts a new baseline.
+    pub trigger: String,
     pub baseline: bool,
     pub seen: BTreeMap<String, String>,
     pub anchor: String,
@@ -44,6 +46,7 @@ pub struct Kept {
 
 pub struct Watch {
     file: PathBuf,
+    written: Mutex<Vec<u8>>,
     kept: Mutex<BTreeMap<String, Kept>>,
     polls: Mutex<HashMap<String, DateTime<Local>>>,
 }
@@ -81,6 +84,7 @@ impl Watch {
             .unwrap_or_default();
         Watch {
             file,
+            written: Mutex::new(Vec::new()),
             kept: Mutex::new(kept),
             polls: Mutex::new(HashMap::new()),
         }
@@ -98,6 +102,11 @@ impl Watch {
     fn save(&self) {
         let bytes =
             serde_json::to_vec_pretty(&*self.kept.lock().expect("watch lock")).unwrap_or_default();
+        let mut written = self.written.lock().expect("watch written");
+        if *written == bytes {
+            return;
+        }
+        *written = bytes.clone();
         let tmp = self.file.with_extension("tmp");
         let written = self
             .file
@@ -129,6 +138,7 @@ impl Watch {
         now: DateTime<Local>,
     ) -> Vec<(String, Subject)> {
         let mut out = Vec::new();
+        self.forget_all_but(defs);
         for def in defs.iter().filter(|d| d.enabled) {
             let found = match &def.trigger {
                 Trigger::Manual => continue,
@@ -151,6 +161,34 @@ impl Watch {
         }
         self.save();
         out
+    }
+
+    // A pipeline switched off, deleted or given a new trigger watches from scratch next time,
+    // so what arrived meanwhile does not all start at once.
+    fn forget_all_but(&self, defs: &[Definition]) {
+        let on: BTreeMap<&str, String> = defs
+            .iter()
+            .filter(|d| d.enabled)
+            .map(|d| {
+                (
+                    d.id.as_str(),
+                    serde_json::to_string(&d.trigger).unwrap_or_default(),
+                )
+            })
+            .collect();
+        let mut kept = self.kept.lock().expect("watch lock");
+        kept.retain(|id, _| on.contains_key(id.as_str()));
+        for (id, trigger) in on {
+            let k = kept.entry(id.to_string()).or_default();
+            if k.trigger != trigger {
+                *k = Kept {
+                    trigger,
+                    ..Kept::default()
+                };
+            }
+        }
+        let mut polls = self.polls.lock().expect("watch polls");
+        polls.retain(|id, _| kept.contains_key(id));
     }
 
     fn edit<T>(&self, id: &str, change: impl FnOnce(&mut Kept) -> T) -> T {
@@ -449,6 +487,43 @@ pub(crate) mod tests {
         assert!(
             w.due(&defs, &sources(&f), at(9, 8)).await.is_empty(),
             "each item fires once"
+        );
+    }
+
+    #[tokio::test]
+    async fn switching_back_on_or_changing_the_trigger_watches_from_then() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        let reviewer = |on| {
+            pipeline(
+                Trigger::GitlabReviewer {
+                    host: "git.commslayer.com".into(),
+                },
+                on,
+            )
+        };
+        w.due(&[reviewer(true)], &sources(&f), at(9, 0)).await;
+        w.due(&[reviewer(false)], &sources(&f), at(9, 4)).await;
+        *f.mrs.lock().unwrap() = vec![mr(91, "com-1250-inbox", "Inbox filter")];
+        assert!(
+            w.due(&[reviewer(true)], &sources(&f), at(9, 8))
+                .await
+                .is_empty(),
+            "what arrived while it was off is left alone"
+        );
+        f.mrs
+            .lock()
+            .unwrap()
+            .push(mr(92, "com-1251-export", "Export"));
+        let other = pipeline(
+            Trigger::GitlabReviewer {
+                host: "gl.example.com".into(),
+            },
+            true,
+        );
+        assert!(
+            w.due(&[other], &sources(&f), at(9, 12)).await.is_empty(),
+            "a changed trigger starts a new baseline"
         );
     }
 

@@ -289,9 +289,11 @@ function letGo(e, on) {
   if (h.kind === "line") {
     ghost(canvas, null);
     if (e.type !== "pointerup") return;
+    // A click on a port, or a line dropped back on its own card, changes nothing.
+    if (!h.moved) return;
     const over = document.elementFromPoint(e.clientX, e.clientY)?.closest(".pl-node[data-step]");
-    if (over && over.dataset.step !== "@start") on?.connect?.(h.from, h.outcome, over.dataset.step);
-    else if (h.moved && !over) on?.drop?.(null, toWorld(canvas, e.clientX, e.clientY), h.from, h.outcome, e.clientX, e.clientY);
+    if (over && over.dataset.step !== "@start" && over.dataset.step !== h.from) on?.connect?.(h.from, h.outcome, over.dataset.step);
+    else if (!over) on?.drop?.(null, toWorld(canvas, e.clientX, e.clientY), h.from, h.outcome, e.clientX, e.clientY);
     return;
   }
   if (h.kind === "pan" && !h.moved && e.type === "pointerup" && !e.target.closest(".pl-node, .pl-edge-hit")) on?.select?.(null);
