@@ -1,5 +1,5 @@
 use super::{ApiError, AppState};
-use crate::pipeline::record::{Record, Stage, Ticket};
+use crate::pipeline::legacy::{Record, Stage, Ticket};
 use crate::triggers::LINEAR_SECRET;
 use axum::extract::{Path, State as AxState};
 use axum::http::StatusCode;

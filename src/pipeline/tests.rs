@@ -1,5 +1,5 @@
+use super::legacy::{Effect, ParkKind, Parked, PullRef, Question, Record, Stage, Ticket};
 use super::prompts::TicketText;
-use super::record::{Effect, ParkKind, Parked, PullRef, Question, Record, Stage, Ticket};
 use super::run::World;
 use super::Pipeline;
 use crate::dispatch::ReviewOf;
@@ -404,7 +404,7 @@ async fn a_denying_rule_parks_the_ticket() {
             machine: "hp".into(),
             branch: "com-1-fix-the-login".into(),
             conversation: "conv0000000001".into(),
-            sessions: super::record::Sessions {
+            sessions: super::legacy::Sessions {
                 implement: "hp-app-com-1".into(),
                 ..Default::default()
             },
@@ -540,7 +540,7 @@ async fn a_restart_in_finish_resumes_after_the_push() {
             machine: "hp".into(),
             branch: "com-1-fix-the-login".into(),
             conversation: "conv0000000001".into(),
-            sessions: super::record::Sessions {
+            sessions: super::legacy::Sessions {
                 implement: "hp-app-com-1".into(),
                 ..Default::default()
             },
@@ -584,7 +584,7 @@ async fn qa_on_the_same_machine_starts_a_reader_in_the_worktree() {
             machine: "hp".into(),
             branch: "com-1-fix-the-login".into(),
             conversation: "conv0000000001".into(),
-            sessions: super::record::Sessions {
+            sessions: super::legacy::Sessions {
                 implement: "hp-app-com-1".into(),
                 ..Default::default()
             },

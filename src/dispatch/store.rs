@@ -156,7 +156,7 @@ pub(super) fn now() -> String {
     chrono::Local::now().to_rfc3339()
 }
 
-pub(super) fn new_id() -> String {
+pub(crate) fn new_id() -> String {
     rand::thread_rng()
         .sample_iter(&rand::distributions::Alphanumeric)
         .take(ID_LEN)

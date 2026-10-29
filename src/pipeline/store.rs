@@ -1,83 +1,91 @@
-use super::record::{Entry, Record, Stage, Ticket};
+use super::definition::Definition;
+use super::record::{Entry, Run, RunState, Subject};
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 use std::sync::Mutex;
 
 pub struct Store {
     file: PathBuf,
-    records: Mutex<BTreeMap<String, Record>>,
+    runs: Mutex<BTreeMap<String, Run>>,
 }
 
 impl Store {
     pub fn load(file: PathBuf) -> Store {
-        let records = std::fs::read(&file)
+        let runs = std::fs::read(&file)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         Store {
             file,
-            records: Mutex::new(records),
+            runs: Mutex::new(runs),
         }
     }
 
-    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Record>> {
-        self.records.lock().expect("pipeline lock")
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, Run>> {
+        self.runs.lock().expect("runs lock")
     }
 
-    pub fn all(&self) -> Vec<Record> {
+    pub fn all(&self) -> Vec<Run> {
         self.lock().values().cloned().collect()
     }
 
-    pub fn get(&self, id: &str) -> Option<Record> {
+    pub fn get(&self, id: &str) -> Option<Run> {
         self.lock().get(id).cloned()
     }
 
-    pub fn put(&self, record: Record) {
-        self.lock().insert(record.id.clone(), record);
+    pub fn put(&self, run: Run) {
+        self.lock().insert(run.id.clone(), run);
         self.save();
     }
 
-    // All or none: one ticket still running refuses the whole batch, so a run never starts with
-    // half its tickets.
+    pub fn remove_pipeline(&self, pipeline: &str) {
+        self.lock().retain(|_, r| r.pipeline != pipeline);
+        self.save();
+    }
+
     pub fn add(
         &self,
-        tickets: &[Ticket],
-        run: &str,
+        def: &Definition,
+        subject: Subject,
         started_by: &str,
         now: &str,
-    ) -> Result<Vec<Record>, String> {
-        let mut records = self.lock();
-        if let Some(busy) = tickets
-            .iter()
-            .find(|t| records.get(&t.id).is_some_and(|r| r.stage.active()))
-        {
-            return Err(format!("{} is already in a run", busy.id));
+    ) -> Result<Run, String> {
+        let key = subject.key();
+        let mut runs = self.lock();
+        let busy = runs
+            .values()
+            .any(|r| r.pipeline == def.id && r.key == key && r.state.active() && key != "none");
+        if busy {
+            return Err(format!(
+                "{} is already in a run of {}",
+                subject.label(),
+                def.name
+            ));
         }
-        let added: Vec<Record> = tickets
-            .iter()
-            .map(|t| Record {
-                id: t.id.clone(),
-                linear_id: t.linear_id.clone(),
-                title: t.title.clone(),
-                url: t.url.clone(),
-                run: run.to_string(),
-                started_by: started_by.to_string(),
-                stage: Stage::Queued,
-                stage_since: now.to_string(),
-                history: vec![Entry {
-                    stage: Stage::Queued,
-                    at: now.to_string(),
-                    note: String::new(),
-                }],
-                ..Record::default()
-            })
-            .collect();
-        for r in &added {
-            records.insert(r.id.clone(), r.clone());
-        }
-        drop(records);
+        let run = Run {
+            id: crate::dispatch::new_conversation_id(),
+            pipeline: def.id.clone(),
+            pipeline_name: def.name.clone(),
+            version: def.version,
+            definition: Some(def.clone()),
+            subject,
+            key,
+            started_by: started_by.to_string(),
+            started: now.to_string(),
+            state: RunState::Queued,
+            step_since: now.to_string(),
+            history: vec![Entry {
+                step: String::new(),
+                outcome: None,
+                at: now.to_string(),
+                note: format!("started by {started_by}"),
+            }],
+            ..Run::default()
+        };
+        runs.insert(run.id.clone(), run.clone());
+        drop(runs);
         self.save();
-        Ok(added)
+        Ok(run)
     }
 
     fn save(&self) {
@@ -98,87 +106,107 @@ impl Store {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::record::{Stage, Ticket};
+    use crate::pipeline::definition::tests::cfg;
+    use crate::pipeline::library::Library;
+    use crate::pipeline::record::{PrRef, RunState, Subject, TicketRef};
 
-    fn ticket(id: &str) -> Ticket {
-        Ticket {
-            linear_id: format!("uuid-{id}"),
-            id: id.into(),
-            title: format!("Fix {id}"),
-            url: format!("https://linear.app/acme/issue/{id}"),
-            state: "Todo".into(),
+    fn ticket(id: &str) -> Subject {
+        Subject {
+            ticket: Some(TicketRef {
+                linear_id: format!("u-{id}"),
+                id: id.into(),
+                title: "Fix the webhook dedup".into(),
+                url: format!("https://linear.app/acme/issue/{id}"),
+            }),
+            pr: None,
+        }
+    }
+
+    fn mr() -> Subject {
+        Subject {
+            pr: Some(PrRef {
+                url: "https://git.commslayer.com/commslayer/app/-/merge_requests/87".into(),
+                number: 87,
+                branch: "com-1234-webhook-dedup".into(),
+                host: "git.commslayer.com".into(),
+                project: "commslayer/app".into(),
+                forge: "gitlab".into(),
+            }),
+            ..ticket("COM-1234")
         }
     }
 
     const NOW: &str = "2026-10-29T09:40:00+03:00";
 
-    #[test]
-    fn records_survive_a_reload() {
+    fn setup() -> (Store, Library, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("pipeline.json");
-        let store = Store::load(file.clone());
-        store
-            .add(&[ticket("COM-1"), ticket("COM-2")], "r1", "you", NOW)
+        let lib = Library::load(dir.path().join("pipelines"));
+        lib.copy_template("Implement my Linear tickets", &cfg())
             .unwrap();
-        let mut second = store.get("COM-2").unwrap();
-        second.stage = Stage::Review;
-        second.round = 1;
-        store.put(second);
-        let again = Store::load(file);
-        assert_eq!(again.all().len(), 2);
-        let second = again.get("COM-2").unwrap();
-        assert_eq!(second.stage, Stage::Review);
-        assert_eq!(second.round, 1);
-    }
-
-    #[test]
-    fn a_running_ticket_is_not_added_twice() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::load(dir.path().join("pipeline.json"));
-        store.add(&[ticket("COM-1")], "r1", "you", NOW).unwrap();
-        let mut one = store.get("COM-1").unwrap();
-        one.stage = Stage::Implement;
-        store.put(one);
-        let err = store.add(&[ticket("COM-1")], "r2", "you", NOW).unwrap_err();
-        assert!(err.contains("COM-1 is already in a run"), "{err}");
-        let mut one = store.get("COM-1").unwrap();
-        one.stage = Stage::Done;
-        store.put(one);
-        let added = store.add(&[ticket("COM-1")], "r2", "you", NOW).unwrap();
-        assert_eq!(added[0].stage, Stage::Queued);
-        assert_eq!(store.get("COM-1").unwrap().run, "r2");
-    }
-
-    #[test]
-    fn an_old_file_without_new_fields_loads() {
-        let dir = tempfile::tempdir().unwrap();
-        let file = dir.path().join("pipeline.json");
-        std::fs::write(
-            &file,
-            r#"{"COM-9": {"id": "COM-9", "title": "Old", "stage": "fix"}}"#,
-        )
-        .unwrap();
-        let store = Store::load(file);
-        let old = store.get("COM-9").unwrap();
-        assert_eq!(old.stage, Stage::Fix);
-        assert_eq!(old.round, 0);
-        assert!(old.parked.is_none());
-    }
-
-    #[test]
-    fn add_starts_queued() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = Store::load(dir.path().join("pipeline.json"));
-        let added = store
-            .add(&[ticket("COM-1")], "r1", "trigger:nightly", NOW)
+        lib.copy_template("Review my merge requests", &cfg())
             .unwrap();
-        let r = &added[0];
-        assert_eq!(r.stage, Stage::Queued);
-        assert_eq!(r.run, "r1");
-        assert_eq!(r.started_by, "trigger:nightly");
-        assert_eq!(r.linear_id, "uuid-COM-1");
-        assert_eq!(r.history.len(), 1);
-        assert_eq!(r.history[0].stage, Stage::Queued);
-        assert_eq!(r.stage_since, NOW);
+        (Store::load(dir.path().join("runs.json")), lib, dir)
+    }
+
+    #[test]
+    fn subject_keys_and_labels() {
+        assert_eq!(ticket("COM-1").key(), "ticket:COM-1");
+        assert_eq!(ticket("COM-1").label(), "COM-1 Fix the webhook dedup");
+        assert_eq!(
+            mr().key(),
+            "pr:https://git.commslayer.com/commslayer/app/-/merge_requests/87"
+        );
+        assert_eq!(mr().label(), "!87 COM-1234 Fix the webhook dedup");
+        assert_eq!(Subject::default().key(), "none");
+    }
+
+    #[test]
+    fn runs_survive_a_reload() {
+        let (store, lib, dir) = setup();
+        let def = lib.get("implement-my-linear-tickets").unwrap();
+        let run = store.add(&def, ticket("COM-1"), "you", NOW).unwrap();
+        assert_eq!(run.state, RunState::Queued);
+        assert_eq!(run.pipeline, "implement-my-linear-tickets");
+        assert_eq!(run.pipeline_name, "Implement my Linear tickets");
+        let mut changed = store.get(&run.id).unwrap();
+        changed.step = "implement".into();
+        store.put(changed);
+        let again = Store::load(dir.path().join("runs.json"));
+        assert_eq!(again.get(&run.id).unwrap().step, "implement");
+    }
+
+    #[test]
+    fn an_item_in_a_run_of_this_pipeline_is_refused() {
+        let (store, lib, _dir) = setup();
+        let review = lib.get("review-my-merge-requests").unwrap();
+        let implement = lib.get("implement-my-linear-tickets").unwrap();
+        let first = store.add(&review, mr(), "trigger", NOW).unwrap();
+        let err = store.add(&review, mr(), "trigger", NOW).unwrap_err();
+        assert_eq!(
+            err,
+            "!87 COM-1234 Fix the webhook dedup is already in a run of Review my merge requests"
+        );
+        store.add(&implement, mr(), "you", NOW).unwrap();
+        let mut done = store.get(&first.id).unwrap();
+        done.state = RunState::Done;
+        store.put(done);
+        store.add(&review, mr(), "trigger", NOW).unwrap();
+    }
+
+    #[test]
+    fn a_run_keeps_its_version() {
+        let (store, lib, _dir) = setup();
+        let def = lib.get("implement-my-linear-tickets").unwrap();
+        let run = store.add(&def, ticket("COM-1"), "you", NOW).unwrap();
+        let mut changed = def.clone();
+        changed.steps.retain(|s| s.id != "fix-after-qa");
+        if let Some(qa) = changed.steps.iter_mut().find(|s| s.id == "qa") {
+            qa.next.fail = "fix".into();
+        }
+        let saved = lib.save(changed, &cfg()).unwrap();
+        assert_eq!(saved.version, 2);
+        let kept = store.get(&run.id).unwrap();
+        assert_eq!(kept.version, 1);
+        assert!(kept.def().step("fix-after-qa").is_some());
     }
 }

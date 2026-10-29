@@ -794,7 +794,7 @@ async fn a_pipeline_schedule_adds_open_tickets_in_its_state() {
     let dir = tempfile::tempdir().unwrap();
     let d = dispatch(dir.path(), QUICK);
     let pipeline = crate::pipeline::Pipeline::new(dir.path().join("pipeline.json"));
-    let ticket = |id: &str| crate::pipeline::record::Ticket {
+    let ticket = |id: &str| crate::pipeline::legacy::Ticket {
         linear_id: format!("i-{id}"),
         id: id.into(),
         title: "Busy".into(),

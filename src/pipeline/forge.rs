@@ -1,4 +1,4 @@
-use super::record::{PullRef, Record};
+use super::legacy::{PullRef, Record};
 use crate::config::Machine;
 use crate::pulls::{GitLabAccess, Remotes};
 use crate::shell::{quote, Duration, Runner};
@@ -195,7 +195,7 @@ fn encode(project: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::record::Stage;
+    use crate::pipeline::legacy::Stage;
     use crate::shell::Output;
     use crate::testing::FakeRunner;
     use crate::worktrees::testing::machine;

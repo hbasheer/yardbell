@@ -1,5 +1,5 @@
+use super::legacy::{Finding, Record, Seen, Stage};
 use super::prompts;
-use super::record::{Finding, Record, Seen, Stage};
 use crate::dispatch::parse_result;
 use crate::snapshot::Activity;
 use crate::state::StateView;

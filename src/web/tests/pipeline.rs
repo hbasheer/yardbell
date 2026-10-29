@@ -1,5 +1,5 @@
 use super::*;
-use crate::pipeline::record::{ParkKind, Parked, Question, Record, Stage};
+use crate::pipeline::legacy::{ParkKind, Parked, Question, Record, Stage};
 
 async fn get_json(r: &Rig, c: &str, url: &str) -> (StatusCode, serde_json::Value) {
     let req = Request::get(url)

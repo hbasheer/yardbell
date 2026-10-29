@@ -1,4 +1,4 @@
-use super::record::{Finding, Record, Triage};
+use super::legacy::{Finding, Record, Triage};
 use crate::config::Pipeline as Cfg;
 use crate::dispatch::{bullet, clip, is_marker, unframed, value_of};
 
@@ -329,7 +329,7 @@ pub fn parse_summary(reply: &str) -> Result<(String, String), String> {
 mod tests {
     use super::*;
     use crate::pipeline::engine::tests::{cfg, record};
-    use crate::pipeline::record::Stage;
+    use crate::pipeline::legacy::Stage;
 
     fn ticket() -> TicketText {
         TicketText {

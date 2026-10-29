@@ -1,7 +1,7 @@
-use super::prompts;
-use super::record::{
+use super::legacy::{
     Effect, Entry, Finding, ParkKind, Parked, Question, Record, Seen, Stage, Triage,
 };
+use super::prompts;
 use crate::config::Pipeline as Cfg;
 use crate::dispatch::GroupOutcome;
 use chrono::{DateTime, Duration, Local};
@@ -485,7 +485,7 @@ pub fn admit(records: &[Record], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<St
 pub(crate) mod tests {
     use super::*;
     use crate::dispatch::GroupOutcome;
-    use crate::pipeline::record::{ParkKind, Parked, PullRef, Question};
+    use crate::pipeline::legacy::{ParkKind, Parked, PullRef, Question};
     use chrono::TimeZone;
 
     pub(crate) fn cfg() -> Cfg {

@@ -37,6 +37,7 @@ pub use rules::{
     decide as decide_step, decide_memory, folder_matches, valid_folder_pattern,
     validate as validate_rules, Rule, Step, Verdict,
 };
+pub(crate) use store::new_id as new_conversation_id;
 pub use store::valid_id;
 pub use store::write_private;
 pub use tasks::{History as TaskHistory, SavedTask, Version as TaskVersion, MAX_VERSIONS};

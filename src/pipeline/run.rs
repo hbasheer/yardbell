@@ -1,7 +1,7 @@
 use super::forge::Forge;
+use super::legacy::{Effect, PullRef, Record, Seen, Stage};
 use super::linear::Linear;
 use super::prompts::{self, TicketText};
-use super::record::{Effect, PullRef, Record, Seen, Stage};
 use crate::config::{Approval, Config, Pipeline as Cfg};
 use crate::dispatch::{By, ReviewOf};
 use crate::phone::Push;

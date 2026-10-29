@@ -1,5 +1,5 @@
+use super::legacy::Ticket;
 use super::prompts::TicketText;
-use super::record::Ticket;
 use crate::triggers::{parse_linear, LINEAR_API, LINEAR_QUERY, LINEAR_SECRET};
 use serde_json::{json, Value};
 use std::time::Duration;
