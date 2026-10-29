@@ -1,0 +1,262 @@
+use super::definition::{check, slug, Definition};
+use crate::config::Config;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+struct Saved {
+    version: u32,
+    saved: String,
+    definition: Definition,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+struct File {
+    #[serde(default)]
+    history: Vec<Saved>,
+}
+
+impl File {
+    fn current(&self) -> Option<&Definition> {
+        self.history.first().map(|s| &s.definition)
+    }
+}
+
+// Pipelines as files in a folder, newest version first in each, at most MAX_VERSIONS kept.
+pub struct Library {
+    dir: PathBuf,
+    files: Mutex<BTreeMap<String, File>>,
+}
+
+impl Library {
+    pub fn load(dir: PathBuf) -> Library {
+        let mut files = BTreeMap::new();
+        for entry in std::fs::read_dir(&dir).into_iter().flatten().flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            let file: Option<File> = std::fs::read(&path)
+                .ok()
+                .and_then(|bytes| serde_json::from_slice(&bytes).ok());
+            if let Some(file) = file.filter(|f| f.current().is_some()) {
+                let id = file.current().map(|d| d.id.clone()).unwrap_or_default();
+                files.insert(id, file);
+            }
+        }
+        Library {
+            dir,
+            files: Mutex::new(files),
+        }
+    }
+
+    pub fn dir(&self) -> &Path {
+        &self.dir
+    }
+
+    fn lock(&self) -> std::sync::MutexGuard<'_, BTreeMap<String, File>> {
+        self.files.lock().expect("pipelines lock")
+    }
+
+    pub fn list(&self) -> Vec<Definition> {
+        self.lock()
+            .values()
+            .filter_map(|f| f.current().cloned())
+            .collect()
+    }
+
+    pub fn get(&self, id: &str) -> Option<Definition> {
+        self.lock().get(id).and_then(|f| f.current().cloned())
+    }
+
+    pub fn history(&self, id: &str) -> Vec<(u32, String, Definition)> {
+        self.lock()
+            .get(id)
+            .map(|f| {
+                f.history
+                    .iter()
+                    .map(|s| (s.version, s.saved.clone(), s.definition.clone()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    pub fn save(&self, mut def: Definition, cfg: &Config) -> Result<Definition, Vec<String>> {
+        check(&def, cfg)?;
+        let mut files = self.lock();
+        let file = files.entry(def.id.clone()).or_default();
+        def.version = file.current().map_or(1, |d| d.version + 1);
+        file.history.insert(
+            0,
+            Saved {
+                version: def.version,
+                saved: chrono::Local::now().to_rfc3339(),
+                definition: def.clone(),
+            },
+        );
+        file.history.truncate(crate::dispatch::MAX_VERSIONS);
+        let written = write(&self.dir, &def.id, file);
+        drop(files);
+        written.map_err(|e| vec![e])?;
+        Ok(def)
+    }
+
+    pub fn copy_template(&self, name: &str, cfg: &Config) -> Result<Definition, Vec<String>> {
+        let mut def = super::templates::all()
+            .into_iter()
+            .find(|t| t.name == name)
+            .ok_or_else(|| vec![format!("there is no template named {name}")])?;
+        let taken: Vec<String> = self.lock().keys().cloned().collect();
+        def.id = slug(&def.name, &taken);
+        if let Some(n) = def
+            .id
+            .rsplit('-')
+            .next()
+            .and_then(|n| n.parse::<u32>().ok())
+        {
+            if def.id != slug(&def.name, &[]) {
+                def.name = format!("{} {n}", def.name);
+            }
+        }
+        def.enabled = false;
+        self.save(def, cfg)
+    }
+
+    pub fn set_enabled(
+        &self,
+        id: &str,
+        enabled: bool,
+        cfg: &Config,
+    ) -> Result<Definition, Vec<String>> {
+        let mut def = self
+            .get(id)
+            .ok_or_else(|| vec![format!("there is no pipeline {id}")])?;
+        def.enabled = enabled;
+        self.save(def, cfg)
+    }
+
+    pub fn restore(&self, id: &str, version: u32, cfg: &Config) -> Result<Definition, Vec<String>> {
+        let old = self
+            .history(id)
+            .into_iter()
+            .find(|(v, _, _)| *v == version)
+            .map(|(_, _, d)| d)
+            .ok_or_else(|| vec![format!("{id} has no version {version}")])?;
+        self.save(old, cfg)
+    }
+
+    pub fn delete(&self, id: &str) -> Result<(), String> {
+        self.lock().remove(id);
+        match std::fs::remove_file(self.dir.join(format!("{id}.json"))) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(e.to_string()),
+            _ => Ok(()),
+        }
+    }
+}
+
+fn write(dir: &Path, id: &str, file: &File) -> Result<(), String> {
+    std::fs::create_dir_all(dir).map_err(|e| e.to_string())?;
+    let path = dir.join(format!("{id}.json"));
+    let tmp = path.with_extension("tmp");
+    let bytes = serde_json::to_vec_pretty(file).map_err(|e| e.to_string())?;
+    std::fs::write(&tmp, bytes)
+        .and_then(|_| std::fs::rename(&tmp, &path))
+        .map_err(|e| format!("could not save {}: {e}", path.display()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::definition::tests::cfg;
+
+    fn library() -> (Library, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        (Library::load(dir.path().join("pipelines")), dir)
+    }
+
+    #[test]
+    fn saving_bumps_the_version_and_keeps_history() {
+        let (lib, _dir) = library();
+        let mut def = lib
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        assert_eq!(def.version, 1);
+        def.steps[1].name = "Build it".into();
+        let saved = lib.save(def, &cfg()).unwrap();
+        assert_eq!(saved.version, 2);
+        let history = lib.history(&saved.id);
+        assert_eq!(history.iter().map(|h| h.0).collect::<Vec<_>>(), vec![2, 1]);
+        assert_eq!(history[1].2.steps[1].name, "Implement");
+    }
+
+    #[test]
+    fn restore_brings_back_an_old_version() {
+        let (lib, _dir) = library();
+        let mut def = lib
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        def.steps[1].name = "Build it".into();
+        let id = lib.save(def, &cfg()).unwrap().id;
+        let restored = lib.restore(&id, 1, &cfg()).unwrap();
+        assert_eq!(restored.version, 3);
+        assert_eq!(restored.steps[1].name, "Implement");
+        let again = Library::load(lib.dir().to_path_buf());
+        assert_eq!(again.get(&id).unwrap().version, 3);
+    }
+
+    #[test]
+    fn a_definition_that_fails_is_not_saved() {
+        let (lib, _dir) = library();
+        let mut def = lib
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        def.steps[1].next.pass = "nowhere".into();
+        let problems = lib.save(def.clone(), &cfg()).unwrap_err();
+        assert!(
+            problems[0].contains("its pass line goes to a step that does not exist"),
+            "{problems:?}"
+        );
+        assert_eq!(lib.get(&def.id).unwrap().version, 1);
+    }
+
+    #[test]
+    fn copying_a_template_twice() {
+        let (lib, _dir) = library();
+        let a = lib
+            .copy_template("Review my merge requests", &cfg())
+            .unwrap();
+        let b = lib
+            .copy_template("Review my merge requests", &cfg())
+            .unwrap();
+        assert_eq!(
+            (a.id.as_str(), a.name.as_str()),
+            ("review-my-merge-requests", "Review my merge requests")
+        );
+        assert_eq!(
+            (b.id.as_str(), b.name.as_str()),
+            ("review-my-merge-requests-2", "Review my merge requests 2")
+        );
+        assert!(
+            !a.enabled,
+            "a copy starts switched off until its trigger is set"
+        );
+        assert_eq!(lib.list().len(), 2);
+    }
+
+    #[test]
+    fn switching_on_checks_the_trigger() {
+        let (lib, _dir) = library();
+        let def = lib
+            .copy_template("Review my merge requests", &cfg())
+            .unwrap();
+        let problems = lib.set_enabled(&def.id, true, &cfg()).unwrap_err();
+        assert!(
+            problems.contains(&"gitlab_reviewer needs a host".to_string()),
+            "{problems:?}"
+        );
+        lib.delete(&def.id).unwrap();
+        assert!(lib.get(&def.id).is_none());
+    }
+}

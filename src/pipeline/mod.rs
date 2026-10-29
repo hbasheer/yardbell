@@ -1,10 +1,13 @@
+pub mod definition;
 pub mod engine;
 pub mod forge;
+pub mod library;
 pub mod linear;
 pub mod prompts;
 pub mod record;
 pub mod run;
 pub mod store;
+pub mod templates;
 pub mod watch;
 
 use crate::config::Pipeline as Cfg;
