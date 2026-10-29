@@ -474,3 +474,148 @@ async fn a_runs_own_turn_cannot_answer_it() {
         crate::pipeline::record::RunState::Waiting
     );
 }
+
+#[tokio::test]
+async fn an_answer_for_an_earlier_wait_is_refused() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let c = cookie(&r.app).await;
+    let run = waiting_run(&r, crate::pipeline::record::WaitKind::Stopped, "");
+    dispatch_tool(
+        &r,
+        Some(&id),
+        "answer_run",
+        json!({ "id": run, "action": "continue_pass" }),
+    )
+    .await;
+    let step = last_event(&r, &id);
+    let mut later = r.app.pipelines.run(&run).unwrap();
+    later.step = "review".into();
+    later.waiting = Some(crate::pipeline::record::Waiting {
+        kind: crate::pipeline::record::WaitKind::Stopped,
+        step: "review".into(),
+        reason: "Review failed".into(),
+        screen: String::new(),
+    });
+    r.app.pipelines.put(later);
+    let done = approve(&r, &c, &id, &step).await;
+    assert_eq!(done["result"]["ok"], false, "{done}");
+    assert!(
+        done["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("now waits at review"),
+        "{done}"
+    );
+    let now = r.app.pipelines.run(&run).unwrap();
+    assert_eq!(now.state, crate::pipeline::record::RunState::Waiting);
+    assert_eq!(now.step, "review");
+}
+
+#[tokio::test]
+async fn two_new_pipeline_cards_make_two_pipelines() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let c = cookie(&r.app).await;
+    let mut def = json!(by_hand(&r, IMPLEMENT));
+    def["id"] = json!("nightly-tickets");
+    def["name"] = json!("Nightly tickets");
+    dispatch_tool(&r, Some(&id), "save_pipeline", json!({ "definition": def })).await;
+    let first = last_event(&r, &id);
+    dispatch_tool(&r, Some(&id), "save_pipeline", json!({ "definition": def })).await;
+    let second = last_event(&r, &id);
+    let a = outcome(&approve(&r, &c, &id, &first).await);
+    let b = outcome(&approve(&r, &c, &id, &second).await);
+    assert_ne!(a["saved"], b["saved"], "{a} {b}");
+    assert_eq!(
+        (a["version"].clone(), b["version"].clone()),
+        (json!(1), json!(1))
+    );
+}
+
+#[tokio::test]
+async fn a_change_to_a_deleted_pipeline_fails() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let c = cookie(&r.app).await;
+    let before = by_hand(&r, IMPLEMENT);
+    let mut def = json!(before);
+    step_named(&mut def, "review")["name"] = json!("Code review");
+    dispatch_tool(&r, Some(&id), "save_pipeline", json!({ "definition": def })).await;
+    let step = last_event(&r, &id);
+    r.app.pipelines.delete(&before.id).unwrap();
+    let done = approve(&r, &c, &id, &step).await;
+    assert_eq!(done["result"]["ok"], false, "{done}");
+    assert!(
+        done["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("was deleted since this was proposed"),
+        "{done}"
+    );
+    assert!(r.app.pipelines.library().get(&before.id).is_none());
+}
+
+#[tokio::test]
+async fn an_edit_naming_another_pipeline_is_refused() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let c = cookie(&r.app).await;
+    let shown = by_hand(&r, IMPLEMENT);
+    let other = by_hand(&r, IMPLEMENT);
+    let mut def = json!(shown);
+    step_named(&mut def, "review")["name"] = json!("Code review");
+    dispatch_tool(&r, Some(&id), "save_pipeline", json!({ "definition": def })).await;
+    let step = last_event(&r, &id);
+    let mut edited = step["input"].clone();
+    edited["definition"]["id"] = json!(other.id);
+    let url = format!(
+        "/dispatch/conversations/{id}/actions/{}",
+        step["id"].as_str().unwrap()
+    );
+    let (status, body) = step_post(
+        &r,
+        &c,
+        &url,
+        json!({ "decision": "approve", "input": edited }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("names another pipeline"),
+        "{body}"
+    );
+    assert_eq!(
+        r.app.pipelines.library().get(&other.id).unwrap().version,
+        other.version
+    );
+}
+
+#[tokio::test]
+async fn a_trigger_problem_on_a_pipeline_that_is_on_returns_to_dispatch() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let def = by_hand(&r, IMPLEMENT);
+    let cfg = r.app.config().unwrap();
+    r.app
+        .pipelines
+        .library()
+        .set_enabled(&def.id, true, &cfg)
+        .unwrap();
+    let mut sent = json!(def);
+    sent["enabled"] = json!(false);
+    sent["trigger"] = json!({ "kind": "schedule", "schedule": "whenever you like" });
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "save_pipeline",
+        json!({ "definition": sent }),
+    )
+    .await;
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(text(&result).contains("Not proposed"), "{result}");
+    assert!(r.app.dispatch.pending(&id).is_empty());
+}

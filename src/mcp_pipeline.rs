@@ -4,7 +4,7 @@ use crate::mcp::tool;
 use crate::pipeline::definition::{
     check as check_definition, slug, Definition, Outcome, StepKind, END, WAIT,
 };
-use crate::pipeline::record::{PrRef, Run, RunState};
+use crate::pipeline::record::{PrRef, Run, RunState, Waiting};
 use crate::web::{ApiError, AppState};
 use axum::http::StatusCode;
 use serde::Deserialize;
@@ -106,6 +106,8 @@ struct AnswerRun {
     action: String,
     #[serde(default)]
     text: String,
+    #[serde(default)]
+    waiting: Option<Waiting>,
 }
 
 fn arg<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ApiError> {
@@ -181,7 +183,52 @@ fn answerable(app: &AppState, a: &AnswerRun) -> Result<Run, ApiError> {
         .run(&a.id)
         .ok_or_else(|| bad(format!("there is no run {}; list_runs shows them", a.id)))?;
     fits(&run, &a.action, &a.text).map_err(bad)?;
+    // A card answers the wait it was drawn for, never a later one at another step.
+    if let Some(was) = &a.waiting {
+        match &run.waiting {
+            Some(now) if now.step == was.step && now.reason == was.reason => {}
+            Some(now) => {
+                return Err(bad(format!(
+                    "{} now waits at {} for something else ({}); this was for {}",
+                    run.subject.label(),
+                    now.step,
+                    now.reason,
+                    was.step
+                )))
+            }
+            None => {
+                return Err(bad(format!(
+                    "{} no longer waits at {}",
+                    run.subject.label(),
+                    was.step
+                )))
+            }
+        }
+    }
     Ok(run)
+}
+
+// A card for a new pipeline always makes a new one; a card for a change saves only the pipeline
+// it showed, and only while it exists. The stored on or off is what the checks see.
+fn aligned(app: &AppState, s: &mut SavePipeline) -> Result<Option<Definition>, ApiError> {
+    let Some(before) = &s.before else {
+        s.definition.enabled = false;
+        return Ok(None);
+    };
+    if s.definition.id != before.id {
+        return Err(bad(format!(
+            "this card changes {}; its definition names another pipeline",
+            before.name
+        )));
+    }
+    let current = existing(app, &before.id).ok_or_else(|| {
+        bad(format!(
+            "{} was deleted since this was proposed",
+            before.name
+        ))
+    })?;
+    s.definition.enabled = current.enabled;
+    Ok(Some(current))
 }
 
 pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Value, ApiError> {
@@ -189,9 +236,7 @@ pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Val
         "save_pipeline" => {
             let SavePipeline { mut definition, .. } = arg(args)?;
             let before = existing(app, &definition.id);
-            if before.is_none() {
-                definition.enabled = false;
-            }
+            definition.enabled = before.as_ref().is_some_and(|b| b.enabled);
             check_definition(&definition, cfg).map_err(problems)?;
             let changes = changes(before.as_ref(), &definition);
             Ok(json!({ "definition": definition, "before": before, "changes": changes }))
@@ -221,7 +266,8 @@ pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Val
 pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<(), ApiError> {
     match tool {
         "save_pipeline" => {
-            let s: SavePipeline = arg(input.clone())?;
+            let mut s: SavePipeline = arg(input.clone())?;
+            aligned(app, &mut s)?;
             check_definition(&s.definition, cfg).map_err(problems)
         }
         "set_pipeline_enabled" => checked_enabled(app, cfg, &arg(input.clone())?).map(|_| ()),
@@ -236,11 +282,13 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
     let library = app.pipelines.library();
     let out = match tool {
         "save_pipeline" => {
+            let mut s: SavePipeline = arg(input)?;
+            let current = aligned(app, &mut s)?;
             let SavePipeline {
                 mut definition,
                 before,
-            } = arg(input)?;
-            match existing(app, &definition.id) {
+            } = s;
+            match current {
                 Some(current) => {
                     let saved = library.save(definition, &cfg).map_err(not_saved)?;
                     let mut out =
@@ -280,6 +328,7 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
         }
         "answer_run" => {
             let a: AnswerRun = arg(input)?;
+            answerable(app, &a)?;
             let pipelines = &app.pipelines;
             let run = match a.action.as_str() {
                 "answer" => pipelines.answer(&a.id, &a.text),

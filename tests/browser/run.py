@@ -41,7 +41,6 @@ TASK_CHAT = "browsersavetask1"
 NEW_TASK = "Standup notes"
 PIPE_CHAT = "browserpipeline1"
 RUNS_CHAT = "browserpiperuns1"
-NEW_PIPELINE = "Ask then fix"
 PROPOSAL_CHAT = "browserproposal1"
 REFUSED = "the user's Dispatch rule \"deny start_session on pro\" refuses it"
 PULL_SESSION = "hp-pull-test"
@@ -340,9 +339,9 @@ def task_chat():
     ])
 
 
-# Dispatch proposed a pipeline: ask the person, then fix. `before` is how it read when proposed.
-def proposed_pipeline(chat=PIPE_CHAT, steps=(("pipestp1", NEW_PIPELINE, True),)):
-    def define(name, fix_words, ask_fail):
+# Dispatch proposed new pipelines: ask the person, then fix.
+def proposed_pipeline(chat, names):
+    def define(name):
         return {
             "id": "", "name": name, "enabled": False, "version": 1,
             "trigger": {"kind": "manual"}, "start": "plan",
@@ -350,25 +349,47 @@ def proposed_pipeline(chat=PIPE_CHAT, steps=(("pipestp1", NEW_PIPELINE, True),))
                 {"id": "plan", "name": "Plan", "kind": "plan", "machines": [], "max_runs": 2,
                  "next": {"pass": "ask", "fail": "wait", "needs_you": "wait"}, "x": -240, "y": 80},
                 {"id": "ask", "name": "Ask me", "kind": "wait", "message": "Go ahead?", "max_runs": 2,
-                 "next": {"pass": "fix", "fail": ask_fail, "needs_you": "wait"}, "x": 40, "y": 80},
-                {"id": "fix", "name": "Fix", "kind": "agent", "instructions": fix_words, "agent": "",
+                 "next": {"pass": "fix", "fail": "fix", "needs_you": "wait"}, "x": 40, "y": 80},
+                {"id": "fix", "name": "Fix", "kind": "agent", "instructions": "Fix the issue in {ticket}.", "agent": "",
                  "machine": {"name": MACHINE}, "workspace": {"kind": "new_worktree"}, "session": "new",
                  "read_only": False, "mcp_servers": [], "max_runs": 2,
                  "next": {"pass": "end", "fail": "wait", "needs_you": "wait"}, "x": 320, "y": 80},
             ],
         }
-    changes = {"trigger": False, "added": [], "removed": [], "changed": [{"step": "Fix", "fields": ["instructions"]}],
-               "lines": [{"from": "Ask me", "outcome": "fail", "was": "wait for you", "now": "Fix"}],
-               "wording": [{"step": "Fix", "diff": [{"op": "same", "text": "Fix the "}, {"op": "del", "text": "bug"},
-                                                   {"op": "add", "text": "issue"}, {"op": "same", "text": " in {ticket}."}]}]}
     events = [{"role": "user", "text": "Make a pipeline that asks me, then fixes"}]
-    for id, name, changed in steps:
-        after = define(name, "Fix the issue in {ticket}.", "fix")
-        before = define(name, "Fix the bug in {ticket}.", "wait") if changed else None
+    for id, name in names:
         events.append({"role": "action", "id": id, "tool": "save_pipeline", "by": "dispatch", "status": "pending",
-                       "at": "2026-01-01T10:00:00+00:00",
-                       "input": {"definition": after, "before": before, "changes": changes if changed else {}}})
+                       "at": "2026-01-01T10:00:00+00:00", "input": {"definition": define(name), "before": None, "changes": {}}})
     return conversation(chat, "A pipeline that asks first", events)
+
+
+# Dispatch proposed changing the seeded review pipeline: a line moved and the Test wording edited.
+def review_card_chat():
+    before, after = review_pipeline(), review_pipeline()
+    understand = next(s for s in after["steps"] if s["id"] == "understand")
+    understand["next"]["fail"] = "root-cause"
+    test = next(s for s in after["steps"] if s["id"] == "test")
+    test["instructions"] = "Run the specs and the linters for {branch}."
+    changes = {"trigger": False, "added": [], "removed": [], "changed": [{"step": "Test", "fields": ["instructions"]}],
+               "lines": [{"from": "Understand", "outcome": "fail", "was": "Report to me", "now": "Root cause"}],
+               "wording": [{"step": "Test", "diff": [{"op": "same", "text": "Run the specs "},
+                                                    {"op": "add", "text": "and the linters "}, {"op": "same", "text": "for {branch}."}]}]}
+    step = {"role": "action", "id": "pipestp1", "tool": "save_pipeline", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00", "input": {"definition": after, "before": before, "changes": changes}}
+    return conversation(PIPE_CHAT, "Lint in the review pipeline", [
+        {"role": "user", "text": "Make the review pipeline run the linters too"}, step])
+
+
+def review_change_chat():
+    after = review_pipeline()
+    after["steps"][-1]["name"] = "Report to the team"
+    step = {"role": "action", "id": "propstp3", "tool": "save_pipeline", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00",
+            "input": {"definition": after, "before": review_pipeline(),
+                      "changes": {"trigger": False, "added": [], "removed": [], "lines": [], "wording": [],
+                                  "changed": [{"step": "Report to the team", "fields": ["name"]}]}}}
+    return conversation("browserreviewchg", "Rename the report step", [
+        {"role": "user", "text": "Call the report step Report to the team"}, step])
 
 
 def run_steps_chat():
@@ -670,9 +691,10 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
                                                 "branch": "main", "marks": marks}}, f)
         for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
                      settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat(),
-                     proposed_pipeline(), run_steps_chat(),
-                     proposed_pipeline(PROPOSAL_CHAT, (("propstp1", "Built in the builder", False),
-                                                       ("propstp2", "Broken in the builder", False)))):
+                     review_card_chat(), run_steps_chat(),
+                     proposed_pipeline(PROPOSAL_CHAT, (("propstp1", "Built in the builder"),
+                                                       ("propstp2", "Broken in the builder"))),
+                     review_change_chat()):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -2254,12 +2276,12 @@ class Suite:
             if want not in config:
                 raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
 
-    # Last, so the pipeline it saves cannot change what the Pipelines tests count.
+    # Last, so the change it saves to the review pipeline comes after the Pipelines tests.
     def test_dispatch_save_pipeline_card(self):
         b = self.b
         b.goto(self.url(f"/dispatch?c={PIPE_CHAT}"))
         card = "#dispatch-log .step-card.pending"
-        b.wait(f"document.querySelector('{card} .pl-canvas .pl-node[data-step=\"fix\"]')", "the proposed pipeline drawn on the card")
+        b.wait(f"document.querySelector('{card} .pl-canvas .pl-node[data-step=\"test\"]')", "the proposed pipeline drawn on the card")
         seen = b.js(f"""(() => {{
           const c = document.querySelector('{card}');
           return {{ title: c.querySelector('.step-card-title strong').textContent,
@@ -2267,14 +2289,14 @@ class Suite:
                    ins: c.querySelector('.change-diff ins')?.textContent,
                    waits: c.textContent.includes('A new or changed pipeline always waits for you.') }};
         }})()""")
-        if seen != {"title": f"Change the pipeline {NEW_PIPELINE}", "lines": "On fail, Ask me went to wait for you, now goes to Fix",
-                    "ins": "added issue", "waits": True}:
+        if seen != {"title": "Change the pipeline Review my merge requests", "lines": "On fail, Understand went to Report to me, now goes to Root cause",
+                    "ins": "added and the linters ", "waits": True}:
             raise Failure(f"the card shows {seen}")
         self.check_errors("the pipeline card")
         b.click(f"{card} .step-card-actions .btn.primary")
-        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome')?.textContent.includes('Saved as version 1')", "the pipeline saved")
+        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome')?.textContent.includes('Saved as version')", "the pipeline saved")
         href = b.js("document.querySelector('#dispatch-log .step-card.done .step-card-outcome a').getAttribute('href')")
-        if href != "/pipeline?p=ask-then-fix&tab=build":
+        if href != "/pipeline?p=review&tab=build":
             raise Failure(f"Open pipeline goes to {href}")
 
     def test_dispatch_run_cards(self):
@@ -2337,8 +2359,19 @@ class Suite:
         b.wait("new URLSearchParams(location.search).get('p') === 'broken-in-the-builder'", "the corrected pipeline saved")
         b.goto(self.url(f"/pipeline?proposal={PROPOSAL_CHAT}.propstp2"))
         b.wait("document.querySelector('.pl-proposal')?.textContent.includes('This proposal was already decided')", "a decided proposal said so")
-        if b.js("document.getElementById('pl-save')"):
-            raise Failure("a decided proposal still offers to save")
+        if b.js("document.getElementById('pl-save')") or b.js("document.querySelector('.pl-canvas.editable')"):
+            raise Failure("a decided proposal can still be edited or saved")
+
+    def test_builder_save_key_approves_a_proposal(self):
+        b = self.b
+        b.goto(self.url("/pipeline?proposal=browserreviewchg.propstp3"))
+        b.wait("document.querySelector('.pl-proposal') && document.querySelector('.pl-canvas.editable')", "the change in the builder")
+        self.set_field(".pl-title-name", "Review my merge requests, renamed")
+        b.click(".pl-canvas")
+        b.key("s", "Control")
+        b.wait("new URLSearchParams(location.search).get('p') === 'review'", "the change approved and opened")
+        if self.step_status("browserreviewchg", "propstp3") != "edited":
+            raise Failure("Ctrl+S saved around the proposal instead of approving it")
 
     def test_builder_asks_dispatch(self):
         b = self.b

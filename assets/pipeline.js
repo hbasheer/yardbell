@@ -811,7 +811,8 @@ document.addEventListener("keydown", (e) => {
   const mod = e.ctrlKey || e.metaKey;
   if (mod && e.key.toLowerCase() === "s") {
     e.preventDefault();
-    save();
+    if (!proposal) save();
+    else if (!proposal.decided) approveProposal();
     return;
   }
   if (typing(e)) return;
@@ -891,7 +892,7 @@ function buildTab(d) {
     </button>`;
   return html`<div class=${`pl-build ${libraryOpen ? "" : "no-library"} ${inspectorOpen ? "" : "no-inspector"}`}>
     ${library()}
-    ${canvas({ def: draft, editable: true, selected, problems, on: handlers, key: `${d.id}:build`, bar })}
+    ${canvas({ def: draft, editable: !proposal?.decided, selected, problems, on: handlers, key: `${d.id}:build`, bar })}
     ${addMenuView()}
     ${addSheetView()}
     ${inspectorOpen ? inspector() : html`<span></span>`}
