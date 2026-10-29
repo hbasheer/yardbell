@@ -33,7 +33,7 @@ function checks(e) {
 }
 
 function notes(e) {
-  const more = e.more ? html`<li class="pull-more">${e.more} more on the pull request.</li>` : nothing;
+  const more = e.more ? html`<li class="pull-more">${e.more} more on the ${window.YardbellPull.noun(e.pull || {}).toLowerCase()}.</li>` : nothing;
   return html`<ul class="pull-notes">${(e.notes || []).map((n) => html`<li>
     <div class="pull-note-head"><strong>${n.author || "A reviewer"}</strong> ${noteSaid(n)}${n.url ? html` · <a href=${n.url} target="_blank" rel="noopener">View</a>` : nothing}</div>
     ${n.body ? html`<p class="pull-note-body">${n.body}</p>` : nothing}
@@ -81,7 +81,7 @@ export function pullCard(e, index) {
   return html`<div class="session-card pull-card ${e.kind === "ci" ? "failed" : "blocked"}">
     <header class="session-card-head">
       <div class="session-card-id">
-        <strong>${pull.url ? html`<a href=${pull.url} target="_blank" rel="noopener">#${pull.number}</a>` : `#${pull.number}`} ${pull.title}</strong>
+        <strong>${pull.url ? html`<a href=${pull.url} target="_blank" rel="noopener">${window.YardbellPull.ref(pull)}</a>` : window.YardbellPull.ref(pull)} ${pull.title}</strong>
         <span class="session-card-where">${e.name} on ${e.machine}${e.branch ? html` · <code>${e.branch}</code>` : nothing}</span>
       </div>
       <span class="badge ${kind.badge}">${kind.word}</span>

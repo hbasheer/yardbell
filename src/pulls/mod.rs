@@ -354,6 +354,19 @@ fn what_failed(checks: &[Check]) -> String {
     }
 }
 
+fn kind(p: &Pull) -> &'static str {
+    if p.forge == "gitlab" {
+        "merge request"
+    } else {
+        "pull request"
+    }
+}
+
+pub fn noun(p: &Pull) -> String {
+    let mark = if p.forge == "gitlab" { '!' } else { '#' };
+    format!("{} {mark}{}", kind(p), p.number)
+}
+
 pub fn ci_instruction(pull: &Pull, checks: &[Check]) -> String {
     let line = checks
         .iter()
@@ -361,9 +374,9 @@ pub fn ci_instruction(pull: &Pull, checks: &[Check]) -> String {
         .find(|l| !l.is_empty());
     let said = line.map(|l| format!(": {l}")).unwrap_or_default();
     format!(
-        "CI failed on {} for pull request #{}{said}. Fix it and push.",
+        "CI failed on {} for {}{said}. Fix it and push.",
         what_failed(checks),
-        pull.number
+        noun(pull)
     )
 }
 
@@ -398,13 +411,13 @@ pub fn review_instruction(pull: &Pull, notes: &[Note]) -> String {
     }
     let left = notes.len() - parts.len();
     let more = if left > 0 {
-        format!(" And {left} more on the pull request.")
+        format!(" And {left} more on the {}.", kind(pull))
     } else {
         String::new()
     };
     format!(
-        "New review comments on pull request #{}. {}{more} Address them and push.",
-        pull.number,
+        "New review comments on {}. {}{more} Address them and push.",
+        noun(pull),
         parts.join(" ")
     )
 }
@@ -795,7 +808,13 @@ impl Pulls {
                 continue;
             };
             let card = self.card(m, &n, &hosts).await;
-            let title = format!("Pull request #{}: {}", n.pull.number, n.pull.title);
+            let named = noun(&n.pull);
+            let title = format!(
+                "{}{}: {}",
+                named[..1].to_uppercase(),
+                &named[1..],
+                n.pull.title
+            );
             if dispatch
                 .post_pull(&n.machine, &n.session, &n.path, &title, card)
                 .is_some()

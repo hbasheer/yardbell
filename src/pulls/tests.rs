@@ -271,6 +271,39 @@ fn instructions_are_short_and_say_what_to_do() {
     );
 }
 
+#[test]
+fn a_gitlab_merge_request_is_named_as_one() {
+    let mut p = pull("failing", "a", &[]);
+    p.forge = "gitlab".into();
+    let checks = vec![Check {
+        name: "test / rspec".into(),
+        url: String::new(),
+        log: "2 examples, 1 failure".into(),
+    }];
+    assert_eq!(noun(&p), "merge request !12");
+    assert_eq!(
+        ci_instruction(&p, &checks),
+        "CI failed on test / rspec for merge request !12: 2 examples, 1 failure. Fix it and push."
+    );
+    let note = Note {
+        id: "gitlab:1".into(),
+        kind: "comment".into(),
+        author: "rev1".into(),
+        body: "x".repeat(300),
+        url: String::new(),
+        place: String::new(),
+    };
+    let many = vec![note; 40];
+    let text = review_instruction(&p, &many[..1]);
+    assert!(
+        text.starts_with("New review comments on merge request !12. rev1: "),
+        "{text}"
+    );
+    let text = review_instruction(&p, &many);
+    assert!(text.contains("more on the merge request."), "{text}");
+    assert_eq!(noun(&pull("failing", "a", &[])), "pull request #12");
+}
+
 struct NoPorts;
 
 impl crate::state::PortStatus for NoPorts {
@@ -916,6 +949,14 @@ async fn gitlab_cards_once_across_restarts_and_never_with_the_token() {
     assert_eq!(cards.len(), 1);
     assert_eq!(cards[0]["kind"], "ci");
     assert_eq!(cards[0]["pull"]["forge"], "gitlab");
+    let titles: Vec<String> = dispatch
+        .list()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["title"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(titles, ["Merge request !12: Fix the login redirect"]);
     assert_eq!(cards[0]["checks"][0]["name"], "test / rspec");
     assert!(
         cards[0]["checks"][0]["log"]

@@ -243,7 +243,7 @@ function projects() {
 function pullMark(p) {
   if (!p) return "";
   const { word, tone } = window.YardbellPull.status(p);
-  return `<span class="ws-pr ${tone}" title="${esc(window.YardbellPull.describe(p))}" aria-label="Pull request #${esc(p.number)}, ${esc(word)}">#${esc(p.number)}</span>`;
+  return `<span class="ws-pr ${tone}" title="${esc(window.YardbellPull.describe(p))}" aria-label="${esc(window.YardbellPull.noun(p))} ${esc(window.YardbellPull.ref(p))}, ${esc(word)}">${esc(window.YardbellPull.ref(p))}</span>`;
 }
 
 function dot(st) {
