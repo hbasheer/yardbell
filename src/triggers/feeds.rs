@@ -13,7 +13,8 @@ const NOT_LOGGED_IN: i32 = 4;
 const LIMIT: usize = 100;
 
 // Open issues only: done and canceled ones cannot start anything.
-const LINEAR_QUERY: &str = "query { viewer { assignedIssues(first: 100, orderBy: updatedAt, \
+pub(crate) const LINEAR_QUERY: &str =
+    "query { viewer { assignedIssues(first: 100, orderBy: updatedAt, \
 filter: { state: { type: { nin: [\"completed\", \"canceled\"] } } }) { nodes { id identifier \
 title url state { name } } } } }";
 
