@@ -1,13 +1,6 @@
 pub mod definition;
 pub mod engine;
 pub mod forge;
-pub mod legacy;
-pub mod legacy_engine;
-pub mod legacy_pipeline;
-pub mod legacy_prompts;
-pub mod legacy_run;
-pub mod legacy_store;
-pub mod legacy_watch;
 pub mod library;
 pub mod linear;
 pub mod prompts;
@@ -17,8 +10,6 @@ pub mod store;
 pub mod templates;
 pub mod triggers;
 pub mod watch;
-
-pub use legacy_pipeline::Pipeline;
 
 #[cfg(test)]
 mod tests;

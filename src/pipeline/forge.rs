@@ -1,4 +1,3 @@
-use super::legacy::Record;
 use super::record::PullRef;
 use crate::config::Machine;
 use crate::pulls::{GitLabAccess, Remotes};
@@ -25,20 +24,6 @@ pub struct Draft {
     pub branch: String,
     pub title: String,
     pub body: String,
-}
-
-impl From<&Record> for Draft {
-    fn from(r: &Record) -> Draft {
-        Draft {
-            branch: r.branch.clone(),
-            title: format!("{} {}", r.id, r.title),
-            body: if r.summary.trim().is_empty() {
-                r.outcome.clone()
-            } else {
-                r.summary.clone()
-            },
-        }
-    }
 }
 
 fn number(url: &str) -> Option<u64> {
@@ -209,7 +194,6 @@ fn encode(project: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pipeline::legacy::Stage;
     use crate::shell::Output;
     use crate::testing::FakeRunner;
     use crate::worktrees::testing::machine;
@@ -217,15 +201,11 @@ mod tests {
     use axum::http::StatusCode;
     use std::sync::Mutex;
 
-    fn record() -> Record {
-        Record {
-            id: "COM-1".into(),
-            title: "Fix".into(),
+    fn draft() -> Draft {
+        Draft {
             branch: "com-1-fix".into(),
-            machine: "hp".into(),
-            stage: Stage::Finish,
-            summary: "Fixed the redirect.\nTested on Safari.".into(),
-            ..Record::default()
+            title: "COM-1 Fix".into(),
+            body: "Fixed the redirect.\nTested on Safari.".into(),
         }
     }
 
@@ -246,7 +226,7 @@ mod tests {
             Output::ok_with("Creating draft...\nhttps://github.com/acme/app/pull/12\n"),
         );
         let pull = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &Draft::from(&record()), &[])
+            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[])
             .await
             .unwrap();
         assert_eq!(
@@ -292,7 +272,7 @@ mod tests {
             ),
         );
         let err = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &Draft::from(&record()), &[])
+            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[])
             .await
             .unwrap_err();
         assert_eq!(err, "gh is not logged in on hp");
@@ -348,12 +328,7 @@ mod tests {
             Output::ok_with("git@git.example.com:acme/app.git\n"),
         );
         let pull = forge(&runner)
-            .open_draft(
-                &machine("hp"),
-                "/r/acme/app",
-                &Draft::from(&record()),
-                &[access(&api)],
-            )
+            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[access(&api)])
             .await
             .unwrap();
         assert_eq!(pull.number, 87);
@@ -384,12 +359,7 @@ mod tests {
             Output::ok_with("git@git.example.com:acme/app.git\n"),
         );
         let err = forge(&runner)
-            .open_draft(
-                &machine("hp"),
-                "/r/acme/app",
-                &Draft::from(&record()),
-                &[access(&api)],
-            )
+            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[access(&api)])
             .await
             .unwrap_err();
         assert_eq!(

@@ -1,8 +1,18 @@
-use super::legacy::Ticket;
-use super::legacy_prompts::TicketText;
+use super::prompts::TicketText;
 use crate::triggers::{parse_linear, LINEAR_API, LINEAR_QUERY, LINEAR_SECRET};
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Ticket {
+    pub linear_id: String,
+    pub id: String,
+    pub title: String,
+    pub url: String,
+    #[serde(default)]
+    pub state: String,
+}
 
 const TIMEOUT: Duration = Duration::from_secs(20);
 

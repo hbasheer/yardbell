@@ -1,4 +1,4 @@
-use super::definition::{check, slug, Definition};
+use super::definition::{check, slug, Definition, MachineChoice, StepKind, Workspace};
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -121,6 +121,19 @@ impl Library {
             }
         }
         def.enabled = false;
+        for step in &mut def.steps {
+            // A template tests on devbox; without one, the test runs where the code already is.
+            if let StepKind::Agent {
+                machine,
+                workspace: Workspace::Copy { from },
+                ..
+            } = &mut step.kind
+            {
+                if matches!(machine, MachineChoice::Name(m) if cfg.machine(m).is_none()) {
+                    *machine = MachineChoice::SameAs(from.clone());
+                }
+            }
+        }
         self.save(def, cfg)
     }
 
@@ -243,6 +256,29 @@ mod tests {
             "a copy starts switched off until its trigger is set"
         );
         assert_eq!(lib.list().len(), 2);
+    }
+
+    #[test]
+    fn a_template_test_machine_you_do_not_have_tests_where_the_code_is() {
+        let (lib, _dir) = library();
+        let mut setup = cfg();
+        setup.machines.retain(|m| m.name != "devbox");
+        let def = lib
+            .copy_template("Implement my Linear tickets", &setup)
+            .unwrap();
+        let qa = def.step("qa").unwrap();
+        assert!(
+            matches!(&qa.kind, StepKind::Agent { machine: MachineChoice::SameAs(s), .. } if s == "implement"),
+            "{:?}",
+            qa.kind
+        );
+        let kept = lib
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        assert!(matches!(
+            &kept.step("qa").unwrap().kind,
+            StepKind::Agent { machine: MachineChoice::Name(m), .. } if m == "devbox"
+        ));
     }
 
     #[test]

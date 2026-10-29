@@ -1,31 +1,32 @@
 use super::*;
-use crate::pipeline::legacy::{ParkKind, Parked, Question, Record, Stage};
+use crate::pipeline::record::{RunState, Subject, WaitKind, Waiting};
 
-async fn get_json(r: &Rig, c: &str, url: &str) -> (StatusCode, serde_json::Value) {
-    let req = Request::get(url)
-        .header(header::COOKIE, c)
-        .body(Body::empty())
-        .unwrap();
-    let (status, _, body) = send(&r.app, req).await;
-    (status, serde_json::from_str(&body).unwrap_or(json!(body)))
-}
-
-async fn post(
+async fn call(
     r: &Rig,
     c: &str,
+    method: &str,
     url: &str,
-    body: serde_json::Value,
+    body: Option<serde_json::Value>,
 ) -> (StatusCode, serde_json::Value) {
-    let (status, _, body) = post_json(&r.app, c, url, &body.to_string()).await;
-    (status, serde_json::from_str(&body).unwrap_or(json!(body)))
+    let mut req = Request::builder()
+        .method(method)
+        .uri(url)
+        .header(header::COOKIE, c);
+    if body.is_some() {
+        req = req.header(header::CONTENT_TYPE, "application/json");
+    }
+    let req = req
+        .body(body.map_or_else(Body::empty, |b| Body::from(b.to_string())))
+        .unwrap();
+    let (status, _, text) = send(&r.app, req).await;
+    (status, serde_json::from_str(&text).unwrap_or(json!(text)))
 }
 
 async fn fake_linear() -> String {
     let app = axum::Router::new().fallback(|| async {
         json!({"data":{"viewer":{"assignedIssues":{"nodes":[
             {"id":"u-1","identifier":"COM-1","title":"Fix login","url":"https://linear.app/c/issue/COM-1","state":{"name":"Todo"}},
-            {"id":"u-2","identifier":"COM-2","title":"Docs","url":"https://linear.app/c/issue/COM-2","state":{"name":"In Progress"}},
-            {"id":"u-3","identifier":"COM-3","title":"Search","url":"https://linear.app/c/issue/COM-3","state":{"name":"Todo"}}
+            {"id":"u-2","identifier":"COM-2","title":"Docs","url":"https://linear.app/c/issue/COM-2","state":{"name":"In Progress"}}
         ]}}}})
         .to_string()
     });
@@ -37,7 +38,7 @@ async fn fake_linear() -> String {
 
 async fn with_linear(r: &Rig) {
     r.app
-        .pipeline
+        .pipelines
         .use_linear(crate::pipeline::linear::Linear::with_url(
             &fake_linear().await,
         ));
@@ -48,51 +49,210 @@ async fn with_linear(r: &Rig) {
     secrets.save().unwrap();
 }
 
-fn parked(id: &str, kind: ParkKind) -> Record {
-    Record {
-        id: id.into(),
-        run: "r1".into(),
-        stage: Stage::Parked,
-        parked: Some(Parked {
-            kind,
-            reason: "x".into(),
-            from: Stage::Triage,
-            screen: String::new(),
-        }),
-        questions: vec![Question {
-            asked: "Which page?".into(),
-            ..Question::default()
-        }],
-        ..Record::default()
-    }
-}
-
-#[tokio::test]
-async fn the_pipeline_lists_records_and_runs() {
-    let r = rig();
-    let c = cookie(&r.app).await;
-    r.app.pipeline.put(parked("COM-1", ParkKind::Questions));
-    r.app.pipeline.put(Record {
-        id: "COM-2".into(),
-        run: "r1".into(),
-        stage: Stage::Done,
-        ..Record::default()
-    });
-    let (status, body) = get_json(&r, &c, "/api/pipeline").await;
+async fn copy(r: &Rig, c: &str, template: &str) -> String {
+    let (status, body) = call(
+        r,
+        c,
+        "POST",
+        "/api/pipelines",
+        Some(json!({ "template": template })),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["enabled"], false);
-    assert_eq!(body["records"].as_array().unwrap().len(), 2);
-    assert_eq!(body["runs"][0]["run"], "r1");
-    assert_eq!(body["runs"][0]["done"], 1);
-    assert_eq!(body["runs"][0]["parked"], 1);
-    assert_eq!(body["runs"][0]["active"], 0);
+    body["id"].as_str().unwrap().to_string()
+}
+
+const IMPLEMENT: &str = "Implement my Linear tickets";
+const REVIEW: &str = "Review my merge requests";
+
+#[tokio::test]
+async fn pipelines_list_with_counts_and_templates() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let mut run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.state = RunState::Waiting;
+    r.app.pipelines.put(run);
+    let (status, body) = call(&r, &c, "GET", "/api/pipelines", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["templates"], json!([IMPLEMENT, REVIEW]));
+    assert_eq!(body["pipelines"][0]["definition"]["id"], id);
+    assert_eq!(
+        body["pipelines"][0]["runs"],
+        json!({ "running": 0, "waiting": 1, "done": 0 })
+    );
+    assert_eq!(body["settings"]["per_machine"], 2);
+    assert_eq!(body["machines"], json!(["mini", "hp", "pro"]));
 }
 
 #[tokio::test]
-async fn tickets_come_from_linear_with_running_marked() {
+async fn a_save_failing_its_checks_returns_the_problems() {
     let r = rig();
     let c = cookie(&r.app).await;
-    let (status, body) = get_json(&r, &c, "/api/pipeline/tickets").await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let (status, mut def) = call(&r, &c, "GET", &format!("/api/pipelines/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    def["steps"][1]["next"]["pass"] = json!("nowhere");
+    let (status, body) = call(&r, &c, "PUT", &format!("/api/pipelines/{id}"), Some(def)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        body["problems"][0],
+        "Implement: its pass line goes to a step that does not exist"
+    );
+    assert!(body["problems"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("Review is never reached")));
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        "/api/pipelines",
+        Some(json!({ "template": "Nope" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["problems"], json!(["there is no template named Nope"]));
+}
+
+#[tokio::test]
+async fn a_definition_is_created_with_a_unique_id() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let (_, mut def) = call(&r, &c, "GET", &format!("/api/pipelines/{id}"), None).await;
+    def["name"] = json!("My own");
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        "/api/pipelines",
+        Some(json!({ "definition": def })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (body["id"].clone(), body["version"].clone()),
+        (json!("my-own"), json!(1))
+    );
+    assert_eq!(r.app.pipelines.library().list().len(), 2);
+}
+
+#[tokio::test]
+async fn history_and_restore() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let (_, mut def) = call(&r, &c, "GET", &format!("/api/pipelines/{id}"), None).await;
+    def["steps"][1]["name"] = json!("Build it");
+    let (status, saved) = call(&r, &c, "PUT", &format!("/api/pipelines/{id}"), Some(def)).await;
+    assert_eq!(
+        (status, saved["version"].clone()),
+        (StatusCode::OK, json!(2))
+    );
+    let (_, history) = call(&r, &c, "GET", &format!("/api/pipelines/{id}/history"), None).await;
+    let versions: Vec<_> = history["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["version"].clone())
+        .collect();
+    assert_eq!(versions, vec![json!(2), json!(1)]);
+    let (status, restored) = call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/restore"),
+        Some(json!({ "version": 1 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{restored}");
+    assert_eq!(
+        (
+            restored["version"].clone(),
+            restored["steps"][1]["name"].clone()
+        ),
+        (json!(3), json!("Implement"))
+    );
+}
+
+#[tokio::test]
+async fn switching_on_checks_the_trigger_and_delete_drops_runs() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, REVIEW).await;
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/enabled"),
+        Some(json!({ "enabled": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["problems"], json!(["gitlab_reviewer needs a host"]));
+    let mr = "https://git.commslayer.com/commslayer/app/-/merge_requests/87";
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/runs"),
+        Some(json!({ "prs": [mr] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let pr = &body["runs"][0]["subject"]["pr"];
+    assert_eq!(
+        (
+            pr["number"].clone(),
+            pr["forge"].clone(),
+            pr["project"].clone()
+        ),
+        (json!(87), json!("gitlab"), json!("commslayer/app"))
+    );
+    let (_, runs) = call(&r, &c, "GET", &format!("/api/pipelines/{id}/runs"), None).await;
+    assert_eq!(runs["runs"].as_array().unwrap().len(), 1);
+    let (status, _) = call(&r, &c, "DELETE", &format!("/api/pipelines/{id}"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(r.app.pipelines.runs().is_empty());
+    let (status, _) = call(&r, &c, "GET", &format!("/api/pipelines/{id}"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_pull_request_url_that_is_not_one_is_400() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, REVIEW).await;
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/runs"),
+        Some(json!({ "prs": ["https://example.com/nothing"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("is not a GitHub pull request or GitLab merge request link"),
+        "{body}"
+    );
+}
+
+#[tokio::test]
+async fn starting_by_tickets_and_a_ticket_already_running() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let (status, body) = call(&r, &c, "GET", "/api/pipelines/tickets", None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body["error"]
@@ -102,41 +262,33 @@ async fn tickets_come_from_linear_with_running_marked() {
         "{body}"
     );
     with_linear(&r).await;
-    r.app.pipeline.put(Record {
-        id: "COM-1".into(),
-        stage: Stage::Implement,
-        ..Record::default()
-    });
-    let (status, body) = get_json(&r, &c, "/api/pipeline/tickets").await;
+    let runs_url = format!("/api/pipelines/{id}/runs");
+    let start = |tickets: serde_json::Value| {
+        call(
+            &r,
+            &c,
+            "POST",
+            &runs_url,
+            Some(json!({ "tickets": tickets })),
+        )
+    };
+    let (status, body) = start(json!(["COM-1"])).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    let tickets = body["tickets"].as_array().unwrap();
-    assert_eq!(tickets.len(), 3);
-    assert_eq!(
-        (&tickets[0]["id"], &tickets[0]["running"]),
-        (&json!("COM-1"), &json!(true))
+    assert_eq!(body["runs"][0]["subject"]["ticket"]["linear_id"], "u-1");
+    let (status, body) = start(json!(["COM-1"])).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("is already in a run of Implement my Linear tickets"),
+        "{body}"
     );
-    assert_eq!(tickets[1]["running"], false);
-}
-
-#[tokio::test]
-async fn starting_a_run_by_ids_and_by_state() {
-    let r = rig();
-    let c = cookie(&r.app).await;
-    with_linear(&r).await;
-    let (status, body) = post(&r, &c, "/api/pipeline/runs", json!({ "ids": ["COM-2"] })).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["records"][0]["id"], "COM-2");
-    assert_eq!(r.app.pipeline.get("COM-2").unwrap().stage, Stage::Queued);
-    let (status, body) = post(&r, &c, "/api/pipeline/runs", json!({ "state": "todo" })).await;
-    assert_eq!(status, StatusCode::OK, "{body}");
-    let ids: Vec<&str> = body["records"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|r| r["id"].as_str().unwrap())
-        .collect();
-    assert_eq!(ids, vec!["COM-1", "COM-3"]);
-    let (status, body) = post(&r, &c, "/api/pipeline/runs", json!({ "ids": ["COM-9"] })).await;
+    let (status, tickets) = call(&r, &c, "GET", "/api/pipelines/tickets", None).await;
+    assert_eq!(status, StatusCode::OK, "{tickets}");
+    assert_eq!(tickets["tickets"][0]["running_in"], json!([id]));
+    assert_eq!(tickets["tickets"][1]["running_in"], json!([]));
+    let (status, body) = start(json!(["COM-9"])).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body["error"]
@@ -148,59 +300,86 @@ async fn starting_a_run_by_ids_and_by_state() {
 }
 
 #[tokio::test]
-async fn a_running_ticket_is_refused_with_409() {
+async fn run_actions() {
     let r = rig();
     let c = cookie(&r.app).await;
-    with_linear(&r).await;
-    r.app.pipeline.put(Record {
-        id: "COM-1".into(),
-        stage: Stage::Review,
-        ..Record::default()
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let mut run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.state = RunState::Waiting;
+    run.step = "implement".into();
+    run.waiting = Some(Waiting {
+        kind: WaitKind::Stopped,
+        step: "implement".into(),
+        reason: "Implement failed".into(),
+        screen: String::new(),
     });
-    let (status, body) = post(&r, &c, "/api/pipeline/runs", json!({ "ids": ["COM-1"] })).await;
-    assert_eq!(status, StatusCode::CONFLICT);
+    let run_id = run.id.clone();
+    r.app.pipelines.put(run);
+    let url = |action: &str| format!("/api/runs/{run_id}/{action}");
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        &url("answer"),
+        Some(json!({ "text": "go" })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(
         body["error"]
             .as_str()
             .unwrap()
-            .contains("COM-1 is already in a run"),
+            .contains("is not waiting for an answer"),
         "{body}"
     );
-}
-
-#[tokio::test]
-async fn answer_retry_drop() {
-    let r = rig();
-    let c = cookie(&r.app).await;
-    r.app.pipeline.put(parked("COM-1", ParkKind::Questions));
-    let (status, body) = post(
+    let (status, body) = call(
         &r,
         &c,
-        "/api/pipeline/tickets/COM-1/answer",
-        json!({ "text": "The account page" }),
+        "POST",
+        &url("continue"),
+        Some(json!({ "outcome": "pass" })),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["stage"], "triage");
-    let (status, _) = post(&r, &c, "/api/pipeline/tickets/COM-1/drop", json!({})).await;
-    assert_eq!(status, StatusCode::OK);
-    assert_eq!(r.app.pipeline.get("COM-1").unwrap().stage, Stage::Dropped);
-    let (status, _) = post(&r, &c, "/api/pipeline/tickets/COM-1/retry", json!({})).await;
+    assert_eq!(body["step"], "review");
+    let (status, body) = call(&r, &c, "POST", &url("drop"), None).await;
+    assert_eq!(
+        (status, body["state"].clone()),
+        (StatusCode::OK, json!("dropped"))
+    );
+    let (status, _) = call(&r, &c, "POST", &url("retry"), None).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
-    let (status, _) = post(&r, &c, "/api/pipeline/tickets/COM-9/retry", json!({})).await;
+    let (status, _) = call(&r, &c, "POST", "/api/runs/nope/retry", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
 #[tokio::test]
-async fn an_answer_to_a_push_park_is_400() {
+async fn settings_are_saved_to_yardbell_yml() {
     let r = rig();
     let c = cookie(&r.app).await;
-    r.app.pipeline.put(parked("COM-1", ParkKind::Push));
-    let (status, body) = post(
+    let (status, body) = call(
         &r,
         &c,
-        "/api/pipeline/tickets/COM-1/answer",
-        json!({ "text": "go" }),
+        "PUT",
+        "/api/pipelines/settings",
+        Some(json!({ "per_machine": 3, "minutes": 90, "qa_notes": { "acme/web": "bin/rspec" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let cfg = r.app.config().unwrap();
+    assert_eq!((cfg.pipelines.per_machine, cfg.pipelines.minutes), (3, 90));
+    assert_eq!(cfg.pipelines.qa_notes["acme/web"], "bin/rspec");
+    let (status, body) = call(
+        &r,
+        &c,
+        "PUT",
+        "/api/pipelines/settings",
+        Some(json!({ "per_machine": 9, "minutes": 90 })),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
@@ -208,7 +387,7 @@ async fn an_answer_to_a_push_park_is_400() {
         body["error"]
             .as_str()
             .unwrap()
-            .contains("COM-1 is not waiting for an answer"),
+            .contains("pipelines.per_machine must be from 1 to 6"),
         "{body}"
     );
 }

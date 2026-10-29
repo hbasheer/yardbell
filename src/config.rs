@@ -164,27 +164,6 @@ impl GitLabHost {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct Pipeline {
-    #[serde(default)]
-    pub machines: Vec<String>,
-    #[serde(default)]
-    pub test_machine: String,
-    #[serde(default = "default_per_machine")]
-    pub per_machine: u32,
-    #[serde(default = "default_review_rounds")]
-    pub review_rounds: u32,
-    #[serde(default = "default_qa_retries")]
-    pub qa_retries: u32,
-    #[serde(default = "default_stage_minutes")]
-    pub stage_minutes: u64,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub linear_state: String,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub qa_instructions: String,
-}
-
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Pipelines {
     pub per_machine: u32,
@@ -207,22 +186,6 @@ impl Pipelines {
     pub fn is_default(&self) -> bool {
         *self == Pipelines::default()
     }
-}
-
-fn default_per_machine() -> u32 {
-    2
-}
-
-fn default_review_rounds() -> u32 {
-    2
-}
-
-fn default_qa_retries() -> u32 {
-    1
-}
-
-fn default_stage_minutes() -> u64 {
-    120
 }
 
 fn plain_url(url: &str) -> bool {
@@ -512,8 +475,6 @@ pub struct Config {
     pub dispatch: DispatchSettings,
     #[serde(default, skip_serializing_if = "PullRequests::is_default")]
     pub pull_requests: PullRequests,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pipeline: Option<Pipeline>,
     #[serde(default, skip_serializing_if = "Pipelines::is_default")]
     pub pipelines: Pipelines,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -653,7 +614,6 @@ impl Config {
             .map_err(ConfigError::Invalid)?;
         self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
         self.validate_dispatch().map_err(ConfigError::Invalid)?;
-        self.validate_pipeline().map_err(ConfigError::Invalid)?;
         if !(1..=6).contains(&self.pipelines.per_machine) {
             return invalid("pipelines.per_machine must be from 1 to 6".into());
         }
@@ -663,43 +623,6 @@ impl Config {
         crate::worktrees::setup::validate(&self.worktree_setup, |m| self.machine(m).is_some())
             .map_err(ConfigError::Invalid)?;
         crate::triggers::validate(&self.triggers).map_err(ConfigError::Invalid)
-    }
-
-    fn validate_pipeline(&self) -> Result<(), String> {
-        let Some(p) = &self.pipeline else {
-            return Ok(());
-        };
-        if p.machines.is_empty() {
-            return Err("pipeline.machines needs at least one machine".into());
-        }
-        for name in &p.machines {
-            if self.machine(name).is_none() {
-                return Err(format!(
-                    "pipeline.machines names {name:?}, which is not a machine"
-                ));
-            }
-        }
-        if p.test_machine.trim().is_empty() {
-            return Err("pipeline.test_machine needs the machine QA runs on".into());
-        }
-        if self.machine(&p.test_machine).is_none() {
-            return Err(format!(
-                "pipeline.test_machine names {:?}, which is not a machine",
-                p.test_machine
-            ));
-        }
-        let ranges: [(&str, u64, u64, u64); 4] = [
-            ("per_machine", p.per_machine.into(), 1, 6),
-            ("review_rounds", p.review_rounds.into(), 1, 5),
-            ("qa_retries", p.qa_retries.into(), 0, 3),
-            ("stage_minutes", p.stage_minutes, 10, 1440),
-        ];
-        for (key, value, low, high) in ranges {
-            if !(low..=high).contains(&value) {
-                return Err(format!("pipeline.{key} must be from {low} to {high}"));
-            }
-        }
-        Ok(())
     }
 
     fn validate_dispatch(&self) -> Result<(), String> {
@@ -1225,74 +1148,6 @@ mod tests {
         }
     }
 
-    fn pipeline(yaml: &str) -> Result<Config, ConfigError> {
-        load_str(&format!("{BASE}pipeline:\n{yaml}"))
-    }
-
-    #[test]
-    fn pipeline_defaults_fill_in() {
-        let cfg = pipeline("  machines: [mini]\n  test_machine: mini\n").unwrap();
-        let p = cfg.pipeline.unwrap();
-        assert_eq!(p.machines, vec!["mini"]);
-        assert_eq!(p.test_machine, "mini");
-        assert_eq!(p.per_machine, 2);
-        assert_eq!(p.review_rounds, 2);
-        assert_eq!(p.qa_retries, 1);
-        assert_eq!(p.stage_minutes, 120);
-        assert_eq!(p.linear_state, "");
-        assert_eq!(p.qa_instructions, "");
-    }
-
-    #[test]
-    fn pipeline_names_an_unknown_machine() {
-        let err = pipeline("  machines: [mini, nope]\n  test_machine: mini\n")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("pipeline.machines") && err.contains("nope"),
-            "{err}"
-        );
-        let err = pipeline("  machines: [mini]\n  test_machine: devbox\n")
-            .unwrap_err()
-            .to_string();
-        assert!(
-            err.contains("pipeline.test_machine") && err.contains("devbox"),
-            "{err}"
-        );
-    }
-
-    #[test]
-    fn pipeline_numbers_out_of_range() {
-        let base = "  machines: [mini]\n  test_machine: mini\n";
-        for (line, says) in [
-            ("per_machine: 7", "pipeline.per_machine must be from 1 to 6"),
-            (
-                "review_rounds: 0",
-                "pipeline.review_rounds must be from 1 to 5",
-            ),
-            ("qa_retries: 4", "pipeline.qa_retries must be from 0 to 3"),
-            (
-                "stage_minutes: 5",
-                "pipeline.stage_minutes must be from 10 to 1440",
-            ),
-        ] {
-            let err = pipeline(&format!("{base}  {line}\n"))
-                .unwrap_err()
-                .to_string();
-            assert!(err.contains(says), "{line}: {err}");
-        }
-    }
-
-    #[test]
-    fn pipeline_needs_machines_and_a_test_machine() {
-        let err = pipeline("  machines: []\n  test_machine: mini\n")
-            .unwrap_err()
-            .to_string();
-        assert!(err.contains("pipeline.machines"), "{err}");
-        let err = pipeline("  machines: [mini]\n").unwrap_err().to_string();
-        assert!(err.contains("pipeline.test_machine"), "{err}");
-    }
-
     #[test]
     fn pipelines_settings_defaults_and_ranges() {
         let cfg = load_str(BASE).unwrap();
@@ -1314,13 +1169,6 @@ mod tests {
                 .to_string();
             assert!(err.contains(says), "{line}: {err}");
         }
-    }
-
-    #[test]
-    fn no_pipeline_is_fine() {
-        let cfg = load_str(BASE).unwrap();
-        assert!(cfg.pipeline.is_none());
-        cfg.validate().unwrap();
     }
 
     #[test]

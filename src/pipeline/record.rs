@@ -29,6 +29,33 @@ pub struct Subject {
     pub pr: Option<PrRef>,
 }
 
+impl PrRef {
+    // A GitHub pull request or GitLab merge request link, as pasted from the browser.
+    pub fn parse(url: &str) -> Option<PrRef> {
+        let rest = url.trim().strip_prefix("https://")?;
+        let (host, path) = rest.split_once('/')?;
+        let (project, number, forge, mark) = match path.split_once("/-/merge_requests/") {
+            Some((project, tail)) => (project, tail, "gitlab", "/-/merge_requests/"),
+            None => {
+                let (project, tail) = path.split_once("/pull/")?;
+                (project, tail, "github", "/pull/")
+            }
+        };
+        let number: u64 = number.split(['/', '?', '#']).next()?.parse().ok()?;
+        if project.split('/').filter(|p| !p.is_empty()).count() < 2 {
+            return None;
+        }
+        Some(PrRef {
+            url: format!("https://{host}/{project}{mark}{number}"),
+            number,
+            branch: String::new(),
+            host: host.to_string(),
+            project: project.to_string(),
+            forge: forge.into(),
+        })
+    }
+}
+
 impl Subject {
     // One run of a pipeline per item: a pull or merge request when there is one, else the ticket.
     pub fn key(&self) -> String {
@@ -263,4 +290,41 @@ pub enum Seen {
     Retry,
     Continue(Outcome),
     Drop,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pull_request_links_are_read() {
+        let mr =
+            PrRef::parse("https://git.commslayer.com/commslayer/app/-/merge_requests/87/diffs")
+                .unwrap();
+        assert_eq!(
+            (
+                mr.host.as_str(),
+                mr.project.as_str(),
+                mr.number,
+                mr.forge.as_str()
+            ),
+            ("git.commslayer.com", "commslayer/app", 87, "gitlab")
+        );
+        assert_eq!(
+            mr.url,
+            "https://git.commslayer.com/commslayer/app/-/merge_requests/87"
+        );
+        let pr = PrRef::parse(" https://github.com/acme/api/pull/9 ").unwrap();
+        assert_eq!(
+            (
+                pr.host.as_str(),
+                pr.project.as_str(),
+                pr.number,
+                pr.forge.as_str()
+            ),
+            ("github.com", "acme/api", 9, "github")
+        );
+        assert_eq!(PrRef::parse("https://example.com/nothing"), None);
+        assert_eq!(PrRef::parse("https://github.com/acme/pull/x"), None);
+    }
 }
