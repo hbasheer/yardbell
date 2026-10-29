@@ -1608,7 +1608,8 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "remove_worktree",
             "integrate_branches",
             "push_branch",
-            "move_session"
+            "move_session",
+            "read_settings"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;
