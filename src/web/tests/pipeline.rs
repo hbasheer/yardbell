@@ -88,6 +88,16 @@ async fn pipelines_list_with_counts_and_templates() {
     );
     assert_eq!(body["settings"]["per_machine"], 2);
     assert_eq!(body["machines"], json!(["mini", "hp", "pro"]));
+    assert!(
+        body["gitlab_hosts"].is_array()
+            && body["agents"].is_array()
+            && body["mcp_servers"].is_array(),
+        "{body}"
+    );
+    let (status, all) = call(&r, &c, "GET", "/api/runs", None).await;
+    assert_eq!(status, StatusCode::OK, "{all}");
+    assert_eq!(all["runs"][0]["pipeline"], id);
+    assert_eq!(all["runs"][0]["state"], "waiting");
 }
 
 #[tokio::test]

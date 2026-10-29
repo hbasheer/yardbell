@@ -327,23 +327,68 @@ class FakeLinear(BaseHTTPRequestHandler):
         pass
 
 
-def pipeline_records():
-    stamp = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 600))
-    base = {"run": "r20260101-1000", "started_by": "you", "stage_since": stamp,
-            "history": [{"stage": "queued", "at": stamp}]}
+def ago_stamp(minutes):
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - minutes * 60))
+
+
+def review_pipeline():
+    def agent(id, name, x, machine, workspace, nxt, instructions):
+        return {"id": id, "name": name, "kind": "agent", "instructions": instructions, "agent": "",
+                "machine": machine, "workspace": workspace, "session": "new", "read_only": True,
+                "mcp_servers": [], "max_runs": 2, "next": nxt, "x": x, "y": 80}
+    same = {"same_as": "understand"}
     return {
-        "COM-11": {**base, "id": "COM-11", "linear_id": "u-11", "title": "Fix the webhook dedup",
-                   "url": "https://linear.app/acme/issue/COM-11", "stage": "review", "round": 1,
-                   "machine": MACHINE, "folder": "demo-app", "branch": "com-11-fix-the-webhook-dedup",
-                   "reason": "hp has demo-app and the most room"},
-        "COM-12": {**base, "id": "COM-12", "linear_id": "u-12", "title": "Redirect after login",
-                   "url": "https://linear.app/acme/issue/COM-12", "stage": "parked",
-                   "parked": {"kind": "questions", "reason": "Triage has 2 questions", "from": "triage"},
-                   "questions": [{"asked": "Which page should it go to?"}, {"asked": "Should old links still work?"}]},
-        "COM-13": {**base, "id": "COM-13", "linear_id": "u-13", "title": "Typo on the invoice page",
-                   "url": "https://linear.app/acme/issue/COM-13", "stage": "done", "machine": MACHINE,
-                   "branch": "com-13-typo", "pull": {"url": "https://github.com/acme/app/pull/12", "number": 12},
-                   "summary": "Fixed the typo."},
+        "id": "review", "name": "Review my merge requests", "enabled": False, "version": 1,
+        "trigger": {"kind": "gitlab_reviewer", "host": "git.example.com"}, "start": "understand",
+        "steps": [
+            agent("understand", "Understand", 40, {"name": MACHINE}, {"kind": "new_worktree"},
+                  {"pass": "root-cause", "fail": "report", "needs_you": "wait"}, "Read {ticket} and {pr}."),
+            agent("root-cause", "Root cause", 320, same, {"kind": "same_as", "step": "understand"},
+                  {"pass": "test", "fail": "report", "needs_you": "wait"}, "Does {pr} fix the root cause?"),
+            agent("test", "Test", 600, same, {"kind": "copy", "from": "understand"},
+                  {"pass": "report", "fail": "root-cause", "needs_you": "wait"}, "Run the specs for {branch}."),
+            {"id": "report", "name": "Report to me", "kind": "report", "max_runs": 2,
+             "next": {"pass": "end", "fail": "end", "needs_you": "wait"}, "x": 880, "y": 80},
+        ],
+    }
+
+
+def pipeline_runs():
+    definition = review_pipeline()
+
+    def run(id, number, title, state, step, steps, waiting=None):
+        url = f"https://git.example.com/acme/app/-/merge_requests/{number}"
+        ticket = f"COM-{1200 + number}"
+        return {
+            "id": id, "pipeline": "review", "pipeline_name": definition["name"], "version": 1,
+            "definition": definition, "key": f"pr:{url}", "started_by": "trigger", "started": ago_stamp(40 - number % 10),
+            "subject": {"ticket": {"linear_id": f"u-{number}", "id": ticket, "title": title,
+                                   "url": f"https://linear.app/acme/issue/{ticket}"},
+                        "pr": {"url": url, "number": number, "branch": f"{ticket.lower()}-fix", "host": "git.example.com",
+                               "project": "acme/app", "forge": "gitlab"}},
+            # A machine that does not exist keeps the loop from starting real sessions for these runs.
+            "place": {"machine": "nowhere", "folder": "demo-app", "branch": f"{ticket.lower()}-fix"},
+            "state": state, "step": step, "step_since": ago_stamp(12),
+            "steps": {name: {"runs": 1, "machine": "nowhere", "outcome": outcome, "report": report,
+                             "started": ago_stamp(30), "ended": ago_stamp(20)}
+                      for name, outcome, report in steps},
+            "history": [{"step": name, "outcome": outcome, "at": ago_stamp(20)} for name, outcome, _ in steps],
+            "waiting": waiting,
+        }
+
+    return {
+        "run-a": run("run-a", 87, "Fix the webhook dedup", "waiting", "root-cause",
+                     [("understand", "pass", "The duplicate check keys on the payload id only."),
+                      ("root-cause", "needs_you", "Which window is right?")],
+                     {"kind": "needs_you", "step": "root-cause", "reason": "Root cause needs you",
+                      "screen": "The ticket says 5 minutes, the MR drops them within 60 seconds. Which window is right?"}),
+        "run-b": run("run-b", 91, "Inbox filter", "waiting", "test",
+                     [("understand", "pass", "Filters by label."), ("root-cause", "pass", "Fixes it."),
+                      ("test", "fail", "The filter spec fails on an empty inbox.")],
+                     {"kind": "stopped", "step": "test", "reason": "Test failed"}),
+        "run-c": run("run-c", 84, "Login redirect", "done", "",
+                     [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes."),
+                      ("test", "pass", "Specs pass."), ("report", "pass", "Looks good.")]),
     }
 
 
@@ -372,8 +417,11 @@ class Yardbell:
             git("add", "README.md", cwd=path)
             git("commit", "-q", "-m", "init", cwd=path)
         self.seed_dispatch()
-        with open(os.path.join(self.state, "pipeline.json"), "w") as f:
-            json.dump(pipeline_records(), f)
+        os.makedirs(os.path.join(self.state, "pipelines"))
+        with open(os.path.join(self.state, "pipelines", "review.json"), "w") as f:
+            json.dump({"history": [{"version": 1, "saved": ago_stamp(60), "definition": review_pipeline()}]}, f)
+        with open(os.path.join(self.state, "runs.json"), "w") as f:
+            json.dump(pipeline_runs(), f)
         self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
         threading.Thread(target=self.linear.serve_forever, daemon=True).start()
         # gh on the server's PATH answers for every branch with one failing pull request.
@@ -1588,47 +1636,120 @@ class Suite:
             if "/workspace /pipeline /dispatch" not in order:
                 raise Failure(f"the sidebar on {page} reads {order}")
 
-    def test_pipeline_page_rows(self):
-        b = self.b
-        b.goto(self.url("/pipeline"))
-        b.wait("document.querySelectorAll('#pl-runs .pl-row').length === 3", "three rows")
-        review = '#pl-runs .pl-row[data-id="COM-11"]'
-        if b.js(f"document.querySelector('{review} .pl-word').textContent.trim()") != "Review, round 2":
-            raise Failure("the review row does not say its round")
-        marks = b.js(f"[...document.querySelectorAll('{review} .pl-stage')].map((m) => m.className).join('|')")
-        if "current" not in marks.split("|")[2] or "done" not in marks.split("|")[1]:
-            raise Failure(f"the review row's stage marks are {marks}")
-        if b.js("document.querySelector(\"#pl-runs .pl-row[data-id='COM-13'] a.pl-pull\")?.getAttribute('href')") != "https://github.com/acme/app/pull/12":
-            raise Failure("the done row does not link its pull request")
-        if not b.js("document.getElementById('pl-off') && !document.getElementById('pl-off').hidden"):
-            raise Failure("the page does not say the pipeline is off without its settings")
+    def set_field(self, selector, value):
+        self.b.js(f"""(() => {{
+          const el = document.querySelector({json.dumps(selector)});
+          el.value = {json.dumps(value)};
+          el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+          el.dispatchEvent(new Event("change", {{ bubbles: true }}));
+        }})()""")
 
-    def test_pipeline_needs_you_answer(self):
-        b = self.b
-        b.goto(self.url("/pipeline"))
-        card = '#pl-needs .pl-need[data-id="COM-12"]'
-        b.wait(f"document.querySelector('{card}')?.textContent.includes('Should old links still work?')", "the parked ticket's questions")
-        b.click(f"{card} textarea")
-        b.type("The account page, and yes")
-        b.click(f"{card} .btn.primary")
-        b.wait(f"!document.querySelector('{card}')", "the ticket to leave Needs you")
-        b.wait("document.querySelector(\"#pl-runs .pl-row[data-id='COM-12'] .pl-word\")?.textContent.trim() === 'Triage'", "its row in Triage")
+    def run_of(self, id):
+        runs = self.api("GET", "/api/runs")["runs"]
+        return next(r for r in runs if r["id"] == id)
 
-    def test_pipeline_start_from_the_picker(self):
+    def test_pipelines_list_cards(self):
         b = self.b
         b.goto(self.url("/pipeline"))
-        self.api("POST", "/api/settings/secrets", {"name": "linear", "value": "lin_api_browser_test"})
-        b.click("#pl-load")
-        b.wait("document.querySelectorAll('#pl-tickets .pl-ticket').length === 3", "the open tickets from Linear")
-        if not b.js("document.querySelector(\"#pl-tickets .pl-ticket[data-id='COM-12'] input\").disabled"):
-            raise Failure("a ticket already in a run can be ticked")
-        if "In a run" not in b.js("document.querySelector(\"#pl-tickets .pl-ticket[data-id='COM-12']\").textContent"):
-            raise Failure("the running ticket does not say so")
-        b.click("#pl-tickets .pl-ticket[data-id='COM-21'] input")
-        b.wait("document.getElementById('pl-start').textContent.trim() === 'Start 1 ticket'", "the start button to count")
-        b.click("#pl-start")
-        b.wait("document.querySelector(\"#pl-runs .pl-row[data-id='COM-21'] .pl-word\")?.textContent.trim().startsWith('Queued')", "the new row, queued")
-        self.check_errors("the Pipeline page")
+        card = '.pl-card[data-id="review"]'
+        b.wait(f"document.querySelector('{card}')", "the review pipeline's card")
+        text = b.js(f"document.querySelector('{card}').textContent.replace(/\\s+/g, ' ')")
+        for want in ("When a GitLab merge request on git.example.com adds me as reviewer",
+                     "Understand", "Test ⟲ Root cause", "v1", "2 waiting · 1 done", "Needs you"):
+            if want not in text:
+                raise Failure(f"the card does not say {want!r}: {text}")
+        if b.js(f"document.querySelector('{card} input[type=checkbox]').checked"):
+            raise Failure("a pipeline that is off shows as on")
+        b.click(f"{card} input[type=checkbox]")
+        b.wait("document.getElementById('toast').textContent.includes('gitlab_reviewer names git.example.com')",
+               "the checks' problem when switching on")
+        b.wait(f"!document.querySelector('{card} input[type=checkbox]').checked", "the switch back off")
+        b.click("#pl-waiting-toggle")
+        b.wait("document.querySelectorAll('#pl-waiting .pl-wait-item').length === 2", "two runs waiting for me")
+        if "!87 COM-1287 Fix the webhook dedup" not in b.js("document.getElementById('pl-waiting').textContent"):
+            raise Failure("the waiting list does not name the merge request")
+        self.check_errors("the Pipelines list")
+
+    def test_pipeline_new_from_template(self):
+        b = self.b
+        b.goto(self.url("/pipeline"))
+        b.click("#pl-new")
+        b.wait("document.querySelector('#pl-templates button')", "the templates")
+        b.js("[...document.querySelectorAll('#pl-templates button')].find((x) => x.textContent.includes('Implement my Linear tickets')).click()")
+        b.wait("new URLSearchParams(location.search).get('p') === 'implement-my-linear-tickets'", "the new pipeline opened")
+        b.wait("document.querySelector('.pl-title-name')?.textContent.trim() === 'Implement my Linear tickets'", "its name")
+        b.click("#pl-back")
+        b.wait("document.querySelectorAll('.pl-card[data-id]').length === 2", "two pipeline cards")
+
+    def test_pipeline_steps_form_saves_and_shows_problems(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&tab=steps"))
+        form = '.pl-step-form[data-step="test"]'
+        b.wait(f"document.querySelector('{form}')", "the Test step's form")
+        version = self.api("GET", "/api/pipelines/review")["version"]
+        self.set_field(f"{form} input[name=name]", "Test on hp")
+        b.click("#pl-save")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {version + 1})()", "the new version saved")
+        b.wait(f"document.querySelector('.pl-version').textContent.includes('v{version + 1}')", "the version on the page")
+        self.set_field('.pl-step-form[data-step="report"] input[name=max_runs]', "0")
+        b.click("#pl-save")
+        b.wait("document.getElementById('pl-problems')?.textContent.includes('Report to me: max_runs must be from 1 to 10')",
+               "the checks' problem shown with the form")
+        self.check_errors("the Steps tab")
+
+    def test_pipeline_run_graph_and_waiting_box(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-node[data-step=\"root-cause\"].waiting')", "Root cause marked waiting")
+        for step, cls in (("understand", "done"), ("test", "later"), ("report", "later")):
+            if not b.js(f"document.querySelector('.pl-node[data-step=\"{step}\"]').classList.contains('{cls}')"):
+                raise Failure(f"the {step} node is not {cls}")
+        if b.js("document.querySelectorAll('.pl-canvas svg path').length") < 5:
+            raise Failure("the graph does not draw the lines between steps")
+        box = "#pl-need"
+        b.wait(f"document.querySelector('{box}')?.textContent.includes('Which window is right?')", "the agent's question")
+        b.click(f"{box} textarea")
+        b.type("Five minutes")
+        b.click(f"{box} .btn.primary")
+        b.wait("(async () => (await (await fetch('/api/runs')).json()).runs.find((r) => r.id === 'run-a').steps['root-cause'].answer === 'Five minutes')()",
+               "the answer kept on the run")
+        b.click('.pl-run-item[data-id="run-b"]')
+        b.wait(f"document.querySelector('{box}')?.textContent.includes('Test failed')", "run B's waiting box")
+        b.js(f"[...document.querySelectorAll('{box} button')].find((x) => x.textContent.trim() === 'Continue on fail').click()")
+        b.wait("(async () => (await (await fetch('/api/runs')).json()).runs.find((r) => r.id === 'run-b').step === 'root-cause')()",
+               "run B back at Root cause")
+        self.check_errors("the Runs tab")
+
+    def test_pipeline_history_restore(self):
+        b = self.b
+        definition = self.api("GET", "/api/pipelines/review")
+        first = definition["steps"][0]["name"]
+        definition["steps"][0]["name"] = "Read it"
+        saved = self.api("PUT", "/api/pipelines/review", definition)
+        b.goto(self.url("/pipeline?p=review&tab=history"))
+        b.wait(f"document.querySelector('.pl-history-row')?.dataset.version === '{saved['version']}'", "the newest version first")
+        b.click('.pl-history-row[data-version="1"] button')
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
+        if self.api("GET", "/api/pipelines/review")["steps"][0]["name"] != first:
+            raise Failure("restoring version 1 did not bring its step names back")
+
+    def test_pipeline_settings_panel(self):
+        b = self.b
+        b.goto(self.url("/pipeline"))
+        b.click("#pl-settings-open")
+        b.wait("document.querySelector('#pl-settings input[name=per_machine]')", "the settings form")
+        self.set_field("#pl-settings input[name=per_machine]", "3")
+        self.set_field("#pl-settings input[name=minutes]", "90")
+        b.click("#pl-note-add")
+        self.set_field("#pl-settings .pl-note:last-child input[name=folder]", "demo-app")
+        self.set_field("#pl-settings .pl-note:last-child input[name=note]", "Run bin/rspec")
+        b.click("#pl-settings-save")
+        b.wait("document.getElementById('toast').textContent.includes('Saved')", "the settings saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        for want in ("per_machine: 3", "minutes: 90", "demo-app: Run bin/rspec"):
+            if want not in config:
+                raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
 
     def check_errors(self, where):
         if self.b.errors:

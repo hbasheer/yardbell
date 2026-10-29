@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="light dark">
-<title>Pipeline · Yardbell</title>
+<title>Pipelines · Yardbell</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/400.css" integrity="sha384-EfdL97hcnol8T4/i0jMEua2ounMTPBCKaU1QluVPWTv7V8xcTTfxSL1VWdjjpdRl" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/500.css" integrity="sha384-JJ19IMHzOJ2sAC2xNzhH4cnXNAY9idh1hFgmr9ePDd3e68jl+XEPiMVKTwYyGBcc" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/600.css" integrity="sha384-NWCWDXFWH0ixL3DXbRVGmMD8PbUKTQZA1n9RtBQEkxKQdln+Ui814nUpfzeU0ws+" crossorigin="anonymous">
@@ -52,33 +52,7 @@
     </div>
   </aside>
 
-  <main class="main pipeline-main">
-    <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard</a>
-    <header class="main-head"><h1>Pipeline</h1><a class="btn quiet small-link" href="https://github.com/hbasheer/yardbell/blob/main/docs/automation.md#the-ticket-pipeline" target="_blank" rel="noopener">How it works</a></header>
-    <p class="pl-off" id="pl-off" hidden>The pipeline is off. Add a <code>pipeline</code> section to <code>yardbell.yml</code> with the machines that implement tickets and the one that tests them, and Yardbell starts carrying tickets through. Tickets you start now wait until then.</p>
-    <section class="pl-section" id="pl-needs-section" aria-labelledby="pl-needs-title" hidden>
-      <div class="section-head"><h2 id="pl-needs-title">Needs you</h2></div>
-      <div class="pl-needs" id="pl-needs"></div>
-    </section>
-    <section class="pl-section" aria-labelledby="pl-runs-title">
-      <div class="section-head"><h2 id="pl-runs-title">Runs</h2></div>
-      <div class="pl-runs" id="pl-runs"></div>
-    </section>
-    <section class="pl-section" aria-labelledby="pl-start-title">
-      <div class="section-head"><h2 id="pl-start-title">Start a run</h2></div>
-      <div class="pl-picker" id="pl-picker">
-        <div class="pl-picker-bar">
-          <button class="btn" type="button" id="pl-load">Show my open tickets</button>
-          <label class="pl-filter" hidden>State <select id="pl-state"></select></label>
-          <span class="pl-picker-actions">
-            <button class="btn" type="button" id="pl-start-state" hidden></button>
-            <button class="btn primary" type="button" id="pl-start" disabled hidden>Start 0 tickets</button>
-          </span>
-        </div>
-        <ul class="pl-tickets" id="pl-tickets"></ul>
-      </div>
-    </section>
-  </main>
+  <main class="main pipeline-main" id="pl-root"></main>
 </div>
 <div id="toast" role="status"></div>
 <script src="/nav.js"></script>

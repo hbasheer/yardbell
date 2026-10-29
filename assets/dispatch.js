@@ -172,7 +172,7 @@ function convoItem(c) {
   return html`<li class="convo ${selected ? "selected" : ""}">
     <a href="/dispatch?c=${c.id}" aria-current=${selected ? "true" : nothing} @click=${(e) => switchTo(e, c)}>
       <span class="convo-title">${c.title}</span>
-      <span class="convo-meta">${pipelined.has(c.id) ? html`<span class="convo-trigger" title="A ticket in the pipeline" aria-label="A ticket in the pipeline">${ICONS.pipeline}</span>` : nothing}${c.trigger ? html`<span class="convo-trigger" title="Started by the trigger ${c.trigger}" aria-label="Started by a trigger">${ICONS.trigger}</span>` : nothing}${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
+      <span class="convo-meta">${pipelined.has(c.id) ? html`<span class="convo-trigger" title="A pipeline run" aria-label="A pipeline run">${ICONS.pipeline}</span>` : nothing}${c.trigger ? html`<span class="convo-trigger" title="Started by the trigger ${c.trigger}" aria-label="Started by a trigger">${ICONS.trigger}</span>` : nothing}${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
     </a>
     <button class="btn quiet danger delete" type="button" aria-label="Delete ${c.title}" title="Delete" @click=${() => deleteConvo(c)}>${ICONS.close}</button>
   </li>`;
@@ -208,16 +208,16 @@ async function deleteConvo(c) {
   }
 }
 
-// Conversations the ticket pipeline keeps, one per ticket, get its mark in the list.
+// Conversations a pipeline run keeps, one per run, get its mark in the list.
 let pipelined = new Set();
 
 async function loadList() {
   const [list, pipeline] = await Promise.all([
     api("GET", "/dispatch/conversations"),
-    api("GET", "/api/pipeline").catch(() => ({ records: [] })),
+    api("GET", "/api/runs").catch(() => ({ runs: [] })),
   ]);
   conversations = list;
-  pipelined = new Set(pipeline.records.map((r) => r.conversation).filter(Boolean));
+  pipelined = new Set(pipeline.runs.map((r) => r.conversation).filter(Boolean));
   compose.keep(conversations.map((c) => c.id));
   renderList();
 }

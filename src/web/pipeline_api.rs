@@ -22,6 +22,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/pipelines/{id}/history", get(history))
         .route("/api/pipelines/{id}/restore", post(restore))
         .route("/api/pipelines/{id}/runs", get(runs).post(start))
+        .route("/api/runs", get(all_runs))
         .route("/api/runs/{id}/answer", post(answer))
         .route("/api/runs/{id}/retry", post(retry))
         .route("/api/runs/{id}/continue", post(continue_on))
@@ -91,11 +92,22 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         .map(|t| t.name)
         .collect();
     let machines: Vec<&str> = cfg.machines.iter().map(|m| m.name.as_str()).collect();
+    let agents: Vec<String> = cfg.agents().into_iter().map(|a| a.name).collect();
+    let mcp_servers: Vec<&str> = cfg.mcp_servers.iter().map(|m| m.name.as_str()).collect();
+    let gitlab_hosts: Vec<&str> = cfg
+        .pull_requests
+        .gitlab
+        .iter()
+        .map(|g| g.host.as_str())
+        .collect();
     Ok(Json(json!({
         "pipelines": pipelines,
         "templates": templates,
         "settings": cfg.pipelines,
         "machines": machines,
+        "agents": agents,
+        "mcp_servers": mcp_servers,
+        "gitlab_hosts": gitlab_hosts,
     }))
     .into_response())
 }
@@ -218,6 +230,10 @@ async fn runs(
         .filter(|r| r.pipeline == id)
         .collect();
     Ok(Json(json!({ "runs": newest_first(runs) })).into_response())
+}
+
+async fn all_runs(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    Ok(Json(json!({ "runs": newest_first(app.pipelines.runs()) })).into_response())
 }
 
 async fn open(app: &AppState) -> Result<Vec<Ticket>, ApiError> {
