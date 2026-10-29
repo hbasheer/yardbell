@@ -481,7 +481,9 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         marks = [{"at": at(0), "kind": "started"}, {"at": at(0), "kind": "active"},
                  {"at": at(5), "kind": "test", "text": "Bash: npm test"},
                  {"at": at(6), "kind": "test", "text": "Tests: 1 failed, 4 passed, 5 total", "ok": False},
+                 {"at": at(10), "kind": "pull", "text": "Pull request #12 opened: Fix the login redirect", "url": FAKE_PR["url"]},
                  {"at": at(19), "kind": "blocked"}, {"at": at(24), "kind": "active"},
+                 {"at": at(26), "kind": "pull", "text": "carol approved", "url": FAKE_PR["url"] + "#review"},
                  {"at": at(30), "kind": "idle"}, {"at": at(40), "kind": "ended"}]
         with open(os.path.join(self.state, "insights.json"), "w") as f:
             json.dump({f"{MACHINE}:{OLD_RUN}": {"machine": MACHINE, "name": OLD_RUN, "agent": "shell", "folder": "demo-app",
@@ -1463,6 +1465,15 @@ class Suite:
         if stats != ("Working | 25 min | 63% of the time; Waiting for you | 5 min | 1 time, 12% of the time; "
                      "Idle | 10 min | 25% of the time; Test results | 1 run | 0 passed, 1 failed"):
             raise Failure(f"the totals read {stats}")
+        entries = b.js("[...document.querySelectorAll('.ins-dialog .ins-run.is-pull a')].map((a) => [a.textContent.trim(), a.getAttribute('href')])")
+        if entries != [["Pull request #12 opened: Fix the login redirect", FAKE_PR["url"]], ["carol approved", FAKE_PR["url"] + "#review"]]:
+            raise Failure(f"the pull request entries read {entries}")
+        known = self.api("GET", f"/sessions/{MACHINE}/{OLD_RUN}/insights")["pull"]
+        summary = b.js("document.querySelector('.ins-dialog .ins-pull')?.innerText || ''")
+        if known and f"#{known['number']}" not in summary:
+            raise Failure(f"Insights know pull request #{known['number']} but the summary reads {summary!r}")
+        if not known and summary:
+            raise Failure(f"a summary without a pull request: {summary!r}")
         if not b.js("document.querySelector('.ins-dialog .ins-list > li.ins-day')"):
             raise Failure("the timeline does not name the day of a session from an earlier day")
         states = b.js("[...document.querySelectorAll('.ins-dialog .ins-period .ins-text')].map((x) => x.textContent).join()")

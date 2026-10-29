@@ -205,6 +205,25 @@ impl State {
         self.touch();
     }
 
+    pub fn pull_of(
+        &self,
+        machine: &str,
+        folder: &str,
+        branch: &str,
+    ) -> Option<crate::pulls::PullView> {
+        let inner = self.inner.read().expect("state lock");
+        let path = inner
+            .snapshots
+            .get(machine)?
+            .folder_paths
+            .get(folder)?
+            .clone();
+        inner
+            .pulls
+            .get(&(machine.to_string(), path, branch.to_string()))
+            .cloned()
+    }
+
     pub fn set_pulls(&self, pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>) {
         let mut inner = self.inner.write().expect("state lock");
         if inner.pulls == pulls {

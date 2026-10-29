@@ -172,3 +172,41 @@ async fn task_history_diff_and_restore_over_http() {
     let (status, _) = get_json(&r, &c, "/dispatch/tasks/history?name=Nope").await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn insights_carry_the_sessions_pull_request() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    observe(&r, Activity::Active, "", 5);
+    let (_, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
+    assert!(body["pull"].is_null(), "no pull request known: {body}");
+
+    let snap = r.app.state.snapshot("hp").unwrap();
+    let s = snap
+        .sessions
+        .iter()
+        .find(|s| s.tmux.as_deref() == Some("hp-eng-1301"))
+        .unwrap();
+    let path = snap.folder_paths[&s.folder].clone();
+    let view = crate::pulls::PullView {
+        forge: "gitlab".into(),
+        number: 12,
+        url: "https://git.example.com/acme/app/-/merge_requests/12".into(),
+        title: "Fix the inbox filter".into(),
+        state: "open".into(),
+        draft: false,
+        review: "approved".into(),
+        ci: crate::pulls::Ci::Passing,
+        failed: Vec::new(),
+    };
+    r.app.state.set_pulls(
+        [(("hp".to_string(), path, s.branch.clone()), view)]
+            .into_iter()
+            .collect(),
+    );
+    let (status, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["pull"]["number"], 12);
+    assert_eq!(body["pull"]["forge"], "gitlab");
+    assert_eq!(body["pull"]["review"], "approved");
+}

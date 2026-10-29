@@ -65,6 +65,16 @@ time and a line on what it means, then a bar and a timeline grouped by day, and 
 test runs its screen showed, such as Claude Code's `Bash(cargo test)` or Codex's `Ran npm test`,
 with **Passed** or **Failed** for a test runner's summary line. Runs still in the scrollback from
 before Yardbell recorded them are listed under **Earlier, from the scrollback**, without times.
+
+When the session's branch has a pull request or a GitLab merge request, Insights shows it under the
+facts: its number and title as a link, the same state as the badge, and where CI and the review
+stand. Its timeline also says what happened to it while the session ran: when it was opened (or
+that it was already open), marked ready for review, approved and by whom, when someone asked for
+changes or commented (with the file and line of a comment on the code, and several comments at once
+as one entry), and when it was merged or closed. Each entry links to the pull request or the
+comment. Yardbell takes these from the checks it already makes for the badge, so they come within a
+couple of minutes.
+
 Yardbell records each change from the checks it already makes, keeps up to 300 changes for each of
 the last 100 sessions, and keeps them across restarts in `insights.json` in its state folder. None
 of this asks an AI. The same **Insights** is in a Workspace pane's **⋯** menu and on a Dispatch session card.
