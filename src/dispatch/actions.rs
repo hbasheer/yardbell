@@ -39,6 +39,7 @@ pub(super) fn new_id() -> String {
 pub enum By {
     Dispatch,
     You,
+    Pipeline,
 }
 
 pub fn event(
@@ -54,7 +55,11 @@ pub fn event(
         "id": new_id(),
         "tool": tool,
         "input": input,
-        "by": if by == By::You { "you" } else { "dispatch" },
+        "by": match by {
+            By::You => "you",
+            By::Dispatch => "dispatch",
+            By::Pipeline => "pipeline",
+        },
         "status": status,
         "at": at,
     });

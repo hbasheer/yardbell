@@ -691,7 +691,7 @@ struct ReviewArgs {
 
 // What a step will run: review_session and scan_folder become the start_session that starts the
 // reviewer or the scanner.
-fn plan(
+pub(crate) fn plan(
     app: &AppState,
     cfg: &Config,
     name: &str,

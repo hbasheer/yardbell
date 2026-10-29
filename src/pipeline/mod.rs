@@ -4,6 +4,7 @@ pub mod linear;
 pub mod prompts;
 pub mod record;
 pub mod store;
+pub mod watch;
 
 use record::{Record, Ticket};
 use std::path::PathBuf;

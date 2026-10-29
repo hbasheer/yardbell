@@ -312,13 +312,32 @@ impl Dispatch {
         rule: Option<&Rule>,
         outcome: &Result<Value, String>,
     ) {
+        self.record_as(id, tool, input, review, rule, outcome, By::Dispatch, None);
+    }
+
+    // The pipeline's steps are not Dispatch's, so Dispatch hears of them at its next turn.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_as(
+        &self,
+        id: &str,
+        tool: &str,
+        input: Value,
+        review: Option<ReviewOf>,
+        rule: Option<&Rule>,
+        outcome: &Result<Value, String>,
+        by: By,
+        run_started: Option<&str>,
+    ) {
         let at = now();
-        let mut event = actions::event(tool, input, By::Dispatch, review.as_ref(), "auto", &at);
+        let mut event = actions::event(tool, input, by, review.as_ref(), "auto", &at);
         if let Some(rule) = rule {
             event["rule"] = json!(rule);
         }
+        if let Some(started) = run_started {
+            event["run_started"] = json!(started);
+        }
         event["result"] = actions::result(outcome, &at);
-        event["told"] = json!(true);
+        event["told"] = json!(by != By::Pipeline);
         let recorded = self.shared.edit(id, |s| {
             track(s, &event);
             s.events.push(event.clone());
@@ -928,6 +947,30 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         assert_eq!(failed["result"]["text"], "can't find session: gone");
         assert_eq!(convo["sessions"][0]["name"], "hp-eng-1");
         assert_eq!(dispatch.list()[0]["waiting"], 0);
+    }
+
+    #[tokio::test]
+    async fn a_pipeline_step_is_recorded_as_the_pipelines() {
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = fake_claude(dir.path(), "true");
+        let id = dispatch.open_conversation("COM-1: Fix the login");
+        dispatch.record_as(
+            &id,
+            "start_session",
+            start_input(),
+            None,
+            None,
+            &Ok(json!({ "machine": "hp", "name": "hp-com-1", "path": "/r/app" })),
+            By::Pipeline,
+            Some("2026-10-29T09:40:00+03:00"),
+        );
+        let convo = dispatch.get(&id).unwrap();
+        let step = convo["events"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(step["by"], "pipeline");
+        assert_eq!(step["status"], "auto");
+        assert_eq!(step["run_started"], "2026-10-29T09:40:00+03:00");
+        assert_eq!(step["result"]["ok"], true);
+        assert_eq!(convo["sessions"][0]["name"], "hp-com-1");
     }
 
     #[tokio::test]

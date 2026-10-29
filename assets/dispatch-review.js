@@ -390,7 +390,8 @@ function trail(e, state) {
   if (e.legacy) return "Ran without asking";
   const parts = [];
   const mine = e.by === "you";
-  if (e.status === "auto") parts.push(`Ran without asking ${clock(e.at)}`);
+  if (e.by === "pipeline") parts.push(`Ran as part of the pipeline run started at ${clock(e.run_started || e.at)}`);
+  else if (e.status === "auto") parts.push(`Ran without asking ${clock(e.at)}`);
   else parts.push(`${mine ? "You asked for this" : "Proposed by Dispatch"} ${clock(e.at)}`);
   if (e.rule) parts.push(`Your rule: ${ruleText(e.rule)}`);
   if (e.status === "approved") parts.push(`${mine ? mineWords(e).done : "Approved"} ${clock(e.decided)}`);
