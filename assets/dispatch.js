@@ -22,6 +22,7 @@ let tracked = [];
 let lastState = null;
 let savedTasks = [];
 let answers = new Map();
+const screens = new Set();
 let view = 0;
 let trigger = null;
 let triggerInfo = null;
@@ -227,6 +228,10 @@ function short(path) {
   return String(path ?? "").replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
 }
 
+function folderOf(path) {
+  return String(path ?? "").replace(/\/+$/, "").split("/").pop() || path;
+}
+
 function termUrl(machine, name) {
   return `/term/${encodeURIComponent(machine)}/${encodeURIComponent(name)}`;
 }
@@ -247,6 +252,20 @@ function readable(screen) {
   const indents = lines.filter((l) => l.trim()).map((l) => l.match(/^ */)[0].length);
   const cut = indents.length ? Math.min(...indents) : 0;
   return lines.map((l) => l.slice(cut)).join("\n").replace(/^\n+|\n+$/g, "");
+}
+
+// The end of the screen is where an agent says what it did or asks, so a card shows only that
+// until it is opened.
+const SCREEN_TAIL = 4;
+
+function screen(e, index) {
+  const lines = readable(e.screen).split("\n");
+  const key = `${view}:${index}`;
+  const open = screens.has(key);
+  const long = lines.length > SCREEN_TAIL;
+  const toggle = () => { open ? screens.delete(key) : screens.add(key); draw(); };
+  return html`${long ? html`<button class="link-btn session-screen-more" type="button" aria-expanded=${open ? "true" : "false"} @click=${toggle}>${open ? "Show the end only" : `Show all ${lines.length} lines`}</button>` : nothing}
+    <pre class="session-screen">${(long && !open ? lines.slice(-SCREEN_TAIL) : lines).join("\n")}</pre>`;
 }
 
 // Tool calls in a row share one line of small chips, like an agent's tool calls in a terminal,
@@ -307,11 +326,11 @@ function sessionCard(e, index) {
     <header class="session-card-head">
       <div class="session-card-id">
         <strong>${e.name}</strong>
-        <span class="session-card-where">on ${e.machine}${e.path ? html` · <code>${short(e.path)}</code>` : nothing}</span>
+        <span class="session-card-where" title=${e.path ? short(e.path) : nothing}>on ${e.machine}${e.path ? html` · <code>${folderOf(e.path)}</code>` : nothing}</span>
       </div>
       <span class="badge ${state.badge}" title=${state.hint}>${state.word}</span>
     </header>
-    ${e.screen ? html`<pre class="session-screen">${readable(e.screen)}</pre>` : nothing}
+    ${e.screen ? html`<div class="session-screen-wrap">${screen(e, index)}</div>` : nothing}
     <div class="session-card-actions">
       ${options}
       ${reviewable ? html`<button class="btn" type="button" title="Start a reviewer in the same folder that runs the tests and changes nothing" @click=${() => requestReview(index)}>Review branch</button>` : nothing}
@@ -516,6 +535,7 @@ async function open(id) {
   backend = runsOn?.runs_on || "claude";
   loadRunsOn();
   answers = new Map();
+  screens.clear();
   steps.reset();
   groups.reset();
   setBusy(false);
@@ -688,6 +708,7 @@ steps.setup({
   draw,
   termUrl,
   short,
+  folderOf,
   conversation: () => current,
   state: () => lastState,
   loadState,

@@ -35,6 +35,7 @@ const TITLES = {
 const MEMORY_TITLES = { add: "Remember this", replace: "Change a memory", forget: "Forget a memory" };
 
 const SEVERITY = { high: "High", medium: "Medium", low: "Low" };
+const SEVERITY_ORDER = ["high", "medium", "low"];
 
 const SCANS = { dead_code: "Dead code scan", test_gaps: "Test gap scan", security: "Security scan" };
 const SCAN_WHAT = {
@@ -54,6 +55,7 @@ const picks = new Map();
 const sending = new Set();
 const diffs = new Map();
 const targets = new Map();
+const lowOpen = new Set();
 
 export function setup(context) {
   ctx = context;
@@ -83,6 +85,7 @@ export function reset() {
   sending.clear();
   diffs.clear();
   targets.clear();
+  lowOpen.clear();
 }
 
 export function clock(stamp) {
@@ -174,10 +177,10 @@ function readOnlyNote(i) {
     : html`<p class="step-card-text muted read-only-note">Read-only by instruction: ${agent.label} cannot be started with file editing turned off, so it is only asked to change nothing.</p>`;
 }
 
-function longText(id, text) {
-  const long = text.length > 420 || text.split("\n").length > 6;
+function longText(id, text, brief = false) {
+  const long = brief ? text.length > 200 || text.includes("\n") : text.length > 420 || text.split("\n").length > 6;
   const open = expanded.has(id);
-  return html`<p class="step-card-text ${long && !open ? "clamped" : ""}">${text}</p>
+  return html`<p class="step-card-text ${long && !open ? (brief ? "clamped brief" : "clamped") : ""}">${text}</p>
     ${long ? html`<button class="link-btn" type="button" @click=${() => { open ? expanded.delete(id) : expanded.add(id); ctx.draw(); }}>${open ? "Show less" : "Show all"}</button>` : nothing}`;
 }
 
@@ -487,7 +490,7 @@ export function waitingBar(events) {
 
 function picked(e, index) {
   if (e.outcome) return new Set(e.outcome.findings || []);
-  if (!picks.has(index)) picks.set(index, new Set((e.findings || []).map((_, i) => i)));
+  if (!picks.has(index)) picks.set(index, new Set((e.findings || []).flatMap((f, i) => (f.severity === "low" ? [] : [i]))));
   return picks.get(index);
 }
 
@@ -811,10 +814,34 @@ function finding(e, index, f, i, chosen) {
   };
   return html`<li><label class="finding ${decided && !chosen.has(i) ? "left-out" : ""}">
     <input type="checkbox" .checked=${chosen.has(i)} ?disabled=${decided || sending.has(index)} @change=${toggle}>
-    <span class="sev ${f.severity}">${SEVERITY[f.severity] || f.severity}</span>
-    <span class="finding-text">${place(e, index, f)}<span>${f.text}</span>${shots(e, index, i)}</span>
+    <span class="finding-text"><span>${f.text}</span>${place(e, index, f)}${shots(e, index, i)}</span>
   </label></li>`;
 }
+
+// Findings under one heading per severity, worst first. Low ones start folded, unless they are all
+// there is or one of them is chosen.
+function findingList(e, index, chosen, none) {
+  const all = (e.findings || []).map((f, i) => ({ f, i }));
+  if (!all.length) return html`<p class="step-card-text muted">${none}</p>`;
+  const groups = [...SEVERITY_ORDER, ""]
+    .map((sev) => ({ sev, items: all.filter(({ f }) => (sev ? f.severity === sev : !SEVERITY_ORDER.includes(f.severity))) }))
+    .filter((g) => g.items.length);
+  const onlyLow = groups.every((g) => g.sev === "low");
+  return html`${groups.map((g) => {
+    const word = html`<span class="sev-dot ${g.sev}" aria-hidden="true"></span>${SEVERITY[g.sev] || "Other"} · ${g.items.length}`;
+    const folds = g.sev === "low" && !onlyLow;
+    const open = !folds || lowOpen.has(index) || g.items.some(({ i }) => chosen.has(i));
+    const head = folds
+      ? html`<button class="finding-group-head" type="button" aria-expanded=${open ? "true" : "false"} @click=${() => { open ? lowOpen.delete(index) : lowOpen.add(index); ctx.draw(); }}>${ICONS.chevron}${word}</button>`
+      : html`<p class="finding-group-head">${word}</p>`;
+    return html`<section class="finding-group ${g.sev || "other"}">
+      ${head}
+      ${open ? html`<ul class="findings">${g.items.map(({ f, i }) => finding(e, index, f, i, chosen))}</ul>` : nothing}
+    </section>`;
+  })}`;
+}
+
+const findingWords = (n) => `${n} ${n === 1 ? "finding" : "findings"}`;
 
 function targetsOf(e, index) {
   if (!targets.has(index)) {
@@ -863,7 +890,7 @@ function scanCard(e, index) {
         </select></label>` : nothing}
       <button class="btn primary" type="button" ?disabled=${busy || !count || !t.list}
         title=${t.pick ? `Type the chosen findings into ${t.pick} so it fixes them` : "Prepare a new session in this folder with the chosen findings as its task"}
-        @click=${() => settle(e, index, t.pick ? "send" : "start", t.pick)}><span class="btn-label">${t.pick ? `Send ${count} to ${t.pick}` : `Fix ${count} in a new session`}</span></button>`;
+        @click=${() => settle(e, index, t.pick ? "send" : "start", t.pick)}><span class="btn-label">${t.pick ? `Send ${findingWords(count)}` : `Fix ${count} in a new session`}</span></button>`;
   }
   const foot = done
     ? html`<span class="step-card-trail">${decidedWords(done)}</span>`
@@ -872,21 +899,19 @@ function scanCard(e, index) {
         <button class="btn" type="button" ?disabled=${busy} @click=${() => settle(e, index, "dismiss")}>Dismiss</button>
         ${send}
       </div>`;
-  const folder = String(of.path || "").replace(/\/+$/, "").split("/").pop() || of.path;
+  const folder = ctx.folderOf(of.path);
   return html`<article class="step-card review scan ${done ? "done" : verdict.tone === "done" ? "ready" : "pending"}" aria-label="${title} of ${folder}">
     <header class="step-card-head">
       <span class="step-card-icon">${ICONS.scan}</span>
       <div class="step-card-title">
         <strong>${title} of <code>${folder}</code></strong>
-        <span class="step-card-where">by <a href=${ctx.termUrl(e.machine, e.name)} target="_blank" rel="noopener">${e.name}</a> on ${e.machine} · <code>${ctx.short(of.path)}</code>${of.branch ? html` · <code>${of.branch}</code>` : nothing}</span>
+        <span class="step-card-where" title=${ctx.short(of.path)}>by <a href=${ctx.termUrl(e.machine, e.name)} target="_blank" rel="noopener">${e.name}</a> on ${e.machine}${of.branch ? html` · <code>${of.branch}</code>` : nothing}</span>
       </div>
       <span class="badge ${verdict.tone}">${verdict.word}</span>
     </header>
     <div class="step-card-body">
-      ${e.summary ? html`<p class="step-card-text">${e.summary}</p>` : nothing}
-      ${findings.length
-        ? html`<ul class="findings">${findings.map((f, i) => finding(e, index, f, i, chosen))}</ul>`
-        : html`<p class="step-card-text muted">No issues found.</p>`}
+      ${e.summary ? longText(`summary:${index}`, e.summary, true) : nothing}
+      ${findingList(e, index, chosen, "No issues found.")}
       ${filesPanel(e, index)}
     </div>
     <footer class="step-card-foot">${foot}</footer>
@@ -909,22 +934,20 @@ export function reviewCard(e, index) {
     : html`<span class="step-card-trail">Finished ${clock(e.at)}</span>
       <div class="step-card-actions">
         <button class="btn" type="button" ?disabled=${busy} @click=${() => settle(e, index, "dismiss")}>Dismiss</button>
-        ${findings.length ? html`<button class="btn primary" type="button" ?disabled=${busy || !count} title=${`Type the chosen findings into ${of.name} so it fixes them`} @click=${() => settle(e, index, "send")}><span class="btn-label">Send ${count} to ${of.name}</span></button>` : nothing}
+        ${findings.length ? html`<button class="btn primary" type="button" ?disabled=${busy || !count} title=${`Type the chosen findings into ${of.name} so it fixes them`} @click=${() => settle(e, index, "send")}><span class="btn-label">Send ${findingWords(count)}</span></button>` : nothing}
       </div>`;
   return html`<article class="step-card review ${done ? "done" : ready ? "ready" : "pending"}" aria-label="Review of ${of.branch || of.name}">
     <header class="step-card-head">
       <span class="step-card-icon">${ICONS.review}</span>
       <div class="step-card-title">
         <strong>Review of ${of.branch ? html`<code>${of.branch}</code>` : of.name}</strong>
-        <span class="step-card-where">by <a href=${ctx.termUrl(e.machine, e.name)} target="_blank" rel="noopener">${e.name}</a> on ${e.machine}${of.path ? html` · <code>${ctx.short(of.path)}</code>` : nothing}</span>
+        <span class="step-card-where" title=${of.path ? ctx.short(of.path) : nothing}>by <a href=${ctx.termUrl(e.machine, e.name)} target="_blank" rel="noopener">${e.name}</a> on ${e.machine}${of.path ? html` · <code>${ctx.folderOf(of.path)}</code>` : nothing}</span>
       </div>
       <span class="badge ${ready ? "done" : "blocked"}">${ready ? "Ready" : "Changes needed"}</span>
     </header>
     <div class="step-card-body">
-      ${e.summary ? html`<p class="step-card-text">${e.summary}</p>` : nothing}
-      ${findings.length
-        ? html`<ul class="findings">${findings.map((f, i) => finding(e, index, f, i, chosen))}</ul>`
-        : html`<p class="step-card-text muted">No problems found.</p>`}
+      ${e.summary ? longText(`summary:${index}`, e.summary, true) : nothing}
+      ${findingList(e, index, chosen, "No problems found.")}
       ${diffPanel(e, index)}
     </div>
     <footer class="step-card-foot">${decided}</footer>
