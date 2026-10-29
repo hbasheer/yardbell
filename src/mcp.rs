@@ -445,6 +445,16 @@ async fn dispatch_step(
     name: &str,
     args: Value,
 ) -> Result<String, ApiError> {
+    if WAIT_FOR_PROPOSALS.contains(&name)
+        && conversation.is_some_and(|c| app.pipelines.runs().iter().any(|r| r.conversation == c))
+    {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "A pipeline run's own Dispatch turn cannot change settings, tasks, triggers, \
+pipelines or runs. Report what you found instead."
+                .into(),
+        ));
+    }
     let cfg = app.config()?;
     let (tool, input, review) = plan(app, &cfg, name, args)?;
     let step = step_of(app, name, &input);

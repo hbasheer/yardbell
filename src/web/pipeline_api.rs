@@ -282,11 +282,15 @@ struct StartReq {
     prs: Vec<String>,
 }
 
-async fn subjects(app: &AppState, req: StartReq) -> Result<Vec<Subject>, ApiError> {
+pub(crate) async fn subjects(
+    app: &AppState,
+    tickets: &[String],
+    prs: &[String],
+) -> Result<Vec<Subject>, ApiError> {
     let mut out = Vec::new();
-    if !req.tickets.is_empty() {
+    if !tickets.is_empty() {
         let open = open(app).await?;
-        for id in &req.tickets {
+        for id in tickets {
             let t = open
                 .iter()
                 .find(|t| t.id.eq_ignore_ascii_case(id.trim()))
@@ -302,7 +306,7 @@ async fn subjects(app: &AppState, req: StartReq) -> Result<Vec<Subject>, ApiErro
             });
         }
     }
-    for url in &req.prs {
+    for url in prs {
         let pr = PrRef::parse(url).ok_or_else(|| {
             bad(format!(
                 "{url} is not a GitHub pull request or GitLab merge request link"
@@ -332,7 +336,7 @@ async fn start(
         tickets: Vec::new(),
         prs: Vec::new(),
     });
-    let subjects = subjects(&app, req).await?;
+    let subjects = subjects(&app, &req.tickets, &req.prs).await?;
     let runs = app
         .pipelines
         .start(&id, subjects, "you")

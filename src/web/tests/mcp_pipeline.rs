@@ -268,3 +268,209 @@ async fn pipeline_tools_are_hidden_from_outside_clients() {
         );
     }
 }
+
+async fn fake_linear() -> String {
+    let app = axum::Router::new().fallback(|| async {
+        json!({"data":{"viewer":{"assignedIssues":{"nodes":[
+            {"id":"u-1","identifier":"COM-1","title":"Fix login","url":"https://linear.app/c/issue/COM-1","state":{"name":"Todo"}}
+        ]}}}})
+        .to_string()
+    });
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await });
+    format!("http://{addr}/graphql")
+}
+
+async fn with_linear(r: &Rig) {
+    r.app
+        .pipelines
+        .use_linear(crate::pipeline::linear::Linear::with_url(
+            &fake_linear().await,
+        ));
+    let mut secrets = r.app.secrets().unwrap();
+    secrets
+        .set("linear", "lin_api_test", chrono::Utc::now())
+        .unwrap();
+    secrets.save().unwrap();
+}
+
+fn waiting_run(r: &Rig, kind: crate::pipeline::record::WaitKind, conversation: &str) -> String {
+    use crate::pipeline::record::{RunState, Subject, Waiting};
+    let def = by_hand(r, IMPLEMENT);
+    let mut run = r
+        .app
+        .pipelines
+        .start(&def.id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.state = RunState::Waiting;
+    run.step = "implement".into();
+    run.conversation = conversation.into();
+    run.waiting = Some(Waiting {
+        kind,
+        step: "implement".into(),
+        reason: "Which docker stack should it use?".into(),
+        screen: String::new(),
+    });
+    let id = run.id.clone();
+    r.app.pipelines.put(run);
+    id
+}
+
+const MR: &str = "https://git.commslayer.com/commslayer/app/-/merge_requests/87";
+
+#[tokio::test]
+async fn run_pipeline_starts_a_run_by_dispatch() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "allow", json!([]));
+    let def = by_hand(&r, IMPLEMENT);
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "run_pipeline",
+        json!({ "id": def.id, "prs": [MR] }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    let run = answer(&result)["runs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let run = r.app.pipelines.run(&run).unwrap();
+    assert_eq!(run.started_by, "dispatch");
+    assert_eq!(run.subject.pr.unwrap().number, 87);
+
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "run_pipeline",
+        json!({ "id": def.id, "prs": ["https://example.com/x"] }),
+    )
+    .await;
+    assert!(
+        text(&result).contains("is not a GitHub pull request or GitLab merge request link"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
+async fn run_pipeline_with_an_unknown_ticket_fails_on_the_card() {
+    let r = rig();
+    with_linear(&r).await;
+    let id = dispatch_conversation(&r).await;
+    let c = cookie(&r.app).await;
+    let def = by_hand(&r, IMPLEMENT);
+    dispatch_tool(
+        &r,
+        Some(&id),
+        "run_pipeline",
+        json!({ "id": def.id, "tickets": ["COM-99"] }),
+    )
+    .await;
+    let step = last_event(&r, &id);
+    assert_eq!(step["tool"], "run_pipeline");
+    let done = approve(&r, &c, &id, &step).await;
+    assert_eq!(done["result"]["ok"], false, "{done}");
+    assert!(
+        done["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("COM-99 is not one of your open tickets in Linear"),
+        "{done}"
+    );
+    assert!(r.app.pipelines.runs().is_empty());
+}
+
+#[tokio::test]
+async fn answer_run_answers_a_waiting_run() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "allow", json!([]));
+    let run = waiting_run(&r, crate::pipeline::record::WaitKind::Asking, "");
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "answer_run",
+        json!({ "id": run, "action": "answer", "text": "Use the shared stack" }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_ne!(answer(&result)["state"], "waiting", "{result}");
+    let step = last_event(&r, &id);
+    assert_eq!(
+        step["input"]["waiting"]["reason"],
+        "Which docker stack should it use?"
+    );
+
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "answer_run",
+        json!({ "id": run, "action": "answer", "text": "again" }),
+    )
+    .await;
+    assert!(
+        text(&result).contains("is not waiting for an answer"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
+async fn answer_run_on_a_run_that_stopped_waiting_fails_cleanly() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let c = cookie(&r.app).await;
+    let run = waiting_run(&r, crate::pipeline::record::WaitKind::Stopped, "");
+    dispatch_tool(
+        &r,
+        Some(&id),
+        "answer_run",
+        json!({ "id": run, "action": "continue_pass" }),
+    )
+    .await;
+    let step = last_event(&r, &id);
+    assert_eq!(step["tool"], "answer_run");
+    let (status, body) = step_post(&r, &c, &format!("/api/runs/{run}/drop"), json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let done = approve(&r, &c, &id, &step).await;
+    assert_eq!(done["result"]["ok"], false, "{done}");
+    assert!(
+        done["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("is not waiting for you"),
+        "{done}"
+    );
+    assert_eq!(
+        r.app.pipelines.run(&run).unwrap().state,
+        crate::pipeline::record::RunState::Dropped
+    );
+}
+
+#[tokio::test]
+async fn a_runs_own_turn_cannot_answer_it() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "allow", json!([]));
+    let run = waiting_run(&r, crate::pipeline::record::WaitKind::NeedsYou, &id);
+    for (tool, args) in [
+        (
+            "answer_run",
+            json!({ "id": run, "action": "continue_pass" }),
+        ),
+        ("change_settings", json!({ "area": "phone", "value": {} })),
+    ] {
+        let result = dispatch_tool(&r, Some(&id), tool, args).await;
+        assert_eq!(result["isError"], true, "{tool}: {result}");
+        assert!(
+            text(&result).contains("A pipeline run's own Dispatch turn cannot change"),
+            "{result}"
+        );
+    }
+    assert_eq!(
+        r.app.pipelines.run(&run).unwrap().state,
+        crate::pipeline::record::RunState::Waiting
+    );
+}

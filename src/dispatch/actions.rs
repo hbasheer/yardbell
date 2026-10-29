@@ -231,6 +231,19 @@ fn what(action: &Value) -> String {
             text(input, "name"),
             if input["on"] == true { "on" } else { "off" }
         ),
+        "run_pipeline" => format!("running the pipeline \"{}\"", text(input, "name")),
+        "answer_run" => format!(
+            "{} the run of \"{}\" for {}",
+            match text(input, "action") {
+                "answer" => "answering",
+                "retry" => "retrying",
+                "continue_pass" => "continuing as passed",
+                "continue_fail" => "continuing as failed",
+                _ => "dropping",
+            },
+            text(input, "pipeline"),
+            text(input, "subject")
+        ),
         other => other.to_string(),
     }
 }

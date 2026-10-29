@@ -2,8 +2,9 @@ use crate::config::Config;
 use crate::dispatch::diff::words;
 use crate::mcp::tool;
 use crate::pipeline::definition::{
-    check as check_definition, slug, Definition, StepKind, END, WAIT,
+    check as check_definition, slug, Definition, Outcome, StepKind, END, WAIT,
 };
+use crate::pipeline::record::{PrRef, Run, RunState};
 use crate::web::{ApiError, AppState};
 use axum::http::StatusCode;
 use serde::Deserialize;
@@ -35,10 +36,32 @@ pub fn tools() -> Vec<Value> {
                 "id": { "type": "string", "description": "The pipeline's id, from list_pipelines" },
                 "on": { "type": "boolean" },
             }),
-            &["id", "on"],
+                        &["id", "on"],
+        ),
+        tool(
+            "run_pipeline",
+            "Propose starting a pipeline: one run per ticket or pull request, or one run with no subject when neither is given. tickets are Linear identifiers such as COM-12, from the user's open tickets; prs are GitHub pull request or GitLab merge request links.",
+            json!({
+                "id": { "type": "string", "description": "The pipeline's id, from list_pipelines" },
+                "tickets": { "type": "array", "items": { "type": "string" } },
+                "prs": { "type": "array", "items": { "type": "string" } },
+            }),
+            &["id"],
+        ),
+        tool(
+            "answer_run",
+            "Propose acting on a pipeline run that waits for the user (read_run shows what it waits for): answer its question with text, retry the step, continue as if the step passed or failed, or drop the run.",
+            json!({
+                "id": { "type": "string", "description": "The run's id, from list_runs" },
+                "action": { "type": "string", "enum": ACTIONS },
+                "text": { "type": "string", "description": "The answer, for action answer" },
+            }),
+            &["id", "action"],
         ),
     ]
 }
+
+const ACTIONS: [&str; 5] = ["answer", "retry", "continue_pass", "continue_fail", "drop"];
 
 fn bad(message: String) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, message)
@@ -62,6 +85,23 @@ struct SavePipeline {
 struct Enabled {
     id: String,
     on: bool,
+}
+
+#[derive(Deserialize)]
+struct RunPipeline {
+    id: String,
+    #[serde(default)]
+    tickets: Vec<String>,
+    #[serde(default)]
+    prs: Vec<String>,
+}
+
+#[derive(Deserialize)]
+struct AnswerRun {
+    id: String,
+    action: String,
+    #[serde(default)]
+    text: String,
 }
 
 fn arg<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ApiError> {
@@ -97,6 +137,49 @@ fn checked_enabled(app: &AppState, cfg: &Config, e: &Enabled) -> Result<Definiti
     Ok(def)
 }
 
+fn runnable(app: &AppState, r: &RunPipeline) -> Result<Definition, ApiError> {
+    let def = found(app, &r.id)?;
+    if def.steps.is_empty() {
+        return Err(bad(format!("{} has no steps yet", def.name)));
+    }
+    if let Some(url) = r.prs.iter().find(|u| PrRef::parse(u).is_none()) {
+        return Err(bad(format!(
+            "{url} is not a GitHub pull request or GitLab merge request link"
+        )));
+    }
+    Ok(def)
+}
+
+// The same conditions the Pipelines page's buttons are held to.
+fn fits(run: &Run, action: &str, text: &str) -> Result<(), String> {
+    let label = run.subject.label();
+    let waiting = run.state == RunState::Waiting;
+    match action {
+        "answer" if text.trim().is_empty() => Err("type an answer first".into()),
+        "answer" if waiting && run.waiting.as_ref().is_some_and(|w| w.kind.answerable()) => Ok(()),
+        "answer" => Err(format!("{label} is not waiting for an answer")),
+        "retry" | "continue_pass" | "continue_fail" if waiting => Ok(()),
+        "retry" | "continue_pass" | "continue_fail" => {
+            Err(format!("{label} is not waiting for you"))
+        }
+        "drop" if run.state.active() => Ok(()),
+        "drop" => Err(format!("{label} has already ended")),
+        other => Err(format!(
+            "action {other:?} must be one of {}",
+            ACTIONS.join(", ")
+        )),
+    }
+}
+
+fn answerable(app: &AppState, a: &AnswerRun) -> Result<Run, ApiError> {
+    let run = app
+        .pipelines
+        .run(&a.id)
+        .ok_or_else(|| bad(format!("there is no run {}; list_runs shows them", a.id)))?;
+    fits(&run, &a.action, &a.text).map_err(bad)?;
+    Ok(run)
+}
+
 pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Value, ApiError> {
     match tool {
         "save_pipeline" => {
@@ -114,6 +197,19 @@ pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Val
             let def = checked_enabled(app, cfg, &e)?;
             Ok(json!({ "id": def.id, "name": def.name, "on": e.on }))
         }
+        "run_pipeline" => {
+            let r: RunPipeline = arg(args)?;
+            let def = runnable(app, &r)?;
+            Ok(json!({ "id": def.id, "name": def.name, "tickets": r.tickets, "prs": r.prs }))
+        }
+        "answer_run" => {
+            let a: AnswerRun = arg(args)?;
+            let run = answerable(app, &a)?;
+            Ok(json!({
+                "id": run.id, "action": a.action, "text": a.text.trim(),
+                "pipeline": run.pipeline_name, "subject": run.subject.label(), "waiting": run.waiting,
+            }))
+        }
         other => Err(bad(format!("{other} is not a pipeline tool"))),
     }
 }
@@ -125,6 +221,8 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
             check_definition(&s.definition, cfg).map_err(problems)
         }
         "set_pipeline_enabled" => checked_enabled(app, cfg, &arg(input.clone())?).map(|_| ()),
+        "run_pipeline" => runnable(app, &arg(input.clone())?).map(|_| ()),
+        "answer_run" => answerable(app, &arg(input.clone())?).map(|_| ()),
         other => Err(bad(format!("{other} is not a pipeline tool"))),
     }
 }
@@ -165,6 +263,33 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
             let e: Enabled = arg(input)?;
             let def = library.set_enabled(&e.id, e.on, &cfg).map_err(problems)?;
             json!({ "id": def.id, "enabled": def.enabled })
+        }
+        "run_pipeline" => {
+            let r: RunPipeline = arg(input)?;
+            runnable(app, &r)?;
+            let subjects = crate::web::pipeline_api::subjects(app, &r.tickets, &r.prs).await?;
+            let runs = app
+                .pipelines
+                .start(&r.id, subjects, "dispatch")
+                .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
+            json!({ "runs": runs.iter().map(|run| json!({ "id": run.id, "subject": run.subject.label() })).collect::<Vec<_>>() })
+        }
+        "answer_run" => {
+            let a: AnswerRun = arg(input)?;
+            let pipelines = &app.pipelines;
+            let run = match a.action.as_str() {
+                "answer" => pipelines.answer(&a.id, &a.text),
+                "retry" => pipelines.retry(&a.id),
+                "continue_pass" => pipelines.continue_on(&a.id, Outcome::Pass),
+                "continue_fail" => pipelines.continue_on(&a.id, Outcome::Fail),
+                "drop" => pipelines.drop_run(&a.id),
+                other => Err(format!(
+                    "action {other:?} must be one of {}",
+                    ACTIONS.join(", ")
+                )),
+            }
+            .map_err(bad)?;
+            json!({ "run": run.id, "state": run.state })
         }
         other => return Err(bad(format!("{other} is not a pipeline tool"))),
     };

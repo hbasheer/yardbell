@@ -2136,7 +2136,7 @@ async fn remove_machine(
 }
 
 mod insights_api;
-mod pipeline_api;
+pub(crate) mod pipeline_api;
 mod pulls_api;
 mod review_api;
 mod scan_api;
