@@ -278,7 +278,9 @@ move is done.
 
 ### `dispatch` (optional)
 
-How the Dispatch page works. The **Dispatch** section of the Settings page edits it.
+How the Dispatch page works. The **Dispatch** section of the Settings page edits it. For when to
+use instructions, memory or rules, and example rule sets, see
+[Dispatch rules, instructions and memory](automation.md#dispatch-rules-instructions-and-memory).
 
 ```yaml
 dispatch:
@@ -360,7 +362,8 @@ same steps, and says which rule is wrong.
 ### `worktree_setup` (optional)
 
 Commands that run in a new worktree right after Yardbell creates it, before the agent starts. The
-**Worktree setup** section of the Settings page edits it.
+**Worktree setup** section of the Settings page edits it. For when it runs and more examples, see
+[Worktree setup](automation.md#worktree-setup).
 
 ```yaml
 worktree_setup:
@@ -412,7 +415,8 @@ branches of one machine are asked one after another. What has already been poste
 ### `triggers` (optional)
 
 Start a saved Dispatch task on a schedule, or when a Linear or GitHub ticket comes your way. The
-**Triggers** section of the Settings page edits the list. See [Triggers](usage.md#triggers).
+**Triggers** section of the Settings page edits the list. See [Triggers](usage.md#triggers), and
+[Triggers](automation.md#triggers) for examples.
 
 ```yaml
 triggers:

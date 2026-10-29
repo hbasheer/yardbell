@@ -18,6 +18,10 @@ and the project uses [Semantic Versioning](https://semver.org).
   when one is not found on the machine Yardbell runs on, with **Model** beside it for that agent.
   A Codex model that Codex does not list for your account gets a note. A new model applies from
   the next message, in open conversations too.
+- A new guide, [Triggers, worktree setup and rules](docs/automation.md), explains when to use each,
+  how they work together, and gives examples to copy: a trigger for Linear tickets, review requests
+  and schedules, setup commands for Rails and Node apps, and Dispatch rule sets from careful to
+  hands off.
 
 ## [0.7.6] - 2026-10-29
 
