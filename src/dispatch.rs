@@ -26,6 +26,7 @@ pub use group::{
 };
 pub use mcp_config::CONVERSATION_HEADER;
 pub use memory::{Memory, MemoryChange};
+pub(crate) use review::{bullet, clip, is_marker, unframed, value_of};
 pub use review::{
     changed_file as review_file, changed_files as review_files, evidence_folder, file_view,
     fix_request, found_by, picked as review_picked, places as finding_files,

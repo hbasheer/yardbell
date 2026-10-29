@@ -195,7 +195,7 @@ pub fn admit(records: &[Record], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<St
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use crate::dispatch::GroupOutcome;
     use chrono::TimeZone;
