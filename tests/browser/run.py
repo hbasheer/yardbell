@@ -1706,25 +1706,27 @@ class Suite:
 
     def test_builder_inspector_edits_and_saves(self):
         b = self.b
-        b.goto(self.url("/pipeline?p=review&tab=build"))
+        self.open_builder()
         b.wait("document.querySelector('.pl-node[data-step=\"test\"]')", "the Test card")
         if b.js("document.querySelector('#pl-inspector')?.textContent.includes('Click a step')") is not True:
             raise Failure("the inspector does not say what to do with nothing selected")
         b.click('.pl-node[data-step="test"]')
         b.wait("document.querySelector('#pl-inspector .pl-step-form[data-step=\"test\"]')", "the Test step in the inspector")
+        if b.js("document.querySelector('.pl-canvas').scrollLeft + document.querySelector('.pl-canvas').scrollTop") != 0:
+            raise Failure("selecting a card scrolled the canvas box and hid its controls")
         version = self.api("GET", "/api/pipelines/review")["version"]
         self.set_field('#pl-inspector input[name=name]', "Test on hp")
         b.wait("document.querySelector('.pl-node[data-step=\"test\"] b').textContent === 'Test on hp'", "the card renamed as you type")
         b.click("#pl-save")
         b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {version + 1})()", "the new version saved")
-        b.wait("document.getElementById('pl-save').disabled", "Save showing it is saved")
+        b.wait("document.getElementById('pl-save').classList.contains('pl-saved')", "Save showing it is saved")
         b.click('.pl-node[data-step="@start"]')
         b.wait("document.querySelector('#pl-inspector select[name=trigger]')", "the trigger in the inspector")
         self.check_errors("the inspector")
 
     def test_builder_save_problems_ring_the_step(self):
         b = self.b
-        b.goto(self.url("/pipeline?p=review&tab=build"))
+        self.open_builder()
         b.click('.pl-node[data-step="report"]')
         b.wait("document.querySelector('#pl-inspector input[name=max_runs]')", "Report to me in the inspector")
         self.set_field('#pl-inspector input[name=max_runs]', "0")
@@ -1760,7 +1762,7 @@ class Suite:
         b.wait("document.querySelector('.pl-node.kind-wait')", "a Wait for me card where it was dropped")
         if not b.js("document.querySelector('.pl-node.kind-wait').classList.contains('selected')"):
             raise Failure("the new step is not selected")
-        if b.js("document.getElementById('pl-save').disabled"):
+        if b.js("document.getElementById('pl-save').classList.contains('pl-saved')"):
             raise Failure("Save stays off after adding a step")
         self.check_errors("dragging from the library")
 
@@ -1925,7 +1927,7 @@ class Suite:
                 raise Failure(f"the {step} node is not {cls}")
         if b.js("document.querySelectorAll('.pl-canvas svg path').length") < 5:
             raise Failure("the graph does not draw the lines between steps")
-        if b.js("getComputedStyle(document.querySelector('.pl-canvas')).overflow") != "hidden":
+        if b.js("getComputedStyle(document.querySelector('.pl-canvas')).overflow") != "clip":
             raise Failure("the graph scrolls instead of panning")
         fitted = b.js("document.querySelector('.pl-pan').style.transform")
         b.js("document.querySelector('.pl-canvas').dispatchEvent(new WheelEvent('wheel', { deltaX: 80, deltaY: 30, bubbles: true, cancelable: true }))")

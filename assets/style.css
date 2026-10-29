@@ -2072,7 +2072,7 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
 .pl-dot.run { background: var(--accent); }
 .pl-dot.wait { background: var(--warn); }
 
-.pl-canvas { position: relative; min-width: 0; min-height: 260px; overflow: hidden; cursor: grab; touch-action: pan-y; user-select: none; background-color: var(--bg); background-image: radial-gradient(var(--line-strong) 1px, transparent 1px); background-size: 24px 24px; }
+.pl-canvas { position: relative; min-width: 0; min-height: 260px; overflow: clip; cursor: grab; touch-action: pan-y; user-select: none; background-color: var(--bg); background-image: radial-gradient(var(--line-strong) 1px, transparent 1px); background-size: 24px 24px; }
 .pl-canvas.editable { touch-action: none; }
 .pl-run-view .pl-canvas { border: 0; }
 .pl-empty + .pl-canvas { height: 300px; border: 1px solid var(--line); border-radius: var(--radius); }
@@ -2118,6 +2118,10 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
 .pl-node-tags span { flex: none; max-width: 100%; padding: 0 6px; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); font-size: 11px; line-height: 17px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .pl-node.editable { cursor: pointer; }
 .pl-node.editable:hover { border-color: var(--line-strong); }
+.pl-node.editable:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+.pl-inspector-title { display: inline-flex; align-items: center; gap: 8px; }
+.pl-saved { display: inline-flex; align-items: center; gap: 4px; height: 28px; padding: 0 8px; color: var(--muted); font-size: 12.5px; font-weight: 500; }
+.pl-saved .icon { width: 14px; height: 14px; color: var(--ok); }
 .pl-node.selected { border-color: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 22%, transparent); }
 .pl-node.problem { border-color: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 18%, transparent); }
 .pl-node.done { border-color: color-mix(in srgb, var(--ok) 50%, var(--line)); }

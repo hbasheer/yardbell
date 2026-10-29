@@ -474,7 +474,7 @@ function save() {
 }
 
 const LIBRARY = [
-  ["Start when", [["manual", "start", "By hand", "From Run now"], ["schedule", "start", "Schedule", "Weekdays, every day, a time"], ["linear", "start", "Linear ticket", "Assigned to me, or a state"], ["github_review", "start", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "start", "GitLab reviewer", "An MR adds me as reviewer"]]],
+  ["Start when", [["manual", "manual", "By hand", "From Run now"], ["schedule", "schedule", "Schedule", "Weekdays, every day, a time"], ["linear", "ticket", "Linear ticket", "Assigned to me, or a state"], ["github_review", "pull", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "pull", "GitLab reviewer", "An MR adds me as reviewer"]]],
   ["Agent", [["agent", "agent", "Agent step", "Your instructions, on a machine"], ["plan", "plan", "Plan", "Picks machine, folder and branch"]]],
   ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["linear", "linear", "Linear", "Move the ticket, or draft a comment"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
   ["You", [["wait", "wait", "Wait for me", "Continues when you say"]]],
@@ -854,7 +854,7 @@ function inspector() {
   if (phone.matches && !selected) return nothing;
   return html`<aside class=${`pl-inspector ${phone.matches ? "sheet" : ""}`} id="pl-inspector" aria-label="Selected step">
     <div class="pl-inspector-head">
-      <span>${step ? "Step" : selected === "@start" ? "Trigger" : selected?.startsWith("line:") ? "Line" : "Pipeline"}</span>
+      <span class="pl-inspector-title">${step ? html`<span class="pl-kind-icon">${icon(step.kind)}</span>${KINDS[step.kind]}` : selected === "@start" ? html`<span class="pl-kind-icon">${icon("start")}</span>Start when` : selected?.startsWith("line:") ? "Line" : "Pipeline"}</span>
       ${phone.matches
         ? html`<button class="btn primary" type="button" id="pl-sheet-done" @click=${() => select(null)}>Done</button>`
         : html`<button class="btn quiet" type="button" title="Hide the panel" aria-label="Hide the panel" @click=${() => { inspectorOpen = false; draw(); }}>${chevron("right")}</button>`}
@@ -1001,7 +1001,9 @@ function pipelineView() {
       </button>
       <button class="btn quiet danger" type="button" @click=${() => removePipeline(d)}>Delete</button>
       <button class="btn" type="button" id="pl-run-now" ?disabled=${busy} @click=${() => runNow(d)}>Run now</button>
-      <button class="btn primary" type="button" id="pl-save" ?disabled=${busy || !changed} @click=${save}>${changed ? "Save" : "Saved"}</button>
+      ${changed
+        ? html`<button class="btn primary" type="button" id="pl-save" ?disabled=${busy} @click=${save}>Save</button>`
+        : html`<span class="pl-saved" id="pl-save"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"></path></svg>Saved</span>`}
     </header>
     ${show.runNow ? runNowPanel(d) : nothing}
     <div class="pl-body">${tab === "build" ? buildTab(d) : tab === "history" ? historyTab() : runsTab(d)}</div>

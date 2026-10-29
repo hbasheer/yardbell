@@ -23,6 +23,10 @@ export const KINDS = {
 
 const ICONS = {
   start: "M5.5 3.5v9l7-4.5z",
+  manual: "M5.5 8V4a1 1 0 0 1 2 0v3.5 M7.5 7V3a1 1 0 0 1 2 0v4 M9.5 7.5V4.5a1 1 0 0 1 2 0V9a4.5 4.5 0 0 1-8.2 2.6L2.6 9.4a1 1 0 0 1 1.6-1.2l1.3 1.3",
+  schedule: "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z M8 5v3l2 1.5",
+  ticket: "M2.5 5a1.5 1.5 0 0 0 0 3v3h11V8a1.5 1.5 0 0 1 0-3V2.5h-11z M6.5 4.5v6",
+  pull: "M4.5 2.5v11 M4.5 4.5a1.5 1.5 0 1 0 0-.01 M11.5 13.5a1.5 1.5 0 1 0 0-.01 M11.5 12V7a2 2 0 0 0-2-2H7",
   agent: "M2.5 3.5h11v9h-11z M5 6.5l2 1.5-2 1.5 M8.5 10h2.5",
   plan: "M8 2.5v11 M3.5 4.5h6.5l2 1.75-2 1.75H3.5z",
   push: "M8 13V3.5 M4.5 7 8 3.5 11.5 7",
@@ -378,6 +382,8 @@ function card(s, { run, editable, selected, problems, on, ox, oy }) {
   const d = describe(s);
   const cls = ["pl-node", `kind-${s.kind}`, n.cls, editable ? "editable" : "", selected === s.id ? "selected" : "", problem ? "problem" : ""].join(" ");
   return html`<div class=${cls} data-step=${s.id} data-x=${s.x} data-y=${s.y} style=${`left:${s.x + ox}px;top:${s.y + oy}px`}
+      tabindex=${editable ? "0" : nothing} role=${editable ? "button" : nothing} aria-label=${editable ? `${s.name}, ${d.who}` : nothing}
+      @keydown=${editable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); on?.select?.(s.id); } } : nothing}
       @click=${editable ? (e) => { e.stopPropagation(); on?.select?.(s.id); } : nothing}>
     ${editable ? html`<span class="pl-port in" aria-hidden="true"></span>` : nothing}
     ${body({ iconKind: s.kind, name: s.name, mark: run ? n.mark : "", who: d.who, does: run ? n.note : d.does, tags: d.tags })}
@@ -419,6 +425,8 @@ export function canvas({ def: d, run = null, editable = false, selected = null, 
         </svg>
         ${lines.filter((l) => l.word && l.outcome !== "pass").map((l) => html`<span class=${`pl-edge-word ${l.outcome}`} style=${`left:${l.label.x}px;top:${l.label.y}px`}>${l.word}</span>`)}
         <div class=${`pl-node pl-start ${editable && selected === "@start" ? "selected" : ""} ${editable ? "editable" : ""}`} data-step="@start"
+            tabindex=${editable ? "0" : nothing} role=${editable ? "button" : nothing} aria-label=${editable ? "Start when, the trigger" : nothing}
+            @keydown=${editable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); on?.select?.("@start"); } } : nothing}
             style=${`left:${lay.start.x + lay.ox}px;top:${lay.start.y + lay.oy}px`}
             @click=${editable ? (e) => { e.stopPropagation(); on?.select?.("@start"); } : nothing}>
           ${body({ iconKind: "start", name: "Start when", mark: "", who: "Trigger", does: triggerWords(trigger), tags: [TRIGGER_TAGS[trigger.kind] || "by hand", trigger.kind === "manual" ? "Run now" : "checked every 3 min"] })}
