@@ -170,7 +170,7 @@ fn initialize(params: &Value) -> Value {
     })
 }
 
-fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
+pub(crate) fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
         "name": name,
         "description": description,
@@ -377,11 +377,20 @@ fn tools() -> Vec<Value> {
             &["name"],
         ),
     ];
+    all.extend(crate::mcp_pipeline::tools());
     all.extend(crate::mcp_read::tools());
     all
 }
 
-const WAIT_FOR_PROPOSALS: [&str; 3] = ["change_settings", "save_task", "run_trigger"];
+const WAIT_FOR_PROPOSALS: [&str; 7] = [
+    "change_settings",
+    "save_task",
+    "run_trigger",
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
+];
 
 fn dispatch_only(tool: &str) -> bool {
     tool == "remember" || WAIT_FOR_PROPOSALS.contains(&tool)
@@ -442,6 +451,7 @@ async fn dispatch_step(
     let (default, rules) = (cfg.dispatch.approval, &cfg.dispatch.rules);
     let verdict = match name {
         "remember" => crate::dispatch::decide_memory(default, rules),
+        "save_pipeline" => crate::dispatch::decide_always_wait(default, rules, &step),
         "change_settings"
             if input["area"] == "dispatch"
                 || input["secrets"].as_array().is_some_and(|s| !s.is_empty()) =>
@@ -679,7 +689,8 @@ pub(crate) fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
     if matches!(
         called,
         "remember" | "change_settings" | "save_task" | "run_trigger"
-    ) {
+    ) || crate::mcp_pipeline::owns(called)
+    {
         return Step {
             action: called.to_string(),
             machine: String::new(),
@@ -780,6 +791,10 @@ pub(crate) fn plan(
         let diff = crate::mcp_change::diff(&before, &change.value);
         let secrets = crate::mcp_change::secret_uses(cfg, &change.area, &change.value, &saved);
         let input = json!({ "area": change.area, "value": change.value, "before": before, "diff": diff, "secrets": secrets });
+        return Ok((name.to_string(), input, None));
+    }
+    if crate::mcp_pipeline::owns(name) {
+        let input = crate::mcp_pipeline::plan(app, cfg, name, args)?;
         return Ok((name.to_string(), input, None));
     }
     if name == "save_task" {
@@ -897,6 +912,9 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
         "change_settings" => check_settings(app, cfg, &arg(input.clone())?),
         "save_task" => check_task(&arg(input.clone())?),
         "run_trigger" => check_trigger(cfg, input["name"].as_str().unwrap_or_default()),
+        tool if crate::mcp_pipeline::owns(tool) => {
+            crate::mcp_pipeline::check(app, cfg, tool, input)
+        }
         tool if crate::web::worktrees_api::TOOLS.contains(&tool) => {
             crate::web::worktrees_api::check(app, cfg, tool, input)
         }
@@ -1112,6 +1130,9 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
     }
     if tool == "save_task" {
         return save_task(app, arg(input)?);
+    }
+    if crate::mcp_pipeline::owns(tool) {
+        return crate::mcp_pipeline::perform(app, tool, input).await;
     }
     if tool == "run_trigger" {
         return run_trigger(app, input["name"].as_str().unwrap_or_default()).await;

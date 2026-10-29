@@ -1,0 +1,259 @@
+use crate::config::Config;
+use crate::dispatch::diff::words;
+use crate::mcp::tool;
+use crate::pipeline::definition::{
+    check as check_definition, slug, Definition, StepKind, END, WAIT,
+};
+use crate::web::{ApiError, AppState};
+use axum::http::StatusCode;
+use serde::Deserialize;
+use serde_json::{json, Value};
+
+pub const TOOLS: [&str; 4] = [
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
+];
+
+pub fn owns(tool: &str) -> bool {
+    TOOLS.contains(&tool)
+}
+
+pub fn tools() -> Vec<Value> {
+    vec![
+        tool(
+            "save_pipeline",
+            "Propose a new pipeline, or a change to one. For a change, read it first with read_pipeline and send the whole definition back with your edits, keeping its id; for a new one leave id empty. The pipeline is checked as the builder checks it, and any problem comes back to you to correct. It always waits for the user, who can approve it, finish it in the builder, or reject it. A new pipeline is saved switched off.",
+            json!({ "definition": { "type": "object", "description": "The whole pipeline definition, as read_pipeline returns it" } }),
+            &["definition"],
+        ),
+        tool(
+            "set_pipeline_enabled",
+            "Propose switching a pipeline on or off. Switching on checks that its trigger can run, and a problem comes back to you.",
+            json!({
+                "id": { "type": "string", "description": "The pipeline's id, from list_pipelines" },
+                "on": { "type": "boolean" },
+            }),
+            &["id", "on"],
+        ),
+    ]
+}
+
+fn bad(message: String) -> ApiError {
+    ApiError(StatusCode::BAD_REQUEST, message)
+}
+
+fn problems(list: Vec<String>) -> ApiError {
+    bad(format!(
+        "Not proposed, correct this and send the whole pipeline again: {}",
+        list.join("; ")
+    ))
+}
+
+#[derive(Deserialize)]
+struct SavePipeline {
+    definition: Definition,
+    #[serde(default)]
+    before: Option<Definition>,
+}
+
+#[derive(Deserialize)]
+struct Enabled {
+    id: String,
+    on: bool,
+}
+
+fn arg<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ApiError> {
+    serde_json::from_value(args).map_err(|e| bad(e.to_string()))
+}
+
+fn existing(app: &AppState, id: &str) -> Option<Definition> {
+    (!id.is_empty())
+        .then(|| app.pipelines.library().get(id))
+        .flatten()
+}
+
+fn found(app: &AppState, id: &str) -> Result<Definition, ApiError> {
+    existing(app, id).ok_or_else(|| {
+        let ids: Vec<String> = app
+            .pipelines
+            .library()
+            .list()
+            .into_iter()
+            .map(|d| d.id)
+            .collect();
+        bad(format!(
+            "there is no pipeline {id}; the pipelines are {}",
+            ids.join(", ")
+        ))
+    })
+}
+
+fn checked_enabled(app: &AppState, cfg: &Config, e: &Enabled) -> Result<Definition, ApiError> {
+    let mut def = found(app, &e.id)?;
+    def.enabled = e.on;
+    check_definition(&def, cfg).map_err(problems)?;
+    Ok(def)
+}
+
+pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Value, ApiError> {
+    match tool {
+        "save_pipeline" => {
+            let SavePipeline { mut definition, .. } = arg(args)?;
+            let before = existing(app, &definition.id);
+            if before.is_none() {
+                definition.enabled = false;
+            }
+            check_definition(&definition, cfg).map_err(problems)?;
+            let changes = changes(before.as_ref(), &definition);
+            Ok(json!({ "definition": definition, "before": before, "changes": changes }))
+        }
+        "set_pipeline_enabled" => {
+            let e: Enabled = arg(args)?;
+            let def = checked_enabled(app, cfg, &e)?;
+            Ok(json!({ "id": def.id, "name": def.name, "on": e.on }))
+        }
+        other => Err(bad(format!("{other} is not a pipeline tool"))),
+    }
+}
+
+pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<(), ApiError> {
+    match tool {
+        "save_pipeline" => {
+            let s: SavePipeline = arg(input.clone())?;
+            check_definition(&s.definition, cfg).map_err(problems)
+        }
+        "set_pipeline_enabled" => checked_enabled(app, cfg, &arg(input.clone())?).map(|_| ()),
+        other => Err(bad(format!("{other} is not a pipeline tool"))),
+    }
+}
+
+pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, ApiError> {
+    let cfg = app.config()?;
+    let library = app.pipelines.library();
+    let out = match tool {
+        "save_pipeline" => {
+            let SavePipeline {
+                mut definition,
+                before,
+            } = arg(input)?;
+            match existing(app, &definition.id) {
+                Some(current) => {
+                    let saved = library.save(definition, &cfg).map_err(problems)?;
+                    let mut out =
+                        json!({ "saved": saved.id, "name": saved.name, "version": saved.version });
+                    if before.is_some_and(|b| b.version != current.version) {
+                        out["note"] = json!(
+                            "The pipeline had changed since this was proposed; this replaced it."
+                        );
+                        out["replaced"] = json!(current.version);
+                    }
+                    out
+                }
+                None => {
+                    let taken: Vec<String> = library.list().into_iter().map(|d| d.id).collect();
+                    definition.id = slug(&definition.name, &taken);
+                    definition.version = 0;
+                    definition.enabled = false;
+                    let saved = library.save(definition, &cfg).map_err(problems)?;
+                    json!({ "saved": saved.id, "name": saved.name, "version": saved.version })
+                }
+            }
+        }
+        "set_pipeline_enabled" => {
+            let e: Enabled = arg(input)?;
+            let def = library.set_enabled(&e.id, e.on, &cfg).map_err(problems)?;
+            json!({ "id": def.id, "enabled": def.enabled })
+        }
+        other => return Err(bad(format!("{other} is not a pipeline tool"))),
+    };
+    app.state.touch();
+    Ok(out)
+}
+
+fn target(def: &Definition, other: &Definition, id: &str) -> String {
+    match id {
+        END => "the end".into(),
+        WAIT => "wait for you".into(),
+        id => def
+            .step(id)
+            .or_else(|| other.step(id))
+            .map_or_else(|| id.to_string(), |s| s.name.clone()),
+    }
+}
+
+fn instructions(kind: &StepKind) -> Option<&str> {
+    match kind {
+        StepKind::Agent { instructions, .. } => Some(instructions),
+        _ => None,
+    }
+}
+
+// What a save would change, said in step names: steps added, removed and edited, lines that now
+// go elsewhere, and agents' instructions as word diffs. Positions on the canvas are left out.
+pub fn changes(before: Option<&Definition>, after: &Definition) -> Value {
+    let Some(before) = before else {
+        return json!({ "trigger": false, "added": [], "removed": [], "changed": [], "lines": [], "wording": [] });
+    };
+    let names = |d: &Definition, other: &Definition| -> Vec<String> {
+        d.steps
+            .iter()
+            .filter(|s| other.step(&s.id).is_none())
+            .map(|s| s.name.clone())
+            .collect()
+    };
+    let mut changed = Vec::new();
+    let mut lines = Vec::new();
+    let mut wording = Vec::new();
+    if before.start != after.start {
+        lines.push(json!({
+            "from": "Start", "outcome": "start",
+            "was": target(before, after, &before.start), "now": target(after, before, &after.start),
+        }));
+    }
+    for now in &after.steps {
+        let Some(was) = before.step(&now.id) else {
+            continue;
+        };
+        let (a, b) = (json!(was), json!(now));
+        let fields: Vec<&String> = b
+            .as_object()
+            .into_iter()
+            .flat_map(|o| o.keys())
+            .chain(a.as_object().into_iter().flat_map(|o| o.keys()))
+            .filter(|k| !["id", "x", "y", "next"].contains(&k.as_str()))
+            .filter(|k| a.get(k.as_str()) != b.get(k.as_str()))
+            .collect::<std::collections::BTreeSet<_>>()
+            .into_iter()
+            .collect();
+        if !fields.is_empty() {
+            changed.push(json!({ "step": now.name, "fields": fields }));
+        }
+        for (outcome, was_to, now_to) in [
+            ("pass", &was.next.pass, &now.next.pass),
+            ("fail", &was.next.fail, &now.next.fail),
+            ("needs_you", &was.next.needs_you, &now.next.needs_you),
+        ] {
+            if was_to != now_to {
+                lines.push(json!({
+                    "from": now.name, "outcome": outcome,
+                    "was": target(before, after, was_to), "now": target(after, before, now_to),
+                }));
+            }
+        }
+        if let (Some(old), Some(new)) = (instructions(&was.kind), instructions(&now.kind)) {
+            if old != new {
+                wording.push(json!({ "step": now.name, "diff": words(old, new) }));
+            }
+        }
+    }
+    json!({
+        "trigger": before.trigger != after.trigger,
+        "added": names(after, before),
+        "removed": names(before, after),
+        "changed": changed,
+        "lines": lines,
+        "wording": wording,
+    })
+}

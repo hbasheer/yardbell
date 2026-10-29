@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
 pub const REMEMBER: &str = "remember";
-const ACTIONS: [&str; 13] = [
+const ACTIONS: [&str; 17] = [
     "start_session",
     "stop_session",
     "send_to_session",
@@ -17,11 +17,23 @@ const ACTIONS: [&str; 13] = [
     "change_settings",
     "save_task",
     "run_trigger",
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
     REMEMBER,
 ];
 
 // Steps that change Yardbell itself rather than a machine, so a rule for them names neither.
-const UNPLACED: [&str; 3] = ["change_settings", "save_task", "run_trigger"];
+const UNPLACED: [&str; 7] = [
+    "change_settings",
+    "save_task",
+    "run_trigger",
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
+];
 
 fn any() -> String {
     ANY.into()
@@ -476,7 +488,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, remember, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, save_pipeline, set_pipeline_enabled, run_pipeline, answer_run, remember, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],

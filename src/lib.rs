@@ -13,6 +13,7 @@ pub mod insights;
 pub mod local_server;
 pub mod mcp;
 pub mod mcp_change;
+pub mod mcp_pipeline;
 pub mod mcp_read;
 pub mod mesh;
 pub mod onboarding;

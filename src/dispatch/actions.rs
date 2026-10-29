@@ -3,7 +3,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 13] = [
+const CHANGING: [&str; 17] = [
     "start_session",
     "send_to_session",
     "stop_session",
@@ -17,6 +17,10 @@ const CHANGING: [&str; 13] = [
     "change_settings",
     "save_task",
     "run_trigger",
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
 ];
 
 pub fn changes_something(tool: &str) -> bool {
@@ -214,6 +218,19 @@ fn what(action: &Value) -> String {
         "change_settings" => format!("changing the {} settings", text(input, "area")),
         "save_task" => format!("saving the task \"{}\"", text(input, "name")),
         "run_trigger" => format!("running the trigger {} now", text(input, "name")),
+        "save_pipeline" if input["before"].is_object() => format!(
+            "changing the pipeline \"{}\"",
+            input["definition"]["name"].as_str().unwrap_or_default()
+        ),
+        "save_pipeline" => format!(
+            "saving a new pipeline \"{}\"",
+            input["definition"]["name"].as_str().unwrap_or_default()
+        ),
+        "set_pipeline_enabled" => format!(
+            "turning the pipeline \"{}\" {}",
+            text(input, "name"),
+            if input["on"] == true { "on" } else { "off" }
+        ),
         other => other.to_string(),
     }
 }
