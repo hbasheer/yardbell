@@ -1,6 +1,8 @@
 mod github;
+mod remote;
 
 pub use github::GitHub;
+pub use remote::{Remotes, Repo};
 
 use crate::config::{Config, Machine};
 use crate::dispatch::Dispatch;
