@@ -235,20 +235,32 @@ words, its steps in order (`Review ⟲ Fix` marks a loop back), an On/Off switch
 runs are running, waiting and done, and **Needs you** when one waits.
 
 - **Waiting for me** lists every run that waits for you, across all pipelines.
-- **New pipeline** copies a template, switched off.
+- **New pipeline** starts an **Empty pipeline** or copies a template, switched off.
 - **Settings** sets the agent steps at once per machine, a step's time limit and QA notes per folder.
 
-A pipeline opens with three tabs:
+A pipeline opens full screen (the button beside **Delete** puts it back in the page) with three tabs:
 
-- **Runs**: its runs, newest first. The chosen run shows as a graph of the steps: done in green, the
-  current one outlined (amber when it waits for you), and the rest faded, with solid lines for
-  passed and dashed for failed. Drag it or scroll with two fingers to move around, and pinch,
-  Ctrl and the wheel, or **−**, **Fit** and **+** to zoom. Beside it are links to the ticket, the pull or merge request, the
-  draft and the conversation; the waiting box with **Send answer**, **Retry step**, **Continue on
-  pass**, **Continue on fail** and **Drop**; and each step's report.
-- **Steps**: a form for the name, trigger and first step, and one per step with every field and its
-  three lines. **Save** lists anything the checks find instead of saving.
-- **History**: every saved version, with **Restore**.
+- **Build**: the steps on a canvas. On the left, the library: drag a step onto the canvas, or click
+  one to add it after the selected step; the **Start when** items set the trigger. Drag a card to
+  move it. Each card has three dots on its right, for **pass**, **fail** and **needs you**: drag
+  from one onto another card to draw that line, or onto empty canvas to pick a new step already
+  connected. Click a card, the **Start when** card or a line to edit it in the panel on the right;
+  **Delete** removes the selected step or line, and lines into a removed step go back to ending
+  the run (pass) or waiting for you. **Undo**, **Redo** and **Tidy** (lines the steps up along
+  their pass line) sit at the top left; arrows nudge a card, and Ctrl+S saves. **Save** lists what
+  the checks find over the canvas and rings each step it names.
+- **Runs**: its runs, newest first. The chosen run shows on the same canvas: steps done in green,
+  the current one outlined (amber when it waits for you), and the rest faded, with lines coloured
+  by outcome. Beside it are links to the ticket, the pull or merge request, the draft and the
+  conversation; the waiting box with **Send answer**, **Retry step**, **Continue on pass**,
+  **Continue on fail** and **Drop**; and each step's report.
+- **History**: every saved version. Click one to see it on the canvas, then **Restore** it or go
+  **Back to the current version**.
+
+On every canvas, drag or scroll with two fingers to move around; pinch, Ctrl or Cmd with the wheel,
+or **−**, **+** and **Fit** zoom; the overview at the bottom right moves the view. Leaving with
+unsaved changes asks first. On a phone, **Add step** opens the library as a sheet and a tapped step
+opens in a sheet with **Done**.
 
 **Run now** starts a run, asking for ticket ids or links when the trigger needs them. In Dispatch's
 list, each run's conversation has the pipeline mark.

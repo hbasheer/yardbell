@@ -12,8 +12,11 @@ and the project uses [Semantic Versioning](https://semver.org).
   or comment in Linear, a report to you, and wait for me. Each step's pass, fail and needs-you lines
   go to another step, so a review can loop back to a fix. Two templates ship: **Implement my Linear
   tickets** and **Review my merge requests**. The new **Pipelines** page lists them with what waits
-  for you, shows each run as a graph with its reports, edits the steps, keeps every version, and
-  sets the new `pipelines` section of `yardbell.yml`. `yardbell doctor` checks what each pipeline
+  for you and opens each one full screen on a canvas: build it from nothing or a template by
+  dragging steps from a library and drawing lines between their pass, fail and needs-you dots,
+  edit each step beside the canvas, follow every run on the same canvas with its reports, and look
+  back through every saved version. Its settings write the new `pipelines` section of
+  `yardbell.yml`. `yardbell doctor` checks what each pipeline
   that is on needs.
 - On a phone, Settings and Log out in the header show as their icons, to make room for Pipelines.
 

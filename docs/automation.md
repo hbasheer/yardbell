@@ -433,8 +433,8 @@ belongs there rather than in memory.
 ### What a pipeline is
 
 A pipeline is a set of steps that Yardbell carries a ticket, a pull or merge request, or nothing at
-all through on its own, stopping only when it needs you. You make one from a template on the
-**Pipelines** page, then change its trigger and steps there. Each pipeline has:
+all through on its own, stopping only when it needs you. You build one on the
+**Pipelines** page's canvas, from nothing or from a template. Each pipeline has:
 
 - a **trigger** that starts runs: by hand, a schedule, a Linear ticket, a GitHub review request, or
   a GitLab merge request that adds you as reviewer;
@@ -497,10 +497,11 @@ branch).
 2. Log in `gh` on the machines that push, for draft pull requests. For GitLab, add the host under
    `pull_requests.gitlab`; its token needs the `api` scope to open merge requests and to list the
    ones you review.
-3. On the **Pipelines** page, **New pipeline**, pick a template, then on **Steps** set its trigger
-   and change the steps you want. **Save** checks it: every line goes somewhere, every step can be
-   reached, a step that continues or copies another comes after it on every path, and the machines
-   and MCP servers exist.
+3. On the **Pipelines** page, **New pipeline**, start an **Empty pipeline** or pick a template.
+   On the **Build** canvas, set the trigger on **Start when**, drag in the steps you want, and draw
+   their pass, fail and needs-you lines from each card's dots. **Save** checks it: every line goes
+   somewhere, every step can be reached, a step that continues or copies another comes after it on
+   every path, and the machines and MCP servers exist.
 4. Switch it on. Switching on checks the trigger too, such as a GitLab host you have not added.
 5. Run `yardbell doctor`. For each pipeline that is on, it says whether Linear answers, the GitLab
    host signs you in, `gh` is logged in where it pushes, and its machines are reachable.
@@ -537,4 +538,3 @@ pipelines:
 - Plan can only pick a folder a machine already has; otherwise it says so and waits.
 - An agent step reports through its result block. One that ends without it is asked once more,
   then waits for you.
-- The Steps tab edits every field of a step but does not add or remove steps yet.
