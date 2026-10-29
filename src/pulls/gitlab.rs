@@ -1,7 +1,385 @@
 use super::{last_lines, Check, Ci, Note, Pull, LOG_BYTES, LOG_LINES};
+use crate::config::PullRequests;
+use crate::secrets::Secrets;
 use regex::Regex;
+use reqwest::{StatusCode, Url};
 use serde::Deserialize;
-use std::sync::OnceLock;
+use std::collections::HashMap;
+use std::sync::{Mutex, OnceLock};
+use std::time::Duration;
+
+const TIMEOUT: Duration = Duration::from_secs(20);
+const PAGE: &str = "100";
+const PAGES: u32 = 5;
+// Enough for the excerpt's last lines; a job log can run to many megabytes.
+const TRACE_KEEP: usize = 256 * 1024;
+
+#[derive(Clone)]
+pub struct GitLabAccess {
+    pub host: String,
+    pub api: String,
+    pub secret: String,
+    pub token: Result<String, String>,
+}
+
+impl std::fmt::Debug for GitLabAccess {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let token = match &self.token {
+            Ok(_) => "Ok(<hidden>)".to_string(),
+            Err(e) => format!("Err({e:?})"),
+        };
+        f.debug_struct("GitLabAccess")
+            .field("host", &self.host)
+            .field("api", &self.api)
+            .field("secret", &self.secret)
+            .field("token", &token)
+            .finish()
+    }
+}
+
+pub fn accesses(cfg: &PullRequests, secrets: &Result<Secrets, String>) -> Vec<GitLabAccess> {
+    cfg.gitlab
+        .iter()
+        .map(|g| {
+            let named = crate::secrets::references(&g.token).unwrap_or_default();
+            let token = if named.is_empty() {
+                Ok(g.token.clone())
+            } else {
+                match secrets {
+                    Ok(s) => s.resolve(&g.token).map_err(|e| e.to_string()),
+                    Err(e) => Err(e.clone()),
+                }
+            };
+            GitLabAccess {
+                host: g.host.trim().to_ascii_lowercase(),
+                api: g.api(),
+                secret: named.first().map(|n| n.to_string()).unwrap_or_default(),
+                token,
+            }
+        })
+        .collect()
+}
+
+#[derive(Debug)]
+pub enum Answer {
+    Pull(Box<Pull>),
+    NoPull,
+    Refused(String),
+    Failed(String),
+}
+
+enum Problem {
+    Refused(String),
+    NotFound,
+    Failed(String),
+}
+
+impl From<Problem> for Answer {
+    fn from(p: Problem) -> Answer {
+        match p {
+            Problem::Refused(m) => Answer::Refused(m),
+            Problem::Failed(m) => Answer::Failed(m),
+            Problem::NotFound => Answer::Failed("GitLab answered 404".into()),
+        }
+    }
+}
+
+fn refused(access: &GitLabAccess) -> String {
+    if access.secret.is_empty() {
+        format!("GitLab at {} refused its token", access.host)
+    } else {
+        format!(
+            "GitLab at {} refused the token in secret {}",
+            access.host, access.secret
+        )
+    }
+}
+
+fn unreadable(e: String) -> Problem {
+    Problem::Failed(format!("unexpected GitLab answer: {e}"))
+}
+
+pub struct GitLab {
+    http: reqwest::Client,
+    me: Mutex<HashMap<String, String>>,
+}
+
+impl Default for GitLab {
+    fn default() -> GitLab {
+        GitLab::new()
+    }
+}
+
+impl GitLab {
+    pub fn new() -> GitLab {
+        GitLab {
+            http: reqwest::Client::builder()
+                .timeout(TIMEOUT)
+                .redirect(reqwest::redirect::Policy::none())
+                .build()
+                .expect("an HTTP client"),
+            me: Mutex::new(HashMap::new()),
+        }
+    }
+
+    async fn get(
+        &self,
+        access: &GitLabAccess,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<reqwest::Response, Problem> {
+        let token = access
+            .token
+            .as_ref()
+            .map_err(|e| Problem::Refused(e.clone()))?;
+        let bad = || {
+            Problem::Failed(format!(
+                "{} has an address Yardbell cannot read",
+                access.host
+            ))
+        };
+        let mut url = Url::parse(&access.api).map_err(|_| bad())?;
+        url.path_segments_mut()
+            .map_err(|_| bad())?
+            .pop_if_empty()
+            .extend(segments);
+        if !query.is_empty() {
+            url.query_pairs_mut().extend_pairs(query);
+        }
+        let res = self
+            .http
+            .get(url)
+            .header("PRIVATE-TOKEN", token)
+            .send()
+            .await
+            .map_err(|e| {
+                Problem::Failed(format!(
+                    "{} did not answer: {}",
+                    access.host,
+                    e.without_url()
+                ))
+            })?;
+        match res.status() {
+            s if s.is_success() => Ok(res),
+            StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
+                Err(Problem::Refused(refused(access)))
+            }
+            StatusCode::NOT_FOUND => Err(Problem::NotFound),
+            s => Err(Problem::Failed(format!(
+                "GitLab at {} answered {s}",
+                access.host
+            ))),
+        }
+    }
+
+    async fn text(
+        &self,
+        access: &GitLabAccess,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<String, Problem> {
+        let res = self.get(access, segments, query).await?;
+        res.text().await.map_err(|e| {
+            Problem::Failed(format!(
+                "{} did not answer: {}",
+                access.host,
+                e.without_url()
+            ))
+        })
+    }
+
+    // A part the badge can do without: a failure leaves it out, but a refused token still stops
+    // the whole check.
+    async fn optional(
+        &self,
+        access: &GitLabAccess,
+        segments: &[&str],
+    ) -> Result<Option<String>, Problem> {
+        match self.text(access, segments, &[]).await {
+            Ok(body) => Ok(Some(body)),
+            Err(Problem::Refused(m)) => Err(Problem::Refused(m)),
+            Err(_) => Ok(None),
+        }
+    }
+
+    async fn me(&self, access: &GitLabAccess) -> String {
+        if let Some(name) = self.me.lock().expect("gitlab lock").get(&access.host) {
+            return name.clone();
+        }
+        let Ok(name) = self.whoami(access).await else {
+            return String::new();
+        };
+        self.me
+            .lock()
+            .expect("gitlab lock")
+            .insert(access.host.clone(), name.clone());
+        name
+    }
+
+    pub async fn whoami(&self, access: &GitLabAccess) -> Result<String, String> {
+        #[derive(Deserialize)]
+        struct User {
+            username: String,
+        }
+        let not_gitlab = || format!("{} did not answer as GitLab does", access.host);
+        let body = self
+            .text(access, &["user"], &[])
+            .await
+            .map_err(|p| match p {
+                Problem::Refused(m) | Problem::Failed(m) => m,
+                Problem::NotFound => not_gitlab(),
+            })?;
+        serde_json::from_str::<User>(&body)
+            .map(|u| u.username)
+            .map_err(|_| not_gitlab())
+    }
+
+    pub async fn fetch(&self, access: &GitLabAccess, project: &str, branch: &str) -> Answer {
+        match self.fetch_pull(access, project, branch).await {
+            Ok(Some(pull)) => Answer::Pull(Box::new(pull)),
+            Ok(None) => Answer::NoPull,
+            Err(Problem::NotFound) => Answer::Failed(format!(
+                "project {project} not found on {}, or the token cannot see it",
+                access.host
+            )),
+            Err(p) => p.into(),
+        }
+    }
+
+    async fn fetch_pull(
+        &self,
+        access: &GitLabAccess,
+        project: &str,
+        branch: &str,
+    ) -> Result<Option<Pull>, Problem> {
+        let list = self
+            .text(
+                access,
+                &["projects", project, "merge_requests"],
+                &[
+                    ("source_branch", branch),
+                    ("state", "all"),
+                    ("order_by", "updated_at"),
+                    ("sort", "desc"),
+                    ("per_page", "20"),
+                ],
+            )
+            .await?;
+        let Some(iid) = pick_mr(&list).map_err(unreadable)? else {
+            return Ok(None);
+        };
+        let iid = iid.to_string();
+        let mr = ["projects", project, "merge_requests", iid.as_str()];
+        let gone = |p| match p {
+            Problem::NotFound => Problem::Failed("GitLab no longer has that merge request".into()),
+            p => p,
+        };
+        let one = self.text(access, &mr, &[]).await.map_err(gone)?;
+        let mut pull = parse_mr(&one).map_err(unreadable)?;
+        if pull.ci == Ci::Failing {
+            if let Some(id) = pipeline_id(&one) {
+                let id = id.to_string();
+                let jobs = self
+                    .text(
+                        access,
+                        &["projects", project, "pipelines", id.as_str(), "jobs"],
+                        &[("scope[]", "failed"), ("per_page", PAGE)],
+                    )
+                    .await
+                    .map_err(gone)?;
+                pull.failed = failed_checks(&jobs).map_err(unreadable)?;
+            }
+        }
+        let part = |name: &'static str| [&mr[..], &[name]].concat();
+        let reviewers = self.optional(access, &part("reviewers")).await?;
+        let approvals = if review_of(reviewers.as_deref(), None) == "changes_requested" {
+            None
+        } else {
+            self.optional(access, &part("approvals")).await?
+        };
+        pull.review = review_of(reviewers.as_deref(), approvals.as_deref());
+        let me = self.me(access).await;
+        pull.notes = self
+            .discussions(access, &part("discussions"), &pull, &me)
+            .await?;
+        Ok(Some(pull))
+    }
+
+    // Only whole: a page that fails leaves no notes, so none is marked seen before it is read.
+    async fn discussions(
+        &self,
+        access: &GitLabAccess,
+        segments: &[&str],
+        pull: &Pull,
+        me: &str,
+    ) -> Result<Vec<Note>, Problem> {
+        let mut out = Vec::new();
+        for page in 1..=PAGES {
+            let page = page.to_string();
+            let res = match self
+                .get(
+                    access,
+                    segments,
+                    &[("per_page", PAGE), ("page", page.as_str())],
+                )
+                .await
+            {
+                Ok(res) => res,
+                Err(Problem::Refused(m)) => return Err(Problem::Refused(m)),
+                Err(_) => return Ok(Vec::new()),
+            };
+            let next = res
+                .headers()
+                .get("x-next-page")
+                .and_then(|v| v.to_str().ok())
+                .is_some_and(|v| !v.trim().is_empty());
+            let Ok(body) = res.text().await else {
+                return Ok(Vec::new());
+            };
+            out.extend(notes(&body, &pull.url, &pull.author, me));
+            if !next {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
+    pub async fn failure_log(&self, access: &GitLabAccess, project: &str, check: &Check) -> String {
+        let Some(id) = job_id(&check.url) else {
+            return String::new();
+        };
+        let id = id.to_string();
+        let Ok(mut res) = self
+            .get(
+                access,
+                &["projects", project, "jobs", id.as_str(), "trace"],
+                &[],
+            )
+            .await
+        else {
+            return String::new();
+        };
+        let mut kept: Vec<u8> = Vec::new();
+        while let Ok(Some(chunk)) = res.chunk().await {
+            kept.extend_from_slice(&chunk);
+            if kept.len() > 2 * TRACE_KEEP {
+                kept.drain(..kept.len() - TRACE_KEEP);
+            }
+        }
+        if kept.len() > TRACE_KEEP {
+            kept.drain(..kept.len() - TRACE_KEEP);
+        }
+        excerpt(&String::from_utf8_lossy(&kept))
+    }
+}
+
+pub(super) fn pipeline_id(mr_json: &str) -> Option<u64> {
+    serde_json::from_str::<serde_json::Value>(mr_json)
+        .ok()?
+        .get("head_pipeline")?
+        .get("id")?
+        .as_u64()
+}
 
 #[derive(Deserialize, Default)]
 struct Who {
@@ -390,5 +768,382 @@ mod tests {
         assert!(e.lines().count() <= 30);
         assert!(e.ends_with("ERROR: Job failed: exit code 1"), "{e:?}");
         assert_eq!(super::super::telling_line(&e), "2 examples, 1 failure");
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod stub {
+    use super::GitLabAccess;
+    use axum::extract::State;
+    use axum::http::{HeaderMap, StatusCode, Uri};
+    use axum::response::{IntoResponse, Response};
+    use std::sync::{Arc, Mutex};
+
+    pub struct Answers {
+        pub mrs: (u16, String),
+        pub mr: (u16, String),
+        pub reviewers: (u16, String),
+        pub approvals: (u16, String),
+        pub jobs: (u16, String),
+        pub discussions: (u16, String),
+        pub trace: (u16, String),
+        pub user: (u16, String),
+        pub next_page: bool,
+    }
+
+    impl Default for Answers {
+        fn default() -> Answers {
+            let ok = |body: &str| (200, body.to_string());
+            Answers {
+                mrs: ok(include_str!("../../tests/fixtures/gitlab_mrs.json")),
+                mr: ok(include_str!("../../tests/fixtures/gitlab_mr.json")),
+                reviewers: ok(include_str!("../../tests/fixtures/gitlab_reviewers.json")),
+                approvals: ok(include_str!("../../tests/fixtures/gitlab_approvals.json")),
+                jobs: ok(include_str!("../../tests/fixtures/gitlab_jobs.json")),
+                discussions: ok(include_str!("../../tests/fixtures/gitlab_discussions.json")),
+                trace: ok(include_str!("../../tests/fixtures/gitlab_trace.txt")),
+                user: ok(r#"{"id":1,"username":"me-bot"}"#),
+                next_page: false,
+            }
+        }
+    }
+
+    #[derive(Clone)]
+    struct Shared {
+        answers: Arc<Mutex<Answers>>,
+        log: Arc<Mutex<Vec<String>>>,
+    }
+
+    pub struct Stub {
+        pub base: String,
+        pub answers: Arc<Mutex<Answers>>,
+        pub log: Arc<Mutex<Vec<String>>>,
+    }
+
+    impl Stub {
+        pub fn access(&self, token: &str) -> GitLabAccess {
+            GitLabAccess {
+                host: "git.commslayer.com".into(),
+                api: format!("{}/api/v4", self.base),
+                secret: "gitlab".into(),
+                token: Ok(token.into()),
+            }
+        }
+
+        pub fn asked(&self, part: &str) -> usize {
+            self.log
+                .lock()
+                .unwrap()
+                .iter()
+                .filter(|l| l.contains(part))
+                .count()
+        }
+    }
+
+    async fn answer(State(s): State<Shared>, headers: HeaderMap, uri: Uri) -> Response {
+        let path = uri.path().to_string();
+        let query = uri.query().unwrap_or_default().to_string();
+        s.log.lock().unwrap().push(format!("{path}?{query}"));
+        match headers.get("private-token").and_then(|v| v.to_str().ok()) {
+            Some("glpat-good") => {}
+            Some("glpat-forbidden") => {
+                return (StatusCode::FORBIDDEN, r#"{"message":"403 Forbidden"}"#).into_response()
+            }
+            _ => {
+                return (
+                    StatusCode::UNAUTHORIZED,
+                    r#"{"message":"401 Unauthorized"}"#,
+                )
+                    .into_response()
+            }
+        }
+        let a = s.answers.lock().unwrap();
+        let (status, body) = if path.ends_with("/trace") {
+            &a.trace
+        } else if path.ends_with("/jobs") {
+            &a.jobs
+        } else if path.ends_with("/reviewers") {
+            &a.reviewers
+        } else if path.ends_with("/approvals") {
+            &a.approvals
+        } else if path.ends_with("/discussions") {
+            &a.discussions
+        } else if path.ends_with("/api/v4/user") {
+            &a.user
+        } else if path.ends_with("/merge_requests") {
+            &a.mrs
+        } else if path.contains("/merge_requests/") {
+            &a.mr
+        } else {
+            return StatusCode::NOT_FOUND.into_response();
+        };
+        let mut resp = (StatusCode::from_u16(*status).unwrap(), body.clone()).into_response();
+        if path.ends_with("/discussions") && a.next_page {
+            let page: u32 = query
+                .split('&')
+                .find_map(|kv| kv.strip_prefix("page="))
+                .and_then(|p| p.parse().ok())
+                .unwrap_or(1);
+            resp.headers_mut()
+                .insert("x-next-page", (page + 1).to_string().parse().unwrap());
+        }
+        resp
+    }
+
+    pub async fn serve(answers: Answers) -> Stub {
+        let shared = Shared {
+            answers: Arc::new(Mutex::new(answers)),
+            log: Arc::new(Mutex::new(Vec::new())),
+        };
+        let app = axum::Router::new()
+            .fallback(answer)
+            .with_state(shared.clone());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await });
+        Stub {
+            base: format!("http://{addr}"),
+            answers: shared.answers,
+            log: shared.log,
+        }
+    }
+}
+
+#[cfg(test)]
+mod http_tests {
+    use super::stub::{serve, Answers};
+    use super::*;
+
+    fn failing_ci() -> Answers {
+        Answers::default()
+    }
+
+    #[tokio::test]
+    async fn a_merge_request_is_fetched_with_its_pipeline_jobs_review_and_notes() {
+        let stub = serve(failing_ci()).await;
+        let gl = GitLab::new();
+        let access = stub.access("glpat-good");
+        let Answer::Pull(p) = gl.fetch(&access, "commslayer/app", "eng-2").await else {
+            panic!("no pull");
+        };
+        assert_eq!(p.number, 12);
+        assert_eq!(p.ci, Ci::Failing);
+        assert_eq!(p.failed.len(), 1);
+        assert_eq!(p.failed[0].name, "test / rspec");
+        assert_eq!(p.review, "changes_requested");
+        let ids: Vec<&str> = p.notes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, ["gitlab:301", "gitlab:303", "gitlab:305"]);
+        assert!(stub.asked("/pipelines/501/jobs") == 1);
+        let again = gl.fetch(&access, "commslayer/app", "eng-2").await;
+        assert!(matches!(again, Answer::Pull(_)));
+        assert_eq!(
+            stub.asked("/api/v4/user?"),
+            1,
+            "the token's owner is asked once"
+        );
+    }
+
+    #[tokio::test]
+    async fn the_branch_and_project_are_percent_encoded() {
+        let stub = serve(Answers::default()).await;
+        GitLab::new()
+            .fetch(
+                &stub.access("glpat-good"),
+                "commslayer/app",
+                "feature/eng-12#fix",
+            )
+            .await;
+        let first = stub.log.lock().unwrap()[0].clone();
+        assert!(
+            first.starts_with("/api/v4/projects/commslayer%2Fapp/merge_requests?"),
+            "{first}"
+        );
+        assert!(
+            first.contains("source_branch=feature%2Feng-12%23fix"),
+            "{first}"
+        );
+        assert!(first.contains("state=all"), "{first}");
+    }
+
+    #[tokio::test]
+    async fn discussions_are_read_five_pages_at_most() {
+        let stub = serve(Answers {
+            next_page: true,
+            ..Answers::default()
+        })
+        .await;
+        GitLab::new()
+            .fetch(&stub.access("glpat-good"), "commslayer/app", "eng-2")
+            .await;
+        assert_eq!(stub.asked("/discussions?"), 5);
+    }
+
+    #[tokio::test]
+    async fn no_merge_request_is_no_pull() {
+        let stub = serve(Answers::default()).await;
+        let gl = GitLab::new();
+        let access = stub.access("glpat-good");
+        let got = gl.fetch(&access, "commslayer/app", "eng-2").await;
+        assert!(matches!(got, Answer::Pull(_)), "{got:?}");
+        stub.answers.lock().unwrap().mrs = (200, "[]".into());
+        let got = gl.fetch(&access, "commslayer/app", "eng-2").await;
+        assert!(matches!(got, Answer::NoPull), "{got:?}");
+    }
+
+    #[tokio::test]
+    async fn a_refused_token_is_named_without_the_token() {
+        let stub = serve(Answers::default()).await;
+        for token in ["glpat-bad", "glpat-forbidden"] {
+            let got = GitLab::new()
+                .fetch(&stub.access(token), "commslayer/app", "eng-2")
+                .await;
+            let Answer::Refused(msg) = got else {
+                panic!("{token}: {got:?}");
+            };
+            assert_eq!(
+                msg,
+                "GitLab at git.commslayer.com refused the token in secret gitlab"
+            );
+            assert!(!msg.contains("glpat"));
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_secret_is_refused_before_asking() {
+        let stub = serve(Answers::default()).await;
+        let mut access = stub.access("glpat-good");
+        access.token = Err("the secret gitlab is not set".into());
+        let got = GitLab::new()
+            .fetch(&access, "commslayer/app", "eng-2")
+            .await;
+        assert!(
+            matches!(&got, Answer::Refused(m) if m == "the secret gitlab is not set"),
+            "{got:?}"
+        );
+        assert!(stub.log.lock().unwrap().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_missing_project_says_so() {
+        let stub = serve(Answers {
+            mrs: (404, r#"{"message":"404 Project Not Found"}"#.into()),
+            ..Answers::default()
+        })
+        .await;
+        let got = GitLab::new()
+            .fetch(&stub.access("glpat-good"), "commslayer/app", "eng-2")
+            .await;
+        assert!(
+            matches!(&got, Answer::Failed(m) if m == "project commslayer/app not found on git.commslayer.com, or the token cannot see it"),
+            "{got:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failing_call_after_the_merge_request_leaves_out_only_its_part() {
+        let stub = serve(Answers {
+            reviewers: (404, "{}".into()),
+            discussions: (500, "{}".into()),
+            ..Answers::default()
+        })
+        .await;
+        let got = GitLab::new()
+            .fetch(&stub.access("glpat-good"), "commslayer/app", "eng-2")
+            .await;
+        let Answer::Pull(p) = got else {
+            panic!("{got:?}");
+        };
+        assert_eq!(p.review, "approved");
+        assert!(p.notes.is_empty());
+
+        let stub = serve(Answers {
+            jobs: (500, "{}".into()),
+            ..Answers::default()
+        })
+        .await;
+        let got = GitLab::new()
+            .fetch(&stub.access("glpat-good"), "commslayer/app", "eng-2")
+            .await;
+        assert!(matches!(got, Answer::Failed(_)), "{got:?}");
+    }
+
+    #[tokio::test]
+    async fn a_long_trace_keeps_only_its_end() {
+        let mut trace = "x".repeat(99).repeat(50_000);
+        trace.push_str("\nassertion failed: expected 3\n");
+        let stub = serve(Answers {
+            trace: (200, trace),
+            ..Answers::default()
+        })
+        .await;
+        let check = Check {
+            name: "test / rspec".into(),
+            url: format!("{}/commslayer/app/-/jobs/9001", stub.base),
+            log: String::new(),
+        };
+        let log = GitLab::new()
+            .failure_log(&stub.access("glpat-good"), "commslayer/app", &check)
+            .await;
+        assert!(log.ends_with("assertion failed: expected 3"), "{log:?}");
+        assert!(log.len() <= 3000);
+    }
+
+    #[tokio::test]
+    async fn whoami_names_the_account_or_the_problem() {
+        let stub = serve(Answers::default()).await;
+        let gl = GitLab::new();
+        assert_eq!(
+            gl.whoami(&stub.access("glpat-good")).await,
+            Ok("me-bot".into())
+        );
+        assert_eq!(
+            gl.whoami(&stub.access("glpat-bad")).await,
+            Err("GitLab at git.commslayer.com refused the token in secret gitlab".into())
+        );
+        let mut missing = stub.access("x");
+        missing.token = Err("the secret gitlab is not set".into());
+        assert_eq!(
+            gl.whoami(&missing).await,
+            Err("the secret gitlab is not set".into())
+        );
+        let mut away = stub.access("glpat-good");
+        away.api = "http://127.0.0.1:1/api/v4".into();
+        let err = gl.whoami(&away).await.unwrap_err();
+        assert!(
+            err.starts_with("git.commslayer.com did not answer"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn accesses_fill_the_token_from_its_secret_and_hide_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.yml");
+        std::fs::write(&path, "gitlab: glpat-good\n").unwrap();
+        let secrets = Ok(crate::secrets::Secrets::load(&path).unwrap());
+        let cfg = crate::config::PullRequests {
+            gitlab: vec![
+                crate::config::GitLabHost {
+                    host: "Git.Commslayer.com".into(),
+                    url: String::new(),
+                    token: "${secret:gitlab}".into(),
+                },
+                crate::config::GitLabHost {
+                    host: "gl.example.com".into(),
+                    url: String::new(),
+                    token: "${secret:gone}".into(),
+                },
+            ],
+            ..Default::default()
+        };
+        let got = accesses(&cfg, &secrets);
+        assert_eq!(got[0].host, "git.commslayer.com");
+        assert_eq!(got[0].api, "https://Git.Commslayer.com/api/v4");
+        assert_eq!(got[0].secret, "gitlab");
+        assert_eq!(got[0].token, Ok("glpat-good".into()));
+        assert!(!format!("{:?}", got[0]).contains("glpat"));
+        assert_eq!(got[1].token, Err("the secret gone is not set".into()));
+        let broken = accesses(&cfg, &Err("cannot read secrets.yml".into()));
+        assert_eq!(broken[0].token, Err("cannot read secrets.yml".into()));
     }
 }

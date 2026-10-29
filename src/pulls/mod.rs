@@ -1,9 +1,9 @@
 mod github;
-#[allow(dead_code)]
 mod gitlab;
 mod remote;
 
 pub use github::GitHub;
+pub use gitlab::{accesses, Answer, GitLab, GitLabAccess};
 pub use remote::{Remotes, Repo};
 
 use crate::config::{Config, Machine};
