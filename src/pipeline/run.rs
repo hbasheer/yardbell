@@ -196,11 +196,27 @@ pub async fn act(world: &dyn World, cfg: &Cfg, r: &Record, effect: &Effect) -> V
                 Ok(t) => t,
                 Err(seen) => return vec![seen],
             };
+            let task = prompts::qa(r, &text, cfg);
+            // On the machine that implemented it, QA reads the same worktree instead of a copy.
+            if cfg.test_machine == r.machine {
+                let Some(path) = session(&view, &r.sessions.implement).map(|s| s.path.clone())
+                else {
+                    return vec![Seen::Started(Err(gone(r)))];
+                };
+                let input = json!({
+                    "machine": r.machine,
+                    "path": path,
+                    "prompt": task,
+                    "read_only": true,
+                    "wait": true,
+                });
+                return vec![started(world, r, "start_session", input, None).await];
+            }
             let input = json!({
                 "machine": r.machine,
                 "name": r.sessions.implement,
                 "to": cfg.test_machine,
-                "task": prompts::qa(r, &text, cfg),
+                "task": task,
                 "stop_original": false,
                 "read_only": true,
             });

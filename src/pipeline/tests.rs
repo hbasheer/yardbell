@@ -564,3 +564,48 @@ async fn a_restart_in_finish_resumes_after_the_push() {
     );
     assert_eq!(p.get("COM-1").unwrap().stage, Stage::Done);
 }
+
+#[tokio::test]
+async fn qa_on_the_same_machine_starts_a_reader_in_the_worktree() {
+    let (p, _dir) = pipeline();
+    let fake = Arc::new(Fake::default());
+    fake.session("hp", "hp-app-com-1", "com-1-fix-the-login", Activity::Idle);
+    fake.started
+        .lock()
+        .unwrap()
+        .push_back("hp-app-com-1-qa".into());
+    let mut cfg = cfg();
+    cfg.test_machine = "hp".into();
+    put(
+        &p,
+        Record {
+            id: "COM-1".into(),
+            stage: Stage::Qa,
+            machine: "hp".into(),
+            branch: "com-1-fix-the-login".into(),
+            conversation: "conv0000000001".into(),
+            sessions: super::record::Sessions {
+                implement: "hp-app-com-1".into(),
+                ..Default::default()
+            },
+            stage_since: chrono::Local::now().to_rfc3339(),
+            pending: Some(Effect::MoveToTest),
+            ..Record::default()
+        },
+    );
+    tick(&p, &fake, Some(&cfg)).await;
+    let calls = fake.calls();
+    assert!(
+        !calls.iter().any(|c| c.starts_with("move_session")),
+        "{calls:?}"
+    );
+    let start = calls
+        .iter()
+        .find(|c| c.starts_with("start_session"))
+        .expect("a QA session");
+    assert!(
+        start.contains("\"path\":\"/r/hp-app-com-1\"") && start.contains("\"read_only\":true"),
+        "{start}"
+    );
+    assert_eq!(p.get("COM-1").unwrap().sessions.qa, "hp-app-com-1-qa");
+}
