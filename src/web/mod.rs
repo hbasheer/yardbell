@@ -414,6 +414,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/pipeline", get(|| async { asset("pipeline.html") }))
         .route("/dispatch.js", get(|| async { asset("dispatch.js") }))
         .route("/pipeline.js", get(|| async { asset("pipeline.js") }))
+        .route("/pipeline-canvas.js", get(|| async { asset("pipeline-canvas.js") }))
         .route("/composer.js", get(|| async { asset("composer.js") }))
         .route("/dispatch/conversations", get(dispatch_list))
         .route("/dispatch/conversations/{id}", get(dispatch_get))

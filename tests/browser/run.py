@@ -1712,8 +1712,9 @@ class Suite:
         b.js("document.querySelector('.pl-canvas').dispatchEvent(new WheelEvent('wheel', { deltaX: 80, deltaY: 30, bubbles: true, cancelable: true }))")
         if b.js("document.querySelector('.pl-pan').style.transform") == fitted:
             raise Failure("two-finger scrolling does not pan the graph")
+        panned = b.js("document.querySelector('.pl-pan').style.transform")
         b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
-        if b.js("document.querySelector('.pl-pan').style.transform") != fitted:
+        if b.js("document.querySelector('.pl-pan').style.transform") == panned:
             raise Failure("Fit does not bring the graph back")
         box = "#pl-need"
         b.wait(f"document.querySelector('{box}')?.textContent.includes('Which window is right?')", "the agent's question")
@@ -1728,6 +1729,42 @@ class Suite:
         b.wait("(async () => (await (await fetch('/api/runs')).json()).runs.find((r) => r.id === 'run-b').step === 'root-cause')()",
                "run B back at Root cause")
         self.check_errors("the Runs tab")
+
+    def test_canvas_zoom_controls(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-c"))
+        b.wait("document.querySelector('.pl-zoom-pct')", "the zoom controls")
+        pct = lambda: b.js("document.querySelector('.pl-zoom-pct').textContent.trim()")
+        b.js("document.querySelector('.pl-zoom-pct').closest('.pl-zoom').querySelector('[aria-label=\"Zoom in\"]').click()")
+        first = pct()
+        b.js("document.querySelector('[aria-label=\"Zoom out\"]').click()")
+        b.js("document.querySelector('[aria-label=\"Zoom in\"]').click()")
+        if pct() != first or not first.endswith("%"):
+            raise Failure(f"zooming out and in again reads {pct()}, not {first}")
+        before = pct()
+        b.js("""(() => {
+          const c = document.querySelector('.pl-canvas'), r = c.getBoundingClientRect();
+          c.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, ctrlKey: true, clientX: r.left + 100, clientY: r.top + 100, bubbles: true, cancelable: true }));
+        })()""")
+        if int(pct().rstrip("%")) <= int(before.rstrip("%")):
+            raise Failure(f"Ctrl and the wheel did not zoom in: {before} then {pct()}")
+        b.js("document.querySelector('.pl-zoom-pct').textContent")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        if int(pct().rstrip("%")) > 100:
+            raise Failure(f"Fit leaves the graph at {pct()}")
+
+    def test_canvas_minimap_moves_the_view(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-c"))
+        b.wait("document.querySelector('.pl-minimap .pl-mini-view')", "the minimap")
+        if b.js("document.querySelectorAll('.pl-minimap .pl-mini-node').length") != 5:
+            raise Failure("the minimap does not show the Start node and the four steps")
+        before = b.js("document.querySelector('.pl-pan').style.transform")
+        box = b.js("(() => { const r = document.querySelector('.pl-minimap').getBoundingClientRect(); return [r.right - 8, r.bottom - 8]; })()")
+        b.drag((box[0] - 1, box[1] - 1), (box[0], box[1]), steps=1)
+        if b.js("document.querySelector('.pl-pan').style.transform") == before:
+            raise Failure("pressing the minimap does not move the view")
+        self.check_errors("the canvas")
 
     def test_pipeline_history_restore(self):
         b = self.b

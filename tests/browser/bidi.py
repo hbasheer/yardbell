@@ -307,6 +307,41 @@ class Browser:
         )
         self.pump(0.2)
 
+    def centre(self, selector):
+        return self.wait(
+            f"""(() => {{
+              const el = document.querySelector({json.dumps(selector)});
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return r.width && r.height ? {{x: r.left + r.width / 2, y: r.top + r.height / 2}} : null;
+            }})()""",
+            f"a visible {selector}",
+        )
+
+    # Presses on one place, moves there in small steps and lets go: a real pointer drag.
+    def drag(self, start, to, steps=8):
+        a = self.centre(start) if isinstance(start, str) else {"x": start[0], "y": start[1]}
+        b = self.centre(to) if isinstance(to, str) else {"x": to[0], "y": to[1]}
+        moves = [
+            {"type": "pointerMove", "x": int(a["x"] + (b["x"] - a["x"]) * i / steps),
+             "y": int(a["y"] + (b["y"] - a["y"]) * i / steps), "origin": "viewport", "duration": 16}
+            for i in range(1, steps + 1)
+        ]
+        self._actions(
+            {
+                "type": "pointer",
+                "id": "mouse",
+                "parameters": {"pointerType": "mouse"},
+                "actions": [
+                    {"type": "pointerMove", "x": int(a["x"]), "y": int(a["y"]), "origin": "viewport"},
+                    {"type": "pointerDown", "button": 0},
+                    *moves,
+                    {"type": "pointerUp", "button": 0},
+                ],
+            }
+        )
+        self.pump(0.2)
+
     def type(self, text):
         keys = []
         for ch in text:

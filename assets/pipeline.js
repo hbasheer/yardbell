@@ -1,11 +1,8 @@
-import { html, svg, render, nothing } from "/vendor/lit-html/lit-html.js";
+import { html, render, nothing } from "/vendor/lit-html/lit-html.js";
+import { canvas, settle, nodeState, KINDS, WORDS } from "/pipeline-canvas.js";
 
 const $ = (id) => document.getElementById(id);
-const NODE_W = 190;
-const NODE_H = 58;
 const OUTCOMES = [["pass", "On pass"], ["fail", "On fail"], ["needs_you", "On needs you"]];
-const WORDS = { pass: "passed", fail: "failed", needs_you: "needs you" };
-const KINDS = { agent: "Agent", plan: "Plan", push: "Push and draft PR", linear: "Linear", report: "Report to me", wait: "Wait for me" };
 const ANSWERABLE = ["needs_you", "asking", "questions", "no_result"];
 const SUBJECTLESS = ["manual", "schedule"];
 
@@ -261,163 +258,6 @@ function stateWord(run, d) {
   }
 }
 
-function edgePath(a, b) {
-  const ax = a.x + NODE_W, ay = a.y + NODE_H / 2, bx = b.x, by = b.y + NODE_H / 2;
-  if (b.x >= a.x + NODE_W) {
-    const mid = (ax + bx) / 2;
-    return `M${ax} ${ay} C${mid} ${ay} ${mid} ${by} ${bx} ${by}`;
-  }
-  if (Math.abs(b.x - a.x) < NODE_W) {
-    const down = b.y > a.y;
-    const x = a.x + NODE_W / 2 + (down ? -24 : 24);
-    const y1 = down ? a.y + NODE_H : a.y;
-    const y2 = down ? b.y : b.y + NODE_H;
-    return `M${x} ${y1} C${x} ${(y1 + y2) / 2} ${x} ${(y1 + y2) / 2} ${x} ${y2}`;
-  }
-  const depth = Math.max(a.y, b.y) + NODE_H + 40 + Math.min(80, (a.x - b.x) / 12);
-  const x1 = a.x + NODE_W / 2, x2 = b.x + NODE_W / 2 + 20;
-  return `M${x1} ${a.y + NODE_H} C${x1} ${depth} ${x2} ${depth} ${x2} ${b.y + NODE_H}`;
-}
-
-function nodeState(run, step) {
-  if (!run) return { cls: "", mark: "", note: KINDS[step.kind] };
-  const st = run.steps?.[step.id];
-  const current = run.step === step.id && ["queued", "running", "waiting"].includes(run.state);
-  if (current && run.state === "waiting") {
-    const reason = run.waiting?.reason || "waiting";
-    const note = run.waiting?.kind === "needs_you" ? "needs you" : reason.startsWith(`${step.name} `) ? reason.slice(step.name.length + 1) : reason;
-    return { cls: "waiting", mark: "!", note };
-  }
-  if (current) return { cls: "now", mark: "", note: run.state === "queued" ? "queued" : `running · ${ago(run.step_since)}` };
-  if (st?.outcome) {
-    const runs = st.runs > 1 ? ` · ${st.runs} runs` : "";
-    return { cls: `done ${st.outcome === "fail" ? "failed" : ""}`, mark: st.outcome === "fail" ? "✗" : "✓", note: `${WORDS[st.outcome]}${runs}` };
-  }
-  return { cls: "later", mark: "", note: "not reached" };
-}
-
-function graph(d, run) {
-  const at = Object.fromEntries(d.steps.map((s) => [s.id, s]));
-  const width = Math.max(...d.steps.map((s) => s.x)) + NODE_W + 40;
-  const height = Math.max(...d.steps.map((s) => s.y)) + NODE_H + 160;
-  const edges = [];
-  for (const s of d.steps) {
-    for (const [outcome] of OUTCOMES) {
-      const to = s.next?.[outcome];
-      if (!at[to]) continue;
-      const taken = run && run.steps?.[s.id]?.outcome === outcome && run.steps?.[to];
-      edges.push(svg`<path class=${`pl-edge ${outcome} ${taken ? "taken" : ""}`} d=${edgePath(s, at[to])} marker-end=${taken ? "url(#pl-arrow-taken)" : "url(#pl-arrow)"}></path>`);
-    }
-  }
-  const key = `${d.id}:${d.version}:${run?.id || ""}`;
-  return html`<div class="pl-canvas" aria-label="Steps of this run" data-key=${key} data-width=${width} data-height=${height}
-      @pointerdown=${grab} @pointermove=${drag} @pointerup=${letGo} @pointercancel=${letGo} @wheel=${wheel}>
-    <div class="pl-pan">
-      <div class="pl-canvas-inner" style=${`width:${width}px;height:${height}px`}>
-        <svg width=${width} height=${height} aria-hidden="true">
-          <defs>${["", "-taken"].map((k) => svg`<marker id=${`pl-arrow${k}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 8 4 0 8z" class=${`pl-arrowhead${k}`}></path></marker>`)}</defs>
-          ${edges}
-        </svg>
-        ${d.steps.map((s) => {
-          const n = nodeState(run, s);
-          return html`<div class=${`pl-node ${n.cls}`} data-step=${s.id} style=${`left:${s.x}px;top:${s.y}px`}>
-            <b>${n.mark || run ? html`<span class="pl-mark" aria-hidden="true">${n.mark}</span>` : nothing}${s.name}</b>
-            <small>${n.note}</small>
-          </div>`;
-        })}
-      </div>
-    </div>
-    <div class="pl-zoom" @pointerdown=${(e) => e.stopPropagation()}>
-      <button class="btn" type="button" aria-label="Zoom out" @click=${(e) => zoomBy(e, 1 / 1.25)}>−</button>
-      <button class="btn" type="button" @click=${(e) => fit(e.target.closest(".pl-canvas"))}>Fit</button>
-      <button class="btn" type="button" aria-label="Zoom in" @click=${(e) => zoomBy(e, 1.25)}>+</button>
-    </div>
-  </div>`;
-}
-
-// Where each graph is panned and zoomed to, by canvas key, so a refresh keeps it.
-const views = new Map();
-let held = null;
-
-function place(canvas) {
-  const v = views.get(canvas.dataset.key);
-  canvas.querySelector(".pl-pan").style.transform = `translate(${v.x}px, ${v.y}px) scale(${v.k})`;
-  canvas.style.backgroundPosition = `${v.x}px ${v.y}px`;
-  canvas.style.backgroundSize = `${20 * v.k}px ${20 * v.k}px`;
-}
-
-// Fits the whole graph when it is small enough to read, and otherwise shows it at a readable size
-// centred on the step the run is at.
-function fit(canvas) {
-  const cw = canvas.clientWidth, ch = canvas.clientHeight;
-  const w = Number(canvas.dataset.width), h = Number(canvas.dataset.height);
-  const whole = Math.min(1, (cw - 32) / w, (ch - 16) / h);
-  const k = whole >= 0.75 ? whole : 0.85;
-  let x = (cw - w * k) / 2, y = Math.max(8, (ch - h * k) / 2);
-  const node = canvas.querySelector(".pl-node.waiting, .pl-node.now") || canvas.querySelector(".pl-node");
-  if (w * k > cw && node) x = cw / 2 - (node.offsetLeft + node.offsetWidth / 2) * k;
-  if (h * k > ch && node) y = ch / 2 - (node.offsetTop + node.offsetHeight / 2) * k;
-  views.set(canvas.dataset.key, { x, y, k });
-  place(canvas);
-}
-
-function zoomAt(canvas, factor, px, py) {
-  const v = views.get(canvas.dataset.key);
-  const k = Math.min(1.5, Math.max(0.3, v.k * factor));
-  views.set(canvas.dataset.key, { k, x: px - ((px - v.x) * k) / v.k, y: py - ((py - v.y) * k) / v.k });
-  place(canvas);
-}
-
-function zoomBy(e, factor) {
-  const canvas = e.target.closest(".pl-canvas");
-  zoomAt(canvas, factor, canvas.clientWidth / 2, canvas.clientHeight / 2);
-}
-
-function grab(e) {
-  if (e.button !== 0) return;
-  const canvas = e.currentTarget;
-  held = { id: e.pointerId, x: e.clientX, y: e.clientY };
-  try {
-    canvas.setPointerCapture(e.pointerId);
-  } catch {}
-  canvas.classList.add("grabbing");
-}
-
-function drag(e) {
-  if (!held || held.id !== e.pointerId) return;
-  const canvas = e.currentTarget;
-  const v = views.get(canvas.dataset.key);
-  views.set(canvas.dataset.key, { ...v, x: v.x + e.clientX - held.x, y: v.y + e.clientY - held.y });
-  held = { ...held, x: e.clientX, y: e.clientY };
-  place(canvas);
-}
-
-function letGo(e) {
-  held = null;
-  e.currentTarget.classList.remove("grabbing");
-}
-
-// A trackpad pinch arrives as a wheel event with ctrlKey; two-finger scrolling pans.
-function wheel(e) {
-  const canvas = e.currentTarget;
-  e.preventDefault();
-  if (e.ctrlKey || e.metaKey) {
-    const r = canvas.getBoundingClientRect();
-    zoomAt(canvas, Math.exp(-e.deltaY / 200), e.clientX - r.left, e.clientY - r.top);
-    return;
-  }
-  const v = views.get(canvas.dataset.key);
-  views.set(canvas.dataset.key, { ...v, x: v.x - e.deltaX, y: v.y - e.deltaY });
-  place(canvas);
-}
-
-function canvases() {
-  for (const canvas of document.querySelectorAll(".pl-canvas")) {
-    if (views.has(canvas.dataset.key)) place(canvas);
-    else fit(canvas);
-  }
-}
-
 function act(run, what, body) {
   doing(async () => {
     await api("POST", `/api/runs/${encodeURIComponent(run.id)}/${what}`, body || {});
@@ -486,7 +326,7 @@ function detail(run, d) {
 function runsTab(d) {
   const runs = runsOf(d.id);
   const chosen = runs.find((r) => r.id === params().get("run")) || runs[0];
-  if (!runs.length) return html`<p class="pl-empty">No runs yet. ${SUBJECTLESS.includes(d.trigger.kind) ? "Run it now, or" : "Run it now with a ticket or link, or"} switch it on and let its trigger start one.</p>${graph(d, null)}`;
+  if (!runs.length) return html`<p class="pl-empty">No runs yet. ${SUBJECTLESS.includes(d.trigger.kind) ? "Run it now, or" : "Run it now with a ticket or link, or"} switch it on and let its trigger start one.</p>${canvas({ def: d, key: `${d.id}:${d.version}:` })}`;
   const pick = (r) => {
     const q = params();
     q.set("run", r.id);
@@ -499,7 +339,7 @@ function runsTab(d) {
       <span class="pl-run-title"><span class=${`pl-dot ${dot[r.state] || "off"}`}></span>${label(r)}</span>
       <small>${stateWord(r, r.definition || d)}</small>
     </button>`)}</nav>
-    ${graph(chosen.definition || d, chosen)}
+    ${canvas({ def: chosen.definition || d, run: chosen, key: `${d.id}:${chosen.version}:${chosen.id}` })}
     ${detail(chosen, chosen.definition || d)}
   </div>`;
 }
@@ -736,7 +576,7 @@ function draw() {
   const id = params().get("p");
   document.title = id && def ? `${def.name} · Pipelines · Yardbell` : "Pipelines · Yardbell";
   render(id && def ? pipelineView() : listView(), root);
-  canvases();
+  settle();
 }
 
 async function load() {
