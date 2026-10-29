@@ -219,3 +219,94 @@ async fn tasks_and_their_versions() {
     let missing = tool_call(&r, "read_task", json!({ "name": "No such task" })).await;
     assert_eq!(missing["isError"], true);
 }
+
+fn implement(r: &Rig) -> crate::pipeline::definition::Definition {
+    let cfg = r.app.config().unwrap();
+    let lib = r.app.pipelines.library();
+    let def = lib
+        .copy_template("Implement my Linear tickets", &cfg)
+        .unwrap();
+    let mut changed = def.clone();
+    changed.steps[1].name = "Build it".into();
+    lib.save(changed, &cfg).unwrap()
+}
+
+#[tokio::test]
+async fn pipelines_and_their_versions() {
+    let r = rig();
+    mcp_on(&r);
+    let def = implement(&r);
+    let list = answer(&tool_call(&r, "list_pipelines", json!({})).await);
+    assert_eq!(list[0]["id"], def.id.as_str(), "{list}");
+    assert_eq!(list[0]["version"], 2);
+    assert_eq!(list[0]["steps"][1], "Build it");
+    assert_eq!(
+        list[0]["runs"],
+        json!({ "running": 0, "waiting": 0, "done": 0 })
+    );
+    let one = answer(&tool_call(&r, "read_pipeline", json!({ "id": def.id })).await);
+    assert_eq!(one["definition"]["steps"][1]["name"], "Build it");
+    let versions: Vec<u64> = one["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["version"].as_u64().unwrap())
+        .collect();
+    assert_eq!(versions, vec![2, 1]);
+}
+
+#[tokio::test]
+async fn runs_are_summaries_and_one_run_is_whole() {
+    let r = rig();
+    mcp_on(&r);
+    let def = implement(&r);
+    let mut run = r
+        .app
+        .pipelines
+        .start(&def.id, vec![Default::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.state = crate::pipeline::record::RunState::Waiting;
+    run.waiting = Some(crate::pipeline::record::Waiting {
+        kind: crate::pipeline::record::WaitKind::NeedsYou,
+        step: "plan".into(),
+        reason: "Plan needs you".into(),
+        screen: String::new(),
+    });
+    run.state_of("plan").report = "y".repeat(9_000);
+    let id = run.id.clone();
+    r.app.pipelines.put(run);
+    let list = answer(&tool_call(&r, "list_runs", json!({ "state": "waiting" })).await);
+    assert_eq!(list[0]["id"], id.as_str(), "{list}");
+    assert_eq!(list[0]["waiting_reason"], "Plan needs you");
+    assert!(list[0].get("steps").is_none(), "a list entry is a summary");
+    let none = answer(&tool_call(&r, "list_runs", json!({ "state": "done" })).await);
+    assert_eq!(none, json!([]));
+    let whole = answer(&tool_call(&r, "read_run", json!({ "id": id })).await);
+    assert!(whole.get("definition").is_none(), "{whole}");
+    let report = whole["steps"]["plan"]["report"].as_str().unwrap();
+    assert!(
+        report.len() < 5_000 && report.contains("clipped"),
+        "{report}"
+    );
+}
+
+#[tokio::test]
+async fn an_unknown_pipeline_or_run_says_so() {
+    let r = rig();
+    mcp_on(&r);
+    for (tool, hint) in [
+        ("read_pipeline", "list_pipelines"),
+        ("read_run", "list_runs"),
+    ] {
+        let result = tool_call(&r, tool, json!({ "id": "nope" })).await;
+        assert_eq!(result["isError"], true);
+        assert!(
+            result["content"][0]["text"]
+                .as_str()
+                .unwrap()
+                .contains(hint),
+            "{result}"
+        );
+    }
+}

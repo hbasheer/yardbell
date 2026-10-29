@@ -1613,7 +1613,11 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "list_conversations",
             "read_conversation",
             "list_tasks",
-            "read_task"
+            "read_task",
+            "list_pipelines",
+            "read_pipeline",
+            "list_runs",
+            "read_run"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;

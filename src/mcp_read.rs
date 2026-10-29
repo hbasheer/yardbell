@@ -65,6 +65,33 @@ ${secret:name}, and any other credential shows (hidden).",
         "One saved task's text and its versions.",
         json!({ "name": { "type": "string" } }),
         &["name"],
+    ),
+    tool(
+        "list_pipelines",
+        "The user's pipelines: id, name, on or off, version, trigger, step names in order, and how many runs are running, waiting and done.",
+        json!({}),
+        &[],
+    ),
+    tool(
+        "read_pipeline",
+        "One pipeline's whole definition and its saved versions, newest first.",
+        json!({ "id": { "type": "string", "description": "Pipeline id from list_pipelines" } }),
+        &["id"],
+    ),
+    tool(
+        "list_runs",
+        "Pipeline runs as summaries, newest first, at most 50: id, pipeline, subject, state, step and why it waits.",
+        json!({
+            "pipeline": { "type": "string", "description": "Only this pipeline's runs" },
+            "state": { "type": "string", "enum": ["queued", "running", "waiting", "done", "dropped"] },
+        }),
+        &[],
+    ),
+    tool(
+        "read_run",
+        "One run in full: each step's outcome, report and session, what it waits for, its pull request and its final report.",
+        json!({ "id": { "type": "string", "description": "Run id from list_runs" } }),
+        &["id"],
     )]
 }
 
@@ -83,6 +110,10 @@ pub async fn read(app: &AppState, name: &str, args: &Value) -> Option<Result<Val
         "read_conversation" => Some(conversation(app, args)),
         "list_tasks" => Some(Ok(tasks(app))),
         "read_task" => Some(task(app, args["name"].as_str().unwrap_or_default())),
+        "list_pipelines" => Some(Ok(pipelines(app))),
+        "read_pipeline" => Some(pipeline(app, args["id"].as_str().unwrap_or_default())),
+        "list_runs" => Some(Ok(runs(app, args))),
+        "read_run" => Some(run(app, args["id"].as_str().unwrap_or_default())),
         _ => None,
     }
 }
@@ -361,4 +392,100 @@ fn task(app: &AppState, name: &str) -> Result<Value, ApiError> {
     Ok(
         json!({ "name": found.name, "text": found.text, "current": history.current, "versions": versions }),
     )
+}
+
+fn pipelines(app: &AppState) -> Value {
+    use crate::pipeline::record::RunState;
+    let runs = app.pipelines.runs();
+    Value::Array(
+        app.pipelines
+            .library()
+            .list()
+            .into_iter()
+            .map(|d| {
+                let count = |s: &[RunState]| {
+                    runs.iter()
+                        .filter(|r| r.pipeline == d.id && s.contains(&r.state))
+                        .count()
+                };
+                json!({
+                    "id": d.id,
+                    "name": d.name,
+                    "enabled": d.enabled,
+                    "version": d.version,
+                    "trigger": d.trigger,
+                    "steps": d.steps.iter().map(|s| s.name.clone()).collect::<Vec<_>>(),
+                    "runs": {
+                        "running": count(&[RunState::Queued, RunState::Running]),
+                        "waiting": count(&[RunState::Waiting]),
+                        "done": count(&[RunState::Done]),
+                    },
+                })
+            })
+            .collect(),
+    )
+}
+
+fn pipeline(app: &AppState, id: &str) -> Result<Value, ApiError> {
+    let library = app.pipelines.library();
+    let def = library.get(id).ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            format!("there is no pipeline {id}; list_pipelines shows them"),
+        )
+    })?;
+    let versions: Vec<Value> = library
+        .history(id)
+        .into_iter()
+        .map(|(version, saved, _)| json!({ "version": version, "saved": saved }))
+        .collect();
+    Ok(json!({ "definition": def, "versions": versions }))
+}
+
+fn runs(app: &AppState, args: &Value) -> Value {
+    let pipeline = args["pipeline"].as_str().unwrap_or_default();
+    let state = args["state"].as_str().unwrap_or_default();
+    let mut all = app.pipelines.runs();
+    all.sort_by(|a, b| b.started.cmp(&a.started));
+    Value::Array(
+        all.into_iter()
+            .filter(|r| pipeline.is_empty() || r.pipeline == pipeline)
+            .filter(|r| {
+                state.is_empty()
+                    || serde_json::to_value(r.state)
+                        .ok()
+                        .as_ref()
+                        .and_then(Value::as_str)
+                        == Some(state)
+            })
+            .take(50)
+            .map(|r| {
+                json!({
+                    "id": r.id,
+                    "pipeline": r.pipeline,
+                    "subject": r.subject.label(),
+                    "state": r.state,
+                    "step": r.step,
+                    "waiting_reason": r.waiting.as_ref().map(|w| w.reason.clone()),
+                    "started": r.started,
+                })
+            })
+            .collect(),
+    )
+}
+
+fn run(app: &AppState, id: &str) -> Result<Value, ApiError> {
+    let found = app.pipelines.run(id).ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            format!("there is no run {id}; list_runs shows them"),
+        )
+    })?;
+    let mut value = serde_json::to_value(&found).unwrap_or(Value::Null);
+    if let Value::Object(map) = &mut value {
+        map.remove("definition");
+        map.remove("pending");
+    }
+    let mut count = 0;
+    Ok(clipped(value, &mut count))
 }
