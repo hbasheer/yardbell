@@ -1,5 +1,5 @@
 import { html, render, nothing } from "/vendor/lit-html/lit-html.js";
-import { canvas, settle, nodeState, triggerWords, icon, KINDS, WORDS } from "/pipeline-canvas.js";
+import { canvas, settle, nodeState, triggerWords, icon, toWorld, centreOf, NODE_W, KINDS, WORDS } from "/pipeline-canvas.js";
 
 const $ = (id) => document.getElementById(id);
 const OUTCOMES = [["pass", "On pass"], ["fail", "On fail"], ["needs_you", "On needs you"]];
@@ -507,7 +507,12 @@ function library() {
     <div class="pl-library-head"><span>Steps</span><button class="btn quiet" type="button" title="Hide the steps" aria-label="Hide the steps" @click=${fold}>${chevron("left")}</button></div>
     ${LIBRARY.map(([group, items]) => html`<h3>${group}</h3>
       <ul>${items.map(([kind, iconKind, name, hint]) => html`<li>
-        <button type="button" class="pl-lib-item" data-kind=${kind} data-group=${group} @click=${() => (group === "Start when" ? pickTrigger(kind) : addStep(kind))}>
+        <button type="button" class="pl-lib-item" data-kind=${kind} data-group=${group}
+            @pointerdown=${group === "Start when" ? nothing : (e) => carry(e, kind)}
+            @click=${(e) => {
+              if (e.currentTarget.dataset.dragged) return delete e.currentTarget.dataset.dragged;
+              return group === "Start when" ? pickTrigger(kind) : addStep(kind);
+            }}>
           <span class="pl-kind-icon">${icon(iconKind)}</span>
           <span><b>${name}</b><small>${hint}</small></span>
         </button>
@@ -519,9 +524,277 @@ function chevron(way) {
   return html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d=${way === "left" ? "M10 3.5 5.5 8l4.5 4.5" : "M6 3.5 10.5 8 6 12.5"}></path></svg>`;
 }
 
-function addStep() {
-  toast("Adding steps arrives with drag and drop");
+let past = [];
+let future = [];
+let addMenu = null;
+const GAP_X = 260;
+const GAP_Y = 170;
+
+function snapshot() {
+  past.push(structuredClone(draft));
+  if (past.length > 100) past.shift();
+  future = [];
 }
+
+function edit(change) {
+  snapshot();
+  change();
+  draw();
+}
+
+function undo() {
+  if (!past.length) return;
+  future.push(structuredClone(draft));
+  draft = past.pop();
+  if (selected && selected !== "@start" && !selected.startsWith("line:") && !draft.steps.some((s) => s.id === selected)) selected = null;
+  draw();
+}
+
+function redo() {
+  if (!future.length) return;
+  past.push(structuredClone(draft));
+  draft = future.pop();
+  draw();
+}
+
+// The same rule as the server's slug, so a step's id reads like its name.
+function slug(name, taken) {
+  const words = name.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean);
+  const base = words.length ? words.join("-") : "step";
+  if (!taken.includes(base)) return base;
+  for (let n = 2; ; n++) if (!taken.includes(`${base}-${n}`)) return `${base}-${n}`;
+}
+
+function blank(kind) {
+  const names = draft.steps.map((s) => s.name.toLowerCase());
+  let name = KINDS[kind];
+  for (let n = 2; names.includes(name.toLowerCase()); n++) name = `${KINDS[kind]} ${n}`;
+  const fields = {
+    agent: { instructions: "", agent: "", machine: { pick: [] }, workspace: { kind: "new_worktree" }, session: "new", read_only: false, mcp_servers: [] },
+    plan: { machines: [] },
+    linear: { action: "move", state: "In Review" },
+    wait: { message: "" },
+  }[kind] || {};
+  return { id: slug(name, draft.steps.map((s) => s.id)), name, kind, ...fields, max_runs: 2, minutes: null, next: { pass: "end", fail: "wait", needs_you: "wait" }, x: 0, y: 0 };
+}
+
+// Moves a new card down until it no longer sits on another.
+function room(x, y) {
+  let at = { x: Math.round(x / 8) * 8, y: Math.round(y / 8) * 8 };
+  while (draft.steps.some((s) => Math.abs(s.x - at.x) < NODE_W - 20 && Math.abs(s.y - at.y) < 100)) at = { ...at, y: at.y + GAP_Y };
+  return at;
+}
+
+function stepOf(id) {
+  return draft.steps.find((s) => s.id === id);
+}
+
+function connect(from, outcome, to) {
+  edit(() => {
+    if (from === "@start") draft.start = to;
+    else stepOf(from).next[outcome] = to;
+  });
+}
+
+function createAt(kind, x, y, from = null, outcome = null) {
+  edit(() => {
+    const step = { ...blank(kind), ...room(x, y) };
+    draft.steps.push(step);
+    if (from === "@start" || !draft.start) draft.start = step.id;
+    else if (from) stepOf(from).next[outcome] = step.id;
+    selected = step.id;
+    inspectorOpen = true;
+  });
+  addMenu = null;
+}
+
+// From the library by click: after the selected step, on its pass line; otherwise in view.
+function addStep(kind) {
+  const after = stepOf(selected);
+  if (after) {
+    edit(() => {
+      const step = { ...blank(kind), ...room(after.x + GAP_X, after.y) };
+      step.next.pass = after.next.pass;
+      after.next.pass = step.id;
+      draft.steps.push(step);
+      selected = step.id;
+    });
+    return;
+  }
+  const c = document.querySelector(".pl-canvas.editable");
+  const at = c ? centreOf(c) : { x: 40, y: 120 };
+  if (selected === "@start" && draft.start) {
+    const first = stepOf(draft.start);
+    edit(() => {
+      const step = { ...blank(kind), ...room(first.x, first.y + GAP_Y) };
+      step.next.pass = draft.start;
+      draft.start = step.id;
+      draft.steps.push(step);
+      selected = step.id;
+    });
+    return;
+  }
+  createAt(kind, at.x - NODE_W / 2, at.y - 50);
+}
+
+function removeStep(id) {
+  edit(() => {
+    const gone = stepOf(id);
+    draft.steps = draft.steps.filter((s) => s.id !== id);
+    for (const s of draft.steps) {
+      for (const o of ["pass", "fail", "needs_you"]) if (s.next[o] === id) s.next[o] = o === "pass" ? "end" : "wait";
+    }
+    if (draft.start === id) draft.start = stepOf(gone.next.pass) ? gone.next.pass : draft.steps[0]?.id || "";
+    selected = null;
+  });
+}
+
+function cutLine(from, outcome) {
+  edit(() => {
+    stepOf(from).next[outcome] = outcome === "pass" ? "end" : "wait";
+    selected = from;
+  });
+}
+
+function removeSelected() {
+  if (selected?.startsWith("line:")) {
+    const [, from, outcome] = selected.split(":");
+    cutLine(from, outcome);
+  } else if (stepOf(selected)) {
+    removeStep(selected);
+  }
+}
+
+// Steps along the pass line from the start go left to right; a step reached another way sits
+// under the step it comes from; anything else goes in a row underneath.
+function tidy() {
+  edit(() => {
+    const chain = [];
+    for (let id = draft.start; stepOf(id) && !chain.includes(id); id = stepOf(id).next.pass) chain.push(id);
+    const placed = new Map(chain.map((id, i) => [id, { x: 40 + i * GAP_X, y: 120 }]));
+    const below = new Map();
+    const queue = [...chain];
+    while (queue.length) {
+      const id = queue.shift();
+      for (const o of ["pass", "fail", "needs_you"]) {
+        const to = stepOf(id).next[o];
+        if (!stepOf(to) || placed.has(to)) continue;
+        const col = placed.get(id).x;
+        const depth = (below.get(col) || 0) + 1;
+        below.set(col, depth);
+        placed.set(to, { x: col, y: 120 + depth * GAP_Y });
+        queue.push(to);
+      }
+    }
+    const deepest = Math.max(0, ...below.values());
+    let i = 0;
+    for (const s of draft.steps) {
+      const at = placed.get(s.id) || { x: 40 + i++ * GAP_X, y: 120 + (deepest + 1) * GAP_Y };
+      s.x = at.x;
+      s.y = at.y;
+    }
+  });
+}
+
+const handlers = {
+  select: (id) => { addMenu = null; select(id); },
+  begin: snapshot,
+  move: (id, x, y) => {
+    const s = stepOf(id);
+    if (!s || (s.x === x && s.y === y)) return;
+    s.x = x;
+    s.y = y;
+    draw();
+  },
+  connect,
+  drop: (kind, world, from, outcome, cx, cy) => {
+    if (kind) return createAt(kind, world.x - NODE_W / 2, world.y - 50, from, outcome);
+    addMenu = { cx, cy, world, from, outcome };
+    draw();
+  },
+};
+
+function addMenuView() {
+  if (!addMenu) return nothing;
+  const kinds = LIBRARY.filter(([g]) => g !== "Start when").flatMap(([, items]) => items);
+  return html`<div class="pl-add-menu" id="pl-add-menu" role="menu" style=${`left:${addMenu.cx}px;top:${addMenu.cy}px`}>
+    <p>Add a step on this line</p>
+    ${kinds.map(([kind, iconKind, name]) => html`<button type="button" role="menuitem" data-kind=${kind}
+      @click=${() => createAt(kind, addMenu.world.x - NODE_W / 2, addMenu.world.y - 50, addMenu.from, addMenu.outcome)}>
+      <span class="pl-kind-icon">${icon(iconKind)}</span>${name}</button>`)}
+  </div>`;
+}
+
+// Dragging an item out of the library: a card follows the pointer and lands where it is let go.
+let carrying = null;
+
+function carry(e, kind) {
+  if (e.button !== 0) return;
+  carrying = { kind, x0: e.clientX, y0: e.clientY, moved: false, item: e.currentTarget };
+}
+
+window.addEventListener("pointermove", (e) => {
+  if (!carrying) return;
+  if (!carrying.moved && Math.hypot(e.clientX - carrying.x0, e.clientY - carrying.y0) < 5) return;
+  if (!carrying.moved) {
+    carrying.moved = true;
+    carrying.ghost = Object.assign(document.createElement("div"), { className: "pl-lib-ghost", textContent: KINDS[carrying.kind] });
+    document.body.append(carrying.ghost);
+  }
+  carrying.ghost.style.transform = `translate(${e.clientX + 8}px, ${e.clientY + 8}px)`;
+});
+
+window.addEventListener("pointerup", (e) => {
+  if (!carrying) return;
+  const c = carrying;
+  carrying = null;
+  c.ghost?.remove();
+  if (!c.moved) return;
+  c.item.dataset.dragged = "1";
+  const canvas = document.querySelector(".pl-canvas.editable");
+  const r = canvas?.getBoundingClientRect();
+  if (!r || e.clientX < r.left || e.clientX > r.right || e.clientY < r.top || e.clientY > r.bottom) return;
+  const at = toWorld(canvas, e.clientX, e.clientY);
+  createAt(c.kind, at.x - NODE_W / 2, at.y - 50);
+});
+
+function typing(e) {
+  return e.target.closest?.("input, textarea, select, [contenteditable]");
+}
+
+document.addEventListener("keydown", (e) => {
+  if (!def || !draft || !document.querySelector(".pl-canvas.editable")) return;
+  const mod = e.ctrlKey || e.metaKey;
+  if (mod && e.key.toLowerCase() === "s") {
+    e.preventDefault();
+    save();
+    return;
+  }
+  if (typing(e)) return;
+  if (mod && e.key.toLowerCase() === "z") {
+    e.preventDefault();
+    if (e.shiftKey) redo();
+    else undo();
+  } else if (mod && e.key.toLowerCase() === "y") {
+    e.preventDefault();
+    redo();
+  } else if (e.key === "Delete" || e.key === "Backspace") {
+    e.preventDefault();
+    removeSelected();
+  } else if (e.key === "Escape") {
+    addMenu = null;
+    select(null);
+  } else if (e.key.startsWith("Arrow") && stepOf(selected)) {
+    e.preventDefault();
+    const by = e.shiftKey ? 32 : 8;
+    const [dx, dy] = { ArrowLeft: [-by, 0], ArrowRight: [by, 0], ArrowUp: [0, -by], ArrowDown: [0, by] }[e.key];
+    edit(() => {
+      const s = stepOf(selected);
+      s.x += dx;
+      s.y += dy;
+    });
+  }
+});
 
 function inspector() {
   const redraw = () => draw();
@@ -529,7 +802,16 @@ function inspector() {
   const mine = step ? problems.filter((p) => p.startsWith(`${step.name}: `) || p === `${step.name} is never reached`) : [];
   let body;
   if (step) {
-    body = html`${mine.length ? html`<ul class="pl-inspector-problems" role="alert">${mine.map((p) => html`<li>${p.startsWith(`${step.name}: `) ? p.slice(step.name.length + 2) : p}</li>`)}</ul>` : nothing}${stepForm(step, draft, redraw)}`;
+    body = html`${mine.length ? html`<ul class="pl-inspector-problems" role="alert">${mine.map((p) => html`<li>${p.startsWith(`${step.name}: `) ? p.slice(step.name.length + 2) : p}</li>`)}</ul>` : nothing}${stepForm(step, draft, redraw)}
+      <div class="pl-inspector-foot"><button class="btn quiet danger" type="button" @click=${() => removeStep(step.id)}>Delete step</button></div>`;
+  } else if (selected?.startsWith("line:")) {
+    const [, from, outcome] = selected.split(":");
+    const src = stepOf(from);
+    body = src ? html`<div class="pl-inspector-empty">
+      <p><b>${src.name}</b> on ${WORDS[outcome].replace("passed", "pass").replace("failed", "fail")} goes to <b>${stepOf(src.next[outcome])?.name || src.next[outcome]}</b>.</p>
+      <p>Drag from the port to another step to change it, or remove the line: the run then ${outcome === "pass" ? "ends" : "waits for you"} there.</p>
+      <div><button class="btn quiet danger" type="button" @click=${() => cutLine(from, outcome)}>Remove line</button></div>
+    </div>` : nothing;
   } else if (selected === "@start") {
     body = triggerFields(draft, redraw);
   } else {
@@ -541,7 +823,7 @@ function inspector() {
   }
   return html`<aside class="pl-inspector" id="pl-inspector" aria-label="Selected step">
     <div class="pl-inspector-head">
-      <span>${step ? "Step" : selected === "@start" ? "Trigger" : "Pipeline"}</span>
+      <span>${step ? "Step" : selected === "@start" ? "Trigger" : selected?.startsWith("line:") ? "Line" : "Pipeline"}</span>
       <button class="btn quiet" type="button" title="Hide the panel" aria-label="Hide the panel" @click=${() => { inspectorOpen = false; draw(); }}>${chevron("right")}</button>
     </div>
     <div class="pl-inspector-body">${body}</div>
@@ -551,10 +833,16 @@ function inspector() {
 function buildTab(d) {
   const bar = html`${problems.length ? html`<div class="pl-problems pl-canvas-bar" id="pl-problems" role="alert"><p>Not saved. Fix these first:</p><ul>${problems.map((p) => html`<li>${p}</li>`)}</ul></div>` : nothing}
     ${inspectorOpen ? nothing : html`<button class="btn pl-panel-toggle pl-canvas-bar" type="button" title="Show the panel" aria-label="Show the panel" @click=${() => { inspectorOpen = true; draw(); }}>${chevron("left")}</button>`}
-    ${draft.steps.length ? nothing : html`<p class="pl-canvas-hint">Drag a step here, or click one in the library.</p>`}`;
+    ${draft.steps.length ? nothing : html`<p class="pl-canvas-hint">Drag a step here, or click one in the library.</p>`}
+    <div class="pl-canvas-tools pl-canvas-bar">
+      <button class="btn" type="button" title="Undo (Ctrl+Z)" aria-label="Undo" ?disabled=${!past.length} @click=${undo}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 4 2.5 7l3 3 M2.5 7h7a4 4 0 0 1 0 8H8"></path></svg></button>
+      <button class="btn" type="button" title="Redo (Ctrl+Shift+Z)" aria-label="Redo" ?disabled=${!future.length} @click=${redo}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M10.5 4l3 3-3 3 M13.5 7h-7a4 4 0 0 0 0 8H8"></path></svg></button>
+      <button class="btn" type="button" id="pl-tidy" title="Line the steps up" ?disabled=${!draft.steps.length} @click=${tidy}>Tidy</button>
+    </div>`;
   return html`<div class=${`pl-build ${libraryOpen ? "" : "no-library"} ${inspectorOpen ? "" : "no-inspector"}`}>
     ${library()}
-    ${canvas({ def: draft, editable: true, selected, problems, on: { select }, key: `${d.id}:build`, bar })}
+    ${canvas({ def: draft, editable: true, selected, problems, on: handlers, key: `${d.id}:build`, bar })}
+    ${addMenuView()}
     ${inspectorOpen ? inspector() : html`<span></span>`}
   </div>`;
 }
@@ -657,6 +945,15 @@ function draw() {
   document.title = id && def ? `${def.name} · Pipelines · Yardbell` : "Pipelines · Yardbell";
   render(id && def ? pipelineView() : listView(), root);
   settle();
+  inView(document.getElementById("pl-add-menu"));
+}
+
+// Keeps a menu opened at the pointer inside the window, 8px from its edges.
+function inView(el) {
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  if (r.bottom > innerHeight - 8) el.style.top = `${Math.max(8, innerHeight - 8 - r.height)}px`;
+  if (r.right > innerWidth - 8) el.style.left = `${Math.max(8, innerWidth - 8 - r.width)}px`;
 }
 
 async function load() {
@@ -671,6 +968,12 @@ async function load() {
       history.replaceState(null, "", location.pathname);
       def = null;
     } else {
+      if (def?.id !== id) {
+        past = [];
+        future = [];
+        selected = null;
+        addMenu = null;
+      }
       const editing = draft && def && def.id === id && JSON.stringify(draft) !== JSON.stringify(def);
       def = found;
       if (!editing) draft = structuredClone(found);

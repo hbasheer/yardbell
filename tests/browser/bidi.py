@@ -16,6 +16,7 @@ KEYS = {
     "Tab": "",
     "Escape": "",
     "Backspace": "",
+    "Delete": "",
     "ArrowUp": "",
     "ArrowDown": "",
     "ArrowLeft": "",

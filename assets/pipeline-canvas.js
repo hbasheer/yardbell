@@ -194,20 +194,49 @@ export function toWorld(canvas, clientX, clientY) {
   };
 }
 
-const OWN_DRAG = ".pl-zoom, .pl-minimap, .pl-canvas-bar, button, input, select, textarea, a, .pl-port, .pl-node.editable";
+const OWN_DRAG = ".pl-zoom, .pl-minimap, .pl-canvas-bar, button, input, select, textarea, a";
+const SNAP = 8;
+const snap = (n) => Math.round(n / SNAP) * SNAP;
 
-function grab(e) {
+// Where a point of the window lands inside the drawing (definition coordinates plus the offsets).
+function toInner(canvas, clientX, clientY) {
+  const v = viewOf(canvas);
+  const r = canvas.getBoundingClientRect();
+  return { x: (clientX - r.left - v.x) / v.k, y: (clientY - r.top - v.y) / v.k };
+}
+
+function ghost(canvas, from, to) {
+  const g = canvas.querySelector(".pl-ghost");
+  if (g) g.setAttribute("d", from ? line(from, to).d : "");
+}
+
+function grab(e, on) {
   const canvas = e.currentTarget;
   if (e.pointerType === "touch") touches.set(e.pointerId, { x: e.clientX, y: e.clientY });
   if (e.button !== 0 || e.target.closest(OWN_DRAG)) return;
-  held = { id: e.pointerId, x: e.clientX, y: e.clientY, moved: false };
+  const port = canvas.classList.contains("editable") && e.target.closest(".pl-port.out");
+  const node = canvas.classList.contains("editable") && e.target.closest(".pl-node.editable:not(.pl-start)");
+  if (port) {
+    const r = port.getBoundingClientRect();
+    held = { id: e.pointerId, kind: "line", from: port.closest(".pl-node").dataset.step, outcome: port.dataset.outcome, start: toInner(canvas, r.left + r.width / 2, r.top + r.height / 2), x: e.clientX, y: e.clientY, moved: false };
+  } else if (node) {
+    held = { id: e.pointerId, kind: "card", step: node.dataset.step, at: { x: Number(node.dataset.x), y: Number(node.dataset.y) }, x0: e.clientX, y0: e.clientY, x: e.clientX, y: e.clientY, moved: false };
+  } else {
+    held = { id: e.pointerId, kind: "pan", x: e.clientX, y: e.clientY, moved: false };
+  }
+}
+
+// Capturing only once the pointer moves keeps a plain click on the card or line it landed on.
+function hold(canvas, e) {
+  if (held.captured) return;
+  held.captured = true;
   try {
     canvas.setPointerCapture(e.pointerId);
   } catch {}
   canvas.classList.add("grabbing");
 }
 
-function drag(e) {
+function drag(e, on) {
   const canvas = e.currentTarget;
   if (touches.has(e.pointerId)) {
     const before = [...touches.values()];
@@ -223,17 +252,45 @@ function drag(e) {
   }
   if (!held || held.id !== e.pointerId) return;
   const v = viewOf(canvas);
+  if (held.kind === "line") {
+    held.moved ||= Math.hypot(e.clientX - held.x, e.clientY - held.y) > 4;
+    hold(canvas, e);
+    ghost(canvas, held.start, toInner(canvas, e.clientX, e.clientY));
+    return;
+  }
+  if (held.kind === "card") {
+    const far = Math.hypot(e.clientX - held.x0, e.clientY - held.y0) > 4;
+    if (far && !held.moved) {
+      held.moved = true;
+      hold(canvas, e);
+      on?.begin?.();
+    }
+    if (held.moved) on?.move?.(held.step, snap(held.at.x + (e.clientX - held.x0) / v.k), snap(held.at.y + (e.clientY - held.y0) / v.k));
+    return;
+  }
   held.moved ||= Math.hypot(e.clientX - held.x, e.clientY - held.y) > 3;
+  if (!held.moved) return;
+  hold(canvas, e);
   setView(canvas, { ...v, x: v.x + e.clientX - held.x, y: v.y + e.clientY - held.y });
-  held = { ...held, x: e.clientX, y: e.clientY, moved: held.moved };
+  held = { ...held, x: e.clientX, y: e.clientY };
 }
 
 function letGo(e, on) {
   touches.delete(e.pointerId);
   const canvas = e.currentTarget;
   canvas.classList.remove("grabbing");
-  if (held && held.id === e.pointerId && !held.moved && e.type === "pointerup") on?.select?.(null);
+  const h = held;
   held = null;
+  if (!h || h.id !== e.pointerId) return;
+  if (h.kind === "line") {
+    ghost(canvas, null);
+    if (e.type !== "pointerup") return;
+    const over = document.elementFromPoint(e.clientX, e.clientY)?.closest(".pl-node[data-step]");
+    if (over && over.dataset.step !== "@start") on?.connect?.(h.from, h.outcome, over.dataset.step);
+    else if (h.moved && !over) on?.drop?.(null, toWorld(canvas, e.clientX, e.clientY), h.from, h.outcome, e.clientX, e.clientY);
+    return;
+  }
+  if (h.kind === "pan" && !h.moved && e.type === "pointerup" && !e.target.closest(".pl-node, .pl-edge-hit")) on?.select?.(null);
 }
 
 // A trackpad pinch arrives as a wheel event with ctrlKey; two-finger scrolling pans.
@@ -320,7 +377,7 @@ function card(s, { run, editable, selected, problems, on, ox, oy }) {
   const problem = problems?.some((p) => p.startsWith(`${s.name}: `) || p === `${s.name} is never reached`);
   const d = describe(s);
   const cls = ["pl-node", `kind-${s.kind}`, n.cls, editable ? "editable" : "", selected === s.id ? "selected" : "", problem ? "problem" : ""].join(" ");
-  return html`<div class=${cls} data-step=${s.id} style=${`left:${s.x + ox}px;top:${s.y + oy}px`}
+  return html`<div class=${cls} data-step=${s.id} data-x=${s.x} data-y=${s.y} style=${`left:${s.x + ox}px;top:${s.y + oy}px`}
       @click=${editable ? (e) => { e.stopPropagation(); on?.select?.(s.id); } : nothing}>
     ${editable ? html`<span class="pl-port in" aria-hidden="true"></span>` : nothing}
     ${body({ iconKind: s.kind, name: s.name, mark: run ? n.mark : "", who: d.who, does: run ? n.note : d.does, tags: d.tags })}
@@ -335,25 +392,30 @@ export function canvas({ def: d, run = null, editable = false, selected = null, 
   const first = at[d.start];
   if (first) {
     const a = { x: lay.start.x + lay.ox + NODE_W, y: lay.start.y + lay.oy + NODE_H / 2 };
-    lines.push({ cls: "pass taken-start", ...line(a, inPort(first, lay.ox, lay.oy)), word: "" });
+    lines.push({ cls: "pass taken-start", from: "@start", outcome: "start", to: first.id, ...line(a, inPort(first, lay.ox, lay.oy)), word: "" });
   }
   for (const s of d.steps) {
     for (const o of OUTCOMES) {
       const to = s.next?.[o];
       if (!at[to]) continue;
       const taken = run && run.steps?.[s.id]?.outcome === o && run.steps?.[to];
-      lines.push({ cls: `${o} ${taken ? "taken" : ""}`, from: s.id, outcome: o, word: LINE_WORDS[o], ...line(outPort(s, o, lay.ox, lay.oy), inPort(at[to], lay.ox, lay.oy)) });
+      const picked = selected === `line:${s.id}:${o}`;
+      lines.push({ cls: `${o} ${taken ? "taken" : ""} ${picked ? "selected" : ""}`, from: s.id, outcome: o, to, word: LINE_WORDS[o], ...line(outPort(s, o, lay.ox, lay.oy), inPort(at[to], lay.ox, lay.oy)) });
     }
   }
   const trigger = d.trigger || { kind: "manual" };
   return html`<div class=${`pl-canvas ${editable ? "editable" : ""}`} aria-label=${editable ? "Pipeline builder canvas" : "Steps of this run"}
       data-key=${key} data-width=${lay.width} data-height=${lay.height} data-ox=${lay.ox} data-oy=${lay.oy}
-      @pointerdown=${grab} @pointermove=${drag} @pointerup=${(e) => letGo(e, on)} @pointercancel=${(e) => letGo(e, on)} @wheel=${wheel}>
+      @pointerdown=${(e) => grab(e, on)} @pointermove=${(e) => drag(e, on)} @pointerup=${(e) => letGo(e, on)} @pointercancel=${(e) => letGo(e, on)} @wheel=${wheel}>
     <div class="pl-pan">
       <div class="pl-canvas-inner" style=${`width:${lay.width}px;height:${lay.height}px`}>
         <svg width=${lay.width} height=${lay.height} aria-hidden="true">
           <defs>${["pass", "fail", "needs_you", "taken"].map((k) => svg`<marker id=${`pl-arrow-${k}`} viewBox="0 0 8 8" refX="7" refY="4" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 8 4 0 8z" class=${`pl-arrowhead ${k}`}></path></marker>`)}</defs>
           ${lines.map((l) => svg`<path class=${`pl-edge ${l.cls}`} d=${l.d} marker-end=${`url(#pl-arrow-${l.cls.includes("taken") && !l.cls.includes("taken-start") ? "taken" : l.cls.split(" ")[0]})`}></path>`)}
+          ${editable ? lines.filter((l) => l.from !== "@start").map((l) => svg`<path class="pl-edge-hit" d=${l.d} data-from=${l.from} data-outcome=${l.outcome} data-to=${l.to}
+            @click=${(e) => { e.stopPropagation(); on?.select?.(`line:${l.from}:${l.outcome}`); }}></path>`) : nothing}
+          ${editable ? lines.filter((l) => l.from === "@start").map((l) => svg`<path class="pl-edge-hit start" d=${l.d} data-from="@start" data-outcome="start" data-to=${l.to}></path>`) : nothing}
+          <path class="pl-ghost" d=""></path>
         </svg>
         ${lines.filter((l) => l.word && l.outcome !== "pass").map((l) => html`<span class=${`pl-edge-word ${l.outcome}`} style=${`left:${l.label.x}px;top:${l.label.y}px`}>${l.word}</span>`)}
         <div class=${`pl-node pl-start ${editable && selected === "@start" ? "selected" : ""} ${editable ? "editable" : ""}`} data-step="@start"
@@ -377,9 +439,26 @@ export function canvas({ def: d, run = null, editable = false, selected = null, 
 }
 
 // Called after every render: a canvas seen for the first time is fitted, others keep their view.
+const origins = new Map();
+
 export function settle() {
   for (const c of document.querySelectorAll(".pl-canvas")) {
-    if (views.has(c.dataset.key)) place(c);
-    else fit(c);
+    const ox = Number(c.dataset.ox), oy = Number(c.dataset.oy);
+    const was = origins.get(c.dataset.key);
+    origins.set(c.dataset.key, { ox, oy });
+    const v = viewOf(c);
+    if (!v) {
+      fit(c);
+      continue;
+    }
+    if (was && (was.ox !== ox || was.oy !== oy)) {
+      views.set(c.dataset.key, { ...v, x: v.x - (ox - was.ox) * v.k, y: v.y - (oy - was.oy) * v.k });
+    }
+    place(c);
   }
+}
+
+export function centreOf(canvas) {
+  const r = canvas.getBoundingClientRect();
+  return toWorld(canvas, r.left + r.width / 2, r.top + r.height / 2);
 }

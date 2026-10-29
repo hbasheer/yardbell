@@ -1736,6 +1736,110 @@ class Suite:
             raise Failure("the inspector does not show the step's problem")
         self.check_errors("save problems")
 
+    def open_builder(self):
+        b = self.b
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.querySelector('.pl-node[data-step=\"report\"]')", "the builder")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+
+    def empty_spot(self):
+        return self.b.js("(() => { const r = document.querySelector('.pl-canvas').getBoundingClientRect(); return [r.left + 90, r.bottom - 110]; })()")
+
+    def has_line(self, src, outcome, dst=None):
+        sel = f'.pl-edge-hit[data-from="{src}"][data-outcome="{outcome}"]'
+        if dst:
+            sel += f'[data-to="{dst}"]'
+        return self.b.js(f"!!document.querySelector({json.dumps(sel)})")
+
+    def test_builder_drag_from_library_creates_a_step(self):
+        b = self.b
+        self.open_builder()
+        spot = self.empty_spot()
+        b.drag('.pl-lib-item[data-kind="wait"]', tuple(spot), steps=10)
+        b.wait("document.querySelector('.pl-node.kind-wait')", "a Wait for me card where it was dropped")
+        if not b.js("document.querySelector('.pl-node.kind-wait').classList.contains('selected')"):
+            raise Failure("the new step is not selected")
+        if b.js("document.getElementById('pl-save').disabled"):
+            raise Failure("Save stays off after adding a step")
+        self.check_errors("dragging from the library")
+
+    def test_builder_connect_ports_and_cut_a_line(self):
+        b = self.b
+        self.open_builder()
+        if self.has_line("understand", "needs_you"):
+            raise Failure("the fixture already has the line this test draws")
+        b.drag('.pl-node[data-step="understand"] .pl-port.out.needs_you', '.pl-node[data-step="report"]', steps=10)
+        b.wait("!!document.querySelector('.pl-edge-hit[data-from=\"understand\"][data-outcome=\"needs_you\"][data-to=\"report\"]')", "the new needs you line")
+        b.js("document.querySelector('.pl-edge-hit[data-from=\"understand\"][data-outcome=\"needs_you\"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))")
+        b.wait("document.querySelector('.pl-edge.selected')", "the line selected")
+        b.key("Delete")
+        b.wait("!document.querySelector('.pl-edge-hit[data-from=\"understand\"][data-outcome=\"needs_you\"]')", "the line cut")
+        self.check_errors("connecting ports")
+
+    def test_builder_drop_a_line_on_empty_canvas_creates_a_connected_step(self):
+        b = self.b
+        self.open_builder()
+        b.drag('.pl-node[data-step="test"] .pl-port.out.needs_you', tuple(self.empty_spot()), steps=10)
+        b.wait("document.querySelector('#pl-add-menu button[data-kind=\"wait\"]')", "the add menu where the line was dropped")
+        b.click('#pl-add-menu button[data-kind="wait"]')
+        b.wait("document.querySelector('.pl-node.kind-wait')", "the new step")
+        new = b.js("document.querySelector('.pl-node.kind-wait').dataset.step")
+        if not self.has_line("test", "needs_you", new):
+            raise Failure("the new step is not connected to the line that made it")
+
+    def test_builder_delete_step_repoints_lines(self):
+        b = self.b
+        self.open_builder()
+        b.click('.pl-node[data-step="root-cause"]')
+        b.key("Delete")
+        b.wait("!document.querySelector('.pl-node[data-step=\"root-cause\"]')", "Root cause removed")
+        if b.js("!!document.querySelector('.pl-edge-hit[data-to=\"root-cause\"]')"):
+            raise Failure("a line still points at the removed step")
+        if self.has_line("understand", "pass"):
+            raise Failure("Understand's pass line did not go back to End")
+
+    def test_builder_move_undo_redo_and_tidy(self):
+        b = self.b
+        self.open_builder()
+        left = lambda: b.js("parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left)")
+        start = left()
+        box = b.centre('.pl-node[data-step="report"] .pl-node-head b')
+        b.drag((box["x"], box["y"]), (box["x"] + 120, box["y"]), steps=10)
+        moved = left()
+        if moved <= start + 60:
+            raise Failure(f"dragging the card moved it from {start} to {moved}")
+        b.key("z", "Control")
+        b.wait(f"parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left) === {start}", "undo putting it back")
+        b.key("z", "Control", "Shift")
+        b.wait(f"parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left) === {moved}", "redo moving it again")
+        b.click("#pl-tidy")
+        b.wait(f"parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left) !== {moved}", "Tidy laying the steps out")
+        b.key("z", "Control")
+        b.wait(f"parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left) === {moved}", "one undo for the whole Tidy")
+
+    def test_builder_keyboard_only(self):
+        b = self.b
+        self.open_builder()
+        version = self.api("GET", "/api/pipelines/review")["version"]
+        b.click('.pl-node[data-step="understand"]')
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"agent\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-agent.selected[data-step=\"agent-step\"]')", "the new agent step after Understand")
+        if not self.has_line("understand", "pass", "agent-step") or not self.has_line("agent-step", "pass", "root-cause"):
+            raise Failure("the new step was not put on Understand's pass line")
+        before = b.js("parseFloat(document.querySelector('.pl-node[data-step=\"agent-step\"]').style.left)")
+        b.js("document.activeElement.blur()")
+        b.key("ArrowRight")
+        if b.js("parseFloat(document.querySelector('.pl-node[data-step=\"agent-step\"]').style.left)") != before + 8:
+            raise Failure("the arrow key did not nudge the step 8px")
+        self.set_field('#pl-inspector select[name=machine_mode]', "name")
+        b.wait("document.querySelector('#pl-inspector select[name=machine]')", "the machine to pick")
+        self.set_field('#pl-inspector textarea[name=instructions]', "Check the change is small")
+        b.js("document.activeElement.blur()")
+        b.key("s", "Control")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {version + 1})()", "Ctrl+S saving")
+        self.check_errors("the keyboard path")
+
     def test_pipeline_run_graph_and_waiting_box(self):
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-a"))
