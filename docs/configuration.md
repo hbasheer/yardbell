@@ -393,24 +393,48 @@ repository's branches.
 
 ### `pull_requests` (optional)
 
-For each branch a session works on, Yardbell shows its pull request and CI on the dashboard and in
-the Workspace sidebar, and posts a card in Dispatch when CI starts failing or a reviewer comments.
-It asks the GitHub CLI `gh` on the machine where the session runs, over the same ssh connection,
-from that session's folder. Nothing is installed: a machine without `gh`, or with `gh` not logged
-in, shows no badge and is asked again after 10 minutes. A branch with no pull request shows none.
-Only GitHub is supported so far.
+For each branch a session works on, Yardbell shows its pull request or merge request and its CI on
+the dashboard and in the Workspace sidebar, and posts a card in Dispatch when CI starts failing or
+a reviewer comments. GitHub is read through `gh`, GitLab through its API.
+
+For GitHub, Yardbell asks the GitHub CLI `gh` on the machine where the session runs, over the same
+ssh connection, from that session's folder. Nothing is installed: a machine without `gh`, or with
+`gh` not logged in, shows no badge and is asked again after 10 minutes. A branch with no pull
+request shows none.
+
+For GitLab, list each GitLab host under `gitlab`, with a personal access token saved as a
+[secret](#secrets). Yardbell reads the remote each branch pushes to (its upstream remote, or
+`origin`) once every 10 minutes, and asks the API of a listed host from the machine Yardbell runs
+on, so only that machine needs to reach GitLab. Any other host goes to `gh` as above, so GitHub
+Enterprise keeps working, and a GitLab host that is not listed shows no badge.
 
 ```yaml
 pull_requests:
-  enabled: true        # false: no badges, no cards, gh is never run
+  enabled: true        # false: no badges, no cards, gh and GitLab are never asked
   poll_seconds: 120    # how often each branch is asked, at least 30
   cards: true          # false: badges only, no cards in Dispatch
+  gitlab:              # optional
+    - host: git.example.com               # the host as the remote URL names it
+      token: '${secret:gitlab}'           # a personal access token with read_api
+    - host: gitlab.example.org
+      url: https://gitlab.example.org:8443  # optional; default https://<host>
+      token: '${secret:gitlab-example}'
 ```
 
-Every key is optional. The values above are the defaults. A branch is asked at most once every
-`poll_seconds`, separately from the machine check every `poll_seconds` at the top level, and the
-branches of one machine are asked one after another. What has already been posted is kept in
-`pulls.json` in the state folder, so a restart never posts a card twice.
+Every key is optional. The values above, without `gitlab`, are the defaults. A branch is asked at
+most once every `poll_seconds`, separately from the machine check every `poll_seconds` at the top
+level, and the branches of one machine are asked one after another. What has already been posted
+is kept in `pulls.json` in the state folder, so a restart never posts a card twice.
+
+A GitLab token needs only the `read_api` scope: Yardbell never writes to GitLab. Make one in GitLab
+from your avatar, **Edit profile**, **Access tokens**, and save it under **Secrets** in Settings.
+`url` is for an instance whose web address differs from the host in your remote, such as another
+port. The token is sent only to that address, in a header, and never goes over ssh, into
+`pulls.json` or a log. When GitLab refuses the token, or its secret is missing, that host is asked
+again after 10 minutes and Yardbell's log says why; `yardbell doctor` signs in to each host and
+names the account or the problem. A merge request shows as `!12`, its pipeline as CI, and a
+reviewer asking for changes or approving as on GitHub. A request for changes without a comment
+changes the badge but posts no card, and at most 500 comments of one merge request are read.
 
 ### `triggers` (optional)
 
@@ -572,6 +596,11 @@ Yardbell refuses to start or save an invalid file and says why:
 | `phone_notifications.topic may only use letters, digits, - and _ (at most 64)` | rename the topic, or leave it empty to turn notifications off |
 | `phone_notifications.wait_minutes must be from 0 to 60` | use a whole number of minutes from 0 to 60 |
 | `pull_requests.poll_seconds must be at least 30` | ask GitHub less often, 120 is the default |
+| `pull_requests.gitlab entry 1 needs a host` | add `host:` |
+| `pull_requests.gitlab host "https://x/y" must be a host name only, like git.example.com` | drop the scheme and the path |
+| `pull_requests.gitlab lists git.example.com twice` | keep one entry per host |
+| `pull_requests.gitlab git.example.com needs a token` | add `token: '${secret:NAME}'` |
+| `pull_requests.gitlab git.example.com: url must start with https:// or http:// and have no path` | write `url` as `https://host` or `https://host:port` |
 | `trigger "x" needs exactly one of schedule, linear or github` | give each trigger one source |
 | `trigger "x": schedule "daily 9am" has a time that is not HH:MM...` | write the schedule as `daily 09:00`, `weekdays 09:00`, `every 4h` or `cron 30 9 * * 1-5` |
 | `trigger "x" is listed twice` | trigger names must be unique |

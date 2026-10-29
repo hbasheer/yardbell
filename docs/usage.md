@@ -25,10 +25,11 @@ stop leaves the list at once.
 - **Sessions** show folder, ticket, branch, agent, status and ports. Click a row (or press `Enter`) to
   open its terminal, use `j` and `k` to move, and `n` to start a new session. On a phone, a card
   opens only with its **Open** button, so Stop and the other buttons are easy to hit.
-- **Pull requests:** a session whose branch has a pull request on GitHub shows its number and state
-  next to the branch: CI failing, changes requested, CI running, approved, CI passing, merged or
-  closed. Hover it for the title and the checks that failed, click it to open the pull request.
-  Yardbell asks `gh` on the session's machine every two minutes or so; without `gh`, or without a
+- **Pull requests:** a session whose branch has a pull request on GitHub, or a merge request on a
+  GitLab host you listed, shows its number (`#12` or `!12`) and state next to the branch: CI
+  failing, changes requested, CI running, approved, CI passing, merged or closed. Hover it for the
+  title and the checks that failed, click it to open it. Yardbell asks `gh` on the session's
+  machine, or GitLab's API, every two minutes or so; without `gh` or a GitLab token, or without a
   pull request, there is simply no badge. See [`pull_requests`](configuration.md#pull_requests-optional).
 
 Sessions started outside tmux, and sessions that ended, fold into the footer of their machine's
@@ -341,11 +342,12 @@ from the next message, in open conversations too. Beside the Dispatch heading, a
 `Codex · gpt-6.1-sol` or `Claude Code · Haiku` shows the agent and model the open conversation
 runs on, or that a new one starts on, and leads to the setting.
 
-Dispatch also watches the pull requests of your sessions. When a session's CI goes from passing or
-running to failing, or a reviewer leaves a comment, a review or asks for changes, a card appears in
-the conversation that follows that session, or in a new conversation named after the pull request,
-which then follows the session. A CI card lists the failed checks, with a link and the last lines
-of the failed log when GitHub Actions has them. A review card shows each comment, with its file and
+Dispatch also watches the pull requests and GitLab merge requests of your sessions. When a
+session's CI goes from passing or running to failing, or a reviewer leaves a comment, a review or
+asks for changes, a card appears in the conversation that follows that session, or in a new
+conversation named after the pull request or merge request, which then follows the session. A CI
+card lists the failed checks (on GitLab, the failed jobs), with a link and the last lines of the
+failed log when GitHub Actions or GitLab has them. A review card shows each comment, with its file and
 line for a comment on the code. **Send to session** types a short instruction into the session,
 like "CI failed on test for pull request #12: error: test failed. Fix it and push.", shown on the
 card before you send it. It is a step like Dispatch's own, so your rules for typing into sessions
