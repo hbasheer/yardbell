@@ -58,6 +58,7 @@ const ICONS = {
   edit: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l.6-2.6L10.8 3.2a1.4 1.4 0 0 1 2 2L5.6 12.4z"/></svg>`,
   close: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`,
   trigger: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8.5" r="5"/><path d="M8 6v2.5l1.8 1.2M6.5 2h3"/></svg>`,
+  pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="12.5" cy="8" r="1.5"/><path d="M5 8h1.5M9.5 8H11"/></svg>`,
 };
 
 const INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g;
@@ -171,7 +172,7 @@ function convoItem(c) {
   return html`<li class="convo ${selected ? "selected" : ""}">
     <a href="/dispatch?c=${c.id}" aria-current=${selected ? "true" : nothing} @click=${(e) => switchTo(e, c)}>
       <span class="convo-title">${c.title}</span>
-      <span class="convo-meta">${c.trigger ? html`<span class="convo-trigger" title="Started by the trigger ${c.trigger}" aria-label="Started by a trigger">${ICONS.trigger}</span>` : nothing}${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
+      <span class="convo-meta">${pipelined.has(c.id) ? html`<span class="convo-trigger" title="A ticket in the pipeline" aria-label="A ticket in the pipeline">${ICONS.pipeline}</span>` : nothing}${c.trigger ? html`<span class="convo-trigger" title="Started by the trigger ${c.trigger}" aria-label="Started by a trigger">${ICONS.trigger}</span>` : nothing}${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
     </a>
     <button class="btn quiet danger delete" type="button" aria-label="Delete ${c.title}" title="Delete" @click=${() => deleteConvo(c)}>${ICONS.close}</button>
   </li>`;
@@ -207,8 +208,16 @@ async function deleteConvo(c) {
   }
 }
 
+// Conversations the ticket pipeline keeps, one per ticket, get its mark in the list.
+let pipelined = new Set();
+
 async function loadList() {
-  conversations = await api("GET", "/dispatch/conversations");
+  const [list, pipeline] = await Promise.all([
+    api("GET", "/dispatch/conversations"),
+    api("GET", "/api/pipeline").catch(() => ({ records: [] })),
+  ]);
+  conversations = list;
+  pipelined = new Set(pipeline.records.map((r) => r.conversation).filter(Boolean));
   compose.keep(conversations.map((c) => c.id));
   renderList();
 }

@@ -10,7 +10,9 @@ import tempfile
 import time
 import traceback
 import urllib.request
+import threading
 import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bidi import Browser, Failure, free_port  # noqa: E402
@@ -303,6 +305,48 @@ def memory_chat():
     ])
 
 
+# Linear's GraphQL API as the Pipeline page's ticket picker asks it: my open tickets.
+LINEAR_TICKETS = [
+    {"id": "u-12", "identifier": "COM-12", "title": "Redirect after login", "url": "https://linear.app/acme/issue/COM-12", "state": {"name": "Todo"}},
+    {"id": "u-21", "identifier": "COM-21", "title": "Search by email", "url": "https://linear.app/acme/issue/COM-21", "state": {"name": "Todo"}},
+    {"id": "u-22", "identifier": "COM-22", "title": "Export invoices", "url": "https://linear.app/acme/issue/COM-22", "state": {"name": "In Progress"}},
+]
+
+
+class FakeLinear(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        body = json.dumps({"data": {"viewer": {"assignedIssues": {"nodes": LINEAR_TICKETS}}}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def pipeline_records():
+    stamp = time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - 600))
+    base = {"run": "r20260101-1000", "started_by": "you", "stage_since": stamp,
+            "history": [{"stage": "queued", "at": stamp}]}
+    return {
+        "COM-11": {**base, "id": "COM-11", "linear_id": "u-11", "title": "Fix the webhook dedup",
+                   "url": "https://linear.app/acme/issue/COM-11", "stage": "review", "round": 1,
+                   "machine": MACHINE, "folder": "demo-app", "branch": "com-11-fix-the-webhook-dedup",
+                   "reason": "hp has demo-app and the most room"},
+        "COM-12": {**base, "id": "COM-12", "linear_id": "u-12", "title": "Redirect after login",
+                   "url": "https://linear.app/acme/issue/COM-12", "stage": "parked",
+                   "parked": {"kind": "questions", "reason": "Triage has 2 questions", "from": "triage"},
+                   "questions": [{"asked": "Which page should it go to?"}, {"asked": "Should old links still work?"}]},
+        "COM-13": {**base, "id": "COM-13", "linear_id": "u-13", "title": "Typo on the invoice page",
+                   "url": "https://linear.app/acme/issue/COM-13", "stage": "done", "machine": MACHINE,
+                   "branch": "com-13-typo", "pull": {"url": "https://github.com/acme/app/pull/12", "number": 12},
+                   "summary": "Fixed the typo."},
+    }
+
+
 def conversation(id, title, events):
     stamp = "2026-01-01T10:00:00+00:00"
     return {"id": id, "title": title, "created": stamp, "updated": stamp, "events": events}
@@ -328,6 +372,10 @@ class Yardbell:
             git("add", "README.md", cwd=path)
             git("commit", "-q", "-m", "init", cwd=path)
         self.seed_dispatch()
+        with open(os.path.join(self.state, "pipeline.json"), "w") as f:
+            json.dump(pipeline_records(), f)
+        self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
+        threading.Thread(target=self.linear.serve_forever, daemon=True).start()
         # gh on the server's PATH answers for every branch with one failing pull request.
         fake_bin = os.path.join(tmp, "bin")
         os.makedirs(fake_bin)
@@ -376,6 +424,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "TMUX_TMPDIR": self.tmux_dir,
             "YARDBELL_STATE": self.state,
             "CLAUDE_CONFIG_DIR": os.path.join(home, ".claude"),
+            "YARDBELL_LINEAR_URL": f"http://127.0.0.1:{self.linear.server_address[1]}/graphql",
         }
         for agent, fake in (("claude", self.fake_claude), ("codex", self.fake_codex)):
             out = subprocess.run(["bash", "-lic", f"command -v {agent}"], env=self.env, capture_output=True, text=True)
@@ -1530,6 +1579,56 @@ class Suite:
         b.wait(f"!document.getElementById('task-form').hidden && document.querySelector('#task-form textarea').value === {json.dumps(PROMPT)} && !document.querySelector('#task-form input[name=name]').value",
                "the proposal in a new task's form")
         b.click("#task-cancel")
+
+    def test_pipeline_in_the_sidebar(self):
+        for page in ("/", "/workspace", "/dispatch", "/settings", "/pipeline"):
+            self.b.goto(self.url(page))
+            self.b.wait("document.querySelector('.side-link[href=\"/pipeline\"]')", f"the Pipeline link on {page}")
+            order = self.b.js("[...document.querySelectorAll('a.side-link[href]')].map((a) => a.getAttribute('href')).join(' ')")
+            if "/workspace /pipeline /dispatch" not in order:
+                raise Failure(f"the sidebar on {page} reads {order}")
+
+    def test_pipeline_page_rows(self):
+        b = self.b
+        b.goto(self.url("/pipeline"))
+        b.wait("document.querySelectorAll('#pl-runs .pl-row').length === 3", "three rows")
+        review = '#pl-runs .pl-row[data-id="COM-11"]'
+        if b.js(f"document.querySelector('{review} .pl-word').textContent.trim()") != "Review, round 2":
+            raise Failure("the review row does not say its round")
+        marks = b.js(f"[...document.querySelectorAll('{review} .pl-stage')].map((m) => m.className).join('|')")
+        if "current" not in marks.split("|")[2] or "done" not in marks.split("|")[1]:
+            raise Failure(f"the review row's stage marks are {marks}")
+        if b.js("document.querySelector(\"#pl-runs .pl-row[data-id='COM-13'] a.pl-pull\")?.getAttribute('href')") != "https://github.com/acme/app/pull/12":
+            raise Failure("the done row does not link its pull request")
+        if not b.js("document.getElementById('pl-off') && !document.getElementById('pl-off').hidden"):
+            raise Failure("the page does not say the pipeline is off without its settings")
+
+    def test_pipeline_needs_you_answer(self):
+        b = self.b
+        b.goto(self.url("/pipeline"))
+        card = '#pl-needs .pl-need[data-id="COM-12"]'
+        b.wait(f"document.querySelector('{card}')?.textContent.includes('Should old links still work?')", "the parked ticket's questions")
+        b.click(f"{card} textarea")
+        b.type("The account page, and yes")
+        b.click(f"{card} .btn.primary")
+        b.wait(f"!document.querySelector('{card}')", "the ticket to leave Needs you")
+        b.wait("document.querySelector(\"#pl-runs .pl-row[data-id='COM-12'] .pl-word\")?.textContent.trim() === 'Triage'", "its row in Triage")
+
+    def test_pipeline_start_from_the_picker(self):
+        b = self.b
+        b.goto(self.url("/pipeline"))
+        self.api("POST", "/api/settings/secrets", {"name": "linear", "value": "lin_api_browser_test"})
+        b.click("#pl-load")
+        b.wait("document.querySelectorAll('#pl-tickets .pl-ticket').length === 3", "the open tickets from Linear")
+        if not b.js("document.querySelector(\"#pl-tickets .pl-ticket[data-id='COM-12'] input\").disabled"):
+            raise Failure("a ticket already in a run can be ticked")
+        if "In a run" not in b.js("document.querySelector(\"#pl-tickets .pl-ticket[data-id='COM-12']\").textContent"):
+            raise Failure("the running ticket does not say so")
+        b.click("#pl-tickets .pl-ticket[data-id='COM-21'] input")
+        b.wait("document.getElementById('pl-start').textContent.trim() === 'Start 1 ticket'", "the start button to count")
+        b.click("#pl-start")
+        b.wait("document.querySelector(\"#pl-runs .pl-row[data-id='COM-21'] .pl-word\")?.textContent.trim().startsWith('Queued')", "the new row, queued")
+        self.check_errors("the Pipeline page")
 
     def check_errors(self, where):
         if self.b.errors:

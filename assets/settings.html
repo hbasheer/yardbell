@@ -35,6 +35,9 @@
       <a class="side-link" href="/workspace">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10M8 8h5.5"/></svg>Workspace
       </a>
+      <a class="side-link" href="/pipeline">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="12.5" cy="8" r="1.5"/><path d="M5 8h1.5M9.5 8H11"/></svg>Pipeline
+      </a>
       <a class="side-link" href="/dispatch">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z"/></svg>Dispatch
       </a>
@@ -245,8 +248,14 @@
     <form class="panel" id="trigger-form" hidden>
       <div class="grid2">
         <label>Name <input type="text" name="name" maxlength="60" placeholder="Morning summary" autocomplete="off" required></label>
-        <label>Task <select name="task" required></select></label>
+        <label data-start="task">Task <select name="task" required></select></label>
       </div>
+      <label>What it does
+        <select name="start">
+          <option value="task">Starts a Dispatch conversation from a task</option>
+          <option value="pipeline">Runs the ticket pipeline</option>
+        </select>
+      </label>
       <label>Start it
         <select name="kind">
           <option value="schedule">On a schedule</option>
@@ -268,6 +277,7 @@
           <label data-repeat="every">Hours between runs <input type="number" name="hours" min="1" max="23" step="1" value="4" inputmode="numeric" required></label>
           <label data-repeat="cron">Cron <input type="text" name="cron" placeholder="30 9 * * 1-5" autocapitalize="off" spellcheck="false" required></label>
         </div>
+        <label data-start="pipeline">Run my open Linear tickets in <input type="text" name="pl_state" placeholder="Todo" autocomplete="off" required></label>
         <p class="help trigger-help" data-repeat="every">Counted from midnight: every 4 hours runs at 00:00, 04:00, 08:00 and so on.</p>
         <p class="help trigger-help" data-repeat="cron">Five fields: minute, hour, day of the month, month and day of the week, where 0 and 7 are Sunday. Use numbers, *, ranges like 1-5, lists like 1,15 and steps like */15.</p>
       </div>
@@ -281,7 +291,8 @@
         <label class="choice"><input type="checkbox" name="gh_review">A pull request asks for my review</label>
         <p class="help trigger-help">Yardbell asks the GitHub CLI <code>gh</code> on this machine every 3 minutes, as the account it is logged in with.</p>
       </div>
-      <p class="help trigger-help" data-kind="linear github">The task gets the ticket: write {ticket}, {title}, {url}, {state} or {repo} in it where each goes, or the ticket is added at the end. One conversation per ticket, one at a time. Tickets that already match when the trigger starts watching are left alone.</p>
+      <p class="help trigger-help" data-start="pipeline">Each ticket goes through the pipeline on its own: triage, implement, review, QA and a draft pull request. GitHub issues cannot start the pipeline.</p>
+      <p class="help trigger-help" data-kind="linear github" data-start="task">The task gets the ticket: write {ticket}, {title}, {url}, {state} or {repo} in it where each goes, or the ticket is added at the end. One conversation per ticket, one at a time. Tickets that already match when the trigger starts watching are left alone.</p>
       <div class="form-foot">
         <label class="choice"><input type="checkbox" class="switch" name="enabled" checked>On</label>
         <p class="help"></p>

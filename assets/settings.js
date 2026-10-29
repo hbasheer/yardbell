@@ -611,7 +611,7 @@ function triggerRow(v, i) {
     <input type="checkbox" class="switch" data-toggle="${i}" aria-label="${esc(t.name)} on"${t.enabled ? " checked" : ""}>
     <div class="row-main">
       <div class="row-title"><span class="folder">${esc(t.name)}</span><span class="note">${esc(v.describe)}</span></div>
-      <p class="help">Runs the task <strong>${esc(t.task)}</strong>${plan ? ` · ${esc(plan)}` : ""}</p>
+      <p class="help">${t.start === "pipeline" ? `Runs the ticket pipeline${t.state ? ` for tickets in <strong>${esc(t.state)}</strong>` : ""}` : `Runs the task <strong>${esc(t.task)}</strong>`}${plan ? ` · ${esc(plan)}` : ""}</p>
       ${last}
       ${v.note ? `<p class="help">${esc(v.note)}.</p>` : ""}
       ${v.problem ? `<p class="help trigger-problem">${esc(v.problem.charAt(0).toUpperCase() + v.problem.slice(1))}.</p>` : ""}
@@ -641,10 +641,17 @@ function showTriggerKind() {
   const f = $("trigger-form");
   const kind = f.elements.kind.value;
   const repeat = f.elements.repeat.value;
+  const start = f.elements.start.value;
   f.querySelectorAll("[data-kind]").forEach((el) => { el.hidden = !el.dataset.kind.split(" ").includes(kind); });
   f.querySelectorAll("[data-repeat]").forEach((el) => { el.hidden = !el.dataset.repeat.split(" ").includes(repeat); });
+  f.querySelectorAll("[data-start]").forEach((el) => {
+    const shown = !el.dataset.kind || el.dataset.kind.split(" ").includes(kind);
+    el.hidden = !shown || el.dataset.start !== start;
+  });
   // A field that is not shown is not checked or sent.
-  f.querySelectorAll("[data-kind] input, [data-kind] select").forEach((el) => { el.disabled = Boolean(el.closest("[hidden]")); });
+  f.querySelectorAll("input, select").forEach((el) => {
+    if (el.closest("[data-kind], [data-start]")) el.disabled = Boolean(el.closest("[hidden]"));
+  });
 }
 
 function openTriggerForm(index) {
@@ -669,6 +676,8 @@ function openTriggerForm(index) {
   f.elements.gh_assigned.checked = Boolean(t.github?.assigned);
   f.elements.gh_review.checked = t.github ? Boolean(t.github.review_requested) : true;
   f.elements.enabled.checked = t.enabled !== false;
+  f.elements.start.value = t.start === "pipeline" ? "pipeline" : "task";
+  f.elements.pl_state.value = t.state || "Todo";
   f.hidden = false;
   showTriggerKind();
   f.elements.name.focus();
@@ -676,7 +685,11 @@ function openTriggerForm(index) {
 
 function readTrigger(f) {
   const e = f.elements;
-  const t = { name: e.name.value.trim(), task: e.task.value, enabled: e.enabled.checked };
+  const pipeline = e.start.value === "pipeline";
+  const t = pipeline
+    ? { name: e.name.value.trim(), start: "pipeline", enabled: e.enabled.checked }
+    : { name: e.name.value.trim(), task: e.task.value, enabled: e.enabled.checked };
+  if (pipeline && e.kind.value === "schedule") t.state = e.pl_state.value.trim();
   if (e.kind.value === "linear") {
     t.linear = { assigned: e.linear_assigned.checked, states: e.states.value.split(",").map((s) => s.trim()).filter(Boolean) };
   } else if (e.kind.value === "github") {
@@ -698,6 +711,7 @@ $("trigger-add").addEventListener("click", () => openTriggerForm(null));
 $("trigger-cancel").addEventListener("click", () => { $("trigger-form").hidden = true; });
 $("trigger-form").elements.kind.addEventListener("change", showTriggerKind);
 $("trigger-form").elements.repeat.addEventListener("change", showTriggerKind);
+$("trigger-form").elements.start.addEventListener("change", showTriggerKind);
 
 $("trigger-form").addEventListener("submit", async (e) => {
   e.preventDefault();
