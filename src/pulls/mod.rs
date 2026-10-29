@@ -8,6 +8,7 @@ pub use remote::{Remotes, Repo};
 
 use crate::config::{Config, Machine};
 use crate::dispatch::Dispatch;
+use crate::secrets::Secrets;
 use crate::state::State;
 use futures::future::BoxFuture;
 use serde::{Deserialize, Serialize};
@@ -453,17 +454,33 @@ pub fn card(n: &Notice, checks: &[Check], notes: &[Note]) -> Value {
 struct Entry {
     next: Instant,
     pull: Option<Pull>,
+    host: Option<String>,
+}
+
+// gh missing or logged out is a machine's problem; a refused token is a GitLab host's.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum Away {
+    Machine(String),
+    Host(String),
+}
+
+enum Got {
+    Fetched(Fetched),
+    Refused(String, String),
 }
 
 #[derive(Default)]
 struct Inner {
     entries: HashMap<Key, Entry>,
-    away: HashMap<String, Instant>,
+    away: HashMap<Away, Instant>,
     seen: BTreeMap<String, Seen>,
+    remotes: HashMap<Key, (Instant, Option<Repo>)>,
 }
 
 pub struct Pulls {
-    forge: Arc<dyn Forge>,
+    github: Arc<dyn Forge>,
+    gitlab: Arc<GitLab>,
+    remotes: Remotes,
     file: PathBuf,
     inner: Mutex<Inner>,
 }
@@ -473,13 +490,20 @@ fn today() -> String {
 }
 
 impl Pulls {
-    pub fn new(forge: Arc<dyn Forge>, file: PathBuf) -> Pulls {
+    pub fn new(
+        github: Arc<dyn Forge>,
+        gitlab: Arc<GitLab>,
+        remotes: Remotes,
+        file: PathBuf,
+    ) -> Pulls {
         let seen = std::fs::read(&file)
             .ok()
             .and_then(|bytes| serde_json::from_slice(&bytes).ok())
             .unwrap_or_default();
         Pulls {
-            forge,
+            github,
+            gitlab,
+            remotes,
             file,
             inner: Mutex::new(Inner {
                 seen,
@@ -525,21 +549,73 @@ impl Pulls {
         let mut inner = self.lock();
         inner.entries.clear();
         inner.away.clear();
+        inner.remotes.clear();
+    }
+
+    fn is_away(&self, away: &Away) -> bool {
+        self.lock().away.contains_key(away)
+    }
+
+    async fn repo(&self, m: &Machine, t: &Target, now: Instant) -> Option<Repo> {
+        if let Some((until, repo)) = self.lock().remotes.get(&t.key()) {
+            if *until > now {
+                return repo.clone();
+            }
+        }
+        let repo = self.remotes.read(m, &t.path, &t.branch).await;
+        self.lock()
+            .remotes
+            .insert(t.key(), (now + AWAY, repo.clone()));
+        repo
+    }
+
+    // Only a host listed under pull_requests.gitlab goes to GitLab, so without one no remote is
+    // read and GitHub is asked exactly as before.
+    async fn on_gitlab<'a>(
+        &self,
+        m: &Machine,
+        t: &Target,
+        hosts: &'a [GitLabAccess],
+        now: Instant,
+    ) -> Option<(&'a GitLabAccess, Repo)> {
+        if hosts.is_empty() {
+            return None;
+        }
+        let repo = self.repo(m, t, now).await?;
+        let access = hosts.iter().find(|a| a.host == repo.host)?;
+        Some((access, repo))
+    }
+
+    fn gitlab_place<'a>(
+        &self,
+        n: &Notice,
+        hosts: &'a [GitLabAccess],
+    ) -> Option<(&'a GitLabAccess, String)> {
+        let key = (n.machine.clone(), n.path.clone(), n.branch.clone());
+        let repo = self.lock().remotes.get(&key)?.1.clone()?;
+        let access = hosts.iter().find(|a| a.host == repo.host)?;
+        Some((access, repo.project))
     }
 
     // Each branch is asked about at most once per poll interval, the branches of one machine one
     // after the other, and the machines at the same time.
-    pub async fn poll(&self, cfg: &Config, targets: &[Target], now: Instant) -> Vec<Notice> {
+    pub async fn poll(
+        &self,
+        cfg: &Config,
+        hosts: &[GitLabAccess],
+        targets: &[Target],
+        now: Instant,
+    ) -> Vec<Notice> {
         let every = Duration::from_secs(cfg.pull_requests.poll_seconds);
         let due: Vec<&Target> = {
             let mut inner = self.lock();
             let live: HashSet<Key> = targets.iter().map(Target::key).collect();
             inner.entries.retain(|k, _| live.contains(k));
+            inner.remotes.retain(|k, _| live.contains(k));
             inner.away.retain(|_, until| *until > now);
             let inner = &*inner;
             targets
                 .iter()
-                .filter(|t| !inner.away.contains_key(&t.machine))
                 .filter(|t| inner.entries.get(&t.key()).is_none_or(|e| e.next <= now))
                 .collect()
         };
@@ -553,12 +629,35 @@ impl Pulls {
                     return Vec::new();
                 };
                 let mut out = Vec::new();
+                let mut no_gh = self.is_away(&Away::Machine(m.name.clone()));
+                let mut refused: HashSet<String> = HashSet::new();
                 for t in list {
-                    let got = self.forge.fetch(m, &t.path, &t.branch).await;
-                    let stop = got == Fetched::NoTool;
-                    out.push((t, got));
-                    if stop {
-                        break;
+                    match self.on_gitlab(m, t, hosts, now).await {
+                        Some((access, repo)) => {
+                            let host = access.host.clone();
+                            if refused.contains(&host) || self.is_away(&Away::Host(host.clone())) {
+                                continue;
+                            }
+                            let got =
+                                match self.gitlab.fetch(access, &repo.project, &t.branch).await {
+                                    Answer::Pull(pull) => Got::Fetched(Fetched::Found(pull)),
+                                    Answer::NoPull => Got::Fetched(Fetched::NoPull),
+                                    Answer::Failed(why) => Got::Fetched(Fetched::Failed(why)),
+                                    Answer::Refused(why) => {
+                                        refused.insert(host.clone());
+                                        Got::Refused(host.clone(), why)
+                                    }
+                                };
+                            out.push((t, Some(host), got));
+                        }
+                        None => {
+                            if no_gh {
+                                continue;
+                            }
+                            let got = self.github.fetch(m, &t.path, &t.branch).await;
+                            no_gh = got == Fetched::NoTool;
+                            out.push((t, None, Got::Fetched(got)));
+                        }
                     }
                 }
                 out
@@ -569,21 +668,40 @@ impl Pulls {
         let mut changed = false;
         {
             let mut inner = self.lock();
-            for (t, got) in fetched.into_iter().flatten() {
+            for (t, host, got) in fetched.into_iter().flatten() {
                 let (next, pull) = match got {
-                    Fetched::Found(pull) => (now + every, Some(*pull)),
-                    Fetched::NoPull => (now + every, None),
-                    Fetched::NoTool => {
-                        inner.away.insert(t.machine.clone(), now + AWAY);
+                    Got::Fetched(Fetched::Found(pull)) => (now + every, Some(*pull)),
+                    Got::Fetched(Fetched::NoPull) => (now + every, None),
+                    Got::Fetched(Fetched::NoTool) => {
+                        inner
+                            .away
+                            .insert(Away::Machine(t.machine.clone()), now + AWAY);
                         for (k, e) in inner.entries.iter_mut() {
-                            if k.0 == t.machine {
+                            if k.0 == t.machine && e.host.is_none() {
                                 e.pull = None;
                             }
                         }
                         (now + AWAY, None)
                     }
-                    Fetched::Failed(why) => {
+                    Got::Fetched(Fetched::Failed(why)) => {
                         tracing::debug!(machine = %t.machine, branch = %t.branch, "no pull request status: {why}");
+                        (now + AWAY, None)
+                    }
+                    Got::Refused(refused, why) => {
+                        let first = inner
+                            .away
+                            .insert(Away::Host(refused.clone()), now + AWAY)
+                            .is_none();
+                        if first {
+                            tracing::warn!(
+                                "no merge requests from {refused} for 10 minutes: {why}"
+                            );
+                        }
+                        for e in inner.entries.values_mut() {
+                            if e.host.as_deref() == Some(refused.as_str()) {
+                                e.pull = None;
+                            }
+                        }
                         (now + AWAY, None)
                     }
                 };
@@ -605,7 +723,7 @@ impl Pulls {
                         }));
                     }
                 }
-                inner.entries.insert(t.key(), Entry { next, pull });
+                inner.entries.insert(t.key(), Entry { next, pull, host });
             }
         }
         if changed {
@@ -615,12 +733,20 @@ impl Pulls {
     }
 
     // The failed log, or a review's comments on lines, are asked for only when a card is made.
-    pub async fn card(&self, m: &Machine, n: &Notice) -> Value {
+    pub async fn card(&self, m: &Machine, n: &Notice, hosts: &[GitLabAccess]) -> Value {
+        let gitlab = n.pull.forge == "gitlab";
         match &n.change {
             Change::Failed(checks) => {
                 let mut with_logs = checks.clone();
+                let place = self.gitlab_place(n, hosts);
                 for c in with_logs.iter_mut().take(LOGS_PER_CARD) {
-                    c.log = self.forge.failure_log(m, &n.path, c).await;
+                    c.log = match (&place, gitlab) {
+                        (Some((access, project)), _) => {
+                            self.gitlab.failure_log(access, project, c).await
+                        }
+                        (None, true) => String::new(),
+                        (None, false) => self.github.failure_log(m, &n.path, c).await,
+                    };
                 }
                 card(n, &with_logs, &[])
             }
@@ -632,9 +758,9 @@ impl Pulls {
                     if !review || !note.body.trim().is_empty() {
                         all.push(note.clone());
                     }
-                    if review && asked < REVIEWS_PER_CARD {
+                    if review && !gitlab && asked < REVIEWS_PER_CARD {
                         asked += 1;
-                        all.extend(self.forge.review_comments(m, &n.path, note).await);
+                        all.extend(self.github.review_comments(m, &n.path, note).await);
                     }
                 }
                 if all.is_empty() {
@@ -645,13 +771,21 @@ impl Pulls {
         }
     }
 
-    pub async fn round(&self, cfg: &Config, state: &State, dispatch: &Dispatch, now: Instant) {
+    pub async fn round(
+        &self,
+        cfg: &Config,
+        secrets: &Result<Secrets, String>,
+        state: &State,
+        dispatch: &Dispatch,
+        now: Instant,
+    ) {
         if !cfg.pull_requests.enabled {
             self.forget();
             state.set_pulls(HashMap::new());
             return;
         }
-        let notices = self.poll(cfg, &targets(cfg, state), now).await;
+        let hosts = accesses(&cfg.pull_requests, secrets);
+        let notices = self.poll(cfg, &hosts, &targets(cfg, state), now).await;
         state.set_pulls(self.views());
         if !cfg.pull_requests.cards {
             return;
@@ -660,7 +794,7 @@ impl Pulls {
             let Some(m) = cfg.machine(&n.machine) else {
                 continue;
             };
-            let card = self.card(m, &n).await;
+            let card = self.card(m, &n, &hosts).await;
             let title = format!("Pull request #{}: {}", n.pull.number, n.pull.title);
             if dispatch
                 .post_pull(&n.machine, &n.session, &n.path, &title, card)
@@ -683,7 +817,15 @@ impl Pulls {
             loop {
                 every.tick().await;
                 match Config::load(&cfg_path) {
-                    Ok(cfg) => self.round(&cfg, &state, &dispatch, Instant::now()).await,
+                    Ok(cfg) => {
+                        let secrets = if cfg.pull_requests.gitlab.is_empty() {
+                            Err(String::new())
+                        } else {
+                            Secrets::for_config(&cfg_path).map_err(|e| e.to_string())
+                        };
+                        self.round(&cfg, &secrets, &state, &dispatch, Instant::now())
+                            .await
+                    }
                     Err(e) => tracing::debug!(error = %e, "pull requests not checked"),
                 }
             }
