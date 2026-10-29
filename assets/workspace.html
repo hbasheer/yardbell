@@ -21,15 +21,15 @@
   <aside class="ws-side" id="ws-side" aria-label="Workspaces and agents">
     <div class="ws-side-head">
       <a class="wordmark" href="/">Yardbell</a>
-      <a class="btn quiet ws-home" href="/" title="Back to the dashboard"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard</a>
+      <span class="side-summary ws-summary" id="summary" aria-live="polite"></span>
       <button class="btn primary ws-side-new" id="side-new" type="button">New session</button>
-      <span class="ws-summary" id="summary" aria-live="polite"></span>
-      <span class="server-line ws-server" id="server"></span>
     </div>
     <nav class="ws-agents" aria-label="Workspaces and terminals">
       <ul id="tree"></ul>
     </nav>
+    <p class="server-line ws-server" id="server"></p>
     <nav class="ws-nav" aria-label="Pages">
+      <p class="vpn" id="nav-vpn"></p>
       <a class="side-link" href="/">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard
       </a>
@@ -42,14 +42,14 @@
       <a class="side-link" href="/settings">
         <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:2.3"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings
       </a>
+      <button class="side-link desk-only" id="keys-btn" type="button">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><path d="M4 6.75h1M7.5 6.75h1M11 6.75h1M5 9.25h6"/></svg>Keyboard shortcuts
+      </button>
+      <button class="side-link theme-toggle" type="button" data-theme-toggle></button>
       <button class="side-link" id="logout" type="button">
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 3H3.5v10h3M10 5l3 3-3 3M13 8H6.5"/></svg>Log out
       </button>
     </nav>
-    <div class="ws-foot">
-      <button class="ws-hint" id="keys-btn" type="button">Keyboard shortcuts</button>
-      <button class="ws-hint theme-toggle" type="button" data-theme-toggle></button>
-    </div>
   </aside>
 
   <aside class="ws-dispatch" id="ws-dispatch" aria-label="Dispatch" hidden>

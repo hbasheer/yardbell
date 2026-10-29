@@ -127,7 +127,10 @@ the sidebar comes first and a session opens full screen.
 it starts or links to open in a pane. Hide or show it with the speech bubble before the tabs or the
 button at the top of the panel; the Workspace remembers whether it was open. **Dispatch** in the
 sidebar menu opens the full Dispatch page. The sidebar menu is the same as on every other page,
-with **Dashboard** first.
+with **Dashboard** first, and the sidebar folds to icons the same way. The panel is too narrow for
+the lists beside the chat, so it shows one at a time under three tabs, **Chat**, **Chats** and
+**Tasks**, with **+** for a new conversation; picking a conversation or running a task goes back to
+**Chat**. The Dispatch page does the same on a phone.
 
 Click a machine's name in the sidebar to fold its folders and sessions away. Drag the right edge of
 the sidebar or of the Dispatch panel to resize it, and double-click the edge to reset it. The
@@ -313,7 +316,8 @@ Yardbell's state folder, under `dispatch/`, readable only by your account: a hea
 the next change. If a hand edit takes it over the cap, Dispatch reads the entries that fit and
 Settings says how many were left out.
 
-Every conversation is kept in a list beside the chat, also after a restart, so you can go back to
+Every conversation is kept in a list beside the chat (under **Chats** in the Workspace panel and on a
+phone), also after a restart, so you can go back to
 one or delete it; **Clear all** deletes every conversation that is not still working. Deleting a
 conversation never stops the sessions it started. The agent Dispatch runs on must be installed and
 signed in on the host.
