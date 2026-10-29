@@ -3,7 +3,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 11] = [
+const CHANGING: [&str; 13] = [
     "start_session",
     "send_to_session",
     "stop_session",
@@ -15,6 +15,8 @@ const CHANGING: [&str; 11] = [
     "move_session",
     "remember",
     "change_settings",
+    "save_task",
+    "run_trigger",
 ];
 
 pub fn changes_something(tool: &str) -> bool {
@@ -210,6 +212,8 @@ fn what(action: &Value) -> String {
             _ => format!("adding \"{}\" to your memory", text(input, "entry")),
         },
         "change_settings" => format!("changing the {} settings", text(input, "area")),
+        "save_task" => format!("saving the task \"{}\"", text(input, "name")),
+        "run_trigger" => format!("running the trigger {} now", text(input, "name")),
         other => other.to_string(),
     }
 }

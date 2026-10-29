@@ -267,3 +267,142 @@ async fn outside_clients_cannot_change_yet() {
     .await;
     assert!(!listed.to_string().contains("change_settings"), "{listed}");
 }
+
+#[tokio::test]
+async fn outside_clients_cannot_save_tasks_or_run_triggers_yet() {
+    let r = rig();
+    mcp_on(&r);
+    for (tool, args) in [
+        (
+            "save_task",
+            json!({ "name": "Notes", "text": "Sum up my day" }),
+        ),
+        ("run_trigger", json!({ "name": "Morning" })),
+    ] {
+        let result = tool_call(&r, tool, args).await;
+        assert!(
+            text(&result).contains("Proposals inbox"),
+            "{tool}: {result}"
+        );
+    }
+    assert!(!r.app.dispatch.tasks().iter().any(|t| t.name == "Notes"));
+}
+
+#[tokio::test]
+async fn save_task_adds_a_version() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let c = cookie(&r.app).await;
+    r.app
+        .dispatch
+        .save_task("Standup", "List what changed yesterday.", None)
+        .unwrap();
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "save_task",
+        json!({ "name": "Standup", "text": "List what changed yesterday and what waits." }),
+    )
+    .await;
+    assert!(text(&result).starts_with("Not run yet"), "{result}");
+    let step = last_event(&r, &id);
+    assert_eq!(step["input"]["before"], "List what changed yesterday.");
+    assert!(step["input"]["diff"]
+        .as_array()
+        .is_some_and(|d| !d.is_empty()));
+
+    let url = format!(
+        "/dispatch/conversations/{id}/actions/{}",
+        step["id"].as_str().unwrap()
+    );
+    let (status, done) = step_post(&r, &c, &url, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(outcome(&done)["version"], 2, "{done}");
+    let history = r.app.dispatch.task_history("Standup").unwrap();
+    assert_eq!(history.versions.len(), 2);
+    assert_eq!(
+        history.versions.last().unwrap().text,
+        "List what changed yesterday and what waits."
+    );
+}
+
+#[tokio::test]
+async fn a_new_task_is_created() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "allow", json!([]));
+    let result = dispatch_tool(
+        &r,
+        Some(&id),
+        "save_task",
+        json!({ "name": "Review my MRs", "text": "Review every merge request waiting on me." }),
+    )
+    .await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert_eq!(answer(&result)["version"], 1, "{result}");
+    assert_eq!(last_event(&r, &id)["input"]["before"], "");
+    assert!(r
+        .app
+        .dispatch
+        .tasks()
+        .iter()
+        .any(|t| t.name == "Review my MRs"));
+
+    let empty = dispatch_tool(
+        &r,
+        Some(&id),
+        "save_task",
+        json!({ "name": "Blank", "text": "  " }),
+    )
+    .await;
+    assert_eq!(empty["isError"], true, "{empty}");
+    assert!(
+        text(&empty).contains("a task needs a name and what to ask"),
+        "{empty}"
+    );
+}
+
+#[tokio::test]
+async fn run_trigger_runs_it_now() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "allow", json!([]));
+    r.app
+        .settings
+        .set_triggers(
+            serde_json::from_value(json!([{
+                "name": "Morning",
+                "task": "What's going on?",
+                "schedule": "daily 09:00",
+            }]))
+            .unwrap(),
+        )
+        .unwrap();
+    let before = r.app.dispatch.list().as_array().unwrap().len();
+    let result = dispatch_tool(&r, Some(&id), "run_trigger", json!({ "name": "Morning" })).await;
+    assert_eq!(result["isError"], false, "{result}");
+    let started = answer(&result)["conversation"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let list = r.app.dispatch.list();
+    assert_eq!(list.as_array().unwrap().len(), before + 1);
+    assert!(list
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|c| c["id"] == started.as_str() && c["trigger"] == "Morning"));
+}
+
+#[tokio::test]
+async fn an_unknown_trigger_says_so() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let result = dispatch_tool(&r, Some(&id), "run_trigger", json!({ "name": "Nope" })).await;
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(
+        text(&result).contains("there is no trigger called Nope"),
+        "{result}"
+    );
+    assert!(r.app.dispatch.pending(&id).is_empty());
+}

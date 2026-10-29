@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
 pub const REMEMBER: &str = "remember";
-const ACTIONS: [&str; 11] = [
+const ACTIONS: [&str; 13] = [
     "start_session",
     "stop_session",
     "send_to_session",
@@ -15,6 +15,8 @@ const ACTIONS: [&str; 11] = [
     "push_branch",
     "move_session",
     "change_settings",
+    "save_task",
+    "run_trigger",
     REMEMBER,
 ];
 
@@ -465,7 +467,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, remember, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, remember, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],

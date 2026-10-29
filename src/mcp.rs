@@ -357,7 +357,22 @@ fn tools() -> Vec<Value> {
                 "area": { "type": "string", "enum": crate::mcp_change::CHANGEABLE },
                 "value": { "type": ["object", "array"], "description": "The whole area as read_settings returned it, with your edits" },
             }),
-            &["area", "value"],
+                        &["area", "value"],
+        ),
+        tool(
+            "save_task",
+            "Propose saving a task: a new one, or a new version of one that exists (read_task shows its text). text is the whole task as it should read. The older version stays in the task's history. Unless the user's rules say otherwise it becomes a step the user approves.",
+            json!({
+                "name": { "type": "string", "description": "The task's name, as list_tasks shows it for one that exists" },
+                "text": { "type": "string", "description": "What the task asks, in full" },
+            }),
+            &["name", "text"],
+        ),
+        tool(
+            "run_trigger",
+            "Propose running a trigger now, as Settings' Run now does: a schedule starts its task at once, a Linear or GitHub trigger checks for new items. read_settings with area triggers lists them. Unless the user's rules say otherwise it becomes a step the user approves.",
+            json!({ "name": { "type": "string", "description": "The trigger's name" } }),
+            &["name"],
         ),
     ];
     all.extend(crate::mcp_read::tools());
@@ -656,7 +671,10 @@ started or proposed.",
 // in or scans, the folder of the session it reviews, or the folder of the session it stops or
 // types into.
 pub(crate) fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
-    if called == "remember" || called == "change_settings" {
+    if matches!(
+        called,
+        "remember" | "change_settings" | "save_task" | "run_trigger"
+    ) {
         return Step {
             action: called.to_string(),
             machine: String::new(),
@@ -758,6 +776,20 @@ pub(crate) fn plan(
             json!({ "area": change.area, "value": change.value, "before": before, "diff": diff });
         return Ok((name.to_string(), input, None));
     }
+    if name == "save_task" {
+        let task: TaskSave = arg(args)?;
+        check_task(&task)?;
+        let before = app
+            .dispatch
+            .tasks()
+            .into_iter()
+            .find(|t| t.name == task.name.trim())
+            .map(|t| t.text)
+            .unwrap_or_default();
+        let diff = crate::dispatch::diff::words(&before, task.text.trim());
+        let input = json!({ "name": task.name.trim(), "text": task.text.trim(), "before": before, "diff": diff });
+        return Ok((name.to_string(), input, None));
+    }
     check(app, cfg, name, &args)?;
     Ok((name.to_string(), args, None))
 }
@@ -802,6 +834,33 @@ fn check_settings(cfg: &Config, change: &SettingsChange) -> Result<(), ApiError>
         })
 }
 
+#[derive(Deserialize)]
+struct TaskSave {
+    name: String,
+    text: String,
+}
+
+fn check_task(task: &TaskSave) -> Result<(), ApiError> {
+    if task.name.trim().is_empty() || task.text.trim().is_empty() {
+        return Err(bad("a task needs a name and what to ask".into()));
+    }
+    Ok(())
+}
+
+fn check_trigger(cfg: &Config, name: &str) -> Result<(), ApiError> {
+    if cfg.triggers.iter().any(|t| t.name == name) {
+        return Ok(());
+    }
+    let names: Vec<&str> = cfg.triggers.iter().map(|t| t.name.as_str()).collect();
+    Err(bad(match names.is_empty() {
+        true => format!("there is no trigger called {name}; there are no triggers yet"),
+        false => format!(
+            "there is no trigger called {name}; the triggers are {}",
+            names.join(", ")
+        ),
+    }))
+}
+
 fn check_memory(app: &AppState, change: &MemoryChange) -> Result<(), ApiError> {
     app.dispatch
         .memory()
@@ -825,6 +884,8 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
         }
         "remember" => check_memory(app, &arg(input.clone())?),
         "change_settings" => check_settings(cfg, &arg(input.clone())?),
+        "save_task" => check_task(&arg(input.clone())?),
+        "run_trigger" => check_trigger(cfg, input["name"].as_str().unwrap_or_default()),
         tool if crate::web::worktrees_api::TOOLS.contains(&tool) => {
             crate::web::worktrees_api::check(app, cfg, tool, input)
         }
@@ -1038,6 +1099,12 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
     if tool == "change_settings" {
         return change_settings(app, arg(input)?);
     }
+    if tool == "save_task" {
+        return save_task(app, arg(input)?);
+    }
+    if tool == "run_trigger" {
+        return run_trigger(app, input["name"].as_str().unwrap_or_default()).await;
+    }
     run_tool(app, tool, input).await
 }
 
@@ -1052,6 +1119,30 @@ fn change_settings(app: &AppState, change: SettingsChange) -> Result<Value, ApiE
         outcome["replaced"] = now;
     }
     Ok(outcome)
+}
+
+fn save_task(app: &AppState, task: TaskSave) -> Result<Value, ApiError> {
+    let name = task.name.trim();
+    let exists = app.dispatch.tasks().iter().any(|t| t.name == name);
+    let tasks = app
+        .dispatch
+        .save_task(name, &task.text, exists.then_some(name))
+        .map_err(bad)?;
+    let version = tasks.iter().find(|t| t.name == name).map(|t| t.version);
+    Ok(json!({ "saved": name, "version": version }))
+}
+
+async fn run_trigger(app: &AppState, name: &str) -> Result<Value, ApiError> {
+    let cfg = app.config()?;
+    check_trigger(&cfg, name)?;
+    let launch = crate::triggers::Launch::new(&cfg, app.secrets().map_err(|e| e.1), &app.dispatch);
+    let out = app
+        .triggers
+        .run_now(&cfg, name, &launch, chrono::Local::now())
+        .await
+        .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
+    app.state.touch();
+    Ok(out)
 }
 
 fn arg<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ApiError> {
