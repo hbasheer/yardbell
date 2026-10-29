@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.7] - 2026-10-29
+
 - The Workspace sidebar matches the other pages: the same header with the collapse button beside
   the name, the theme button and the VPN line in its menu, and no second Dashboard button.
   Collapsed, it shows only icons, where its menu used to show cut-off words.
