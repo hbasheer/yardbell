@@ -1,7 +1,7 @@
 use super::legacy::{
     Effect, Entry, Finding, ParkKind, Parked, Question, Record, Seen, Stage, Triage,
 };
-use super::prompts;
+use super::legacy_prompts as prompts;
 use crate::config::Pipeline as Cfg;
 use crate::dispatch::GroupOutcome;
 use chrono::{DateTime, Duration, Local};
