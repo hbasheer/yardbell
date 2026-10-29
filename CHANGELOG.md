@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.7.9] - 2026-10-29
+
 - **Insights** shows a session's pull request or merge request under its facts: the number and
   title as a link, the state the badge shows, and where CI and the review stand. Its timeline says
   what happened to it while the session ran: opened (or already open), marked ready for review,
