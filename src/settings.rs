@@ -31,6 +31,34 @@ pub struct MachineEdit {
     pub mesh: Option<MeshProvider>,
 }
 
+// What Settings checks when a machine is edited, shared with changes made through tools.
+pub fn edit_machine(cfg: &mut Config, name: &str, edit: &MachineEdit) -> Result<(), String> {
+    for host in [edit.ssh.as_deref(), edit.mesh_ip.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if !valid_host(host) {
+            return Err(format!("{host:?} is not a valid host or address"));
+        }
+    }
+    if edit.root.trim().is_empty() || edit.root.contains('\n') {
+        return Err("enter the project folder on that machine".into());
+    }
+    let m = cfg
+        .machines
+        .iter_mut()
+        .find(|m| m.name == name)
+        .ok_or_else(|| format!("no machine named {name}"))?;
+    m.ssh = edit.ssh.clone().filter(|s| !s.is_empty());
+    m.mesh_ip = edit.mesh_ip.clone().filter(|s| !s.is_empty());
+    if !m.local {
+        m.port_prefix = edit.port_prefix;
+    }
+    m.root = edit.root.trim().to_string();
+    m.mesh = edit.mesh;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AgentEdit {
     pub label: String,
@@ -436,33 +464,37 @@ impl Settings {
     }
 
     pub fn update_machine(&self, name: &str, edit: &MachineEdit) -> Result<(), String> {
+        self.change(|cfg| edit_machine(cfg, name, edit))
+    }
+
+    // One change to the config: checked as a whole, saved once, so Undo reverses all of it.
+    pub fn change(
+        &self,
+        edit: impl FnOnce(&mut Config) -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut cfg = self.load()?;
-        for host in [edit.ssh.as_deref(), edit.mesh_ip.as_deref()]
-            .into_iter()
-            .flatten()
-        {
-            if !valid_host(host) {
-                return Err(format!("{host:?} is not a valid host or address"));
-            }
-        }
-        if edit.root.trim().is_empty() || edit.root.contains('\n') {
-            return Err("enter the project folder on that machine".into());
-        }
-        let m = cfg
-            .machines
-            .iter_mut()
-            .find(|m| m.name == name)
-            .ok_or_else(|| format!("no machine named {name}"))?;
-        m.ssh = edit.ssh.clone().filter(|s| !s.is_empty());
-        m.mesh_ip = edit.mesh_ip.clone().filter(|s| !s.is_empty());
-        if !m.local {
-            m.port_prefix = edit.port_prefix;
-        }
-        m.root = edit.root.trim().to_string();
-        m.mesh = edit.mesh;
+        edit(&mut cfg)?;
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
         self.save(&cfg, backup, None)
+    }
+
+    pub fn set_agents(&self, default: Option<String>, agents: Vec<Agent>) -> Result<(), String> {
+        self.change(|cfg| {
+            cfg.default_agent = default;
+            cfg.agents = agents;
+            Ok(())
+        })
+    }
+
+    pub fn set_pull_requests(
+        &self,
+        pull_requests: crate::config::PullRequests,
+    ) -> Result<(), String> {
+        self.change(|cfg| {
+            cfg.pull_requests = pull_requests;
+            Ok(())
+        })
     }
 
     pub fn add_agent(&self, edit: &AgentEdit) -> Result<Agent, String> {

@@ -1,6 +1,6 @@
 mod actions;
 mod backend;
-mod diff;
+pub(crate) mod diff;
 mod follow;
 mod group;
 mod mcp_config;
