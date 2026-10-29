@@ -178,6 +178,7 @@ function convoItem(c) {
 
 function renderList() {
   $("clear-all").hidden = !conversations.length;
+  countTab("convos", conversations.length);
   render(conversations.length
     ? repeat(conversations, (c) => c.id, convoItem)
     : html`<li><p class="convo-empty">No conversations yet.</p></li>`, $("convo-list"));
@@ -517,7 +518,7 @@ async function open(id) {
   groups.reset();
   setBusy(false);
   renderList();
-  if (narrow.matches) $("convos").open = false;
+  showTab("chat");
   tracked = [];
   shownEvents = 0;
   shownUpdated = "";
@@ -740,6 +741,7 @@ function taskItem(t) {
 function renderTasks() {
   const shown = savedTasks.filter((t) => !t.hidden);
   $("task-restore").hidden = !savedTasks.some((t) => t.hidden);
+  countTab("tasks", shown.length);
   render(shown.length
     ? repeat(shown, (t) => t.name, taskItem)
     : html`<li><p class="convo-empty">No tasks yet.</p></li>`, $("task-list"));
@@ -752,7 +754,7 @@ async function loadTasks() {
 
 function runTask(task) {
   if (busy) { toast("Dispatch is still working on the last message."); return; }
-  if (narrow.matches) $("tasks").open = false;
+  showTab("chat");
   ask(task.text, { task: { name: task.name, version: task.version } });
 }
 
@@ -819,6 +821,7 @@ function editTask(task, text = "") {
   $("task-version").hidden = !task;
   if (task) $("task-version-word").textContent = `Version ${task.version}${task.builtin ? (task.customised ? ", changed from the default" : ", the default") : ""}`;
   $("tasks").open = true;
+  showTab("tasks");
   f.name.focus();
 }
 
@@ -978,17 +981,54 @@ resizer.addEventListener("keydown", (e) => {
 
 setSideWidth(Number(remembered(WIDTH_KEY)) || SIDE_WIDTH.normal, false);
 
+// Narrow, the chat and the two lists take turns under tabs, so each list stays open and folding
+// is left to the wide layout.
 const FOLDED_KEY = "yardbell.dispatch.folded";
 const folded = new Set((remembered(FOLDED_KEY) || "").split(",").filter(Boolean));
+const unfold = () => { for (const id of ["convos", "tasks"]) $(id).open = narrow.matches || !folded.has(id); };
 for (const id of ["convos", "tasks"]) {
-  $(id).open = !narrow.matches && !folded.has(id);
   $(id).addEventListener("toggle", () => {
     if (narrow.matches) return;
     if ($(id).open) folded.delete(id);
     else folded.add(id);
     remember(FOLDED_KEY, folded.size ? [...folded].join(",") : null);
   });
+  $(id).querySelector("summary").addEventListener("click", (e) => {
+    if (narrow.matches && !e.target.closest("button")) e.preventDefault();
+  });
 }
+unfold();
+narrow.addEventListener("change", unfold);
+
+function tabList() {
+  return [...document.querySelectorAll("#dispatch-tabs [role=tab]")];
+}
+
+function showTab(name, focus = false) {
+  $("dispatch").dataset.tab = name;
+  for (const t of tabList()) {
+    const on = t.dataset.tab === name;
+    t.setAttribute("aria-selected", String(on));
+    t.tabIndex = on ? 0 : -1;
+    if (on && focus) t.focus();
+  }
+}
+
+function countTab(name, n) {
+  $("dispatch-tabs").querySelector(`[data-tab=${name}] .seg-count`).textContent = n;
+}
+
+for (const t of tabList()) t.addEventListener("click", () => showTab(t.dataset.tab));
+$("dispatch-tabs").addEventListener("keydown", (e) => {
+  const step = { ArrowLeft: -1, ArrowRight: 1 }[e.key];
+  const tabs = tabList();
+  const at = tabs.indexOf(document.activeElement);
+  if (!step || at < 0) return;
+  e.preventDefault();
+  showTab(tabs[(at + step + tabs.length) % tabs.length].dataset.tab, true);
+});
+$("tab-new").addEventListener("click", () => $("new-chat").click());
+showTab("chat");
 const handedOver = window.YardbellInsights.takeOver();
 loadRunsOn();
 loadTasks();

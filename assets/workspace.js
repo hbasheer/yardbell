@@ -266,6 +266,10 @@ function renderSide() {
   for (const s of all) counts[stateOf(s)] = (counts[stateOf(s)] || 0) + 1;
   const server = state.server;
   paint($("server"), server ? `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>${version(server)}` : "");
+  const mesh = state.mesh;
+  const on = mesh?.on === true ? "on" : mesh?.on === false ? "off" : "status unknown";
+  $("nav-vpn").title = mesh ? `${mesh.label} ${on}` : "";
+  paint($("nav-vpn"), mesh ? `<span class="dot ${mesh.on === true ? "ok" : mesh.on === false ? "bad" : ""}"></span>${esc(mesh.label)} ${on}` : "");
   const summary = ["blocked", "done", "working", "idle"]
     .filter((k) => counts[k]).map((k) => `${counts[k]} ${WORD[k]}`).join(" · ") || "No agents running";
   if ($("summary").textContent !== summary) $("summary").textContent = summary;

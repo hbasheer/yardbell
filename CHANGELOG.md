@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- The Workspace sidebar matches the other pages: the same header with the collapse button beside
+  the name, the theme button and the VPN line in its menu, and no second Dashboard button.
+  Collapsed, it shows only icons, where its menu used to show cut-off words.
+- Dispatch in the Workspace panel, and on a phone, shows **Chat**, **Chats** and **Tasks** as tabs
+  instead of boxed lists stacked above the chat. The tabs stay at the top while a conversation
+  scrolls, and say how many conversations and tasks there are.
 - **Insights** opens in a larger dialog, up to 880px wide and 920px tall, that scrolls inside and
   fits small windows. Its facts (status, machine, folder, branch, agent) are labelled, **Time
   spent** shows Working, Waiting for you, Idle and Test results as tiles with units, each one's

@@ -53,7 +53,15 @@
   <main class="main dispatch-main">
     <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard</a>
     <header class="main-head"><h1>Dispatch</h1><a class="runs-on" id="runs-on" href="/settings#dispatch" hidden></a><a class="btn quiet small-link" href="/settings#dispatch">Settings</a><button class="btn quiet icon-btn embed-only" type="button" id="hide-panel" aria-label="Hide Dispatch" title="Hide Dispatch"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10M10.5 6.5 9 8l1.5 1.5"/></svg></button></header>
-    <div class="dispatch">
+    <div class="dispatch-tabs" id="dispatch-tabs">
+      <div class="segmented" role="tablist" aria-label="Dispatch">
+        <button type="button" role="tab" data-tab="chat" aria-selected="true" aria-controls="dispatch-chat">Chat</button>
+        <button type="button" role="tab" data-tab="convos" aria-selected="false" aria-controls="convos" tabindex="-1">Chats <span class="seg-count"></span></button>
+        <button type="button" role="tab" data-tab="tasks" aria-selected="false" aria-controls="tasks" tabindex="-1">Tasks <span class="seg-count"></span></button>
+      </div>
+      <button class="btn quiet icon-btn" type="button" id="tab-new" aria-label="New conversation" title="New conversation"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>
+    </div>
+    <div class="dispatch" id="dispatch">
       <aside class="dispatch-side" id="dispatch-side" aria-label="Conversations and tasks">
         <button class="btn primary dispatch-new" type="button" id="new-chat">
           <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>New conversation
@@ -75,7 +83,7 @@
         </details>
       </aside>
       <div class="dispatch-resize" id="dispatch-resize" role="separator" aria-orientation="vertical" aria-label="Resize conversations" aria-controls="dispatch-side" tabindex="0" title="Drag to resize. Double-click to reset."></div>
-      <div class="dispatch-chat">
+      <div class="dispatch-chat" id="dispatch-chat">
         <div class="dispatch-sessions" id="dispatch-sessions" hidden></div>
         <div class="dispatch-log" id="dispatch-log" aria-live="polite"></div>
         <div class="dispatch-thinking" id="dispatch-thinking" role="status" hidden><span class="thinking-dots" aria-hidden="true"><span></span><span></span><span></span></span><span id="thinking-word">Working</span></div>

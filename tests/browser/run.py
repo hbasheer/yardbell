@@ -630,6 +630,108 @@ class Suite:
         finally:
             b.viewport(1280, 800)
 
+    def menu(self, path):
+        self.b.goto(self.url(path))
+        self.b.wait("document.querySelector('[data-theme-toggle] .theme-word')", f"the menu on {path}")
+        return self.b.js(
+            """[...document.querySelectorAll('.side-foot .side-link, .ws-nav .side-link')]
+                 .map((el) => el.matches('[data-theme-toggle]') ? 'theme' : el.textContent.trim())"""
+        )
+
+    def test_workspace_sidebar_matches_the_other_pages(self):
+        b = self.b
+        dashboard = self.menu("/")
+        workspace = self.menu("/workspace")
+        if [w for w in workspace if w != "Keyboard shortcuts"] != dashboard:
+            raise Failure(f"the Workspace menu {workspace} is not the dashboard's {dashboard}")
+        rows = b.js(
+            """(() => {
+              const mid = (el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; };
+              const home = document.querySelector('.ws-home');
+              return {
+                wordmark: mid(document.querySelector('#ws-side .wordmark')),
+                toggle: mid(document.querySelector('#ws-side .side-toggle')),
+                home: home && home.getClientRects().length > 0,
+              };
+            })()"""
+        )
+        if abs(rows["wordmark"] - rows["toggle"]) > 4:
+            raise Failure(f"the collapse button is not on the wordmark's row: {rows}")
+        if rows["home"]:
+            raise Failure("the Workspace sidebar shows a second Dashboard button next to its menu")
+
+    def test_collapsed_sidebar_draws_icons_only(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.js("localStorage.setItem('yardbell.side', 'rail')")
+        try:
+            for path in PAGES[:4]:
+                b.goto(self.url(path))
+                b.wait("document.documentElement.classList.contains('side-rail') && document.querySelector('.side-toggle')", f"the rail on {path}")
+                b.pump(0.3)
+                drawn = b.js(
+                    """(() => {
+                      const side = document.querySelector('.side, .ws-side');
+                      const walk = document.createTreeWalker(side, NodeFilter.SHOW_TEXT);
+                      const out = [];
+                      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
+                        if (!n.textContent.trim() || n.parentElement.closest('.rail-initial')) continue;
+                        const range = document.createRange();
+                        range.selectNodeContents(n);
+                        if ([...range.getClientRects()].some((r) => r.width > 0 && r.height > 0)) out.push(n.textContent.trim().slice(0, 30));
+                      }
+                      return out;
+                    })()"""
+                )
+                if drawn:
+                    raise Failure(f"the collapsed sidebar on {path} still draws words: {drawn}")
+        finally:
+            b.js("localStorage.removeItem('yardbell.side')")
+
+    def test_narrow_dispatch_has_chat_chats_and_tasks_tabs(self):
+        b = self.b
+        shown = """(() => {
+          const seen = (id) => document.getElementById(id).getClientRects().length > 0;
+          return {
+            tabs: seen('dispatch-tabs'),
+            tab: document.querySelector('#dispatch-tabs [aria-selected=true]')?.dataset.tab,
+            chat: seen('dispatch-form'),
+            convos: seen('convo-list'),
+            tasks: seen('task-list'),
+          };
+        })()"""
+        b.viewport(380, 800)
+        try:
+            b.goto(self.url(f"/dispatch?c={SHORT_CHAT}"))
+            b.wait("document.querySelector('#dispatch-log .msg.user')", "the saved conversation")
+            now = b.js(shown)
+            if now != {"tabs": True, "tab": "chat", "chat": True, "convos": False, "tasks": False}:
+                raise Failure(f"a narrow Dispatch should open on Chat with only the chat showing: {now}")
+            b.click("#dispatch-tabs [data-tab=convos]")
+            now = b.js(shown)
+            if now != {"tabs": True, "tab": "convos", "chat": False, "convos": True, "tasks": False}:
+                raise Failure(f"Chats should show only the conversations: {now}")
+            if b.js("getComputedStyle(document.getElementById('convo-list')).overflowY") not in ("visible", "clip"):
+                raise Failure("the conversation list scrolls on its own inside the page")
+            count = b.js("document.querySelector('#dispatch-tabs [data-tab=convos] .seg-count').textContent")
+            items = b.js("document.querySelectorAll('#convo-list .convo').length")
+            if count != str(items):
+                raise Failure(f"the Chats tab counts {count}, the list has {items}")
+            b.click("#convo-list .convo:not(.selected) a")
+            b.wait("document.querySelector('#dispatch-tabs [aria-selected=true]')?.dataset.tab === 'chat'", "Chat after picking a conversation")
+            b.click("#dispatch-tabs [data-tab=tasks]")
+            now = b.js(shown)
+            if now != {"tabs": True, "tab": "tasks", "chat": False, "convos": False, "tasks": True}:
+                raise Failure(f"Tasks should show only the tasks: {now}")
+            b.click("#dispatch-tabs [data-tab=chat]")
+            b.viewport(1280, 800)
+            b.pump(0.3)
+            now = b.js(shown)
+            if now["tabs"] or not (now["chat"] and now["convos"] and now["tasks"]):
+                raise Failure(f"a wide Dispatch keeps its lists beside the chat and has no tabs: {now}")
+        finally:
+            b.viewport(1280, 800)
+
     def test_dispatch_shows_a_saved_conversation(self):
         b = self.b
         b.goto(self.url(f"/dispatch?c={SHORT_CHAT}"))
