@@ -24,6 +24,7 @@ pub(crate) struct Fake {
     pub recorded: Mutex<Vec<String>>,
     pub notes: Mutex<Vec<String>>,
     pub started: Mutex<u32>,
+    pub ticket_fails: Mutex<bool>,
 }
 
 impl Fake {
@@ -181,6 +182,9 @@ impl World for Fake {
         _linear_id: &'a str,
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>> {
         Box::pin(async move {
+            if *self.ticket_fails.lock().unwrap() {
+                return Err("Linear has no ticket COM-1".into());
+            }
             let closed = self.closed.lock().unwrap().pop_front().unwrap_or(false);
             Ok((
                 TicketText {
@@ -348,6 +352,20 @@ async fn a_run_of_the_review_template_reports() {
 }
 
 #[tokio::test]
+async fn a_pull_request_whose_ticket_cannot_be_read_still_runs() {
+    let fake = Fake::default();
+    *fake.ticket_fails.lock().unwrap() = true;
+    fake.replies
+        .lock()
+        .unwrap()
+        .extend([PLANNED.to_string(), REPORTED.to_string()]);
+    let mut run = run_of("Review my merge requests");
+    mr(&mut run);
+    let run = drive(&fake, run, &[]).await;
+    assert_eq!(run.state, RunState::Done, "{:?}", run.waiting);
+}
+
+#[tokio::test]
 async fn same_as_reuses_the_path() {
     let fake = Fake::default();
     fake.replies
@@ -501,4 +519,189 @@ async fn the_implement_template_pushes_and_moves_the_ticket() {
         ]
     );
     let _ = Outcome::Pass;
+}
+
+mod pipelines {
+    use super::*;
+    use crate::pipeline::definition::{tests::cfg, Trigger};
+    use crate::pipeline::record::{Subject, TicketRef};
+    use crate::pipeline::triggers::{tests::Fakes, Sources};
+    use crate::pipeline::Pipelines;
+    use crate::pulls::{GitLabAccess, Mr};
+    use std::sync::Arc;
+
+    fn pipelines() -> (Arc<Pipelines>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        (Arc::new(Pipelines::new(dir.path().to_path_buf())), dir)
+    }
+
+    async fn tick(
+        p: &Arc<Pipelines>,
+        fake: &Arc<Fake>,
+        src: Option<&Sources<'_>>,
+        now: chrono::DateTime<chrono::Local>,
+    ) {
+        let world: Arc<dyn World> = fake.clone();
+        for handle in p
+            .tick(&world, &crate::config::Pipelines::default(), src, now)
+            .await
+        {
+            handle.await.unwrap();
+        }
+    }
+
+    fn ticket(id: &str) -> Subject {
+        Subject {
+            ticket: Some(TicketRef {
+                linear_id: format!("u-{id}"),
+                id: id.into(),
+                title: "Fix".into(),
+                url: String::new(),
+            }),
+            pr: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn starting_a_run_plans_it() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let runs = p.start(&def.id, vec![ticket("COM-1")], "you").unwrap();
+        assert_eq!(
+            runs[0].pending,
+            Some(Effect::Plan {
+                step: "plan".into()
+            })
+        );
+        let err = p.start(&def.id, vec![ticket("COM-1")], "you").unwrap_err();
+        assert!(
+            err.contains("COM-1 Fix is already in a run of Implement my Linear tickets"),
+            "{err}"
+        );
+        assert!(p.start("nope", vec![ticket("COM-2")], "you").is_err());
+    }
+
+    #[tokio::test]
+    async fn an_item_in_a_run_is_not_started_again() {
+        let (p, _dir) = pipelines();
+        let mut def = p
+            .library()
+            .copy_template("Review my merge requests", &cfg())
+            .unwrap();
+        def.trigger = Trigger::GitlabReviewer {
+            host: "git.commslayer.com".into(),
+        };
+        def.enabled = true;
+        let def = p.library().save(def, &cfg()).unwrap();
+        let fakes = Fakes::default();
+        let src = Sources {
+            feeds: &fakes,
+            gitlab: &fakes,
+            accesses: vec![GitLabAccess {
+                host: "git.commslayer.com".into(),
+                api: String::new(),
+                secret: "gitlab".into(),
+                token: Ok("t".into()),
+            }],
+            linear_key: Ok("lin".into()),
+            pattern: None,
+        };
+        let fake = Arc::new(Fake::default());
+        let t0 = chrono::Local::now();
+        tick(&p, &fake, Some(&src), t0).await;
+        *fakes.mrs.lock().unwrap() = vec![Mr {
+            url: "https://git.commslayer.com/commslayer/app/-/merge_requests/91".into(),
+            iid: 91,
+            title: "Inbox".into(),
+            source_branch: "com-1250-inbox".into(),
+            project: "commslayer/app".into(),
+        }];
+        tick(&p, &fake, Some(&src), t0 + chrono::Duration::minutes(4)).await;
+        assert_eq!(p.runs().len(), 1);
+        assert_eq!(p.runs()[0].pipeline, def.id);
+        assert_eq!(p.runs()[0].started_by, "a trigger");
+        let subject = p.runs()[0].subject.clone();
+        assert!(
+            p.start(&def.id, vec![subject], "you").is_err(),
+            "the same merge request is not run twice"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_restart_mid_start_finds_the_session() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.place.machine = "hp".into();
+        run.place.branch = "com-1-fix-the-login".into();
+        run.step = "implement".into();
+        run.state = RunState::Running;
+        run.slot = Some("hp".into());
+        run.state_of("implement").machine = "hp".into();
+        run.pending = Some(Effect::Agent {
+            step: "implement".into(),
+        });
+        run.conversation = "conv0000000001".into();
+        let id = run.id.clone();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session(
+            "hp",
+            "hp-app-com-1",
+            "com-1-fix-the-login",
+            Activity::Active,
+        );
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.steps["implement"].session, "hp-app-com-1");
+        assert!(run.pending.is_none());
+        assert!(
+            !fake.calls().iter().any(|c| c.starts_with("start_session")),
+            "{:?}",
+            fake.calls()
+        );
+    }
+
+    #[tokio::test]
+    async fn answer_retry_continue_and_drop() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.state = RunState::Waiting;
+        run.step = "implement".into();
+        run.waiting = Some(crate::pipeline::record::Waiting {
+            kind: WaitKind::Stopped,
+            step: "implement".into(),
+            reason: "Implement failed".into(),
+            screen: String::new(),
+        });
+        let id = run.id.clone();
+        p.put(run);
+        let err = p.answer(&id, "go").unwrap_err();
+        assert!(err.contains("is not waiting for an answer"), "{err}");
+        let run = p.continue_on(&id, Outcome::Pass).unwrap();
+        assert_eq!((run.step.as_str(), run.state), ("review", RunState::Queued));
+        let run = p.drop_run(&id).unwrap();
+        assert_eq!(
+            (run.state, run.pending),
+            (RunState::Dropped, Some(Effect::StopSessions))
+        );
+        assert!(p.retry(&id).is_err());
+        assert!(p.answer("nope", "x").unwrap_err().contains("is not a run"));
+    }
 }

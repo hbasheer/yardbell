@@ -115,6 +115,9 @@ async fn ticket_text(world: &dyn World, run: &Run) -> Result<TicketText, Seen> {
     match world.ticket(&t.linear_id).await {
         Ok((_, true)) => Err(Seen::Closed("closed".into())),
         Ok((text, false)) => Ok(text),
+        // A pull request's ticket is only a name found in its branch or title, so one Linear
+        // cannot read leaves the step without the ticket's text rather than stopping it.
+        Err(_) if run.subject.pr.is_some() => Ok(TicketText::default()),
         Err(e) => Err(Seen::Started {
             step: run.step.clone(),
             result: Err(e),

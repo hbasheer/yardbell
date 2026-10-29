@@ -654,6 +654,12 @@ impl Config {
         self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
         self.validate_dispatch().map_err(ConfigError::Invalid)?;
         self.validate_pipeline().map_err(ConfigError::Invalid)?;
+        if !(1..=6).contains(&self.pipelines.per_machine) {
+            return invalid("pipelines.per_machine must be from 1 to 6".into());
+        }
+        if !(10..=1440).contains(&self.pipelines.minutes) {
+            return invalid("pipelines.minutes must be from 10 to 1440".into());
+        }
         crate::worktrees::setup::validate(&self.worktree_setup, |m| self.machine(m).is_some())
             .map_err(ConfigError::Invalid)?;
         crate::triggers::validate(&self.triggers).map_err(ConfigError::Invalid)
@@ -1285,6 +1291,29 @@ mod tests {
         assert!(err.contains("pipeline.machines"), "{err}");
         let err = pipeline("  machines: [mini]\n").unwrap_err().to_string();
         assert!(err.contains("pipeline.test_machine"), "{err}");
+    }
+
+    #[test]
+    fn pipelines_settings_defaults_and_ranges() {
+        let cfg = load_str(BASE).unwrap();
+        assert_eq!((cfg.pipelines.per_machine, cfg.pipelines.minutes), (2, 120));
+        let notes = load_str(&format!(
+            "{BASE}pipelines:\n  qa_notes:\n    acme/web: Run bin/rspec\n"
+        ))
+        .unwrap();
+        assert_eq!(notes.pipelines.qa_notes["acme/web"], "Run bin/rspec");
+        for (line, says) in [
+            (
+                "per_machine: 0",
+                "pipelines.per_machine must be from 1 to 6",
+            ),
+            ("minutes: 5", "pipelines.minutes must be from 10 to 1440"),
+        ] {
+            let err = load_str(&format!("{BASE}pipelines:\n  {line}\n"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains(says), "{line}: {err}");
+        }
     }
 
     #[test]

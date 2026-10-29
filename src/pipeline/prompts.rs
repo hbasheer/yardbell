@@ -232,6 +232,7 @@ pub fn parse_plan(reply: &str, machines: &[String], run: &Run) -> Result<Plan, S
             let ticket = run.subject.ticket.clone().unwrap_or_default();
             p.branch = match &run.subject.pr {
                 Some(pr) if !pr.branch.is_empty() => pr.branch.clone(),
+                Some(_) if crate::folders::valid_branch(&p.branch) => p.branch,
                 _ if fits(&ticket.id, &p.branch) => p.branch,
                 _ => branch_for(&ticket.id, &ticket.title),
             };
@@ -507,6 +508,24 @@ mod tests {
         )
         .unwrap();
         assert_eq!(bad.branch, "com-1-fix-the-login");
+    }
+
+    #[test]
+    fn a_github_pr_without_a_branch_takes_the_planned_one() {
+        let mut run = run_of("Review my merge requests");
+        run.subject.pr = Some(PrRef {
+            url: "https://github.com/acme/app/pull/12".into(),
+            number: 12,
+            forge: "github".into(),
+            ..PrRef::default()
+        });
+        let p = parse_plan(
+            &START.replace("com-1-fix-login", "feature/login-fix"),
+            &["hp".to_string()],
+            &run,
+        )
+        .unwrap();
+        assert_eq!(p.branch, "feature/login-fix");
     }
 
     #[test]

@@ -256,16 +256,14 @@ pub async fn serve(
     )
     .start(path.clone(), state.clone(), dispatch.clone());
     let pipeline = Arc::new(crate::pipeline::Pipeline::new(dir.join("pipeline.json")));
+    let pipelines = Arc::new(crate::pipeline::Pipelines::new(dir.clone()));
     let triggers = Arc::new(crate::triggers::Triggers::new(
         Arc::new(crate::triggers::Live::new(runner.clone())),
         dir.join("triggers.json"),
     ));
-    triggers.clone().start_loop(
-        path.clone(),
-        state.clone(),
-        dispatch.clone(),
-        pipeline.clone(),
-    );
+    triggers
+        .clone()
+        .start_loop(path.clone(), state.clone(), dispatch.clone());
     let poller = Arc::new(Poller::new(
         path.clone(),
         Arc::new(Probe::new(runner.clone(), ssh.clone())),
@@ -302,6 +300,7 @@ pub async fn serve(
         triggers,
         insights,
         pipeline: pipeline.clone(),
+        pipelines: pipelines.clone(),
         releases: crate::about::github(),
         refresh: Arc::new(move |machine: Option<String>| {
             let poller = poller.clone();
@@ -319,6 +318,11 @@ pub async fn serve(
     pipeline.clone().start_loop(
         app.clone(),
         crate::pipeline::forge::Forge::new(runner.clone(), ssh.clone()),
+    );
+    pipelines.clone().start_loop(
+        app.clone(),
+        crate::pipeline::forge::Forge::new(runner.clone(), ssh.clone()),
+        Arc::new(crate::triggers::Live::new(runner.clone())),
     );
     let mut servers = Vec::new();
     for ip in &binds {
