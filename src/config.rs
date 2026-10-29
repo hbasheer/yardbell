@@ -137,6 +137,41 @@ pub struct PullRequests {
     pub enabled: bool,
     pub poll_seconds: u64,
     pub cards: bool,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub gitlab: Vec<GitLabHost>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GitLabHost {
+    #[serde(default)]
+    pub host: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub url: String,
+    #[serde(default)]
+    pub token: String,
+}
+
+impl GitLabHost {
+    pub fn api(&self) -> String {
+        let base = if self.url.is_empty() {
+            format!("https://{}", self.host)
+        } else {
+            self.url.trim_end_matches('/').to_string()
+        };
+        format!("{base}/api/v4")
+    }
+}
+
+fn plain_url(url: &str) -> bool {
+    let Some(rest) = url
+        .strip_prefix("https://")
+        .or_else(|| url.strip_prefix("http://"))
+    else {
+        return false;
+    };
+    let rest = rest.strip_suffix('/').unwrap_or(rest);
+    !rest.is_empty() && !rest.contains(['/', '?', '#']) && !rest.contains(char::is_whitespace)
 }
 
 impl Default for PullRequests {
@@ -145,6 +180,7 @@ impl Default for PullRequests {
             enabled: true,
             poll_seconds: 120,
             cards: true,
+            gitlab: Vec::new(),
         }
     }
 }
@@ -152,6 +188,36 @@ impl Default for PullRequests {
 impl PullRequests {
     pub fn is_default(&self) -> bool {
         *self == PullRequests::default()
+    }
+
+    fn validate_gitlab(&self) -> Result<(), String> {
+        let mut seen = std::collections::HashSet::new();
+        for (i, g) in self.gitlab.iter().enumerate() {
+            let host = g.host.trim().to_ascii_lowercase();
+            if host.is_empty() {
+                return Err(format!("pull_requests.gitlab entry {} needs a host", i + 1));
+            }
+            if host.contains(['/', ':', '@']) || host.contains(char::is_whitespace) {
+                return Err(format!(
+                    "pull_requests.gitlab host {:?} must be a host name only, like git.example.com",
+                    g.host
+                ));
+            }
+            if !seen.insert(host.clone()) {
+                return Err(format!("pull_requests.gitlab lists {host} twice"));
+            }
+            if g.token.trim().is_empty() {
+                return Err(format!("pull_requests.gitlab {host} needs a token"));
+            }
+            if !g.url.is_empty() && !plain_url(&g.url) {
+                return Err(format!(
+                    "pull_requests.gitlab {host}: url must start with https:// or http:// and have no path"
+                ));
+            }
+            secrets::references(&g.token)
+                .map_err(|e| format!("pull_requests.gitlab {host}: {e}"))?;
+        }
+        Ok(())
     }
 }
 
@@ -516,6 +582,9 @@ impl Config {
                 "pull_requests.poll_seconds must be at least {PULL_POLL_MIN}"
             ));
         }
+        self.pull_requests
+            .validate_gitlab()
+            .map_err(ConfigError::Invalid)?;
         self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
         self.validate_dispatch().map_err(ConfigError::Invalid)?;
         crate::worktrees::setup::validate(&self.worktree_setup, |m| self.machine(m).is_some())
@@ -1044,6 +1113,62 @@ mod tests {
             }
             other => panic!("5 seconds was not refused: {other:?}"),
         }
+    }
+
+    #[test]
+    fn gitlab_hosts_load_and_name_their_api() {
+        let cfg = load_str(&format!(
+            "{BASE}pull_requests:\n  gitlab:\n    - {{host: git.commslayer.com, token: '${{secret:gitlab}}'}}\n    - {{host: gl.example.com, url: 'https://gl.example.com:8443/', token: abc}}\n"
+        ))
+        .unwrap();
+        let hosts = &cfg.pull_requests.gitlab;
+        assert_eq!(hosts.len(), 2);
+        assert_eq!(hosts[0].token, "${secret:gitlab}");
+        assert_eq!(hosts[0].api(), "https://git.commslayer.com/api/v4");
+        assert_eq!(hosts[1].api(), "https://gl.example.com:8443/api/v4");
+    }
+
+    #[test]
+    fn gitlab_hosts_are_checked() {
+        let cases = [
+            ("{token: x}", "pull_requests.gitlab entry 1 needs a host"),
+            (
+                "{host: 'https://x/y', token: x}",
+                "pull_requests.gitlab host \"https://x/y\" must be a host name only, like git.example.com",
+            ),
+            (
+                "{host: Git.Example.com, token: x}\n    - {host: git.example.com, token: y}",
+                "pull_requests.gitlab lists git.example.com twice",
+            ),
+            ("{host: git.example.com}", "pull_requests.gitlab git.example.com needs a token"),
+            (
+                "{host: git.example.com, url: 'ftp://x', token: x}",
+                "pull_requests.gitlab git.example.com: url must start with https:// or http:// and have no path",
+            ),
+            (
+                "{host: git.example.com, url: 'https://x/path', token: x}",
+                "pull_requests.gitlab git.example.com: url must start with https:// or http:// and have no path",
+            ),
+        ];
+        for (entry, message) in cases {
+            match load_str(&format!("{BASE}pull_requests:\n  gitlab:\n    - {entry}\n")) {
+                Err(ConfigError::Invalid(got)) => assert_eq!(got, message, "{entry}"),
+                other => panic!("{entry} was not refused: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_gitlab_list_is_not_written() {
+        assert!(PullRequests::default().is_default());
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        let mut cfg = fixture();
+        cfg.pull_requests.cards = false;
+        cfg.save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        assert!(text.contains("cards: false"), "{text}");
+        assert!(!text.contains("gitlab"), "{text}");
     }
 
     #[test]
