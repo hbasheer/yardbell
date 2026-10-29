@@ -5,6 +5,14 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- GitLab merge requests get what GitHub pull requests get: a badge next to the branch on the
+  dashboard and in the Workspace, such as `!12` with its pipeline and review state, and a card in
+  Dispatch when the pipeline starts failing (with the failed jobs and the end of their logs) or a
+  reviewer comments (with file and line for a comment on the code), with **Send to session**. List
+  each GitLab host under `pull_requests.gitlab` with a `read_api` token saved as a secret; Yardbell
+  tells GitHub from GitLab by the remote each branch pushes to, and asks GitLab's API from its own
+  machine. `yardbell doctor` signs in to each GitLab host and names the account or the problem.
+
 ## [0.7.8] - 2026-10-29
 
 - The Dispatch page is laid out like an app on a wide screen: a column beside the chat with

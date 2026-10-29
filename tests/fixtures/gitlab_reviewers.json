@@ -1,0 +1,22 @@
+[
+  {
+    "user": {
+      "id": 94289,
+      "username": "rev1",
+      "name": "Rev1",
+      "state": "active"
+    },
+    "state": "requested_changes",
+    "created_at": "2026-09-03T19:31:57.436Z"
+  },
+  {
+    "user": {
+      "id": 65138,
+      "username": "rev2",
+      "name": "Rev2",
+      "state": "active"
+    },
+    "state": "approved",
+    "created_at": "2026-09-03T19:31:57.436Z"
+  }
+]

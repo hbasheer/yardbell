@@ -242,7 +242,7 @@ function agentLabel(name) {
 function pullBadge(p) {
   if (!p) return "";
   const { word, tone } = window.YardbellPull.status(p);
-  return html`<a class="pr-badge ${tone}" href=${p.url} target="_blank" rel="noopener" title=${window.YardbellPull.describe(p)}><span class="pr-num">#${p.number}</span>${word}</a>`;
+  return html`<a class="pr-badge ${tone}" href=${p.url} target="_blank" rel="noopener" title=${window.YardbellPull.describe(p)}><span class="pr-num">${window.YardbellPull.ref(p)}</span>${word}</a>`;
 }
 
 function setupFlag(s) {

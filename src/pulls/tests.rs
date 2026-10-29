@@ -1,4 +1,5 @@
 use super::github::{classify, excerpt, log_command, parse_review_comments, parse_view};
+use super::gitlab::stub::{serve, Answers, Stub};
 use super::*;
 use crate::probe::MachineStatus;
 use crate::shell::Output;
@@ -270,6 +271,39 @@ fn instructions_are_short_and_say_what_to_do() {
     );
 }
 
+#[test]
+fn a_gitlab_merge_request_is_named_as_one() {
+    let mut p = pull("failing", "a", &[]);
+    p.forge = "gitlab".into();
+    let checks = vec![Check {
+        name: "test / rspec".into(),
+        url: String::new(),
+        log: "2 examples, 1 failure".into(),
+    }];
+    assert_eq!(noun(&p), "merge request !12");
+    assert_eq!(
+        ci_instruction(&p, &checks),
+        "CI failed on test / rspec for merge request !12: 2 examples, 1 failure. Fix it and push."
+    );
+    let note = Note {
+        id: "gitlab:1".into(),
+        kind: "comment".into(),
+        author: "rev1".into(),
+        body: "x".repeat(300),
+        url: String::new(),
+        place: String::new(),
+    };
+    let many = vec![note; 40];
+    let text = review_instruction(&p, &many[..1]);
+    assert!(
+        text.starts_with("New review comments on merge request !12. rev1: "),
+        "{text}"
+    );
+    let text = review_instruction(&p, &many);
+    assert!(text.contains("more on the merge request."), "{text}");
+    assert_eq!(noun(&pull("failing", "a", &[])), "pull request #12");
+}
+
 struct NoPorts;
 
 impl crate::state::PortStatus for NoPorts {
@@ -336,9 +370,19 @@ impl Rig {
         }
     }
 
+    fn secrets(&self) -> Result<crate::secrets::Secrets, String> {
+        crate::secrets::Secrets::for_config(&self.root.join("yardbell.yml"))
+            .map_err(|e| e.to_string())
+    }
+
     fn pulls(&self) -> Pulls {
-        let forge = GitHub::new(self.fake.clone(), Ssh::new(self.root.join("ssh")));
-        Pulls::new(Arc::new(forge), self.root.join("state/pulls.json"))
+        let ssh = || Ssh::new(self.root.join("ssh"));
+        Pulls::new(
+            Arc::new(GitHub::new(self.fake.clone(), ssh())),
+            Arc::new(GitLab::new()),
+            Remotes::new(self.fake.clone(), ssh()),
+            self.root.join("state/pulls.json"),
+        )
     }
 
     fn dispatch(&self) -> Dispatch {
@@ -400,16 +444,30 @@ async fn without_gh_there_is_no_badge_and_no_card_and_gh_is_not_asked_again_soon
     rig.fake.stub(BRANCH, Output::failed(127, ""));
     let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
     let start = Instant::now();
-    pulls.round(&rig.cfg, &rig.state, &dispatch, start).await;
     pulls
-        .round(&rig.cfg, &rig.state, &dispatch, later(start, 300))
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 300),
+        )
         .await;
     assert_eq!(rig.gh_calls(), 1);
     assert!(pulls.views().is_empty());
     assert!(rig.badge(0).is_none());
     assert!(dispatch.list().as_array().unwrap().is_empty());
     pulls
-        .round(&rig.cfg, &rig.state, &dispatch, later(start, 601))
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 601),
+        )
         .await;
     assert_eq!(rig.gh_calls(), 2, "asked again after a while");
 }
@@ -423,7 +481,13 @@ async fn a_branch_without_a_pull_request_has_no_badge() {
     );
     let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
     pulls
-        .round(&rig.cfg, &rig.state, &dispatch, Instant::now())
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
         .await;
     assert!(rig.badge(0).is_none());
     assert!(dispatch.list().as_array().unwrap().is_empty());
@@ -437,7 +501,9 @@ async fn a_failing_branch_gets_a_badge_and_one_card_even_across_restarts() {
     rig.fake.stub("gh run view --job 222", Output::ok_with(LOG));
     let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
     let start = Instant::now();
-    pulls.round(&rig.cfg, &rig.state, &dispatch, start).await;
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
     let badge = rig.badge(0).unwrap();
     assert_eq!((badge.number, badge.ci), (12, Ci::Pending));
     assert!(
@@ -448,7 +514,13 @@ async fn a_failing_branch_gets_a_badge_and_one_card_even_across_restarts() {
     rig.fake
         .restub(BRANCH, Output::ok_with(&view_with("failing", "a", &[])));
     pulls
-        .round(&rig.cfg, &rig.state, &dispatch, later(start, 60))
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 60),
+        )
         .await;
     assert_eq!(
         rig.gh_calls(),
@@ -456,7 +528,13 @@ async fn a_failing_branch_gets_a_badge_and_one_card_even_across_restarts() {
         "not asked again before the poll interval"
     );
     pulls
-        .round(&rig.cfg, &rig.state, &dispatch, later(start, 120))
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 120),
+        )
         .await;
     assert_eq!(rig.gh_calls(), 2);
     let badge = rig.badge(0).unwrap();
@@ -497,11 +575,23 @@ async fn a_failing_branch_gets_a_badge_and_one_card_even_across_restarts() {
     );
 
     pulls
-        .round(&rig.cfg, &rig.state, &dispatch, later(start, 240))
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 240),
+        )
         .await;
     let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
     pulls
-        .round(&rig.cfg, &rig.state, &dispatch, Instant::now())
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
         .await;
     assert_eq!(
         rig.pull_cards(&dispatch).len(),
@@ -521,13 +611,21 @@ async fn a_new_review_gets_a_card_with_its_comments_on_lines() {
     );
     let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
     let start = Instant::now();
-    pulls.round(&rig.cfg, &rig.state, &dispatch, start).await;
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
     let mut reviewed: Value = serde_json::from_str(&view_with("passing", "a", &[])).unwrap();
     reviewed["reviews"] = json!([{ "id": "PRR_new", "author": { "login": "bob" }, "body": "", "state": "CHANGES_REQUESTED" }]);
     rig.fake
         .restub(BRANCH, Output::ok_with(&reviewed.to_string()));
     pulls
-        .round(&rig.cfg, &rig.state, &dispatch, later(start, 120))
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 120),
+        )
         .await;
     let cards = rig.pull_cards(&dispatch);
     assert_eq!(cards.len(), 1);
@@ -551,7 +649,13 @@ async fn turned_off_there_is_no_badge_and_with_cards_off_no_card() {
         .stub(BRANCH, Output::ok_with(&view_with("pending", "a", &[])));
     let (pulls, dispatch) = (off.pulls(), off.dispatch());
     pulls
-        .round(&off.cfg, &off.state, &dispatch, Instant::now())
+        .round(
+            &off.cfg,
+            &off.secrets(),
+            &off.state,
+            &dispatch,
+            Instant::now(),
+        )
         .await;
     assert_eq!(off.gh_calls(), 0);
     assert!(off.badge(0).is_none());
@@ -563,13 +667,19 @@ async fn turned_off_there_is_no_badge_and_with_cards_off_no_card() {
     let (pulls, dispatch) = (quiet.pulls(), quiet.dispatch());
     let start = Instant::now();
     pulls
-        .round(&quiet.cfg, &quiet.state, &dispatch, start)
+        .round(&quiet.cfg, &quiet.secrets(), &quiet.state, &dispatch, start)
         .await;
     quiet
         .fake
         .restub(BRANCH, Output::ok_with(&view_with("failing", "a", &[])));
     pulls
-        .round(&quiet.cfg, &quiet.state, &dispatch, later(start, 120))
+        .round(
+            &quiet.cfg,
+            &quiet.secrets(),
+            &quiet.state,
+            &dispatch,
+            later(start, 120),
+        )
         .await;
     assert_eq!(quiet.badge(0).unwrap().ci, Ci::Failing);
     assert!(quiet.pull_cards(&dispatch).is_empty());
@@ -580,4 +690,480 @@ fn an_excerpt_drops_a_byte_order_mark_before_the_first_stamp() {
     let log = "desktop\tRun cargo clippy\t\u{feff}2026-10-28T02:48:00.9386230Z ##[group]Run cargo clippy\n\
                desktop\tRun cargo clippy\t2026-10-28T02:48:14.0412420Z \x1b[1m\x1b[91merror[E0063]\x1b[0m: missing field\n";
     assert_eq!(excerpt(log), "error[E0063]: missing field");
+}
+
+// A rig whose app folder is on GitHub and whose web folder is on a GitLab host served by `stub`.
+fn gitlab_rig(stub: &Stub) -> Rig {
+    let rig = Rig::new(&format!(
+        "pull_requests:\n  gitlab:\n    - {{host: git.commslayer.com, url: '{}', token: '${{secret:gitlab}}'}}\n",
+        stub.base
+    ));
+    std::fs::write(rig.root.join("secrets.yml"), "gitlab: glpat-good\n").unwrap();
+    let mut snap = rig.state.snapshot("hp").unwrap();
+    snap.sessions.push(Session {
+        machine: "hp".into(),
+        agent: "claude".into(),
+        pid: 3,
+        cwd: "/r/web".into(),
+        folder: "web".into(),
+        branch: "eng-2".into(),
+        ticket: "ENG-2".into(),
+        tmux: Some("hp-web".into()),
+        activity: Activity::Active,
+    });
+    snap.folders.insert("web".into(), "eng-2".into());
+    snap.folder_paths.insert("web".into(), "/r/web".into());
+    rig.state.update(MachineStatus {
+        name: "hp".into(),
+        up: true,
+        reason: None,
+        snapshot: Some(snap),
+        checked_at: chrono::Local::now(),
+    });
+    rig.fake.stub(
+        "branch.eng-1.remote",
+        Output::ok_with("git@github.com:acme/app.git\n"),
+    );
+    rig.fake.stub(
+        "branch.eng-2.remote",
+        Output::ok_with("git@git.commslayer.com:commslayer/web.git\n"),
+    );
+    rig.fake
+        .stub(BRANCH, Output::ok_with(&view_with("passing", "abc", &[])));
+    rig
+}
+
+impl Rig {
+    fn asked(&self, part: &str) -> usize {
+        self.fake
+            .calls()
+            .iter()
+            .filter(|argv| argv.join(" ").contains(part))
+            .count()
+    }
+
+    fn forge_of(&self, folder: &str) -> Option<String> {
+        self.state
+            .view(&self.cfg, &NoPorts, "h")
+            .sessions
+            .iter()
+            .find(|s| s.folder == folder)
+            .and_then(|s| s.pull.clone())
+            .map(|p| p.forge)
+    }
+}
+
+fn new_failure(stub: &Stub, sha: &str) {
+    let mut mr: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/gitlab_mr.json")).unwrap();
+    mr["sha"] = json!(sha);
+    mr["head_pipeline"]["sha"] = json!(sha);
+    stub.answers.lock().unwrap().mr = (200, mr.to_string());
+}
+
+fn new_note(stub: &Stub) {
+    let mut d: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/gitlab_discussions.json")).unwrap();
+    d.as_array_mut().unwrap().push(json!({
+        "id": "d9",
+        "notes": [{"id": 399, "type": null, "body": "One more thing.", "author": {"username": "rev1"}, "system": false}]
+    }));
+    stub.answers.lock().unwrap().discussions = (200, d.to_string());
+}
+
+#[tokio::test]
+async fn each_branch_goes_to_its_own_forge() {
+    let stub = serve(Answers::default()).await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    assert_eq!(rig.gh_calls(), 1);
+    assert!(!rig
+        .fake
+        .calls()
+        .iter()
+        .any(|a| a.join(" ").contains("gh pr view 'eng-2'")));
+    assert_eq!(stub.asked("merge_requests?source_branch=eng-2"), 1);
+    assert_eq!(stub.asked("source_branch=eng-1"), 0);
+    assert_eq!(rig.forge_of("app").as_deref(), Some("github"));
+    assert_eq!(rig.forge_of("web").as_deref(), Some("gitlab"));
+}
+
+#[tokio::test]
+async fn without_gitlab_hosts_no_remote_is_read() {
+    let rig = Rig::new("");
+    rig.fake
+        .stub(BRANCH, Output::ok_with(&view_with("passing", "abc", &[])));
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    assert_eq!(rig.gh_calls(), 1);
+    assert_eq!(rig.asked("git config --get"), 0);
+}
+
+#[tokio::test]
+async fn the_remote_is_read_once_per_ten_minutes() {
+    let stub = serve(Answers::default()).await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    for secs in [0, 130, 260] {
+        pulls
+            .round(
+                &rig.cfg,
+                &rig.secrets(),
+                &rig.state,
+                &dispatch,
+                later(start, secs),
+            )
+            .await;
+    }
+    assert_eq!(rig.asked("branch.eng-1.remote"), 1);
+    assert_eq!(rig.asked("branch.eng-2.remote"), 1);
+    assert_eq!(stub.asked("merge_requests?source_branch=eng-2"), 3);
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 601),
+        )
+        .await;
+    assert_eq!(rig.asked("branch.eng-2.remote"), 2);
+}
+
+#[tokio::test]
+async fn a_refused_token_pauses_that_host_only() {
+    let stub = serve(Answers::default()).await;
+    let rig = gitlab_rig(&stub);
+    std::fs::write(rig.root.join("secrets.yml"), "gitlab: glpat-bad\n").unwrap();
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    assert_eq!(rig.forge_of("web"), None);
+    assert_eq!(rig.forge_of("app").as_deref(), Some("github"));
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 130),
+        )
+        .await;
+    assert_eq!(rig.gh_calls(), 2, "GitHub carries on");
+    assert_eq!(
+        stub.asked("merge_requests?"),
+        1,
+        "the host is not asked again soon"
+    );
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 601),
+        )
+        .await;
+    assert_eq!(
+        stub.asked("merge_requests?"),
+        2,
+        "asked again after a while"
+    );
+}
+
+#[tokio::test]
+async fn a_removed_secret_pauses_the_host_and_github_carries_on() {
+    let stub = serve(Answers::default()).await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    assert_eq!(rig.forge_of("web").as_deref(), Some("gitlab"));
+    let asked = stub.log.lock().unwrap().len();
+    std::fs::write(rig.root.join("secrets.yml"), "other: x\n").unwrap();
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 130),
+        )
+        .await;
+    assert_eq!(
+        stub.log.lock().unwrap().len(),
+        asked,
+        "no request without a token"
+    );
+    assert_eq!(rig.forge_of("web"), None);
+    assert_eq!(rig.gh_calls(), 2);
+}
+
+#[tokio::test]
+async fn gitlab_cards_once_across_restarts_and_never_with_the_token() {
+    let stub = serve(Answers::default()).await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    assert!(
+        rig.pull_cards(&dispatch).is_empty(),
+        "first sight says nothing"
+    );
+
+    new_failure(&stub, "def456");
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 130),
+        )
+        .await;
+    let cards = rig.pull_cards(&dispatch);
+    assert_eq!(cards.len(), 1);
+    assert_eq!(cards[0]["kind"], "ci");
+    assert_eq!(cards[0]["pull"]["forge"], "gitlab");
+    let titles: Vec<String> = dispatch
+        .list()
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["title"].as_str().unwrap_or_default().to_string())
+        .collect();
+    assert_eq!(titles, ["Merge request !12: Fix the login redirect"]);
+    assert_eq!(cards[0]["checks"][0]["name"], "test / rspec");
+    assert!(
+        cards[0]["checks"][0]["log"]
+            .as_str()
+            .unwrap()
+            .contains("2 examples, 1 failure"),
+        "{}",
+        cards[0]["checks"][0]["log"]
+    );
+
+    new_note(&stub);
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 260),
+        )
+        .await;
+    let cards = rig.pull_cards(&dispatch);
+    assert_eq!(cards.len(), 2);
+    assert_eq!(cards[1]["kind"], "review");
+    assert_eq!(cards[1]["notes"][0]["id"], "gitlab:399");
+
+    let again = rig.pulls();
+    again
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 400),
+        )
+        .await;
+    assert_eq!(
+        rig.pull_cards(&dispatch).len(),
+        2,
+        "nothing twice after a restart"
+    );
+
+    let saved = std::fs::read_to_string(rig.root.join("state/pulls.json")).unwrap();
+    let view = serde_json::to_string(&rig.state.view(&rig.cfg, &NoPorts, "h")).unwrap();
+    let cards = serde_json::to_string(&rig.pull_cards(&dispatch)).unwrap();
+    for text in [saved, view, cards] {
+        assert!(!text.contains("glpat"), "{text}");
+    }
+}
+
+#[tokio::test]
+async fn comments_first_seen_while_unreadable_are_not_posted_later() {
+    let stub = serve(Answers {
+        discussions: (500, "{}".into()),
+        ..Answers::default()
+    })
+    .await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    assert_eq!(
+        rig.forge_of("web").as_deref(),
+        Some("gitlab"),
+        "the badge still shows"
+    );
+    stub.answers.lock().unwrap().discussions = Answers::default().discussions;
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 130),
+        )
+        .await;
+    assert!(
+        rig.pull_cards(&dispatch).is_empty(),
+        "old comments are not new"
+    );
+    new_note(&stub);
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 260),
+        )
+        .await;
+    let cards = rig.pull_cards(&dispatch);
+    assert_eq!(cards.len(), 1);
+    let ids: Vec<&str> = cards[0]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, ["gitlab:399"]);
+}
+
+#[tokio::test]
+async fn own_comments_are_not_cards_when_the_account_is_unknown() {
+    let stub = serve(Answers {
+        user: (500, "{}".into()),
+        ..Answers::default()
+    })
+    .await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    let mut d: Value =
+        serde_json::from_str(include_str!("../../tests/fixtures/gitlab_discussions.json")).unwrap();
+    d.as_array_mut().unwrap().push(json!({
+        "id": "d9",
+        "notes": [{"id": 398, "body": "my own reply", "author": {"username": "me-bot"}, "system": false}]
+    }));
+    stub.answers.lock().unwrap().discussions = (200, d.to_string());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 130),
+        )
+        .await;
+    let cards = serde_json::to_string(&rig.pull_cards(&dispatch)).unwrap();
+    assert!(!cards.contains("my own reply"), "{cards}");
+}
+
+#[tokio::test]
+async fn a_merge_request_with_many_comments_posts_each_once() {
+    let many = |n: u64| {
+        let notes: Vec<Value> = (1..=n)
+            .map(|i| json!({"id": i, "body": format!("note {i}"), "author": {"username": "rev1"}, "system": false}))
+            .collect();
+        (200, json!([{"id": "big", "notes": notes}]).to_string())
+    };
+    let stub = serve(Answers {
+        discussions: many(510),
+        ..Answers::default()
+    })
+    .await;
+    let rig = gitlab_rig(&stub);
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    let start = Instant::now();
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    stub.answers.lock().unwrap().discussions = many(511);
+    for secs in [130, 260, 390, 520] {
+        pulls
+            .round(
+                &rig.cfg,
+                &rig.secrets(),
+                &rig.state,
+                &dispatch,
+                later(start, secs),
+            )
+            .await;
+    }
+    assert_eq!(rig.pull_cards(&dispatch).len(), 1, "only note 511 is new");
+}
+
+#[derive(Clone, Default)]
+struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+#[tokio::test]
+async fn the_refused_token_warning_names_no_token() {
+    let stub = serve(Answers::default()).await;
+    let rig = gitlab_rig(&stub);
+    std::fs::write(rig.root.join("secrets.yml"), "gitlab: glpat-bad\n").unwrap();
+    let captured = Captured::default();
+    let writer = captured.clone();
+    let subscriber = tracing_subscriber::fmt()
+        .with_writer(move || writer.clone())
+        .with_ansi(false)
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    // Other tests on other threads may have marked the warning's callsite as unwanted.
+    tracing::callsite::rebuild_interest_cache();
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    let log = String::from_utf8(captured.0.lock().unwrap().clone()).unwrap();
+    assert!(log.contains("refused the token in secret gitlab"), "{log}");
+    assert!(!log.contains("glpat"), "{log}");
 }

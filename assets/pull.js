@@ -12,15 +12,24 @@
     return { word: p.draft ? "draft" : "open", tone: "" };
   }
 
+  // GitLab numbers a merge request !12 where GitHub writes #12.
+  function ref(p) {
+    return `${p.forge === "gitlab" ? "!" : "#"}${p.number}`;
+  }
+
+  function noun(p) {
+    return p.forge === "gitlab" ? "Merge request" : "Pull request";
+  }
+
   function describe(p) {
-    const parts = [`Pull request #${p.number}${p.title ? `: ${p.title}` : ""}${p.draft ? " (draft)" : ""}`];
+    const parts = [`${noun(p)} ${ref(p)}${p.title ? `: ${p.title}` : ""}${p.draft ? " (draft)" : ""}`];
     if (p.state === "merged" || p.state === "closed") return `${parts[0]}. ${p.state === "merged" ? "Merged" : "Closed"}.`;
-    const ci = { failing: "CI failing", pending: "CI running", passing: "CI passing" }[p.ci];
+    const ci = { failing: p.forge === "gitlab" ? "Pipeline failing" : "CI failing", pending: "CI running", passing: "CI passing" }[p.ci];
     if (ci) parts.push(p.ci === "failing" && p.failed?.length ? `${ci} on ${p.failed.join(", ")}` : ci);
     const review = { approved: "Approved", changes_requested: "Changes requested", review_required: "Review required" }[p.review];
     if (review) parts.push(review);
     return `${parts.join(". ")}.`;
   }
 
-  window.YardbellPull = { status, describe };
+  window.YardbellPull = { status, describe, ref, noun };
 })();

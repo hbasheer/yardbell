@@ -149,10 +149,10 @@ is no ticket to fill them with and they stay as written.
 
 ### What triggers do not do
 
-- **GitLab** is not supported, neither its issues nor its merge requests.
-- **A failing CI run** is not a trigger. Yardbell watches the pull requests of the sessions it
-  started on its own: when CI goes from passing or running to failing, or a reviewer comments, a
-  card appears in Dispatch with **Send to session**. That is GitHub only and set under
+- **GitLab** issues and merge requests do not start triggers.
+- **A failing CI run** is not a trigger. Yardbell watches the pull requests and GitLab merge
+  requests of the sessions it started on its own: when CI goes from passing or running to failing,
+  or a reviewer comments, a card appears in Dispatch with **Send to session**. That is set under
   [`pull_requests`](configuration.md#pull_requests-optional), see the end of
   [Dispatch](usage.md#dispatch).
 - **Linear filters** beyond "assigned to me" and states, such as a team, a label or a project, are

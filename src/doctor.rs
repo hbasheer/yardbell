@@ -29,6 +29,13 @@ pub fn ufw_hints(cfg: &Config) -> Vec<String> {
     out
 }
 
+pub fn gitlab_line(host: &str, found: &Result<String, String>) -> (bool, String) {
+    match found {
+        Ok(name) => (true, format!("{host}: signed in as {name}")),
+        Err(problem) => (false, format!("{host}: {problem}")),
+    }
+}
+
 fn line(ok: bool, text: &str) {
     println!("{} {text}", if ok { "✓" } else { "✗" });
 }
@@ -81,6 +88,14 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
         };
         line(st.up, &format!("{}: {detail}", m.name));
     }
+    if !cfg.pull_requests.gitlab.is_empty() {
+        let secrets = crate::secrets::Secrets::for_config(path).map_err(|e| e.to_string());
+        let gitlab = crate::pulls::GitLab::new();
+        for access in crate::pulls::accesses(&cfg.pull_requests, &secrets) {
+            let (ok, text) = gitlab_line(&access.host, &gitlab.whoami(&access).await);
+            line(ok, &text);
+        }
+    }
     if in_docker() {
         println!("  running inside Docker: the host machine is reached over ssh like any other");
     }
@@ -121,6 +136,24 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn gitlab_lines_name_the_account_or_the_problem() {
+        assert_eq!(
+            gitlab_line("git.commslayer.com", &Ok("hbasheer".into())),
+            (true, "git.commslayer.com: signed in as hbasheer".into())
+        );
+        assert_eq!(
+            gitlab_line(
+                "git.commslayer.com",
+                &Err("the secret gitlab is not set".into())
+            ),
+            (
+                false,
+                "git.commslayer.com: the secret gitlab is not set".into()
+            )
+        );
+    }
 
     #[test]
     fn pmset_sleep_zero() {

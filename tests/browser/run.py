@@ -26,6 +26,7 @@ REVIEW_CHAT = "browserreview001"
 SCAN_CHAT = "browserscan00001"
 SHOT_FILE = "shotbrowsertest1.png"
 PULL_CHAT = "browsertestpull0"
+GITLAB_CHAT = "browsergitlab001"
 GROUP_CHAT = "browsergroup0001"
 RESULTS_CHAT = "browserresults01"
 MEMORY_CHAT = "browsermemory001"
@@ -449,6 +450,19 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "at": "2026-01-01T10:00:00+00:00",
         }
         pull = conversation(PULL_CHAT, "Pull request #12: Fix the login redirect", [card])
+        merge_request = conversation(GITLAB_CHAT, "Merge request !12: Fix the login redirect", [{
+            "role": "pull", "kind": "review", "key": "review:gitlab",
+            "machine": MACHINE, "name": PULL_SESSION, "path": os.path.join(self.root, "demo-app"), "branch": "main",
+            "pull": {"forge": "gitlab", "number": 12, "url": "https://git.example.com/acme/app/-/merge_requests/12",
+                     "title": "Fix the login redirect", "state": "open", "draft": False, "review": "", "ci": "passing",
+                     "failed": []},
+            "checks": [],
+            "notes": [{"id": "gitlab:301", "kind": "comment", "author": "rev1", "body": "Please add a test.",
+                       "url": "https://git.example.com/acme/app/-/merge_requests/12#note_301"}],
+            "more": 2,
+            "instruction": "echo merge''-sent",
+            "at": "2026-01-01T10:00:00+00:00",
+        }])
         with open(os.path.join(self.state, "dispatch", "memory.md"), "w") as f:
             f.write(f"# Dispatch memory\n\n- {MEMORY_OLD}\n- Branches are named after the ticket\n")
         insight = conversation(INSIGHTS_CHAT, "Fix the login", [
@@ -472,7 +486,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         with open(os.path.join(self.state, "insights.json"), "w") as f:
             json.dump({f"{MACHINE}:{OLD_RUN}": {"machine": MACHINE, "name": OLD_RUN, "agent": "shell", "folder": "demo-app",
                                                 "branch": "main", "marks": marks}}, f)
-        for chat in (short, long, review, pull, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight):
+        for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -1068,6 +1082,31 @@ class Suite:
                 raise Failure(f"the instruction did not reach the session:\n{screen}")
             b.pump(0.3)
         b.wait("/Sent( at|\\.)/.test(document.querySelector('#dispatch-log .pull-card').innerText)", "the card to say it was sent")
+
+    def test_merge_request_badge_and_card_wording(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait("window.YardbellPull", "the pull request helpers")
+        words = b.js(
+            """(() => {
+              const P = window.YardbellPull;
+              const gl = {forge: 'gitlab', number: 12, title: 'Fix', state: 'open', ci: 'failing', failed: ['test / rspec']};
+              const gh = {...gl, forge: 'github', failed: ['CI / test']};
+              return [P.ref(gl), P.noun(gl), P.describe(gl), P.ref(gh), P.noun(gh), P.describe(gh)];
+            })()"""
+        )
+        want = ["!12", "Merge request", "Merge request !12: Fix. Pipeline failing on test / rspec.",
+                "#12", "Pull request", "Pull request #12: Fix. CI failing on CI / test."]
+        if words != want:
+            raise Failure(f"the badge words are {words}, not {want}")
+        b.goto(self.url(f"/dispatch?c={GITLAB_CHAT}"))
+        b.wait("document.querySelector('#dispatch-log .pull-card')", "the merge request card")
+        text = b.js("document.querySelector('#dispatch-log .pull-card').innerText")
+        for expected in ("!12", "Fix the login redirect", "Please add a test.", "2 more on the merge request."):
+            if expected not in text:
+                raise Failure(f"the card does not show {expected!r}:\n{text}")
+        if "#12" in text or "pull request" in text.lower():
+            raise Failure(f"the merge request card still says pull request:\n{text}")
 
     def test_settings_saves_dispatch_rules(self):
         b = self.b
