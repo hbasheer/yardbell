@@ -95,6 +95,22 @@ fn refused(access: &GitLabAccess) -> String {
     }
 }
 
+// reqwest's own message is only "error sending request"; the reason (a name that does not resolve,
+// a refused connection, a certificate) is in its sources.
+fn unanswered(host: &str, e: reqwest::Error) -> Problem {
+    let e = e.without_url();
+    let mut said = vec![e.to_string()];
+    let mut source = std::error::Error::source(&e);
+    while let Some(s) = source {
+        let text = s.to_string();
+        if !said.contains(&text) {
+            said.push(text);
+        }
+        source = s.source();
+    }
+    Problem::Failed(format!("{host} did not answer: {}", said.join(": ")))
+}
+
 fn unreadable(e: String) -> Problem {
     Problem::Failed(format!("unexpected GitLab answer: {e}"))
 }
@@ -152,13 +168,7 @@ impl GitLab {
             .header("PRIVATE-TOKEN", token)
             .send()
             .await
-            .map_err(|e| {
-                Problem::Failed(format!(
-                    "{} did not answer: {}",
-                    access.host,
-                    e.without_url()
-                ))
-            })?;
+            .map_err(|e| unanswered(&access.host, e))?;
         match res.status() {
             s if s.is_success() => Ok(res),
             StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
@@ -179,13 +189,7 @@ impl GitLab {
         query: &[(&str, &str)],
     ) -> Result<String, Problem> {
         let res = self.get(access, segments, query).await?;
-        res.text().await.map_err(|e| {
-            Problem::Failed(format!(
-                "{} did not answer: {}",
-                access.host,
-                e.without_url()
-            ))
-        })
+        res.text().await.map_err(|e| unanswered(&access.host, e))
     }
 
     // A part the badge can do without: a failure leaves it out, but a refused token still stops
@@ -1113,6 +1117,7 @@ mod http_tests {
             err.starts_with("git.commslayer.com did not answer"),
             "{err}"
         );
+        assert!(err.to_lowercase().contains("refused"), "says why: {err}");
     }
 
     #[test]
