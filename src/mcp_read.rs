@@ -18,6 +18,8 @@ pub const AREAS: [&str; 11] = [
 ];
 
 const HIDDEN: &str = "(hidden)";
+const CLIP: usize = 4000;
+const TURNS: usize = 20;
 
 fn tool(name: &str, description: &str, properties: Value, required: &[&str]) -> Value {
     json!({
@@ -36,6 +38,33 @@ pull_requests, security, about. Secrets are never shown: a setting that uses one
 ${secret:name}, and any other credential shows (hidden).",
         json!({ "area": { "type": "string", "enum": AREAS } }),
         &["area"],
+    ),
+    tool(
+        "list_conversations",
+        "Dispatch conversations, newest first: id, title, when it last changed, how many steps wait for the user, and who started it (you, a trigger or a pipeline run).",
+        json!({ "filter": { "type": "string", "enum": ["all", "waiting", "trigger", "pipeline"] } }),
+        &[],
+    ),
+    tool(
+        "read_conversation",
+        "One Dispatch conversation's newest turns and step cards, oldest first. Long text is clipped.",
+        json!({
+            "id": { "type": "string", "description": "Conversation id from list_conversations" },
+            "last": { "type": "integer", "minimum": 1, "maximum": 100, "description": "How many of the newest turns, default 20" },
+        }),
+        &["id"],
+    ),
+    tool(
+        "list_tasks",
+        "The user's saved Dispatch tasks: name, how many versions it has, and its first line.",
+        json!({}),
+        &[],
+    ),
+    tool(
+        "read_task",
+        "One saved task's text and its versions.",
+        json!({ "name": { "type": "string" } }),
+        &["name"],
     )]
 }
 
@@ -47,6 +76,13 @@ fn bad(message: String) -> ApiError {
 pub async fn read(app: &AppState, name: &str, args: &Value) -> Option<Result<Value, ApiError>> {
     match name {
         "read_settings" => Some(settings(app, args["area"].as_str().unwrap_or_default()).await),
+        "list_conversations" => Some(Ok(conversations(
+            app,
+            args["filter"].as_str().unwrap_or("all"),
+        ))),
+        "read_conversation" => Some(conversation(app, args)),
+        "list_tasks" => Some(Ok(tasks(app))),
+        "read_task" => Some(task(app, args["name"].as_str().unwrap_or_default())),
         _ => None,
     }
 }
@@ -200,5 +236,129 @@ fn machines_of(cfg: &Config) -> Value {
                 )
             })
             .collect(),
+    )
+}
+
+fn first_line(text: &str) -> String {
+    text.lines()
+        .find(|l| !l.trim().is_empty())
+        .unwrap_or("")
+        .trim()
+        .chars()
+        .take(120)
+        .collect()
+}
+
+fn conversations(app: &AppState, filter: &str) -> Value {
+    let piped: Vec<String> = app
+        .pipelines
+        .runs()
+        .into_iter()
+        .map(|r| r.conversation)
+        .filter(|c| !c.is_empty())
+        .collect();
+    let all = app.dispatch.list();
+    let rows = all.as_array().cloned().unwrap_or_default();
+    Value::Array(
+        rows.into_iter()
+            .map(|c| {
+                let id = c["id"].as_str().unwrap_or_default().to_string();
+                let started_by = if piped.contains(&id) {
+                    "a pipeline run".to_string()
+                } else if let Some(name) = c["trigger"].as_str() {
+                    format!("the trigger {name}")
+                } else {
+                    "you".to_string()
+                };
+                json!({ "id": id, "title": c["title"], "updated": c["updated"], "waiting": c["waiting"], "busy": c["busy"], "started_by": started_by })
+            })
+            .filter(|c| match filter {
+                "waiting" => c["waiting"].as_u64().unwrap_or(0) > 0,
+                "trigger" => c["started_by"].as_str().unwrap_or_default().starts_with("the trigger"),
+                "pipeline" => c["started_by"] == "a pipeline run",
+                _ => true,
+            })
+            .collect(),
+    )
+}
+
+// Shortens every long string inside, counting how many it shortened.
+fn clipped(value: Value, count: &mut usize) -> Value {
+    match value {
+        Value::String(s) if s.chars().count() > CLIP => {
+            *count += 1;
+            let kept: String = s.chars().take(CLIP).collect();
+            Value::String(format!(
+                "{kept}\n[clipped: {} more characters]",
+                s.chars().count() - CLIP
+            ))
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(|v| clipped(v, count)).collect()),
+        Value::Object(map) => Value::Object(
+            map.into_iter()
+                .map(|(k, v)| (k, clipped(v, count)))
+                .collect(),
+        ),
+        other => other,
+    }
+}
+
+fn conversation(app: &AppState, args: &Value) -> Result<Value, ApiError> {
+    let id = args["id"].as_str().unwrap_or_default();
+    let c = app.dispatch.get(id).ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            format!("there is no conversation {id}; list_conversations shows them"),
+        )
+    })?;
+    let last = args["last"]
+        .as_u64()
+        .map_or(TURNS, |n| n.clamp(1, 100) as usize);
+    let events = c["events"].as_array().cloned().unwrap_or_default();
+    let left_out = events.len().saturating_sub(last);
+    let mut count = 0;
+    let turns = clipped(Value::Array(events[left_out..].to_vec()), &mut count);
+    Ok(
+        json!({ "id": id, "title": c["title"], "updated": c["updated"], "busy": c["busy"], "left_out": left_out, "clipped": count, "turns": turns }),
+    )
+}
+
+fn tasks(app: &AppState) -> Value {
+    Value::Array(
+        app.dispatch
+            .tasks()
+            .into_iter()
+            .filter(|t| !t.hidden)
+            .map(|t| {
+                let versions = app
+                    .dispatch
+                    .task_history(&t.name)
+                    .map_or(1, |h| h.versions.len());
+                json!({ "name": t.name, "versions": versions, "summary": first_line(&t.text) })
+            })
+            .collect(),
+    )
+}
+
+fn task(app: &AppState, name: &str) -> Result<Value, ApiError> {
+    let found = app
+        .dispatch
+        .tasks()
+        .into_iter()
+        .find(|t| t.name == name && !t.hidden)
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                format!("there is no task called {name}; list_tasks shows them"),
+            )
+        })?;
+    let history = app.dispatch.task_history(name).map_err(bad)?;
+    let versions: Vec<Value> = history
+        .versions
+        .iter()
+        .map(|v| json!({ "n": v.n, "saved": v.at }))
+        .collect();
+    Ok(
+        json!({ "name": found.name, "text": found.text, "current": history.current, "versions": versions }),
     )
 }

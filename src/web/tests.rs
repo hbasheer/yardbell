@@ -1609,7 +1609,11 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "integrate_branches",
             "push_branch",
             "move_session",
-            "read_settings"
+            "read_settings",
+            "list_conversations",
+            "read_conversation",
+            "list_tasks",
+            "read_task"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;

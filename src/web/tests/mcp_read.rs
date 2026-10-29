@@ -117,3 +117,105 @@ async fn read_settings_answers_dispatch_and_outside_clients_alike() {
     assert_eq!(answer(&outside), answer(&inside));
     assert_eq!(answer(&outside)["value"]["wait_minutes"], 2);
 }
+
+fn seed_conversation(r: &Rig, title: &str, big: usize) -> String {
+    let id = r.app.dispatch.open_conversation(title);
+    r.app.dispatch.record_as(
+        &id,
+        "read_session",
+        json!({ "machine": "hp", "name": "hp-x" }),
+        None,
+        None,
+        &Ok(json!({ "screen": "x".repeat(big) })),
+        crate::dispatch::By::Dispatch,
+        None,
+    );
+    id
+}
+
+#[tokio::test]
+async fn conversations_are_listed_and_filtered() {
+    let r = rig();
+    mcp_on(&r);
+    let mine = seed_conversation(&r, "Look at hp", 10);
+    let piped = seed_conversation(&r, "Implement: COM-1 Fix", 10);
+    let mut run = crate::pipeline::record::Run {
+        id: "run1".into(),
+        pipeline: "implement".into(),
+        conversation: piped.clone(),
+        ..Default::default()
+    };
+    run.state = crate::pipeline::record::RunState::Running;
+    r.app.pipelines.put(run);
+    let all = answer(&tool_call(&r, "list_conversations", json!({})).await);
+    let ids: Vec<&str> = all
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["id"].as_str().unwrap())
+        .collect();
+    assert!(
+        ids.contains(&mine.as_str()) && ids.contains(&piped.as_str()),
+        "{all}"
+    );
+    let started_by = |id: &str| {
+        all.as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id)
+            .unwrap()["started_by"]
+            .clone()
+    };
+    assert_eq!(
+        (started_by(&mine), started_by(&piped)),
+        (json!("you"), json!("a pipeline run"))
+    );
+    let only = answer(&tool_call(&r, "list_conversations", json!({ "filter": "pipeline" })).await);
+    assert_eq!(only.as_array().unwrap().len(), 1, "{only}");
+    assert_eq!(only[0]["id"], piped);
+}
+
+#[tokio::test]
+async fn a_long_conversation_is_clipped() {
+    let r = rig();
+    mcp_on(&r);
+    let id = seed_conversation(&r, "Big screen", 50_000);
+    let result = tool_call(&r, "read_conversation", json!({ "id": id })).await;
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.len() < 8_000, "{} characters came back", text.len());
+    let got = answer(&result);
+    assert_eq!(got["clipped"], 1, "{got}");
+    assert_eq!(got["title"], "Big screen");
+}
+
+#[tokio::test]
+async fn an_unknown_conversation_says_so() {
+    let r = rig();
+    mcp_on(&r);
+    let result = tool_call(&r, "read_conversation", json!({ "id": "abcdefghijklmnop" })).await;
+    assert_eq!(result["isError"], true);
+    assert!(
+        result["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("list_conversations"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
+async fn tasks_and_their_versions() {
+    let r = rig();
+    mcp_on(&r);
+    let tasks = answer(&tool_call(&r, "list_tasks", json!({})).await);
+    let first = tasks[0]["name"].as_str().unwrap().to_string();
+    assert!(tasks[0]["versions"].as_u64().unwrap() >= 1, "{tasks}");
+    let one = answer(&tool_call(&r, "read_task", json!({ "name": first })).await);
+    assert_eq!(one["name"], first);
+    assert!(
+        one["text"].as_str().is_some() && one["versions"][0]["n"] == 1,
+        "{one}"
+    );
+    let missing = tool_call(&r, "read_task", json!({ "name": "No such task" })).await;
+    assert_eq!(missing["isError"], true);
+}
