@@ -240,7 +240,8 @@ impl Folders {
         } else {
             format!(
                 "if git show-ref --verify --quiet refs/heads/{0}; then git worktree add {1} {0}; \
-                 else git worktree add --track -b {0} {1} {2}; fi",
+                 else git fetch -q origin {0} 2>/dev/null || true; \
+                 git worktree add --track -b {0} {1} {2}; fi",
                 b,
                 quote(&target),
                 quote(&format!("origin/{}", pick.branch))
@@ -420,6 +421,32 @@ mod tests {
         assert!(script.contains("worktree add"), "{script}");
         assert!(script.contains("'/r/app-worktrees/eng-1290-csv'"));
         assert!(script.contains("'origin/eng-1290-csv'"));
+    }
+
+    #[tokio::test]
+    async fn a_branch_only_on_the_remote_is_fetched_first() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub(
+            "worktree",
+            Output::ok_with("PATH\t/r/app-worktrees/com-1-mr\nCREATED\n"),
+        );
+        let pick = Pick {
+            branch: "com-1-mr".into(),
+            new_branch: false,
+            base: String::new(),
+        };
+        folders(fake.clone())
+            .prepare(&machine(), "/r/app", &pick, "main")
+            .await
+            .unwrap();
+        let script = fake.calls()[0].last().unwrap().clone();
+        let fetch = script
+            .find("git fetch -q origin 'com-1-mr'")
+            .expect(&script);
+        assert!(
+            fetch < script.find("worktree add --track").unwrap(),
+            "{script}"
+        );
     }
 
     #[tokio::test]

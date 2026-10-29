@@ -92,11 +92,7 @@ pub struct Entry {
     pub note: String,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PullRef {
-    pub url: String,
-    pub number: u64,
-}
+pub use super::record::PullRef;
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]

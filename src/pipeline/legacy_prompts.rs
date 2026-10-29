@@ -14,11 +14,7 @@ const SUMMARY_END: &str = "END SUMMARY";
 const BRANCH_MAX: usize = 60;
 const SUMMARY_ASK: &str = "Three to six lines for the pull request description";
 
-#[derive(Debug, Clone, PartialEq, Default)]
-pub struct TicketText {
-    pub description: String,
-    pub comments: Vec<(String, String)>,
-}
+pub use super::prompts::TicketText;
 
 // A fence longer than any run of backticks in the ticket, so nothing in it can close the fence.
 fn quoted(t: &TicketText) -> String {

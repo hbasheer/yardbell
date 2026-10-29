@@ -1,4 +1,5 @@
-use super::legacy::{PullRef, Record};
+use super::legacy::Record;
+use super::record::PullRef;
 use crate::config::Machine;
 use crate::pulls::{GitLabAccess, Remotes};
 use crate::shell::{quote, Duration, Runner};
@@ -19,16 +20,25 @@ pub struct Forge {
     http: reqwest::Client,
 }
 
-fn body(r: &Record) -> String {
-    if r.summary.trim().is_empty() {
-        r.outcome.clone()
-    } else {
-        r.summary.clone()
-    }
+// What a draft pull or merge request is opened with.
+pub struct Draft {
+    pub branch: String,
+    pub title: String,
+    pub body: String,
 }
 
-fn title(r: &Record) -> String {
-    format!("{} {}", r.id, r.title)
+impl From<&Record> for Draft {
+    fn from(r: &Record) -> Draft {
+        Draft {
+            branch: r.branch.clone(),
+            title: format!("{} {}", r.id, r.title),
+            body: if r.summary.trim().is_empty() {
+                r.outcome.clone()
+            } else {
+                r.summary.clone()
+            },
+        }
+    }
 }
 
 fn number(url: &str) -> Option<u64> {
@@ -50,30 +60,34 @@ impl Forge {
         &self,
         m: &Machine,
         path: &str,
-        r: &Record,
+        d: &Draft,
         gitlab: &[GitLabAccess],
     ) -> Result<PullRef, String> {
         let repo = Remotes::new(self.runner.clone(), self.ssh.clone())
-            .read(m, path, &r.branch)
+            .read(m, path, &d.branch)
             .await
-            .ok_or_else(|| format!("the branch {} has no remote Yardbell can read", r.branch))?;
+            .ok_or_else(|| format!("the branch {} has no remote Yardbell can read", d.branch))?;
         match gitlab.iter().find(|g| g.host == repo.host) {
-            Some(access) => self.merge_request(access, &repo.project, r).await,
-            None => self.pull_request(m, path, r).await,
+            Some(access) => self.merge_request(access, &repo.project, d).await,
+            None => self.pull_request(m, path, d).await,
         }
     }
 
-    async fn pull_request(&self, m: &Machine, path: &str, r: &Record) -> Result<PullRef, String> {
+    async fn pull_request(&self, m: &Machine, path: &str, d: &Draft) -> Result<PullRef, String> {
         let script = format!(
             "{QUIET}cd {} 2>/dev/null || exit 1; command -v gh >/dev/null 2>&1 || exit {NO_GH}; \
 gh pr create --draft --head {} --title {} --body-file -",
             quote(path),
-            quote(&r.branch),
-            quote(&title(r))
+            quote(&d.branch),
+            quote(&d.title.clone())
         );
         let out = self
             .runner
-            .run(self.ssh.command(m, &script), Some(body(r)), GH_TIMEOUT)
+            .run(
+                self.ssh.command(m, &script),
+                Some(d.body.clone()),
+                GH_TIMEOUT,
+            )
             .await;
         match out.status {
             Some(0) => {}
@@ -104,7 +118,7 @@ gh pr create --draft --head {} --title {} --body-file -",
         &self,
         access: &GitLabAccess,
         project: &str,
-        r: &Record,
+        d: &Draft,
     ) -> Result<PullRef, String> {
         let token = access.token.as_ref().map_err(Clone::clone)?;
         let base = format!(
@@ -124,7 +138,7 @@ gh pr create --draft --head {} --title {} --body-file -",
                 access.host
             ),
             reqwest::StatusCode::CONFLICT => {
-                format!("a merge request for {} is already open", r.branch)
+                format!("a merge request for {} is already open", d.branch)
             }
             s => format!("GitLab at {} answered {s}", access.host),
         };
@@ -156,10 +170,10 @@ gh pr create --draft --head {} --title {} --body-file -",
             .header("PRIVATE-TOKEN", token)
             .timeout(HTTP_TIMEOUT)
             .json(&json!({
-                "source_branch": r.branch,
+                "source_branch": d.branch,
                 "target_branch": target,
-                "title": format!("Draft: {}", title(r)),
-                "description": body(r),
+                "title": format!("Draft: {}", d.title.clone()),
+                "description": d.body.clone(),
             }))
             .send()
             .await
@@ -232,7 +246,7 @@ mod tests {
             Output::ok_with("Creating draft...\nhttps://github.com/acme/app/pull/12\n"),
         );
         let pull = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &record(), &[])
+            .open_draft(&machine("hp"), "/r/acme/app", &Draft::from(&record()), &[])
             .await
             .unwrap();
         assert_eq!(
@@ -278,7 +292,7 @@ mod tests {
             ),
         );
         let err = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &record(), &[])
+            .open_draft(&machine("hp"), "/r/acme/app", &Draft::from(&record()), &[])
             .await
             .unwrap_err();
         assert_eq!(err, "gh is not logged in on hp");
@@ -334,7 +348,12 @@ mod tests {
             Output::ok_with("git@git.example.com:acme/app.git\n"),
         );
         let pull = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &record(), &[access(&api)])
+            .open_draft(
+                &machine("hp"),
+                "/r/acme/app",
+                &Draft::from(&record()),
+                &[access(&api)],
+            )
             .await
             .unwrap();
         assert_eq!(pull.number, 87);
@@ -365,7 +384,12 @@ mod tests {
             Output::ok_with("git@git.example.com:acme/app.git\n"),
         );
         let err = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &record(), &[access(&api)])
+            .open_draft(
+                &machine("hp"),
+                "/r/acme/app",
+                &Draft::from(&record()),
+                &[access(&api)],
+            )
             .await
             .unwrap_err();
         assert_eq!(

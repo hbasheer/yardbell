@@ -18,3 +18,6 @@ pub mod templates;
 pub mod watch;
 
 pub use legacy_pipeline::Pipeline;
+
+#[cfg(test)]
+mod tests;

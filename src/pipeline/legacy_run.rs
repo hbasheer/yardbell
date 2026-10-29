@@ -445,7 +445,9 @@ impl World for Live {
                 .machine(&r.machine)
                 .ok_or_else(|| format!("{} is not a machine", r.machine))?;
             let gitlab = crate::pulls::accesses(&self.cfg.pull_requests, &self.secrets);
-            self.forge.open_draft(m, path, r, &gitlab).await
+            self.forge
+                .open_draft(m, path, &super::forge::Draft::from(r), &gitlab)
+                .await
         })
     }
 

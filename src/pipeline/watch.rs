@@ -1,1 +1,256 @@
+use super::definition::{SessionChoice, StepKind};
+use super::prompts;
+use super::record::{Run, RunState, Seen};
+use crate::snapshot::Activity;
+use crate::state::StateView;
+use chrono::{DateTime, Local};
 
+// A session may take this long to show up after it was started, or to print its result after it
+// goes quiet.
+const GRACE_MINUTES: i64 = 2;
+
+fn settled(run: &Run, now: DateTime<Local>) -> bool {
+    DateTime::parse_from_rfc3339(&run.step_since)
+        .is_ok_and(|since| (now - since.with_timezone(&Local)).num_minutes() >= GRACE_MINUTES)
+}
+
+// Reports already on the screen of a session this step continues are the earlier step's, not
+// this one's.
+fn known_reports(run: &Run) -> Vec<String> {
+    let mut known: Vec<String> = run
+        .steps
+        .get(&run.step)
+        .map(|s| s.report.clone())
+        .into_iter()
+        .collect();
+    if let Some(StepKind::Agent {
+        session: SessionChoice::Continue(other),
+        ..
+    }) = run.def().step(&run.step).map(|s| &s.kind)
+    {
+        if let Some(s) = run.steps.get(other) {
+            known.push(s.report.clone());
+        }
+    }
+    known.retain(|r| !r.is_empty());
+    known
+}
+
+// What the poll shows about a run's current step, if anything new.
+pub fn seen(
+    run: &Run,
+    view: &StateView,
+    screen: Option<&str>,
+    now: DateTime<Local>,
+) -> Option<Seen> {
+    if run.state == RunState::Queued {
+        let machine = run.slot.as_deref()?;
+        return view
+            .machines
+            .iter()
+            .any(|m| m.name == machine && !m.up)
+            .then_some(Seen::Offline);
+    }
+    if run.state != RunState::Running {
+        return None;
+    }
+    if !matches!(run.def().step(&run.step)?.kind, StepKind::Agent { .. }) {
+        return None;
+    }
+    let name = run
+        .steps
+        .get(&run.step)
+        .map(|s| s.session.as_str())
+        .unwrap_or("");
+    if name.is_empty() {
+        return None;
+    }
+    let screen = screen.unwrap_or_default();
+    let step = run.step.clone();
+    let no_result = || {
+        settled(run, now).then(|| Seen::NoResult {
+            step: step.clone(),
+            screen: screen.to_string(),
+        })
+    };
+    let Some(session) = view
+        .sessions
+        .iter()
+        .find(|s| s.tmux.as_deref() == Some(name))
+    else {
+        return no_result();
+    };
+    match session.activity {
+        Activity::Active => None,
+        Activity::Blocked => Some(Seen::Waiting {
+            step: step.clone(),
+            screen: screen.to_string(),
+        }),
+        Activity::Idle => match prompts::outcome(screen) {
+            Some((_, report, _)) if known_reports(run).contains(&report) => no_result(),
+            Some((outcome, report, details)) => Some(Seen::Ended {
+                step: step.clone(),
+                outcome,
+                report,
+                details,
+            }),
+            None => no_result(),
+        },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::pipeline::definition::Outcome;
+    use crate::pipeline::engine::tests::{at, run_of};
+    use crate::pipeline::record::RunState;
+    use crate::snapshot::Activity;
+    use crate::state::{MachineView, SessionView};
+
+    fn view(sessions: &[(&str, Activity)], up: bool) -> StateView {
+        StateView {
+            agents: vec![],
+            default_agent: "claude".into(),
+            machines: vec![MachineView {
+                name: "hp".into(),
+                up,
+                reason: None,
+                last_seen: None,
+                local: false,
+                health: None,
+                accounts: Vec::new(),
+                mesh_on: None,
+            }],
+            folders: vec![],
+            sessions: sessions
+                .iter()
+                .map(|(name, activity)| SessionView {
+                    id: name.to_string(),
+                    machine: "hp".into(),
+                    agent: "claude".into(),
+                    pid: 1,
+                    folder: "app".into(),
+                    ticket: "-".into(),
+                    branch: "com-1".into(),
+                    activity: *activity,
+                    attachable: true,
+                    tmux: Some(name.to_string()),
+                    stale: false,
+                    ports: vec![],
+                    pull: None,
+                    path: "/r/app".into(),
+                    worktree: true,
+                    setup: None,
+                })
+                .collect(),
+            ended: vec![],
+            host_terminal: crate::config::HostTerminal::None,
+            mesh: None,
+            server: None,
+        }
+    }
+
+    const RESULT: &str =
+        "YARDBELL RESULT\nstatus: pass\nsummary: Fixed the redirect.\n- 12 passed\nEND RESULT\n";
+
+    fn running(step: &str) -> Run {
+        let mut run = run_of("Implement my Linear tickets");
+        run.step = step.into();
+        run.state = RunState::Running;
+        run.step_since = at(0).to_rfc3339();
+        run.state_of("implement").session = "hp-app-com-1".into();
+        run.state_of(step).session = "hp-app-com-1".into();
+        run
+    }
+
+    #[test]
+    fn an_idle_agent_with_a_result() {
+        let run = running("implement");
+        let v = view(&[("hp-app-com-1", Activity::Idle)], true);
+        match seen(&run, &v, Some(RESULT), at(1)) {
+            Some(Seen::Ended {
+                step,
+                outcome,
+                report,
+                details,
+            }) => {
+                assert_eq!(
+                    (step.as_str(), outcome, report.as_str()),
+                    ("implement", Outcome::Pass, "Fixed the redirect.")
+                );
+                assert_eq!(details, vec!["12 passed"]);
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(
+            seen(
+                &run,
+                &view(&[("hp-app-com-1", Activity::Active)], true),
+                Some(RESULT),
+                at(1)
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn a_screen_showing_the_task_gives_nothing() {
+        let run = running("implement");
+        let v = view(&[("hp-app-com-1", Activity::Idle)], true);
+        let task = "Implement it.\n\nYARDBELL RESULT\nstatus: pass, fail, or needs you\nEND RESULT";
+        assert_eq!(seen(&run, &v, Some(task), at(1)), None);
+        assert!(matches!(
+            seen(&run, &v, Some(task), at(3)),
+            Some(Seen::NoResult { .. })
+        ));
+    }
+
+    #[test]
+    fn a_continued_session_ignores_the_result_it_already_had() {
+        let mut run = running("fix");
+        run.state_of("implement").report = "Fixed the redirect.".into();
+        let v = view(&[("hp-app-com-1", Activity::Idle)], true);
+        assert_eq!(seen(&run, &v, Some(RESULT), at(1)), None);
+        let fixed = RESULT.replace("Fixed the redirect.", "Fixed both findings.");
+        assert!(matches!(
+            seen(&run, &v, Some(&fixed), at(1)),
+            Some(Seen::Ended { .. })
+        ));
+    }
+
+    #[test]
+    fn a_blocked_session_is_waiting() {
+        let run = running("implement");
+        let v = view(&[("hp-app-com-1", Activity::Blocked)], true);
+        assert_eq!(
+            seen(&run, &v, Some("Allow?"), at(1)),
+            Some(Seen::Waiting {
+                step: "implement".into(),
+                screen: "Allow?".into()
+            })
+        );
+    }
+
+    #[test]
+    fn a_missing_session_waits_two_minutes() {
+        let run = running("implement");
+        assert_eq!(seen(&run, &view(&[], true), None, at(1)), None);
+        assert!(matches!(
+            seen(&run, &view(&[], true), None, at(3)),
+            Some(Seen::NoResult { .. })
+        ));
+    }
+
+    #[test]
+    fn an_offline_machine() {
+        let mut run = run_of("Implement my Linear tickets");
+        run.state = RunState::Queued;
+        run.slot = Some("hp".into());
+        assert_eq!(
+            seen(&run, &view(&[], false), None, at(1)),
+            Some(Seen::Offline)
+        );
+        assert_eq!(seen(&run, &view(&[], true), None, at(1)), None);
+    }
+}

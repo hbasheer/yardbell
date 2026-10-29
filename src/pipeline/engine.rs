@@ -448,6 +448,7 @@ pub(crate) mod tests {
                 }),
                 pr: None,
             },
+            started: at(0).to_rfc3339(),
             step_since: at(0).to_rfc3339(),
             ..Run::default()
         }
