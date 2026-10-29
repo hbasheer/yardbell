@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Insights** opens in a larger dialog, up to 880px wide and 920px tall, that scrolls inside and
+  fits small windows. Its facts (status, machine, folder, branch, agent) are labelled, **Time
+  spent** shows Working, Waiting for you, Idle and Test results as tiles with units, each one's
+  share of the time and a line on what it means, and the bar has its start and end times. The
+  timeline is grouped under the day, so a session from an earlier day no longer crowds its times
+  into the text. A session Yardbell has not recorded yet says so and when its timeline starts.
+
 ## [0.7.6] - 2026-10-29
 
 - Dispatch can run on Codex as well as Claude Code. **Dispatch runs on** in Settings, under

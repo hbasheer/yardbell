@@ -57,15 +57,16 @@ restart, and a note that it continued from the first machine. Both clones must h
 original keeps running unless you tick **Stop the original**, and the dialog offers to stop it once
 the new session runs.
 
-**Insights** on a session, also on one that ended, shows what Yardbell saw of it: when it started
-(or that it was already running when Yardbell started watching), how long it worked, waited for
-you and sat idle, as totals, a bar and a timeline, and the tool calls and test runs its screen
-showed, such as Claude Code's `Bash(cargo test)` or Codex's `Ran npm test`, with **Passed** or
-**Failed** for a test runner's summary line. Runs still in the scrollback from before Yardbell
-recorded them are listed under **Earlier, from the scrollback**, without times. Yardbell records
-each change from the checks it already makes, keeps up to 300 changes for each of the last 100
-sessions, and keeps them across restarts in `insights.json` in its state folder. None of this asks
-an AI. The same **Insights** is in a Workspace pane's **⋯** menu and on a Dispatch session card.
+**Insights** on a session, also on one that ended, shows what Yardbell saw of it: its status,
+machine, folder, branch and agent, when it started (or that it was already running when Yardbell
+started watching), and how long it worked, waited for you and sat idle, each with its share of the
+time and a line on what it means, then a bar and a timeline grouped by day, and the tool calls and
+test runs its screen showed, such as Claude Code's `Bash(cargo test)` or Codex's `Ran npm test`,
+with **Passed** or **Failed** for a test runner's summary line. Runs still in the scrollback from
+before Yardbell recorded them are listed under **Earlier, from the scrollback**, without times.
+Yardbell records each change from the checks it already makes, keeps up to 300 changes for each of
+the last 100 sessions, and keeps them across restarts in `insights.json` in its state folder. None
+of this asks an AI. The same **Insights** is in a Workspace pane's **⋯** menu and on a Dispatch session card.
 
 **Suggest a better prompt**, in Insights and in the pane's menu, asks Dispatch, as a message you
 send, to read the session's task and scrollback and propose a clearer, more complete prompt for the
