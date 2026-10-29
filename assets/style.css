@@ -1913,6 +1913,7 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .th-pick select { height: 32px; }
 .step-card-pipeline .pl-minimap { display: none; }
 .step-card-pipeline .pl-canvas { height: 220px; border: 1px solid var(--line); border-radius: 8px; }
+.pl-proposal { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--info-bg, var(--side)); font-size: 13px; }
 .run-waiting { padding: 10px 12px; border-radius: 8px; background: var(--side); }
 .step-card-form textarea.step-card-json { font: 12.5px/1.6 var(--mono); tab-size: 2; }
 .th-diff { max-height: 240px; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--side); font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }

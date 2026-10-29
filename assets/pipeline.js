@@ -17,6 +17,8 @@ let settings = null;
 let answers = new Map();
 let subjects = "";
 let busy = false;
+// A pipeline Dispatch proposed, opened from its card: saving approves the step.
+let proposal = null;
 
 function toast(message, kind = "error") {
   const el = $("toast");
@@ -978,6 +980,78 @@ function removePipeline(d) {
 
 let full = remembered("yb-pipeline-full", true);
 
+async function loadProposal(key) {
+  const at = key.lastIndexOf(".");
+  const conversation = key.slice(0, at), step = key.slice(at + 1);
+  const convo = await api("GET", `/dispatch/conversations/${encodeURIComponent(conversation)}`);
+  const e = convo.events.find((x) => x.role === "action" && x.id === step && x.tool === "save_pipeline");
+  if (!e) {
+    toast("There is no such proposal");
+    history.replaceState(null, "", location.pathname);
+    proposal = def = draft = null;
+    return;
+  }
+  proposal = { key, conversation, step, before: e.input.before, decided: e.status !== "pending" };
+  def = structuredClone(e.input.definition);
+  draft = structuredClone(def);
+  past = [];
+  future = [];
+  selected = null;
+  addMenu = null;
+  problems = [];
+}
+
+// Unchanged, the step is approved as proposed; changed, it goes back as an edit and is checked again.
+function approveProposal() {
+  doing(async () => {
+    const edited = JSON.stringify(draft) !== JSON.stringify(def);
+    const body = { decision: "approve", ...(edited ? { input: { definition: draft, before: proposal.before } } : {}) };
+    try {
+      const step = await api("POST", `/dispatch/conversations/${encodeURIComponent(proposal.conversation)}/actions/${proposal.step}`, body);
+      if (step.result && !step.result.ok) {
+        proposal.decided = true;
+        toast(step.result.text);
+        return;
+      }
+      const out = JSON.parse(step.result?.text || "{}");
+      def = structuredClone(draft);
+      proposal = null;
+      toast(`Saved as v${out.version}`, "ok");
+      go(`p=${encodeURIComponent(out.saved)}&tab=build`);
+    } catch (err) {
+      if (/already|withdrawn/.test(err.message)) {
+        proposal.decided = true;
+        toast(err.message);
+        return;
+      }
+      const listed = err.message.match(/send the whole pipeline again: (.*)$/s);
+      if (!listed) throw err;
+      problems = listed[1].split("; ");
+      inspectorOpen = true;
+    }
+  });
+}
+
+function proposalView() {
+  const back = `/dispatch?c=${encodeURIComponent(proposal.conversation)}`;
+  return html`<div class=${`pl-builder ${full ? "full" : ""}`}>
+    <header class="pl-bar">
+      <a class="btn quiet pl-back" href=${back}>${chevron("left")}<span>Dispatch</span></a>
+      <input class="pl-name pl-title-name" aria-label="Pipeline name" .value=${draft.name} ?disabled=${proposal.decided} @input=${(e) => { draft.name = e.target.value; draw(); }}>
+      <span class="pl-bar-space"></span>
+      ${proposal.decided ? nothing : html`<button class="btn primary" type="button" id="pl-save" ?disabled=${busy} @click=${approveProposal}>Approve and save</button>`}
+    </header>
+    <p class="pl-proposal" role="status">${proposal.decided ? "This proposal was already decided." : "Proposed by Dispatch. Saving approves it."} <a href=${back}>Back to Dispatch</a></p>
+    <div class="pl-body">${buildTab(def)}</div>
+  </div>`;
+}
+
+function askDispatch(d) {
+  if (unsaved() && !confirm("Leave without saving your changes?")) return;
+  draft = structuredClone(def);
+  location.href = `/dispatch?ask=${encodeURIComponent(`Change the pipeline "${d.name}" (${d.id}): `)}`;
+}
+
 function unsaved() {
   return !!(def && draft && JSON.stringify(draft) !== JSON.stringify(def));
 }
@@ -1012,6 +1086,7 @@ function pipelineView() {
       <button class="btn quiet" type="button" id="pl-full" aria-pressed=${full ? "true" : "false"} title=${full ? "Exit full screen" : "Full screen"} aria-label=${full ? "Exit full screen" : "Full screen"} @click=${toggleFull}>
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d=${full ? "M6.5 2.5v4h-4 M9.5 2.5v4h4 M6.5 13.5v-4h-4 M9.5 13.5v-4h4" : "M2.5 6.5v-4h4 M13.5 6.5v-4h-4 M2.5 9.5v4h4 M13.5 9.5v4h-4"}></path></svg>
       </button>
+      <button class="btn quiet" type="button" id="pl-ask" @click=${() => askDispatch(d)}>Ask Dispatch to change it</button>
       <button class="btn quiet danger" type="button" @click=${() => removePipeline(d)}>Delete</button>
       <button class="btn" type="button" id="pl-run-now" ?disabled=${busy} @click=${() => runNow(d)}>Run now</button>
       ${changed
@@ -1028,7 +1103,7 @@ function draw() {
   if (!data) return;
   const id = params().get("p");
   document.title = id && def ? `${def.name} · Pipelines · Yardbell` : "Pipelines · Yardbell";
-  render(id && def ? pipelineView() : listView(), root);
+  render(proposal && def ? proposalView() : id && def ? pipelineView() : listView(), root);
   here = location.href;
   settle();
   inView(document.getElementById("pl-add-menu"));
@@ -1044,9 +1119,16 @@ function inView(el) {
 
 async function load() {
   const id = params().get("p");
+  const asked = params().get("proposal");
   const [list, runs] = await Promise.all([api("GET", "/api/pipelines"), api("GET", "/api/runs")]);
   data = list;
   allRuns = runs.runs;
+  if (asked) {
+    if (proposal?.key !== asked) await loadProposal(asked);
+    draw();
+    return;
+  }
+  proposal = null;
   if (id) {
     const found = data.pipelines.find((p) => p.definition.id === id)?.definition;
     if (!found) {

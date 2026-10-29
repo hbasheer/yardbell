@@ -1072,9 +1072,23 @@ const handedOver = window.YardbellInsights.takeOver();
 loadRunsOn();
 loadTasks();
 loadState().then(() => draw());
+// Another page can start a message here, such as the builder's Ask Dispatch to change it.
+const asked = new URLSearchParams(location.search).get("ask");
+if (asked !== null) history.replaceState(null, "", location.pathname);
+
+function startWith(text) {
+  form.text.value = text;
+  form.text.dispatchEvent(new Event("input", { bubbles: true }));
+  form.text.focus();
+  form.text.setSelectionRange(text.length, text.length);
+}
+
 loadList()
-  .then(() => open(!handedOver && current && conversations.some((c) => c.id === current) ? current : null))
-  .then(() => { if (handedOver) suggestFor(handedOver.machine, handedOver.name); })
+  .then(() => open(!handedOver && asked === null && current && conversations.some((c) => c.id === current) ? current : null))
+  .then(() => {
+    if (handedOver) suggestFor(handedOver.machine, handedOver.name);
+    if (asked) startWith(asked);
+  })
   .catch((err) => toast(err.message));
 
 // Inside the Workspace, Dispatch opens sessions as Workspace panes and other pages in the whole window.

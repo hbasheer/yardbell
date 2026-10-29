@@ -42,6 +42,7 @@ NEW_TASK = "Standup notes"
 PIPE_CHAT = "browserpipeline1"
 RUNS_CHAT = "browserpiperuns1"
 NEW_PIPELINE = "Ask then fix"
+PROPOSAL_CHAT = "browserproposal1"
 REFUSED = "the user's Dispatch rule \"deny start_session on pro\" refuses it"
 PULL_SESSION = "hp-pull-test"
 FAKE_PR = {
@@ -340,10 +341,10 @@ def task_chat():
 
 
 # Dispatch proposed a pipeline: ask the person, then fix. `before` is how it read when proposed.
-def proposed_pipeline():
-    def define(fix_words, ask_fail):
+def proposed_pipeline(chat=PIPE_CHAT, steps=(("pipestp1", NEW_PIPELINE, True),)):
+    def define(name, fix_words, ask_fail):
         return {
-            "id": "", "name": NEW_PIPELINE, "enabled": False, "version": 1,
+            "id": "", "name": name, "enabled": False, "version": 1,
             "trigger": {"kind": "manual"}, "start": "plan",
             "steps": [
                 {"id": "plan", "name": "Plan", "kind": "plan", "machines": [], "max_runs": 2,
@@ -356,15 +357,18 @@ def proposed_pipeline():
                  "next": {"pass": "end", "fail": "wait", "needs_you": "wait"}, "x": 320, "y": 80},
             ],
         }
-    after, before = define("Fix the issue in {ticket}.", "fix"), define("Fix the bug in {ticket}.", "wait")
     changes = {"trigger": False, "added": [], "removed": [], "changed": [{"step": "Fix", "fields": ["instructions"]}],
                "lines": [{"from": "Ask me", "outcome": "fail", "was": "wait for you", "now": "Fix"}],
                "wording": [{"step": "Fix", "diff": [{"op": "same", "text": "Fix the "}, {"op": "del", "text": "bug"},
                                                    {"op": "add", "text": "issue"}, {"op": "same", "text": " in {ticket}."}]}]}
-    step = {"role": "action", "id": "pipestp1", "tool": "save_pipeline", "by": "dispatch", "status": "pending",
-            "at": "2026-01-01T10:00:00+00:00", "input": {"definition": after, "before": before, "changes": changes}}
-    return conversation(PIPE_CHAT, "A pipeline that asks first", [
-        {"role": "user", "text": "Make a pipeline that asks me, then fixes"}, step])
+    events = [{"role": "user", "text": "Make a pipeline that asks me, then fixes"}]
+    for id, name, changed in steps:
+        after = define(name, "Fix the issue in {ticket}.", "fix")
+        before = define(name, "Fix the bug in {ticket}.", "wait") if changed else None
+        events.append({"role": "action", "id": id, "tool": "save_pipeline", "by": "dispatch", "status": "pending",
+                       "at": "2026-01-01T10:00:00+00:00",
+                       "input": {"definition": after, "before": before, "changes": changes if changed else {}}})
+    return conversation(chat, "A pipeline that asks first", events)
 
 
 def run_steps_chat():
@@ -666,7 +670,9 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
                                                 "branch": "main", "marks": marks}}, f)
         for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
                      settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat(),
-                     proposed_pipeline(), run_steps_chat()):
+                     proposed_pipeline(), run_steps_chat(),
+                     proposed_pipeline(PROPOSAL_CHAT, (("propstp1", "Built in the builder", False),
+                                                       ("propstp2", "Broken in the builder", False)))):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -2286,6 +2292,64 @@ class Suite:
         b.click("[aria-label=\"Drop COM-1284 Login redirect\"] .step-card-actions .btn.primary")
         b.wait("document.querySelector('[aria-label=\"Drop COM-1284 Login redirect\"].failed .step-card-outcome')?.textContent.includes('has already ended')", "the drop refused, on the card")
         self.check_errors("the run cards")
+
+    def step_status(self, chat, step):
+        return self.b.js(f"(async () => (await (await fetch('/dispatch/conversations/{chat}')).json()).events.find((e) => e.id === '{step}').status)()")
+
+    def test_builder_edits_a_proposal(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={PROPOSAL_CHAT}"))
+        card = '[aria-label="New pipeline: Built in the builder"]'
+        b.wait(f"document.querySelector('{card} .step-card-actions a')", "the proposal with Edit in the builder")
+        b.js(f"[...document.querySelectorAll('{card} .step-card-actions a')].find((a) => a.textContent.trim() === 'Edit in the builder').click()")
+        b.wait("document.querySelector('.pl-proposal')?.textContent.includes('Proposed by Dispatch. Saving approves it.')", "the builder holding the proposal")
+        if b.js("document.querySelector('.pl-tabs')"):
+            raise Failure("the builder shows its tabs for a proposal")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        b.click('.pl-node[data-step="fix"]')
+        b.wait("document.querySelector('#pl-inspector input[name=name]')", "the Fix step in the inspector")
+        self.set_field("#pl-inspector input[name=name]", "Fix it")
+        if b.js("document.getElementById('pl-save').textContent.trim()") != "Approve and save":
+            raise Failure("Save does not say it approves")
+        b.click("#pl-save")
+        b.wait("new URLSearchParams(location.search).get('p') === 'built-in-the-builder'", "the saved pipeline opened")
+        saved = b.js("(async () => (await (await fetch('/api/pipelines/built-in-the-builder')).json()))()")
+        if [s["name"] for s in saved["steps"]] != ["Plan", "Ask me", "Fix it"] or saved["enabled"]:
+            raise Failure(f"the library holds {saved}")
+        if self.step_status(PROPOSAL_CHAT, "propstp1") != "edited":
+            raise Failure("the proposal is not marked edited")
+        self.check_errors("the builder with a proposal")
+
+    def test_builder_proposal_with_problems_keeps_waiting(self):
+        b = self.b
+        b.goto(self.url(f"/pipeline?proposal={PROPOSAL_CHAT}.propstp2"))
+        b.wait("document.querySelector('.pl-proposal')", "the builder holding the proposal")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        b.click('.pl-node[data-step="fix"]')
+        b.wait("document.querySelector('#pl-inspector input[name=max_runs]')", "the Fix step in the inspector")
+        self.set_field("#pl-inspector input[name=max_runs]", "0")
+        b.click("#pl-save")
+        b.wait("(document.querySelector('#pl-inspector .pl-inspector-problems')?.textContent || '').includes('max_runs must be from 1 to 10')", "the problem in the builder")
+        if self.step_status(PROPOSAL_CHAT, "propstp2") != "pending":
+            raise Failure("a refused save decided the proposal")
+        self.set_field("#pl-inspector input[name=max_runs]", "2")
+        b.click("#pl-save")
+        b.wait("new URLSearchParams(location.search).get('p') === 'broken-in-the-builder'", "the corrected pipeline saved")
+        b.goto(self.url(f"/pipeline?proposal={PROPOSAL_CHAT}.propstp2"))
+        b.wait("document.querySelector('.pl-proposal')?.textContent.includes('This proposal was already decided')", "a decided proposal said so")
+        if b.js("document.getElementById('pl-save')"):
+            raise Failure("a decided proposal still offers to save")
+
+    def test_builder_asks_dispatch(self):
+        b = self.b
+        name = b.js("(async () => (await (await fetch('/api/pipelines/review')).json()).name)()")
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.getElementById('pl-ask')", "Ask Dispatch in the builder")
+        b.click("#pl-ask")
+        want = f'Change the pipeline "{name}" (review): '
+        b.wait(f"location.pathname === '/dispatch' && document.querySelector('#dispatch-form textarea[name=text]')?.value === {json.dumps(want)}", "Dispatch with the request started")
+        if "ask=" in b.js("location.search"):
+            raise Failure("the ask parameter stayed in the address")
 
     def check_errors(self, where):
         if self.b.errors:

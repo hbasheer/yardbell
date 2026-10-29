@@ -599,6 +599,7 @@ function actions(e, state) {
   return html`<div class="step-card-actions">
     <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => decide(e, "reject")}>${mine ? "Cancel" : "Reject"}</button>
     ${e.tool === "change_settings" ? html`<a class="btn quiet" href=${areaLink(e.input?.area)}>Open in Settings</a>` : nothing}
+    ${e.tool === "save_pipeline" ? html`<a class="btn" href=${`/pipeline?proposal=${encodeURIComponent(ctx.conversation())}.${e.id}`}>${ICONS.edit}Edit in the builder</a>` : nothing}
     ${editable ? html`<button class="btn" type="button" ?disabled=${busy} @click=${() => startEditing(e)}>${ICONS.edit}Edit</button>` : nothing}
     <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve"}</button>
   </div>`;
