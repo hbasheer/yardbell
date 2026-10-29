@@ -25,8 +25,12 @@ impl Default for Linear {
 }
 
 impl Linear {
+    // YARDBELL_LINEAR_URL points Yardbell at a stand-in for Linear, for the browser tests.
     pub fn new() -> Linear {
-        Linear::with_url(LINEAR_API)
+        match std::env::var("YARDBELL_LINEAR_URL") {
+            Ok(url) if !url.trim().is_empty() => Linear::with_url(url.trim()),
+            _ => Linear::with_url(LINEAR_API),
+        }
     }
 
     pub fn with_url(url: &str) -> Linear {

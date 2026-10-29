@@ -516,6 +516,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(triggers_api::routes())
         .merge(worktrees_api::routes())
         .merge(insights_api::routes())
+        .merge(pipeline_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -2129,6 +2130,7 @@ async fn remove_machine(
 }
 
 mod insights_api;
+mod pipeline_api;
 mod pulls_api;
 mod review_api;
 mod scan_api;

@@ -22,7 +22,7 @@ fn bad(msg: String) -> ApiError {
 }
 
 fn launch<'a>(app: &'a AppState, cfg: &'a Config) -> Launch<'a> {
-    Launch::new(cfg, app.secrets().map_err(|e| e.1), &app.dispatch)
+    Launch::new(cfg, app.secrets().map_err(|e| e.1), &app.dispatch).with_pipeline(&app.pipeline)
 }
 
 fn view(app: &AppState, cfg: &Config) -> Value {
@@ -77,7 +77,7 @@ async fn save(
     let before = app.config()?.triggers;
     for t in &triggers {
         let kept = before.iter().any(|b| b.name == t.name && b.task == t.task);
-        if !kept && !tasks.iter().any(|task| task.name == t.task && !task.hidden) {
+        if !t.pipeline() && !kept && !tasks.iter().any(|task| task.name == t.task && !task.hidden) {
             return Err(bad(format!(
                 "the trigger {} runs the task {}, which is not one of your tasks in Dispatch",
                 t.name, t.task

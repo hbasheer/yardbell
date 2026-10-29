@@ -13,6 +13,7 @@ use tower::ServiceExt;
 
 mod insights;
 mod memory;
+mod pipeline;
 mod worktrees;
 
 struct FakePorts;

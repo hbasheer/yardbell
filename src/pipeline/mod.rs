@@ -27,6 +27,7 @@ pub struct Pipeline {
     told: Mutex<HashSet<String>>,
     cfg: Mutex<Option<Cfg>>,
     ticking: tokio::sync::Mutex<()>,
+    linear: Mutex<Arc<linear::Linear>>,
 }
 
 fn settled(stage: Stage) -> bool {
@@ -57,6 +58,7 @@ impl Pipeline {
             told: Mutex::new(HashSet::new()),
             cfg: Mutex::new(None),
             ticking: tokio::sync::Mutex::new(()),
+            linear: Mutex::new(Arc::new(linear::Linear::new())),
         }
     }
 
@@ -72,6 +74,20 @@ impl Pipeline {
 
     pub fn get(&self, id: &str) -> Option<Record> {
         self.store.get(id)
+    }
+
+    pub fn linear(&self) -> Arc<linear::Linear> {
+        self.linear.lock().expect("pipeline linear").clone()
+    }
+
+    #[cfg(test)]
+    pub fn use_linear(&self, linear: linear::Linear) {
+        *self.linear.lock().expect("pipeline linear") = Arc::new(linear);
+    }
+
+    #[cfg(test)]
+    pub fn put(&self, record: Record) {
+        self.store.put(record);
     }
 
     fn known_cfg(&self) -> Cfg {
@@ -290,7 +306,6 @@ impl Pipeline {
         app: Arc<crate::web::AppState>,
         forge: forge::Forge,
     ) -> JoinHandle<()> {
-        let linear = Arc::new(linear::Linear::new());
         let forge = Arc::new(forge);
         tokio::spawn(async move {
             let mut every = tokio::time::interval(TICK);
@@ -306,7 +321,7 @@ impl Pipeline {
                 let world: Arc<dyn World> = Arc::new(run::Live::new(
                     app.clone(),
                     cfg,
-                    linear.clone(),
+                    self.linear(),
                     forge.clone(),
                 ));
                 if !self

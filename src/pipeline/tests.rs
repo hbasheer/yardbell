@@ -249,7 +249,7 @@ async fn tick(p: &Arc<Pipeline>, fake: &Arc<Fake>, cfg: Option<&crate::config::P
 }
 
 fn put(p: &Pipeline, r: Record) {
-    p.store.put(r);
+    p.put(r);
 }
 
 #[tokio::test]

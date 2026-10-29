@@ -260,9 +260,12 @@ pub async fn serve(
         Arc::new(crate::triggers::Live::new(runner.clone())),
         dir.join("triggers.json"),
     ));
-    triggers
-        .clone()
-        .start_loop(path.clone(), state.clone(), dispatch.clone());
+    triggers.clone().start_loop(
+        path.clone(),
+        state.clone(),
+        dispatch.clone(),
+        pipeline.clone(),
+    );
     let poller = Arc::new(Poller::new(
         path.clone(),
         Arc::new(Probe::new(runner.clone(), ssh.clone())),
