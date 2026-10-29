@@ -327,7 +327,11 @@ message fails with an error that says so, instead of a reply that could not do a
 
 A conversation stays on the agent it started on, since one cannot pick up the other's session.
 Changing **Dispatch runs on** applies to new conversations; an open one carries on where it
-started and says so above its messages. To switch, start a new conversation.
+started and says so above its messages. To switch, start a new conversation. Each agent keeps its
+own **Model**, and a conversation takes its agent's model at every turn, so a new model applies
+from the next message, in open conversations too. Beside the Dispatch heading, a label such as
+`Codex · gpt-6.1-sol` or `Claude Code · Haiku` shows the agent and model the open conversation
+runs on, or that a new one starts on, and leads to the setting.
 
 Dispatch also watches the pull requests of your sessions. When a session's CI goes from passing or
 running to failing, or a reviewer leaves a comment, a review or asks for changes, a card appears in
@@ -487,8 +491,8 @@ messages. While Dispatch is working, **Stop** takes the place of Send; it stops 
 and the sessions it started keep running.
 
 The **Dispatch** section of Settings adds your own instructions to its prompt (where your
-repositories live, which machine suits which work, how you name branches), picks the agent it
-starts in new sessions from the ones installed on your machines, picks the Claude model that
-runs Dispatch itself (Haiku is the fastest), and chooses whether Dispatch asks you to approve each
+repositories live, which machine suits which work, how you name branches), picks the agent that
+runs Dispatch itself and its model (for Claude Code, Haiku is the fastest), picks the agent it
+starts in new sessions from the ones installed on your machines, and chooses whether Dispatch asks you to approve each
 step, goes ahead without asking or is refused, with rules for the steps that should be decided
 differently.

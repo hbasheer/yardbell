@@ -1,5 +1,6 @@
 use super::super::mcp_config::CONVERSATION_HEADER;
 use super::{assistant, short, tool_text, Backend, Launch, TurnSpec, TOOLS};
+use crate::config::RunsOn;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -112,8 +113,9 @@ impl Backend for Codex {
         );
         set(&mut argv, &format!("{server}.required"), "true".into());
         user_servers(turn.extra, &mut argv, &mut env)?;
-        if !turn.settings.codex_model.is_empty() {
-            argv.extend(["-m".into(), turn.settings.codex_model.clone()]);
+        let model = turn.settings.model_for(RunsOn::Codex);
+        if !model.is_empty() {
+            argv.extend(["-m".into(), model.to_string()]);
         }
         if let Some(thread) = turn.resume {
             argv.push(thread.to_string());

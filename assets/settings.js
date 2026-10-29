@@ -120,18 +120,41 @@ function dispatchAgents() {
   f.elements.agent.value = current;
 }
 
-// Dispatch itself runs on the machine Yardbell runs on, whichever agent the sessions use.
+function dispatchRunsOnAgents() {
+  return (data.dispatch_runs_on || ["claude"]).map((name) => data.agents.find((a) => a.name === name) || { name, label: name });
+}
+
+// Dispatch itself runs on the machine Yardbell runs on, whichever agent the sessions use, so it
+// offers the agents it can run on from the same list as sessions, marked when one is not there.
 function dispatchRunsOn() {
   const f = $("dispatch-form");
-  const codex = f.elements.runs_on.value === "codex";
-  for (const label of f.querySelectorAll("[data-runs-on]")) label.hidden = label.dataset.runsOn !== (codex ? "codex" : "claude");
-  const name = codex ? "Codex" : "Claude Code";
+  const select = f.elements.runs_on;
+  const current = select.value || (data.dispatch || {}).runs_on || "claude";
+  const agents = dispatchRunsOnAgents();
   const here = (data.machines || []).find((m) => m.local);
-  const missing = here && installedOn?.[here.name] && !installedOn[here.name].includes(codex ? "codex" : "claude");
-  $("dispatch-foot").textContent = missing
+  const known = here && installedOn?.[here.name];
+  select.innerHTML = agents.map((a) => {
+    const absent = known && !known.includes(a.name) ? ` (not found on ${here.name})` : "";
+    return `<option value="${esc(a.name)}">${esc(a.label)}${esc(absent)}</option>`;
+  }).join("");
+  select.value = current;
+  for (const label of f.querySelectorAll("[data-runs-on]")) label.hidden = label.dataset.runsOn !== current;
+  const name = agents.find((a) => a.name === current)?.label || current;
+  $("dispatch-foot").textContent = known && !known.includes(current)
     ? `${name} is not installed on ${here.name}, where Dispatch runs, so Dispatch cannot answer until it is.`
     : `Dispatch runs ${name} on this machine. The agent it starts can be any of yours.`;
   $("codex-models").innerHTML = (data.codex_models || []).map((m) => `<option value="${esc(m)}"></option>`).join("");
+  codexModelNote();
+}
+
+// Codex accepts any model name here, since its list is only what it last fetched for this account.
+function codexModelNote() {
+  const f = $("dispatch-form");
+  const model = f.elements.codex_model.value.trim();
+  const listed = data.codex_models || [];
+  const note = $("codex-model-note");
+  note.hidden = f.elements.runs_on.value !== "codex" || !model || !listed.length || listed.includes(model);
+  note.textContent = `Codex does not list ${model} for your account, so it may refuse it. Dispatch then shows Codex's error in the conversation.`;
 }
 
 async function loadInstalled() {
@@ -152,7 +175,7 @@ function renderDispatch() {
   dispatchAgents();
   f.elements.instructions.value = d.instructions || "";
   f.elements.agent.value = d.agent || "";
-  f.elements.runs_on.value = d.runs_on || "claude";
+  f.elements.runs_on.value = "";
   f.elements.model.value = d.model || "";
   f.elements.codex_model.value = d.codex_model || "";
   dispatchRunsOn();
@@ -516,9 +539,10 @@ $("dispatch-form").addEventListener("submit", async (e) => {
     });
     const before = (data.dispatch || {}).runs_on || "claude";
     const now = f.elements.runs_on.value;
+    const name = dispatchRunsOnAgents().find((a) => a.name === now)?.label || now;
     saved(now === before
       ? "Dispatch settings saved. They apply from the next message."
-      : `Dispatch settings saved. New conversations start on ${now === "codex" ? "Codex" : "Claude Code"}, and open ones carry on where they started.`);
+      : `Dispatch settings saved. New conversations start on ${name}, and open ones carry on where they started.`);
     await load();
   } catch (err) {
     toast(err.message);
@@ -528,6 +552,7 @@ $("dispatch-form").addEventListener("submit", async (e) => {
 });
 
 $("dispatch-form").elements.runs_on.addEventListener("change", dispatchRunsOn);
+$("dispatch-form").elements.codex_model.addEventListener("input", codexModelNote);
 
 $("rule-add").addEventListener("click", () => {
   rules.push({ action: "stop_session", machine: "any", folder: "", approval: "deny" });

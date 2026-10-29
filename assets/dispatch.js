@@ -29,6 +29,7 @@ let backend = "claude";
 let runsOn = null;
 
 const AGENTS = { claude: "Claude Code", codex: "Codex" };
+const CLAUDE_MODELS = { sonnet: "Sonnet", opus: "Opus", haiku: "Haiku" };
 
 let editingTask = null;
 
@@ -41,7 +42,7 @@ const SESSION_STATES = {
 const intro = () => html`<div class="dispatch-intro">
   <h2>What should your agents work on?</h2>
   <p>Describe a task in plain words. Dispatch finds the machine that has the repository and the most room, and offers to start an agent there. You approve each step before it runs, unless Settings lets Dispatch go ahead on its own.</p>
-  <p class="help">Dispatch runs ${runsOn?.label || "Claude Code"} on this machine with Yardbell's own tools. It can start, read and answer sessions, but never edits files itself.</p>
+  <p class="help">Dispatch runs ${runsOnText(backend)} on this machine with Yardbell's own tools. It can start, read and answer sessions, but never edits files itself.</p>
   <p class="help">Type <kbd>/</kbd> to use one of your tasks, or <kbd>@</kbd> to name a machine, session or folder.</p>
 </div>`;
 
@@ -391,14 +392,35 @@ async function setTrigger(enabled) {
   draw();
 }
 
+function agentOf(name) {
+  const agent = runsOn?.agents?.[name];
+  const model = agent?.model || "";
+  return { label: agent?.label || AGENTS[name] || name, model: CLAUDE_MODELS[model] || model || "default model" };
+}
+
+function runsOnText(name) {
+  const { label, model } = agentOf(name);
+  return `${label} (${model})`;
+}
+
 // A conversation keeps the agent it started on, since one agent cannot pick up the other's.
 function backendNote() {
   if (!current || !runsOn || backend === runsOn.runs_on) return nothing;
-  const was = AGENTS[backend] || backend;
-  return html`<p class="backend-note" role="note">This conversation runs on ${was}, so it carries on there. New conversations start on ${runsOn.label}. To switch, start a new conversation.</p>`;
+  return html`<p class="backend-note" role="note">This conversation runs on ${runsOnText(backend)}, so it carries on there. New conversations start on ${runsOnText(runsOn.runs_on)}. To switch, start a new conversation.</p>`;
+}
+
+// The model is read again at every turn, so this is what the next reply runs on.
+function renderRunsOn() {
+  const chip = $("runs-on");
+  chip.hidden = !runsOn;
+  if (!runsOn) return;
+  const { label, model } = agentOf(backend);
+  chip.textContent = `${label} · ${model}`;
+  chip.title = `${current ? "This conversation runs" : "New conversations run"} on ${label} with ${model === "default model" ? "its default model" : model}. Change it in Settings.`;
 }
 
 function draw() {
+  renderRunsOn();
   render(!current && !events.length
     ? intro()
     : html`${triggerHead()}${backendNote()}${repeat(blocks(events), (b) => `${view}:${b.key}`, block)}${steps.waitingBar(events)}`, log);
@@ -489,7 +511,7 @@ async function open(id) {
   events = [];
   trigger = null;
   backend = runsOn?.runs_on || "claude";
-  if (!id) loadRunsOn();
+  loadRunsOn();
   answers = new Map();
   steps.reset();
   groups.reset();
@@ -551,6 +573,7 @@ async function watch(id) {
 
 async function ask(text, marks = {}) {
   setBusy(true);
+  loadRunsOn();
   show({ role: "user", text, ...marks });
   try {
     const res = await fetch("/dispatch/ask", {
@@ -854,7 +877,10 @@ $("save-as-task").addEventListener("click", () => {
 
 window.YardbellLive.follow(() => {
   catchUp(true);
-  if (!busy) loadList().catch(() => {});
+  if (!busy) {
+    loadList().catch(() => {});
+    loadRunsOn();
+  }
 }, 5000);
 
 function scroller() {

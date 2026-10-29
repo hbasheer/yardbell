@@ -87,6 +87,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "secrets": secrets,
         "dispatch": cfg.dispatch,
         "codex_models": app.dispatch.codex_models(),
+        "dispatch_runs_on": crate::config::RunsOn::ALL.map(|r| r.name()),
         "agents": cfg
             .agents()
             .iter()

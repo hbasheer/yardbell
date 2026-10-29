@@ -795,10 +795,32 @@ fn runs_on(app: &AppState) -> crate::config::RunsOn {
         .unwrap_or_default()
 }
 
-// The agent new conversations start on. A conversation keeps the one it started on.
+// The agent new conversations start on, and the model each agent runs with. A conversation keeps
+// the agent it started on and takes that agent's model at every turn.
 async fn dispatch_runs_on(AxState(app): AxState<Arc<AppState>>) -> Response {
-    let runs_on = runs_on(&app);
-    Json(json!({ "runs_on": runs_on, "label": runs_on.label() })).into_response()
+    let cfg = app.config().ok();
+    let settings = cfg.as_ref().map(|c| c.dispatch.clone()).unwrap_or_default();
+    let label = |runs_on: crate::config::RunsOn| {
+        cfg.as_ref()
+            .and_then(|c| c.agent(runs_on.name()))
+            .map(|a| a.display())
+            .unwrap_or_else(|| runs_on.label().to_string())
+    };
+    let agents: serde_json::Map<String, Value> = crate::config::RunsOn::ALL
+        .iter()
+        .map(|&r| {
+            let agent = json!({ "label": label(r), "model": settings.model_for(r) });
+            (r.name().to_string(), agent)
+        })
+        .collect();
+    let runs_on = settings.runs_on;
+    Json(json!({
+        "runs_on": runs_on,
+        "label": label(runs_on),
+        "model": settings.model_for(runs_on),
+        "agents": agents,
+    }))
+    .into_response()
 }
 
 async fn dispatch_usage(AxState(app): AxState<Arc<AppState>>) -> Response {

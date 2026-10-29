@@ -764,6 +764,59 @@ echo '{{"type":"result","is_error":false,"result":"Started on mini."}}'"#,
     }
 
     #[tokio::test]
+    async fn a_conversation_takes_its_own_agents_model_from_the_next_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let args = dir.path().join("args");
+        let dispatch = fake_claude(
+            dir.path(),
+            &format!(
+                r#"printf '%s\n' "$@" > {}
+echo '{{"type":"system","subtype":"init","session_id":"s1"}}'"#,
+                args.display()
+            ),
+        );
+        let model = |model: &str| DispatchSettings {
+            model: model.into(),
+            ..DispatchSettings::default()
+        };
+        let (id, rx) = dispatch
+            .ask(None, "hi", 4000, &model("haiku"), None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        assert!(std::fs::read_to_string(&args)
+            .unwrap()
+            .contains("--model\nhaiku\n"));
+
+        let switched = DispatchSettings {
+            model: "opus".into(),
+            ..codex_settings("gpt-6.1-sol")
+        };
+        let (_, rx) = dispatch
+            .ask(Some(&id), "again", 4000, &switched, None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        let ran = std::fs::read_to_string(&args).unwrap();
+        assert!(
+            ran.contains("--model\nopus\n--resume\ns1\n"),
+            "the Claude conversation resumes on Claude's new model: {ran}"
+        );
+        assert!(!ran.contains("gpt-6.1-sol"), "{ran}");
+
+        let (_, rx) = dispatch
+            .ask(Some(&id), "default", 4000, &model(""), None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        let ran = std::fs::read_to_string(&args).unwrap();
+        assert!(
+            !ran.contains("--model"),
+            "back to Claude Code's default: {ran}"
+        );
+    }
+
+    #[tokio::test]
     async fn every_turn_reads_the_memory_as_it_is_then() {
         let dir = tempfile::tempdir().unwrap();
         let args = dir.path().join("args");

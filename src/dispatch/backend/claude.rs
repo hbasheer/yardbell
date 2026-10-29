@@ -1,6 +1,7 @@
 use super::super::mcp_config::extra_servers;
 use super::super::usage;
 use super::{assistant, short, tool_text, Backend, Launch, TurnSpec, TOOLS};
+use crate::config::RunsOn;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -45,8 +46,9 @@ impl Backend for Claude {
             ]
             .map(String::from),
         );
-        if !turn.settings.model.is_empty() {
-            argv.extend(["--model".into(), turn.settings.model.clone()]);
+        let model = turn.settings.model_for(RunsOn::Claude);
+        if !model.is_empty() {
+            argv.extend(["--model".into(), model.to_string()]);
         }
         if let Some(session) = turn.resume {
             argv.extend(["--resume".into(), session.to_string()]);
