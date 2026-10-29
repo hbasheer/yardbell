@@ -727,8 +727,61 @@ class Suite:
             b.viewport(1280, 800)
             b.pump(0.3)
             now = b.js(shown)
-            if now["tabs"] or not (now["chat"] and now["convos"] and now["tasks"]):
-                raise Failure(f"a wide Dispatch keeps its lists beside the chat and has no tabs: {now}")
+            if not (now["tabs"] and now["chat"]) or now["convos"] == now["tasks"]:
+                raise Failure(f"a wide Dispatch keeps one list beside the chat, picked by its tabs: {now}")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_wide_dispatch_is_an_app_layout(self):
+        b = self.b
+        b.viewport(1280, 800)
+        try:
+            b.goto(self.url(f"/dispatch?c={LONG_CHAT}"))
+            b.wait("document.querySelectorAll('#dispatch-log .msg').length >= 49", "the long conversation")
+            b.pump(0.3)
+            if b.js("document.scrollingElement.scrollHeight > innerHeight + 1"):
+                raise Failure("the wide Dispatch page scrolls as a whole")
+            b.js("const c = document.getElementById('dispatch-chat'); c.scrollTop = c.scrollHeight")
+            b.pump(0.3)
+            seen = b.js(
+                """(() => {
+                  const box = (id) => document.getElementById(id).getBoundingClientRect();
+                  const title = box('chat-title');
+                  const form = box('dispatch-form');
+                  const last = [...document.querySelectorAll('#dispatch-log .msg')].pop().getBoundingClientRect();
+                  return {
+                    title: document.getElementById('chat-title').textContent.trim(),
+                    titleShown: title.top >= 0 && title.bottom <= innerHeight && title.height > 0,
+                    formBottom: form.bottom, lastBottom: last.bottom, formTop: form.top, height: innerHeight,
+                    back: document.querySelector('.back-link').getClientRects().length > 0,
+                    sideScrolls: getComputedStyle(document.getElementById('dispatch-side')).overflowY,
+                  };
+                })()"""
+            )
+            if seen["title"] != "A long conversation" or not seen["titleShown"]:
+                raise Failure(f"the open conversation's title is not shown above it: {seen}")
+            if seen["formBottom"] > seen["height"] + 1 or seen["lastBottom"] > seen["formTop"] + 1:
+                raise Failure(f"the message box is not pinned below the last message: {seen}")
+            if seen["back"]:
+                raise Failure("the wide page still shows a Dashboard back-link")
+            if seen["sideScrolls"] != "auto":
+                raise Failure(f"the list column does not scroll on its own: {seen}")
+            shown = """(() => {
+              const seen = (id) => document.getElementById(id).getClientRects().length > 0;
+              return [seen('convo-list'), seen('task-list'), seen('dispatch-form'),
+                      document.querySelector('#dispatch-tabs [data-tab=chat]').getClientRects().length > 0,
+                      document.querySelector('#dispatch-tabs [aria-selected=true]')?.dataset.tab];
+            })()"""
+            if b.js(shown) != [True, False, True, False, "convos"]:
+                raise Failure(f"a wide page shows its conversations beside the chat: {b.js(shown)}")
+            b.click("#dispatch-tabs [data-tab=tasks]")
+            if b.js(shown) != [False, True, True, False, "tasks"]:
+                raise Failure(f"Tasks takes the list column and the chat stays: {b.js(shown)}")
+            b.click("#dispatch-tabs [data-tab=convos]")
+            b.click("#convo-list .convo:not(.selected) a")
+            b.wait("document.getElementById('chat-title').textContent.trim() !== 'A long conversation'", "the title to follow the open conversation")
+            if b.js(shown)[4] != "convos":
+                raise Failure("opening a conversation moved the list off Chats")
         finally:
             b.viewport(1280, 800)
 
@@ -797,7 +850,7 @@ class Suite:
             b.wait("document.querySelector('#dispatch-log .backend-note')?.textContent.includes('This conversation runs on Codex (gpt-6.1-mini), so it carries on there. New conversations start on Claude Code (Haiku).')",
                    "the note that this conversation stays on Codex, with Codex's new model")
             b.wait("document.getElementById('runs-on').textContent === 'Codex · gpt-6.1-mini'", "the label for this conversation")
-            b.click("#new-chat")
+            b.click("#tab-new")
             b.wait("document.getElementById('runs-on').textContent === 'Claude Code · Haiku'", "the label for a new conversation")
         finally:
             self.api("POST", "/api/settings/dispatch", before)
@@ -902,7 +955,7 @@ class Suite:
         note = b.js("[...document.querySelectorAll('#dispatch-log .step-card.pending')].at(-1).querySelector('.read-only-note')?.textContent || ''")
         if not note.startswith("Read-only by instruction: Shell cannot be started with file editing turned off"):
             raise Failure(f"the Shell agent's scan does not say it is read-only by instruction: {note!r}")
-        b.click("#new-chat")
+        b.click("#tab-new")
         b.wait("!new URLSearchParams(location.search).get('c')", "a new conversation")
         b.click("#insert-scan")
         b.wait("document.getElementById('scan-dialog')?.open && document.querySelector('#scan-dialog select option')", "the Scan a folder dialog")
@@ -920,7 +973,7 @@ class Suite:
         tree = os.path.join(self.y.root, "demo-app-worktrees", "scan-wt")
         git("worktree", "add", "-q", "-b", "scan-wt", tree, cwd=repo)
         try:
-            b.click("#new-chat")
+            b.click("#tab-new")
             b.wait("!new URLSearchParams(location.search).get('c')", "a new conversation")
             b.click("#insert-scan")
             b.wait("document.getElementById('scan-dialog')?.open", "the Scan a folder dialog")
