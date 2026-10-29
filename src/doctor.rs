@@ -36,6 +36,52 @@ pub fn gitlab_line(host: &str, found: &Result<String, String>) -> (bool, String)
     }
 }
 
+pub fn pipeline_lines(
+    cfg: &Config,
+    linear: &Result<usize, String>,
+    gh: &[(String, bool)],
+) -> Vec<(bool, String)> {
+    let Some(p) = &cfg.pipeline else {
+        return Vec::new();
+    };
+    let mut lines = vec![match linear {
+        Ok(n) => (
+            true,
+            format!("pipeline: Linear answers, {n} open tickets are yours"),
+        ),
+        Err(e) => (false, format!("pipeline: {e}")),
+    }];
+    if !p.linear_state.is_empty() {
+        lines.push((
+            true,
+            format!(
+                "pipeline: finished tickets move to {} in Linear, so the key needs write access",
+                p.linear_state
+            ),
+        ));
+    }
+    for (machine, logged_in) in gh {
+        lines.push(if *logged_in {
+            (true, format!("pipeline: gh is logged in on {machine}"))
+        } else {
+            (
+                false,
+                format!("pipeline: gh is not logged in on {machine}, so draft pull requests cannot be opened there (run gh auth login on {machine})"),
+            )
+        });
+    }
+    for g in &cfg.pull_requests.gitlab {
+        lines.push((
+            true,
+            format!(
+                "pipeline: draft merge requests on {} need its token to have the api scope",
+                g.host
+            ),
+        ));
+    }
+    lines
+}
+
 fn line(ok: bool, text: &str) {
     println!("{} {text}", if ok { "✓" } else { "✗" });
 }
@@ -74,7 +120,8 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
     if let Some(hint) = &mesh.hint {
         println!("  fix: {hint}");
     }
-    let probe = Probe::new(runner.clone(), Ssh::new(state_dir));
+    let ssh = Ssh::new(state_dir);
+    let probe = Probe::new(runner.clone(), ssh.clone());
     for m in &cfg.machines {
         let st = probe.check(&cfg, m).await;
         let detail = match (&st.reason, &st.snapshot) {
@@ -93,6 +140,39 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
         let gitlab = crate::pulls::GitLab::new();
         for access in crate::pulls::accesses(&cfg.pull_requests, &secrets) {
             let (ok, text) = gitlab_line(&access.host, &gitlab.whoami(&access).await);
+            line(ok, &text);
+        }
+    }
+    if let Some(p) = &cfg.pipeline {
+        let secrets = crate::secrets::Secrets::for_config(path).map_err(|e| e.to_string());
+        let linear = match secrets.and_then(|s| {
+            s.get(crate::triggers::LINEAR_SECRET)
+                .map(str::to_string)
+                .ok_or_else(|| {
+                    "the secret linear is not set, so the pipeline cannot read tickets".to_string()
+                })
+        }) {
+            Ok(key) => crate::pipeline::linear::Linear::new()
+                .open(&key)
+                .await
+                .map(|t| t.len()),
+            Err(e) => Err(e),
+        };
+        let mut gh = Vec::new();
+        for name in &p.machines {
+            let Some(m) = cfg.machine(name) else {
+                continue;
+            };
+            let out = runner
+                .run(
+                    ssh.command(m, "gh auth status >/dev/null 2>&1"),
+                    None,
+                    std::time::Duration::from_secs(15),
+                )
+                .await;
+            gh.push((name.clone(), out.ok()));
+        }
+        for (ok, text) in pipeline_lines(&cfg, &linear, &gh) {
             line(ok, &text);
         }
     }
@@ -153,6 +233,45 @@ mod tests {
                 "git.commslayer.com: the secret gitlab is not set".into()
             )
         );
+    }
+
+    #[test]
+    fn the_pipeline_lines_name_each_problem() {
+        let cfg: crate::config::Config = serde_yaml::from_str(
+            "machines:\n  - name: hp\n    local: true\n    root: /r\npipeline:\n  machines: [hp]\n  test_machine: hp\n  linear_state: In Review\npull_requests:\n  gitlab:\n    - host: git.example.com\n      token: x\n",
+        )
+        .unwrap();
+        let lines = pipeline_lines(
+            &cfg,
+            &Err("Linear refused the API key in the secret linear".into()),
+            &[("hp".into(), false)],
+        );
+        assert_eq!(
+            lines,
+            vec![
+                (false, "pipeline: Linear refused the API key in the secret linear".into()),
+                (true, "pipeline: finished tickets move to In Review in Linear, so the key needs write access".into()),
+                (false, "pipeline: gh is not logged in on hp, so draft pull requests cannot be opened there (run gh auth login on hp)".into()),
+                (true, "pipeline: draft merge requests on git.example.com need its token to have the api scope".into()),
+            ]
+        );
+        let ok = pipeline_lines(&cfg, &Ok(3), &[("hp".into(), true)]);
+        assert_eq!(
+            ok[0],
+            (
+                true,
+                "pipeline: Linear answers, 3 open tickets are yours".into()
+            )
+        );
+        assert_eq!(ok[2], (true, "pipeline: gh is logged in on hp".into()));
+    }
+
+    #[test]
+    fn no_pipeline_no_line() {
+        let cfg: crate::config::Config =
+            serde_yaml::from_str("machines:\n  - name: hp\n    local: true\n    root: /r\n")
+                .unwrap();
+        assert!(pipeline_lines(&cfg, &Ok(0), &[]).is_empty());
     }
 
     #[test]

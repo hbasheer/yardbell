@@ -228,6 +228,23 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   in the desktop app's tray menu.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
+### Pipeline
+
+The Pipeline page shows the [ticket pipeline](automation.md#the-ticket-pipeline):
+
+- **Needs you**, when a ticket is waiting: why it stopped (triage's questions, the agent's question
+  with its screen, the findings still open, QA's report or the error), a box for your answer, and
+  **Retry** and **Drop**.
+- **Runs**: one row per ticket, with five marks for Triage, Implement, Review, QA and Finish, where it
+  is now ("Review, round 2", "Queued, 1 ahead"), its machine (hover for why Dispatch picked it), its
+  branch, the draft pull request once open, how long it has been in this stage, **Conversation** and
+  **Stop**.
+- **Start a run**: **Show my open tickets** lists your open Linear tickets. Tick some and **Start**,
+  or pick a state and **Start all in** it. Tickets already in a run cannot be ticked.
+
+Without a `pipeline` section in `yardbell.yml` the page says the pipeline is off, and tickets you
+start wait until it is on. In Dispatch's list, each ticket's conversation has the pipeline mark.
+
 ### Dispatch
 
 ![Dispatch page with a conversation](screenshots/dispatch.png)

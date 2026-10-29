@@ -439,6 +439,27 @@ reviewer asking for changes or approving as on GitHub. A request for changes wit
 changes the badge but posts no card, and only the newest 500 comments of
 one merge request are watched.
 
+### `pipeline` (optional)
+
+Carries Linear tickets through triage, implement, review, QA on a test machine and a draft pull
+request. See [The ticket pipeline](automation.md#the-ticket-pipeline).
+
+```yaml
+pipeline:
+  machines: [hp, mini]        # required: where tickets are implemented
+  test_machine: devbox        # required: where QA runs
+  per_machine: 2              # tickets at once per machine in implement, review or fix, 1 to 6
+  review_rounds: 2            # review and fix rounds before a ticket waits for you, 1 to 5
+  qa_retries: 1               # fixes after a failed QA before it waits for you, 0 to 3
+  stage_minutes: 120          # a stage running longer waits for you, 10 to 1440
+  linear_state: In Review     # optional: where finished tickets move in Linear
+  qa_instructions: |          # optional: how the test machine runs specs and the console
+    Run specs with: docker compose exec web bin/rspec <files>
+```
+
+Every machine named must be in `machines`. The Linear key is the secret `linear`, as for triggers;
+moving tickets needs a key that can write.
+
 ### `triggers` (optional)
 
 Start a saved Dispatch task on a schedule, or when a Linear or GitHub ticket comes your way. The
@@ -467,6 +488,11 @@ triggers:
 ```
 
 Each trigger has a `name`, a `task` and exactly one of `schedule`, `linear` or `github`.
+
+`start: pipeline` puts tickets into the [ticket pipeline](#pipeline-optional) instead of starting a
+conversation, and needs no `task`. A Linear trigger adds each ticket it fires for; a schedule needs
+`state`, such as `state: Todo`, and adds all your open tickets in that state that are not already
+running. GitHub triggers cannot start the pipeline.
 
 `schedule` is one of:
 

@@ -5,6 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **The ticket pipeline** carries Linear tickets through on its own: Dispatch triages each ticket and
+  picks the machine, folder and branch; an agent implements it in a new worktree; the reviewer
+  reviews it and its findings go back for fixing; a QA agent on the test machine runs the specs and
+  checks the behaviour in the Rails console; then the branch is pushed, a draft pull or merge
+  request opened, the ticket moved in Linear and a comment drafted for you. A ticket that needs you,
+  such as one with triage questions or an agent asking something, waits under **Needs you** on the
+  new **Pipeline** page with a phone notification, and your answer goes where it stopped. Start a
+  run from the page, or with a Linear or schedule trigger set to `start: pipeline`. Set it up under
+  `pipeline` in `yardbell.yml`; `yardbell doctor` checks Linear and `gh`.
+- On a phone, Settings and Log out in the header show as their icons, to make room for Pipeline.
+
 ## [0.7.10] - 2026-10-29
 
 - Dispatch's cards are shorter and easier to read. A review or scan groups its findings under

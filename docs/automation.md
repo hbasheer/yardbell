@@ -1,12 +1,14 @@
-# Triggers, worktree setup and rules
+# Triggers, worktree setup, rules and the ticket pipeline
 
-How to let Yardbell start work for you, prepare every new worktree, and decide what Dispatch may do
-without asking. Each part has what it is, when it helps, and examples you can copy.
+How to let Yardbell start work for you, prepare every new worktree, decide what Dispatch may do
+without asking, and carry Linear tickets from implementation to a draft pull request. Each part has
+what it is, when it helps, and examples you can copy.
 
 The settings themselves are listed in [Configuration](configuration.md): see
 [`triggers`](configuration.md#triggers-optional),
 [`worktree_setup`](configuration.md#worktree_setup-optional) and
-[`dispatch`](configuration.md#dispatch-optional).
+[`dispatch`](configuration.md#dispatch-optional) and
+[`pipeline`](configuration.md#pipeline-optional).
 
 ## How they fit together
 
@@ -425,3 +427,92 @@ memory collects what came up later, like "the shared docker stack is on hp" afte
 Dispatch once. When an entry in memory goes out of date, edit or delete it under **Memory**, or
 tell Dispatch, which proposes replacing it. Since your instructions win, a lasting rule of thumb
 belongs there rather than in memory.
+
+## The ticket pipeline
+
+### What it does
+
+The pipeline takes Linear tickets and carries each one through the same stages you would, on its
+own, and stops only when it needs you:
+
+| Stage | What happens |
+|---|---|
+| Triage | Dispatch reads the ticket and its comments. Clear enough: it picks one of your pipeline machines, the folder and a branch named after the ticket (`com-1234-fix-webhook-dedup`), and says why. Not clear: it asks you, and the ticket waits under **Needs you**. |
+| Implement | A new worktree on that branch, with your worktree setup, and an agent that makes the change, adds tests, runs them and commits. Nothing is pushed. |
+| Review and fix | The **Review branch** reviewer reads the branch and runs the tests. High and medium findings go back to the implementer, then the reviewer looks again, up to `review_rounds` times. Low findings do not hold the ticket. |
+| QA | The branch and its uncommitted changes are copied to your test machine, where a QA agent that cannot edit files runs the specs for the changed code and checks the ticket's behaviour in the Rails console, and reports pass or fail with what it ran. A fail goes back to the implementer once (`qa_retries`). |
+| Finish | The branch is pushed (with the secret check, never forced), a draft pull request or merge request is opened with a summary, the Linear ticket moves to `linear_state`, and a Linear comment is drafted for you to post. |
+
+Each ticket gets its own Dispatch conversation, where every step shows as a card marked **Ran as
+part of the pipeline**. Starting a run is the one approval: your Dispatch rules still refuse what
+they refuse, and a step a rule refuses stops its ticket with the rule's reason.
+
+### When it stops for you
+
+A ticket parks under **Needs you** on the Pipeline page, and your phone gets a notification, when:
+
+- triage has questions;
+- an agent asks something or waits on a prompt (its screen is shown);
+- the review still finds high or medium problems after the last round, or QA still fails;
+- the push is refused, by the secret check or a rule;
+- its machine stays offline for 30 minutes, or a stage runs longer than `stage_minutes`;
+- the ticket was closed in Linear meanwhile.
+
+Answer in the box, and the answer goes where the ticket stopped: back to triage, typed into the
+waiting agent, or sent to the implementer with the open findings. **Retry** runs the stage again,
+and **Drop** stops the ticket's sessions and leaves its worktree and branch.
+
+### Set it up
+
+1. Save your Linear API key as the secret `linear` (Settings, MCP servers, Secrets).
+2. Log in `gh` on the machines that implement tickets, for draft pull requests. For GitLab, the
+   host's token under `pull_requests.gitlab` needs the `api` scope to open merge requests.
+3. Add a `pipeline` section to `yardbell.yml`:
+
+```yaml
+pipeline:
+  machines: [hp, mini]        # where tickets are implemented; Dispatch picks among these
+  test_machine: devbox        # where QA runs
+  per_machine: 2              # tickets at once per machine
+  review_rounds: 2
+  qa_retries: 1
+  stage_minutes: 120
+  linear_state: In Review     # where finished tickets move; leave out to not move them
+  qa_instructions: |
+    Run specs with: docker compose exec web bin/rspec <files>
+    Rails console:  docker compose exec web bin/rails console
+```
+
+4. Run `yardbell doctor`. Its `pipeline` lines say whether Linear answers and `gh` is logged in.
+
+### Start a run
+
+- **By hand:** on the Pipeline page, **Show my open tickets**, tick some and **Start**, or pick a
+  state and **Start all in Todo**.
+- **As tickets arrive:** a Linear trigger with `start: pipeline` puts each ticket it fires for into
+  the pipeline.
+- **On a schedule:** a schedule trigger with `start: pipeline` and `state: Todo` starts all your
+  open tickets in Todo at its time.
+
+```yaml
+triggers:
+  - name: Nightly tickets
+    start: pipeline
+    state: Todo
+    schedule: weekdays 02:00
+  - name: New tickets
+    start: pipeline
+    linear:
+      assigned: true
+```
+
+A ticket that is already in a run is never started twice. Records are kept in `pipeline.json` in
+the state folder, so a restart carries on where each ticket was.
+
+### Limits
+
+- Dispatch can only pick a folder a pipeline machine already has; otherwise triage says so.
+- QA follows `qa_instructions` for how a repository runs its specs and console. Without them the QA
+  agent finds out from the repository, which takes longer.
+- GitHub issues cannot start the pipeline; it reads Linear tickets only.
+
