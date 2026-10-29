@@ -722,7 +722,10 @@ steps.setup({
   state: () => lastState,
   loadState,
   reload: () => catchUp(false),
-  decided: () => loadList().catch(() => {}),
+  decided: () => {
+    loadList().catch(() => {});
+    loadTasks();
+  },
   addStep(step) {
     events.push(step);
     shownEvents = Math.max(shownEvents, events.length);

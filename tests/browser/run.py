@@ -3,6 +3,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -34,6 +35,10 @@ RESULTS_CHAT = "browserresults01"
 MEMORY_CHAT = "browsermemory001"
 MEMORY_OLD = "Run docker on hp"
 MEMORY_NEW = "Always use the shared docker stack on hp"
+SETTINGS_CHAT = "browsersettings1"
+SETTINGS_EDIT_CHAT = "browsersettings2"
+TASK_CHAT = "browsersavetask1"
+NEW_TASK = "Standup notes"
 REFUSED = "the user's Dispatch rule \"deny start_session on pro\" refuses it"
 PULL_SESSION = "hp-pull-test"
 FAKE_PR = {
@@ -301,6 +306,32 @@ def memory_chat():
     return conversation(MEMORY_CHAT, "Start the api on hp", [
         {"role": "user", "text": "No, use the shared docker stack on hp, not a new one"},
         {"role": "assistant", "text": "Understood. I proposed keeping that in memory."},
+        step,
+    ])
+
+
+# Dispatch proposed changing the phone notifications: the wait goes from 2 minutes to `wait`.
+def settings_chat(id, step, wait):
+    before = {"agent_waiting": True, "machines": True, "memory": True, "session_ended": True, "wait_minutes": 2}
+    head = '{\n  "agent_waiting": true,\n  "machines": true,\n  "memory": true,\n  "session_ended": true,\n  "wait_minutes": '
+    change = {"role": "action", "id": step, "tool": "change_settings", "by": "dispatch", "status": "pending",
+              "at": "2026-01-01T10:00:00+00:00",
+              "input": {"area": "phone", "value": {**before, "wait_minutes": wait}, "before": before,
+                        "diff": [{"op": "same", "text": head}, {"op": "del", "text": "2"},
+                                 {"op": "add", "text": str(wait)}, {"op": "same", "text": "\n}"}]}}
+    return conversation(id, "Wait longer before phoning", [
+        {"role": "user", "text": f"Only tell my phone after {wait} minutes"},
+        change,
+    ])
+
+
+def task_chat():
+    text = "List what changed yesterday and what waits for review."
+    step = {"role": "action", "id": "taskstp1", "tool": "save_task", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00",
+            "input": {"name": NEW_TASK, "text": text, "before": "", "diff": [{"op": "add", "text": text}]}}
+    return conversation(TASK_CHAT, "Keep my standup as a task", [
+        {"role": "user", "text": "Save my standup question as a task"},
         step,
     ])
 
@@ -587,7 +618,8 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         with open(os.path.join(self.state, "insights.json"), "w") as f:
             json.dump({f"{MACHINE}:{OLD_RUN}": {"machine": MACHINE, "name": OLD_RUN, "agent": "shell", "folder": "demo-app",
                                                 "branch": "main", "marks": marks}}, f)
-        for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight):
+        for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
+                     settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat()):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -1533,6 +1565,78 @@ class Suite:
             raise Failure(f"memory.md holds {saved!r}")
         if os.stat(os.path.join(self.y.state, "dispatch", "memory.md")).st_mode & 0o777 != 0o600:
             raise Failure("memory.md is readable by other accounts")
+
+    def wait_minutes(self):
+        with open(self.y.config) as f:
+            found = re.search(r"wait_minutes: (\d+)", f.read())
+        return int(found.group(1)) if found else None
+
+    def test_dispatch_change_settings_card(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={SETTINGS_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .change-diff')", "the settings step with its diff")
+        seen = b.js(f"""(() => {{
+          const c = document.querySelector('{card}');
+          return {{ title: c.querySelector('.step-card-title strong').textContent,
+                   del: c.querySelector('.change-diff del')?.textContent,
+                   ins: c.querySelector('.change-diff ins')?.textContent,
+                   link: c.querySelector('a[href="/settings#phone"]')?.textContent.trim() }};
+        }})()""")
+        if seen != {"title": "Change Settings: Phone notifications", "del": "removed 2", "ins": "added 7", "link": "Open in Settings"}:
+            raise Failure(f"the card shows {seen}")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome a[href=\"/settings#phone\"]')", "the change saved, with a link to Settings")
+        said = b.js("document.querySelector('#dispatch-log .step-card.done .step-card-outcome').textContent")
+        if "Settings, Undo reverses it" not in said:
+            raise Failure(f"the outcome says {said!r}")
+        if self.wait_minutes() != 7:
+            raise Failure(f"yardbell.yml waits {self.wait_minutes()} minutes")
+        self.check_errors("the settings card")
+
+    def test_dispatch_change_settings_edit(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={SETTINGS_EDIT_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .change-diff')", "the settings step")
+        b.js(f"[...document.querySelectorAll('{card} .step-card-actions button')].find((x) => x.textContent.trim() === 'Edit').click()")
+        area = f"{card} .step-card-form textarea"
+        b.wait(f"document.querySelector('{area}')?.value.includes('\"wait_minutes\": 9')", "the value as JSON to edit")
+
+        def put(text):
+            b.js(f"""(() => {{ const t = document.querySelector('{area}'); t.value = {json.dumps(text)};
+              t.dispatchEvent(new Event('input')); }})()""")
+
+        value = b.js(f"document.querySelector('{area}').value")
+        put(value.replace('"wait_minutes": 9', '"wait_minutes": 500'))
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait(f"document.querySelector('{card} .step-card-form [role=alert]')?.textContent.includes('from 0 to 60')", "the problem on the card")
+        put("{ not json")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait(f"document.querySelector('{card} .step-card-form [role=alert]')?.textContent.includes('JSON')", "a note that the value is not JSON")
+        put(value.replace('"wait_minutes": 9', '"wait_minutes": 12'))
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done')", "the edited change saved")
+        note = b.js("document.querySelector('#dispatch-log .step-card.done .step-card-note').textContent")
+        if "you changed the settings" not in note:
+            raise Failure(f"the card says {note!r}")
+        if self.wait_minutes() != 12:
+            raise Failure(f"yardbell.yml waits {self.wait_minutes()} minutes")
+
+    def test_dispatch_save_task_card(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={TASK_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .change-diff ins')", "the task step with its text")
+        title = b.js(f"document.querySelector('{card} .step-card-title strong').textContent")
+        if title != f"Save the task {NEW_TASK}":
+            raise Failure(f"the card is titled {title!r}")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome')?.textContent.includes('Saved as version 1')", "the task saved")
+        b.wait(f"[...document.querySelectorAll('#task-list .task')].some((t) => t.textContent.includes({json.dumps(NEW_TASK)}))", "the task in the list")
+        b.click("#dispatch-log .step-card.done .step-card-outcome .btn")
+        b.wait("document.querySelectorAll('.th-dialog .th-version').length === 1", "the task's history")
+        b.js("document.querySelector('.th-dialog').close()")
 
     def test_task_history_diff_and_restore(self):
         b = self.b

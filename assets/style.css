@@ -1911,6 +1911,7 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .th-pick { display: flex; flex-wrap: wrap; gap: 8px 12px; align-items: end; }
 .th-pick label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
 .th-pick select { height: 32px; }
+.step-card-form textarea.step-card-json { font: 12.5px/1.6 var(--mono); tab-size: 2; }
 .th-diff { max-height: 240px; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--side); font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
 .th-diff ins { padding: 0 1px; text-decoration: none; border-radius: 3px; background: color-mix(in srgb, var(--ok) 16%, transparent); color: var(--ok-text); }
 .th-diff del { padding: 0 1px; border-radius: 3px; background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--bad-text); }
