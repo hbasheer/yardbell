@@ -41,16 +41,16 @@ ${secret:name}, and any other credential shows (hidden).",
     ),
     tool(
         "list_conversations",
-        "Dispatch conversations, newest first: id, title, when it last changed, how many steps wait for the user, and who started it (you, a trigger or a pipeline run).",
+        "Dispatch conversations, newest first, at most 50 (more counts the rest): id, title, when it last changed, how many steps wait for the user, and who started it (you, a trigger or a pipeline run).",
         json!({ "filter": { "type": "string", "enum": ["all", "waiting", "trigger", "pipeline"] } }),
         &[],
     ),
     tool(
         "read_conversation",
-        "One Dispatch conversation's newest turns and step cards, oldest first. Long text is clipped.",
+        "One Dispatch conversation's newest events (messages, tool calls and step cards), oldest first. Long text is clipped and the answer stays under about 30 000 characters; left_out counts the older events not returned.",
         json!({
             "id": { "type": "string", "description": "Conversation id from list_conversations" },
-            "last": { "type": "integer", "minimum": 1, "maximum": 100, "description": "How many of the newest turns, default 20" },
+            "last": { "type": "integer", "minimum": 1, "maximum": 50, "description": "How many of the newest events, default 20" },
         }),
         &["id"],
     ),
@@ -80,7 +80,7 @@ ${secret:name}, and any other credential shows (hidden).",
     ),
     tool(
         "list_runs",
-        "Pipeline runs as summaries, newest first, at most 50: id, pipeline, subject, state, step and why it waits.",
+        "Pipeline runs as summaries, newest first, at most 50 (more counts the rest): id, pipeline, subject, state, step and why it waits.",
         json!({
             "pipeline": { "type": "string", "description": "Only this pipeline's runs" },
             "state": { "type": "string", "enum": ["queued", "running", "waiting", "done", "dropped"] },
@@ -122,18 +122,24 @@ fn bad(message: String) -> ApiError {
 
 // The read tools' answers, or None for a tool this module does not own.
 pub async fn read(app: &AppState, name: &str, args: &Value) -> Option<Result<Value, ApiError>> {
+    let answer = answer(app, name, args).await?;
+    let saved = saved_values(app);
+    Some(answer.map(|v| sweep(v, &saved)))
+}
+
+async fn answer(app: &AppState, name: &str, args: &Value) -> Option<Result<Value, ApiError>> {
     match name {
         "read_settings" => Some(settings(app, args["area"].as_str().unwrap_or_default()).await),
-        "list_conversations" => Some(Ok(conversations(
-            app,
-            args["filter"].as_str().unwrap_or("all"),
+        "list_conversations" => Some(Ok(capped(
+            "conversations",
+            conversations(app, args["filter"].as_str().unwrap_or("all")),
         ))),
         "read_conversation" => Some(conversation(app, args)),
         "list_tasks" => Some(Ok(tasks(app))),
         "read_task" => Some(task(app, args["name"].as_str().unwrap_or_default())),
         "list_pipelines" => Some(Ok(pipelines(app))),
         "read_pipeline" => Some(pipeline(app, args["id"].as_str().unwrap_or_default())),
-        "list_runs" => Some(Ok(runs(app, args))),
+        "list_runs" => Some(Ok(capped("runs", runs(app, args)))),
         "read_run" => Some(run(app, args["id"].as_str().unwrap_or_default())),
         "read_insights" => Some(insights(app, args)),
         "list_pulls" => Some(Ok(pulls(app, args["machine"].as_str().unwrap_or_default()))),
@@ -182,24 +188,97 @@ fn hide(value: &str) -> String {
     }
 }
 
-// Walks a settings section, hiding credential fields and every env or header value.
+// Walks a settings section: credential fields and every env or header value are hidden; URLs and
+// command lines keep their shape with only their credential parts hidden. Keys the person chose
+// (QA note folders) are names, never credentials.
 fn hidden(value: Value, under_credential: bool) -> Value {
+    walk(value, under_credential, false)
+}
+
+fn walk(value: Value, under_credential: bool, free_keys: bool) -> Value {
     match value {
         Value::Object(map) => Value::Object(
             map.into_iter()
                 .map(|(k, v)| {
-                    let secret = under_credential || credential(&k) || k == "env" || k == "headers";
-                    (k, hidden(v, secret))
+                    let secret = under_credential
+                        || (!free_keys && credential(&k))
+                        || k == "env"
+                        || k == "headers";
+                    let v = match v {
+                        Value::String(s)
+                            if !secret && ["url", "command", "resume"].contains(&k.as_str()) =>
+                        {
+                            Value::String(mask(&s))
+                        }
+                        other => walk(other, secret, k == "qa_notes"),
+                    };
+                    (k, v)
                 })
                 .collect::<Map<_, _>>(),
         ),
         Value::Array(items) => Value::Array(
             items
                 .into_iter()
-                .map(|v| hidden(v, under_credential))
+                .map(|v| walk(v, under_credential, false))
                 .collect(),
         ),
         Value::String(s) if under_credential => Value::String(hide(&s)),
+        other => other,
+    }
+}
+
+static MASKS: std::sync::LazyLock<Vec<(regex::Regex, &'static str)>> = std::sync::LazyLock::new(
+    || {
+        [
+        (r"([a-zA-Z][a-zA-Z0-9+.-]*://)[^/\s@]+@", "${1}(hidden)@"),
+        (r#"([?&][^=&#\s"']+=)([^&#\s"'$][^&#\s"']*)"#, "${1}(hidden)"),
+        (r#"(?i)\b([A-Z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|PASS|AUTH)[A-Z0-9_]*=)("[^"]*"|'[^']*'|[^\s$(&][^\s&]*)"#, "${1}(hidden)"),
+        (r#"(?i)(\s--?[a-z-]*(?:token|key|secret|password|passwd|auth)[a-z-]*(?:=|\s+))("[^"]*"|'[^']*'|[^\s$(-][^\s]*)"#, "${1}(hidden)"),
+        (r#"(?i)((?:\s--header|\s-H)(?:=|\s+))("[^"]*"|'[^']*'|[^\s$][^\s]*)"#, "${1}(hidden)"),
+        (r#"(?i)\b(bearer|basic|token)\s+([^\s$"'][^\s"']*)"#, "${1} (hidden)"),
+    ]
+    .into_iter()
+    .map(|(re, to)| (regex::Regex::new(re).expect("static regex"), to))
+    .collect()
+    },
+);
+
+// A URL or a command line with any credential written into it hidden; ${secret:...} stays.
+fn mask(text: &str) -> String {
+    MASKS.iter().fold(text.to_string(), |out, (re, to)| {
+        re.replace_all(&out, *to).into_owned()
+    })
+}
+
+// Every saved secret value, so an answer can be checked for one that slipped into free text.
+fn saved_values(app: &AppState) -> Vec<String> {
+    let Ok(store) = app.secrets() else {
+        return Vec::new();
+    };
+    store
+        .list()
+        .into_iter()
+        .filter_map(|i| store.get(&i.name).map(str::to_string))
+        .filter(|v| v.len() >= 6)
+        .collect()
+}
+
+// The last look over any answer: a saved secret value or a known token shape never leaves.
+fn sweep(value: Value, saved: &[String]) -> Value {
+    match value {
+        Value::String(s) => {
+            let mut s = crate::worktrees::scan::redact(&s);
+            for secret in saved {
+                if s.contains(secret.as_str()) {
+                    s = s.replace(secret.as_str(), HIDDEN);
+                }
+            }
+            Value::String(s)
+        }
+        Value::Array(items) => Value::Array(items.into_iter().map(|v| sweep(v, saved)).collect()),
+        Value::Object(map) => {
+            Value::Object(map.into_iter().map(|(k, v)| (k, sweep(v, saved))).collect())
+        }
         other => other,
     }
 }
@@ -214,8 +293,13 @@ async fn settings(app: &AppState, area: &str) -> Result<Value, ApiError> {
     let agents: Vec<String> = cfg.agents().into_iter().map(|a| a.name).collect();
     let (value, choices) = match area {
         "dispatch" => (
-            shown(&cfg.dispatch),
-            json!({ "approval": ["allow", "prompt", "deny"], "agents": agents }),
+            dispatch_view(&cfg),
+            json!({
+                "approval": ["allow", "prompt", "deny"],
+                "agents": agents,
+                "runs_on": crate::config::RunsOn::ALL,
+                "models": crate::config::DISPATCH_MODELS,
+            }),
         ),
         "triggers" => {
             let tasks: Vec<String> = app
@@ -225,8 +309,17 @@ async fn settings(app: &AppState, area: &str) -> Result<Value, ApiError> {
                 .filter(|t| !t.hidden)
                 .map(|t| t.name)
                 .collect();
+            let mut triggers = shown(&cfg.triggers);
+            for (t, set) in triggers
+                .as_array_mut()
+                .into_iter()
+                .flatten()
+                .zip(&cfg.triggers)
+            {
+                t["enabled"] = json!(set.enabled);
+            }
             (
-                shown(&cfg.triggers),
+                triggers,
                 json!({ "tasks": tasks, "kinds": ["schedule", "linear", "github"] }),
             )
         }
@@ -361,6 +454,16 @@ fn clipped(value: Value, count: &mut usize) -> Value {
     }
 }
 
+const LISTED: usize = 50;
+const BUDGET: usize = 30_000;
+
+// The first LISTED entries under `key`, and how many more there are.
+fn capped(key: &str, all: Value) -> Value {
+    let items = all.as_array().cloned().unwrap_or_default();
+    let more = items.len().saturating_sub(LISTED);
+    json!({ key: items.into_iter().take(LISTED).collect::<Vec<_>>(), "more": more })
+}
+
 fn conversation(app: &AppState, args: &Value) -> Result<Value, ApiError> {
     let id = args["id"].as_str().unwrap_or_default();
     let c = app.dispatch.get(id).ok_or_else(|| {
@@ -371,13 +474,25 @@ fn conversation(app: &AppState, args: &Value) -> Result<Value, ApiError> {
     })?;
     let last = args["last"]
         .as_u64()
-        .map_or(TURNS, |n| n.clamp(1, 100) as usize);
+        .map_or(TURNS, |n| n.clamp(1, 50) as usize);
     let events = c["events"].as_array().cloned().unwrap_or_default();
-    let left_out = events.len().saturating_sub(last);
     let mut count = 0;
-    let turns = clipped(Value::Array(events[left_out..].to_vec()), &mut count);
+    let mut kept: Vec<Value> = Vec::new();
+    let mut used = 0;
+    // Newest first until the answer would pass its budget; older events are counted as left out.
+    for event in events.iter().rev().take(last) {
+        let event = clipped(event.clone(), &mut count);
+        let size = event.to_string().len();
+        if !kept.is_empty() && used + size > BUDGET {
+            break;
+        }
+        used += size;
+        kept.push(event);
+    }
+    kept.reverse();
+    let left_out = events.len() - kept.len();
     Ok(
-        json!({ "id": id, "title": c["title"], "updated": c["updated"], "busy": c["busy"], "left_out": left_out, "clipped": count, "turns": turns }),
+        json!({ "id": id, "title": c["title"], "updated": c["updated"], "busy": c["busy"], "left_out": left_out, "clipped": count, "events": kept }),
     )
 }
 
@@ -485,7 +600,6 @@ fn runs(app: &AppState, args: &Value) -> Value {
                         .and_then(Value::as_str)
                         == Some(state)
             })
-            .take(50)
             .map(|r| {
                 json!({
                     "id": r.id,
@@ -523,7 +637,7 @@ fn insights(app: &AppState, args: &Value) -> Result<Value, ApiError> {
     match args["session"].as_str().filter(|s| !s.is_empty()) {
         Some(name) => {
             let record = app.insights.record(machine, name).ok_or_else(|| {
-                ApiError(StatusCode::NOT_FOUND, format!("Yardbell has seen no session {name} on {machine}; list_sessions shows the live ones"))
+                ApiError(StatusCode::NOT_FOUND, format!("Yardbell has seen no session {name} on {machine}; read_insights without a session lists the ones it has seen"))
             })?;
             let mut count = 0;
             Ok(clipped(
@@ -533,11 +647,17 @@ fn insights(app: &AppState, args: &Value) -> Result<Value, ApiError> {
         }
         None => {
             let mut count = 0;
-            let sessions = clipped(
-                serde_json::to_value(app.insights.timelines(machine, now)).unwrap_or(Value::Null),
-                &mut count,
-            );
-            Ok(json!({ "machine": machine, "sessions": sessions }))
+            let mut seen = app.insights.timelines(machine, now);
+            seen.sort_by(|a, b| b.since.cmp(&a.since));
+            let sessions: Vec<Value> = seen
+                .iter()
+                .take(LISTED)
+                .map(|t| json!({ "name": t.name, "agent": t.agent, "folder": t.folder, "branch": t.branch, "since": t.since, "ended": t.ended, "totals": t.totals }))
+                .collect();
+            let sessions = clipped(Value::Array(sessions), &mut count);
+            Ok(
+                json!({ "machine": machine, "sessions": sessions, "more": seen.len().saturating_sub(LISTED) }),
+            )
         }
     }
 }
@@ -566,4 +686,31 @@ fn pulls(app: &AppState, machine: &str) -> Value {
             })
             .collect(),
     )
+}
+
+fn approval_word(a: crate::config::Approval) -> &'static str {
+    match a {
+        crate::config::Approval::Allow => "allow",
+        crate::config::Approval::Prompt => "prompt",
+        crate::config::Approval::Deny => "deny",
+    }
+}
+
+// Every field, defaults included, with the words Settings uses.
+fn dispatch_view(cfg: &Config) -> Value {
+    let d = &cfg.dispatch;
+    let rules: Vec<Value> = d
+        .rules
+        .iter()
+        .map(|r| json!({ "action": r.action, "machine": r.machine, "folder": r.folder, "approval": approval_word(r.approval) }))
+        .collect();
+    json!({
+        "instructions": d.instructions,
+        "approval": approval_word(d.approval),
+        "rules": rules,
+        "agent": if d.agent.is_empty() { cfg.default_agent().to_string() } else { d.agent.clone() },
+        "runs_on": d.runs_on,
+        "model": d.model,
+        "codex_model": d.codex_model,
+    })
 }

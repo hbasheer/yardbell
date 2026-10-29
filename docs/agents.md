@@ -83,7 +83,7 @@ that uses one shows its `${secret:NAME}` reference, and any other credential sho
 | Tool | What it does |
 |---|---|
 | `read_settings` | one area of Settings with what it may be set to: `dispatch`, `triggers`, `worktree_setup`, `agents`, `session_mcp_servers`, `phone`, `machines`, `pipelines`, `pull_requests`, `security` or `about` |
-| `list_conversations`, `read_conversation` | Dispatch conversations and who started each; one conversation's newest 20 turns, long text clipped |
+| `list_conversations`, `read_conversation` | Dispatch conversations and who started each; one conversation's newest 20 events, long text clipped, under about 30 000 characters |
 | `list_tasks`, `read_task` | saved Dispatch tasks and their versions |
 | `list_pipelines`, `read_pipeline` | pipelines with their run counts; one definition and its versions |
 | `list_runs`, `read_run` | pipeline runs as summaries, newest first; one run in full |

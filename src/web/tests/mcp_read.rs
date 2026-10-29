@@ -56,26 +56,49 @@ async fn no_secret_reaches_read_settings() {
     let r = rig();
     let token = mcp_on(&r);
     edit_config(&r, |cfg| {
-        cfg.mcp_servers = vec![crate::config::McpServer {
-            name: "probe".into(),
-            command: "probe-server".into(),
-            url: String::new(),
-            env: [("TOKEN".to_string(), "sk-planted-env".to_string())].into(),
-            headers: [
-                (
-                    "Authorization".to_string(),
-                    "Bearer ${secret:probe}".to_string(),
-                ),
-                ("X-Api-Key".to_string(), "planted-header".to_string()),
-            ]
-            .into(),
-            machines: vec![],
-        }];
+        cfg.mcp_servers = vec![
+            crate::config::McpServer {
+                name: "probe".into(),
+                command: "npx mcp-remote https://x/mcp --header \"Authorization: Bearer abc123planted\" --token ghp_plantedplantedplantedplantedplanted12".into(),
+                url: String::new(),
+                env: [("TOKEN".to_string(), "sk-planted-env".to_string())].into(),
+                headers: [
+                    ("Authorization".to_string(), "Bearer ${secret:probe}".to_string()),
+                    ("X-Api-Key".to_string(), "planted-header".to_string()),
+                ]
+                .into(),
+                machines: vec![],
+            },
+            crate::config::McpServer {
+                name: "remote".into(),
+                command: String::new(),
+                url: "https://user:pwplanted@mcp.example.com/sse?api_key=lin_api_queryplanted&mode=fast".into(),
+                env: Default::default(),
+                headers: Default::default(),
+                machines: vec![],
+            },
+        ];
         cfg.pull_requests.gitlab = vec![crate::config::GitLabHost {
             host: "git.example.com".into(),
             url: String::new(),
             token: "glpat-planted".into(),
         }];
+        cfg.agents = vec![crate::agents::Agent {
+            name: "keyed".into(),
+            label: None,
+            command: "ANTHROPIC_API_KEY=sk-ant-plantedplantedplantedplanted claude".into(),
+            resume: "claude --continue".into(),
+            process: Some("claude".into()),
+            prompt_arg: None,
+        }];
+        cfg.worktree_setup = vec![crate::worktrees::setup::WorktreeSetup {
+            folder: "app".into(),
+            machine: "any".into(),
+            command: "echo API_TOKEN=tokplanted > .env".into(),
+            timeout_seconds: 300,
+        }];
+        cfg.pipelines.qa_notes =
+            [("acme/auth-api".to_string(), "Run bin/rspec".to_string())].into();
     });
     let mut secrets = r.app.secrets().unwrap();
     secrets
@@ -86,9 +109,16 @@ async fn no_secret_reaches_read_settings() {
     let mut seen = String::new();
     for area in AREAS {
         let result = tool_call(&r, "read_settings", json!({ "area": area })).await;
+        assert_eq!(result["isError"], false, "{area}: {result}");
         seen.push_str(&result.to_string());
     }
     for planted in [
+        "abc123planted",
+        "ghp_plantedplanted",
+        "pwplanted",
+        "lin_api_queryplanted",
+        "sk-ant-planted",
+        "tokplanted",
         "sk-planted-env",
         "planted-header",
         "glpat-planted",
@@ -103,6 +133,14 @@ async fn no_secret_reaches_read_settings() {
         "a secret reference is shown as written"
     );
     assert!(seen.contains("(hidden)"));
+    assert!(
+        seen.contains("Run bin/rspec"),
+        "a QA note for a folder named auth stays readable"
+    );
+    assert!(
+        seen.contains("mode=(hidden)") && seen.contains("@mcp.example.com/sse"),
+        "a URL keeps its host, path and query names"
+    );
     if let Some(key) = cfg.cookie_key.as_deref() {
         assert!(!seen.contains(key), "the cookie key leaked");
     }
@@ -147,7 +185,8 @@ async fn conversations_are_listed_and_filtered() {
     };
     run.state = crate::pipeline::record::RunState::Running;
     r.app.pipelines.put(run);
-    let all = answer(&tool_call(&r, "list_conversations", json!({})).await);
+    let all =
+        answer(&tool_call(&r, "list_conversations", json!({})).await)["conversations"].clone();
     let ids: Vec<&str> = all
         .as_array()
         .unwrap()
@@ -170,7 +209,9 @@ async fn conversations_are_listed_and_filtered() {
         (started_by(&mine), started_by(&piped)),
         (json!("you"), json!("a pipeline run"))
     );
-    let only = answer(&tool_call(&r, "list_conversations", json!({ "filter": "pipeline" })).await);
+    let only = answer(&tool_call(&r, "list_conversations", json!({ "filter": "pipeline" })).await)
+        ["conversations"]
+        .clone();
     assert_eq!(only.as_array().unwrap().len(), 1, "{only}");
     assert_eq!(only[0]["id"], piped);
 }
@@ -276,12 +317,16 @@ async fn runs_are_summaries_and_one_run_is_whole() {
     run.state_of("plan").report = "y".repeat(9_000);
     let id = run.id.clone();
     r.app.pipelines.put(run);
-    let list = answer(&tool_call(&r, "list_runs", json!({ "state": "waiting" })).await);
+    let list =
+        answer(&tool_call(&r, "list_runs", json!({ "state": "waiting" })).await)["runs"].clone();
     assert_eq!(list[0]["id"], id.as_str(), "{list}");
     assert_eq!(list[0]["waiting_reason"], "Plan needs you");
     assert!(list[0].get("steps").is_none(), "a list entry is a summary");
     let none = answer(&tool_call(&r, "list_runs", json!({ "state": "done" })).await);
-    assert_eq!(none, json!([]));
+    assert_eq!(
+        (none["runs"].clone(), none["more"].clone()),
+        (json!([]), json!(0))
+    );
     let whole = answer(&tool_call(&r, "read_run", json!({ "id": id })).await);
     assert!(whole.get("definition").is_none(), "{whole}");
     let report = whole["steps"]["plan"]["report"].as_str().unwrap();
@@ -407,4 +452,132 @@ async fn usage_as_the_sidebar_shows_it() {
     mcp_on(&r);
     let usage = answer(&tool_call(&r, "read_usage", json!({})).await);
     assert!(usage.get("runs_on").is_some(), "{usage}");
+}
+
+#[tokio::test]
+async fn the_dispatch_area_shows_every_field_as_settings_does() {
+    let r = rig();
+    mcp_on(&r);
+    let got = answer(&tool_call(&r, "read_settings", json!({ "area": "dispatch" })).await);
+    assert_eq!(got["value"]["approval"], "prompt", "{got}");
+    assert!(
+        got["value"].get("runs_on").is_some() && got["value"].get("rules").is_some(),
+        "{got}"
+    );
+    assert!(
+        got["choices"]["runs_on"].is_array() && got["choices"]["models"].is_array(),
+        "{got}"
+    );
+    edit_config(&r, |cfg| {
+        cfg.dispatch.approval = crate::config::Approval::Allow
+    });
+    let got = answer(&tool_call(&r, "read_settings", json!({ "area": "dispatch" })).await);
+    assert_eq!(got["value"]["approval"], "allow");
+}
+
+#[tokio::test]
+async fn many_conversations_are_capped_and_counted() {
+    let r = rig();
+    mcp_on(&r);
+    for n in 0..60 {
+        r.app
+            .dispatch
+            .open_conversation(&format!("Conversation {n}"));
+    }
+    let got = answer(&tool_call(&r, "list_conversations", json!({})).await);
+    assert_eq!(got["conversations"].as_array().unwrap().len(), 50, "{got}");
+    assert_eq!(got["more"], 10);
+}
+
+#[tokio::test]
+async fn a_conversation_read_stays_within_its_budget() {
+    let r = rig();
+    mcp_on(&r);
+    let id = r.app.dispatch.open_conversation("Many big screens");
+    for _ in 0..30 {
+        r.app.dispatch.record_as(
+            &id,
+            "read_session",
+            json!({ "machine": "hp", "name": "hp-x" }),
+            None,
+            None,
+            &Ok(json!({ "screen": "z".repeat(6_000) })),
+            crate::dispatch::By::Dispatch,
+            None,
+        );
+    }
+    let result = tool_call(&r, "read_conversation", json!({ "id": id, "last": 50 })).await;
+    let text = result["content"][0]["text"].as_str().unwrap();
+    assert!(text.len() < 40_000, "{} characters came back", text.len());
+    assert!(answer(&result)["left_out"].as_u64().unwrap() > 0);
+}
+
+#[tokio::test]
+async fn a_machine_wide_insights_read_is_a_summary() {
+    let r = rig();
+    mcp_on(&r);
+    let session = crate::snapshot::Session {
+        machine: "hp".into(),
+        agent: "claude".into(),
+        pid: 42,
+        cwd: "/r/app".into(),
+        folder: "app".into(),
+        branch: "fix-login".into(),
+        ticket: "-".into(),
+        tmux: Some("hp-app".into()),
+        activity: crate::snapshot::Activity::Active,
+    };
+    let now = chrono::Local::now();
+    r.app.insights.observe(
+        "hp",
+        &Default::default(),
+        now - chrono::Duration::minutes(10),
+    );
+    let snap = crate::snapshot::Snapshot {
+        sessions: vec![session],
+        ..Default::default()
+    };
+    r.app
+        .insights
+        .observe("hp", &snap, now - chrono::Duration::minutes(5));
+    let all = answer(&tool_call(&r, "read_insights", json!({ "machine": "hp" })).await);
+    assert!(
+        all["sessions"][0].get("periods").is_none() && all["sessions"][0].get("totals").is_some(),
+        "{all}"
+    );
+    let missing = tool_call(
+        &r,
+        "read_insights",
+        json!({ "machine": "hp", "session": "nope" }),
+    )
+    .await;
+    assert!(
+        missing["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("read_insights without a session"),
+        "{missing}"
+    );
+}
+
+#[tokio::test]
+async fn a_config_caught_mid_edit_gives_an_error() {
+    let r = rig();
+    mcp_on(&r);
+    std::fs::write(r._dir.path().join("yardbell.yml"), "port: [unfinished").unwrap();
+    let (status, body) = mcp(
+        &r.app,
+        Some("yb_secret"),
+        None,
+        rpc(
+            "tools/call",
+            json!({ "name": "read_settings", "arguments": { "area": "phone" } }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().starts_with("cannot parse"),
+        "{body}"
+    );
 }

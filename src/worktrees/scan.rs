@@ -48,6 +48,13 @@ static PATTERNS: LazyLock<Vec<(&'static str, Regex)>> = LazyLock::new(|| {
     .collect()
 });
 
+// Text with every match of a known token shape replaced, for showing settings or records.
+pub fn redact(text: &str) -> String {
+    PATTERNS.iter().fold(text.to_string(), |out, (_, re)| {
+        re.replace_all(&out, "(hidden)").into_owned()
+    })
+}
+
 // Where a possible secret is: never the text that matched.
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct Hit {
