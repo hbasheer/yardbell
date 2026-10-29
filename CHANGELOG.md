@@ -5,16 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
-- **The ticket pipeline** carries Linear tickets through on its own: Dispatch triages each ticket and
-  picks the machine, folder and branch; an agent implements it in a new worktree; the reviewer
-  reviews it and its findings go back for fixing; a QA agent on the test machine runs the specs and
-  checks the behaviour in the Rails console; then the branch is pushed, a draft pull or merge
-  request opened, the ticket moved in Linear and a comment drafted for you. A ticket that needs you,
-  such as one with triage questions or an agent asking something, waits under **Needs you** on the
-  new **Pipeline** page with a phone notification, and your answer goes where it stopped. Start a
-  run from the page, or with a Linear or schedule trigger set to `start: pipeline`. Set it up under
-  `pipeline` in `yardbell.yml`; `yardbell doctor` checks Linear and `gh`.
-- On a phone, Settings and Log out in the header show as their icons, to make room for Pipeline.
+- **Pipelines** carry tickets and merge requests through steps you define, and stop only when they
+  need you. A pipeline has a trigger (by hand, a schedule, a Linear ticket, a GitHub review request,
+  or a GitLab merge request that adds you as reviewer) and steps: agents with your instructions,
+  Plan (Dispatch picks the machine, folder and branch), push and draft pull or merge request, move
+  or comment in Linear, a report to you, and wait for me. Each step's pass, fail and needs-you lines
+  go to another step, so a review can loop back to a fix. Two templates ship: **Implement my Linear
+  tickets** and **Review my merge requests**. The new **Pipelines** page lists them with what waits
+  for you, shows each run as a graph with its reports, edits the steps, keeps every version, and
+  sets the new `pipelines` section of `yardbell.yml`. `yardbell doctor` checks what each pipeline
+  that is on needs.
+- On a phone, Settings and Log out in the header show as their icons, to make room for Pipelines.
 
 ## [0.7.10] - 2026-10-29
 

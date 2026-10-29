@@ -439,26 +439,20 @@ reviewer asking for changes or approving as on GitHub. A request for changes wit
 changes the badge but posts no card, and only the newest 500 comments of
 one merge request are watched.
 
-### `pipeline` (optional)
+### `pipelines` (optional)
 
-Carries Linear tickets through triage, implement, review, QA on a test machine and a draft pull
-request. See [The ticket pipeline](automation.md#the-ticket-pipeline).
+Settings for [pipelines](automation.md#pipelines). The pipelines themselves are made and changed
+on the Pipelines page and kept in the state folder, not here. The page's **Settings** button writes
+this section.
 
 ```yaml
-pipeline:
-  machines: [hp, mini]        # required: where tickets are implemented
-  test_machine: devbox        # required: where QA runs
-  per_machine: 2              # tickets at once per machine in implement, review or fix, 1 to 6
-  review_rounds: 2            # review and fix rounds before a ticket waits for you, 1 to 5
-  qa_retries: 1               # fixes after a failed QA before it waits for you, 0 to 3
-  stage_minutes: 120          # a stage running longer waits for you, 10 to 1440
-  linear_state: In Review     # optional: where finished tickets move in Linear
-  qa_instructions: |          # optional: how the test machine runs specs and the console
-    Run specs with: docker compose exec web bin/rspec <files>
+pipelines:
+  per_machine: 2      # agent steps at once on each machine, 1 to 6
+  minutes: 120        # an agent step running longer waits for you, 10 to 1440; a step can set its own
+  qa_notes:           # optional: added to every agent step working in that folder
+    acme/web: |
+      Run specs with: docker compose exec web bin/rspec <files>
 ```
-
-Every machine named must be in `machines`. The Linear key is the secret `linear`, as for triggers;
-moving tickets needs a key that can write.
 
 ### `triggers` (optional)
 
@@ -489,10 +483,8 @@ triggers:
 
 Each trigger has a `name`, a `task` and exactly one of `schedule`, `linear` or `github`.
 
-`start: pipeline` puts tickets into the [ticket pipeline](#pipeline-optional) instead of starting a
-conversation, and needs no `task`. A Linear trigger adds each ticket it fires for; a schedule needs
-`state`, such as `state: Todo`, and adds all your open tickets in that state that are not already
-running. GitHub triggers cannot start the pipeline.
+A pipeline has a trigger of its own, set on the Pipelines page; see
+[Pipelines](automation.md#pipelines).
 
 `schedule` is one of:
 

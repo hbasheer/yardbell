@@ -1,14 +1,14 @@
-# Triggers, worktree setup, rules and the ticket pipeline
+# Triggers, worktree setup, rules and pipelines
 
 How to let Yardbell start work for you, prepare every new worktree, decide what Dispatch may do
-without asking, and carry Linear tickets from implementation to a draft pull request. Each part has
+without asking, and carry tickets and merge requests through pipelines of steps you define. Each part has
 what it is, when it helps, and examples you can copy.
 
 The settings themselves are listed in [Configuration](configuration.md): see
 [`triggers`](configuration.md#triggers-optional),
 [`worktree_setup`](configuration.md#worktree_setup-optional) and
 [`dispatch`](configuration.md#dispatch-optional) and
-[`pipeline`](configuration.md#pipeline-optional).
+[`pipelines`](configuration.md#pipelines-optional).
 
 ## How they fit together
 
@@ -428,91 +428,113 @@ Dispatch once. When an entry in memory goes out of date, edit or delete it under
 tell Dispatch, which proposes replacing it. Since your instructions win, a lasting rule of thumb
 belongs there rather than in memory.
 
-## The ticket pipeline
+## Pipelines
 
-### What it does
+### What a pipeline is
 
-The pipeline takes Linear tickets and carries each one through the same stages you would, on its
-own, and stops only when it needs you:
+A pipeline is a set of steps that Yardbell carries a ticket, a pull or merge request, or nothing at
+all through on its own, stopping only when it needs you. You make one from a template on the
+**Pipelines** page, then change its trigger and steps there. Each pipeline has:
 
-| Stage | What happens |
+- a **trigger** that starts runs: by hand, a schedule, a Linear ticket, a GitHub review request, or
+  a GitLab merge request that adds you as reviewer;
+- **steps**, each with three lines out of it: where to go when it **passed**, **failed** or **needs
+  you**. A line goes to another step, to **End the run**, or to **Wait for me**. A line back to an
+  earlier step makes a loop, such as Review failing back to Fix;
+- a **version**: every save keeps the one before, and **History** restores any of the last 30.
+
+Two templates ship, both saved switched off so you can look at them first:
+
+| Template | Trigger | Steps |
+|---|---|---|
+| Implement my Linear tickets | a Linear ticket assigned to you | Plan, Implement in a new worktree, Review (a fail goes to Fix and back, up to 3 times), QA on devbox (a fail goes to Fix after QA), Push and draft PR, Move in Linear to In Review, Report to me |
+| Review my merge requests | a GitLab merge request adds you as reviewer | Plan, Understand, Root cause, Security, Test on devbox, Report to me. Any fail goes straight to the report. |
+
+Without a machine named `devbox`, a copied template tests where the code already is.
+
+### Steps
+
+| Step | What it does |
 |---|---|
-| Triage | Dispatch reads the ticket and its comments. Clear enough: it picks one of your pipeline machines, the folder and a branch named after the ticket (`com-1234-fix-webhook-dedup`), and says why. Not clear: it asks you, and the ticket waits under **Needs you**. |
-| Implement | A new worktree on that branch, with your worktree setup, and an agent that makes the change, adds tests, runs them and commits. Nothing is pushed. |
-| Review and fix | The **Review branch** reviewer reads the branch and runs the tests. High and medium findings go back to the implementer, then the reviewer looks again, up to `review_rounds` times. Low findings do not hold the ticket. |
-| QA | The branch and its uncommitted changes are copied to your test machine, where a QA agent that cannot edit files runs the specs for the changed code and checks the ticket's behaviour in the Rails console, and reports pass or fail with what it ran. A fail goes back to the implementer once (`qa_retries`). |
-| Finish | The branch is pushed (with the secret check, never forced), a draft pull request or merge request is opened with a summary, the Linear ticket moves to `linear_state`, and a Linear comment is drafted for you to post. |
+| Agent | Starts an agent with your instructions. It works in a new worktree on the run's branch, in another step's folder, or in a copy of another step's branch on another machine; in a new session or by continuing another step's session; optionally read only. Its machine is a fixed one, the machine of another step, or one Dispatch picks. It ends with a result block saying pass, fail or needs you. |
+| Plan | Dispatch reads the ticket and its comments and picks the machine, folder and branch, from all machines or the ones you tick. Unclear tickets come back to you as questions. |
+| Push and draft PR | Pushes the run's branch (with the secret check, never forced) and opens a draft pull or merge request. |
+| Linear | Moves the ticket to a state, or drafts a comment that you post yourself. |
+| Report to me | Dispatch writes what the run did and found, and your phone gets the first line. |
+| Wait for me | Stops with your message until you continue it. |
 
-Each ticket gets its own Dispatch conversation, where every step shows as a card marked **Ran as
-part of the pipeline**. Starting a run is the one approval: your Dispatch rules still refuse what
-they refuse, and a step a rule refuses stops its ticket with the rule's reason.
+An agent step's instructions can use `{ticket}`, `{title}`, `{url}`, `{description}`, `{branch}`,
+`{pr}`, `{report}` (the report of the step that led here) and `{report:Step name}`. Reports from
+other steps arrive quoted, so an agent reads them as data rather than as orders.
 
-### When it stops for you
+A step runs at most `max_runs` times in one run (2 unless you change it, up to 10), and an agent
+step may run for its `minutes`, or the `minutes` setting, before it waits for you. At most
+`per_machine` agent steps run at once on each machine; the rest queue.
 
-A ticket parks under **Needs you** on the Pipeline page, and your phone gets a notification, when:
+Each run gets one Dispatch conversation, where every step shows as a card marked **Ran as part of
+the pipeline run started at 09:40**. Starting a run is the one approval: your Dispatch rules still
+refuse what they refuse, and a refused step waits for you with the rule's reason.
 
-- triage has questions;
-- an agent asks something or waits on a prompt (its screen is shown);
-- the review still finds high or medium problems after the last round, or QA still fails;
-- the push is refused, by the secret check or a rule;
-- its machine stays offline for 30 minutes, or a stage runs longer than `stage_minutes`;
-- the ticket was closed in Linear meanwhile.
+### When a run waits for you
 
-Answer in the box, and the answer goes where the ticket stopped: back to triage, typed into the
-waiting agent, or sent to the implementer with the open findings. **Retry** runs the stage again,
-and **Drop** stops the ticket's sessions and leaves its worktree and branch.
+A run waits under **Waiting for me**, with a phone notification, when:
 
-### Set it up
+- a step's line goes to Wait for me, such as a step that says it needs you;
+- Plan has questions, or an agent asks something or waits on a prompt (its screen is shown);
+- a step reached its `max_runs`, ran past its minutes, or ended without a result;
+- the push or a step was refused, by the secret check or a rule;
+- its machine stayed offline for 30 minutes, or the ticket was closed meanwhile.
 
-1. Save your Linear API key as the secret `linear` (Settings, MCP servers, Secrets).
-2. Log in `gh` on the machines that implement tickets, for draft pull requests. For GitLab, the
-   host's token under `pull_requests.gitlab` needs the `api` scope to open merge requests.
-3. Add a `pipeline` section to `yardbell.yml`:
+On the run you can **Send answer** (the step runs again with it, the waiting agent gets it typed in,
+or Plan gets your answers), **Retry step**, **Continue on pass** or **Continue on fail** (follow that
+line as if the step had ended so), or **Drop** (stops its sessions and leaves the worktree and
+branch).
 
-```yaml
-pipeline:
-  machines: [hp, mini]        # where tickets are implemented; Dispatch picks among these
-  test_machine: devbox        # where QA runs
-  per_machine: 2              # tickets at once per machine
-  review_rounds: 2
-  qa_retries: 1
-  stage_minutes: 120
-  linear_state: In Review     # where finished tickets move; leave out to not move them
-  qa_instructions: |
-    Run specs with: docker compose exec web bin/rspec <files>
-    Rails console:  docker compose exec web bin/rails console
-```
+### Set one up
 
-4. Run `yardbell doctor`. Its `pipeline` lines say whether Linear answers and `gh` is logged in.
+1. Save your Linear API key as the secret `linear` (Settings, MCP servers, Secrets), for Linear
+   triggers, Plan and Linear steps.
+2. Log in `gh` on the machines that push, for draft pull requests. For GitLab, add the host under
+   `pull_requests.gitlab`; its token needs the `api` scope to open merge requests and to list the
+   ones you review.
+3. On the **Pipelines** page, **New pipeline**, pick a template, then on **Steps** set its trigger
+   and change the steps you want. **Save** checks it: every line goes somewhere, every step can be
+   reached, a step that continues or copies another comes after it on every path, and the machines
+   and MCP servers exist.
+4. Switch it on. Switching on checks the trigger too, such as a GitLab host you have not added.
+5. Run `yardbell doctor`. For each pipeline that is on, it says whether Linear answers, the GitLab
+   host signs you in, `gh` is logged in where it pushes, and its machines are reachable.
 
 ### Start a run
 
-- **By hand:** on the Pipeline page, **Show my open tickets**, tick some and **Start**, or pick a
-  state and **Start all in Todo**.
-- **As tickets arrive:** a Linear trigger with `start: pipeline` puts each ticket it fires for into
-  the pipeline.
-- **On a schedule:** a schedule trigger with `start: pipeline` and `state: Todo` starts all your
-  open tickets in Todo at its time.
+- **By hand:** **Run now** on the pipeline. A pipeline whose trigger needs a ticket or a link asks
+  for ticket ids (`COM-1234`) or pull and merge request links, one run each.
+- **From its trigger:** Linear and review triggers are checked every 3 minutes. The first check
+  only notes what is already there, so switching a pipeline on does not start a run for every old
+  ticket. A schedule with a state, such as `weekdays 02:00` with `Todo`, starts one run for each of
+  your open tickets in that state; without a state it starts one run with no ticket.
+
+A ticket or link that is already in a run of the same pipeline is not started twice. Pipelines are
+kept in `pipelines/` and runs in `runs.json` in the state folder, so a restart carries on where each
+run was. A run keeps the version it started with, so saving a pipeline never changes a run halfway.
+
+### Settings
+
+The **Settings** button on the Pipelines page writes the `pipelines` section of `yardbell.yml`:
 
 ```yaml
-triggers:
-  - name: Nightly tickets
-    start: pipeline
-    state: Todo
-    schedule: weekdays 02:00
-  - name: New tickets
-    start: pipeline
-    linear:
-      assigned: true
+pipelines:
+  per_machine: 2      # agent steps at once on each machine, 1 to 6
+  minutes: 120        # an agent step running longer waits for you, 10 to 1440
+  qa_notes:           # added to every agent step working in that folder
+    acme/web: |
+      Run specs with: docker compose exec web bin/rspec <files>
+      Rails console:  docker compose exec web bin/rails console
 ```
-
-A ticket that is already in a run is never started twice. Records are kept in `pipeline.json` in
-the state folder, so a restart carries on where each ticket was.
 
 ### Limits
 
-- Dispatch can only pick a folder a pipeline machine already has; otherwise triage says so.
-- QA follows `qa_instructions` for how a repository runs its specs and console. Without them the QA
-  agent finds out from the repository, which takes longer.
-- GitHub issues cannot start the pipeline; it reads Linear tickets only.
-
+- Plan can only pick a folder a machine already has; otherwise it says so and waits.
+- An agent step reports through its result block. One that ends without it is asked once more,
+  then waits for you.
+- The Steps tab edits every field of a step but does not add or remove steps yet.

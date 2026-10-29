@@ -228,22 +228,30 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   in the desktop app's tray menu.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
-### Pipeline
+### Pipelines
 
-The Pipeline page shows the [ticket pipeline](automation.md#the-ticket-pipeline):
+The Pipelines page shows your [pipelines](automation.md#pipelines), one card each: its trigger in
+words, its steps in order (`Review ⟲ Fix` marks a loop back), an On/Off switch, its version, how many
+runs are running, waiting and done, and **Needs you** when one waits.
 
-- **Needs you**, when a ticket is waiting: why it stopped (triage's questions, the agent's question
-  with its screen, the findings still open, QA's report or the error), a box for your answer, and
-  **Retry** and **Drop**.
-- **Runs**: one row per ticket, with five marks for Triage, Implement, Review, QA and Finish, where it
-  is now ("Review, round 2", "Queued, 1 ahead"), its machine (hover for why Dispatch picked it), its
-  branch, the draft pull request once open, how long it has been in this stage, **Conversation** and
-  **Stop**.
-- **Start a run**: **Show my open tickets** lists your open Linear tickets. Tick some and **Start**,
-  or pick a state and **Start all in** it. Tickets already in a run cannot be ticked.
+- **Waiting for me** lists every run that waits for you, across all pipelines.
+- **New pipeline** copies a template, switched off.
+- **Settings** sets the agent steps at once per machine, a step's time limit and QA notes per folder.
 
-Without a `pipeline` section in `yardbell.yml` the page says the pipeline is off, and tickets you
-start wait until it is on. In Dispatch's list, each ticket's conversation has the pipeline mark.
+A pipeline opens with three tabs:
+
+- **Runs**: its runs, newest first. The chosen run shows as a graph of the steps: done in green, the
+  current one outlined (amber when it waits for you), and the rest faded, with solid lines for
+  passed and dashed for failed. Drag it or scroll with two fingers to move around, and pinch,
+  Ctrl and the wheel, or **−**, **Fit** and **+** to zoom. Beside it are links to the ticket, the pull or merge request, the
+  draft and the conversation; the waiting box with **Send answer**, **Retry step**, **Continue on
+  pass**, **Continue on fail** and **Drop**; and each step's report.
+- **Steps**: a form for the name, trigger and first step, and one per step with every field and its
+  three lines. **Save** lists anything the checks find instead of saving.
+- **History**: every saved version, with **Restore**.
+
+**Run now** starts a run, asking for ticket ids or links when the trigger needs them. In Dispatch's
+list, each run's conversation has the pipeline mark.
 
 ### Dispatch
 
