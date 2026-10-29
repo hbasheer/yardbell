@@ -11,6 +11,13 @@ and the project uses [Semantic Versioning](https://semver.org).
   share of the time and a line on what it means, and the bar has its start and end times. The
   timeline is grouped under the day, so a session from an earlier day no longer crowds its times
   into the text. A session Yardbell has not recorded yet says so and when its timeline starts.
+- Dispatch shows the agent and model it runs on, such as `Codex · gpt-6.1-sol`, beside its heading,
+  for the open conversation or for new ones, and its intro and the note on a conversation that
+  stays on its agent name the model too. The label leads to the setting.
+- **Dispatch runs on** in Settings lists the agents with the names sessions show for them, marked
+  when one is not found on the machine Yardbell runs on, with **Model** beside it for that agent.
+  A Codex model that Codex does not list for your account gets a note. A new model applies from
+  the next message, in open conversations too.
 
 ## [0.7.6] - 2026-10-29
 

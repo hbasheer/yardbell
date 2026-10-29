@@ -2761,6 +2761,65 @@ async fn dispatch_settings_are_saved_and_checked() {
         .unwrap()
         .iter()
         .any(|a| a["name"] == "codex"));
+    assert_eq!(shown["dispatch_runs_on"], json!(["claude", "codex"]));
+}
+
+#[tokio::test]
+async fn dispatch_says_which_agent_and_model_it_runs_on() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let runs_on = || async {
+        let (status, _, body) = send(
+            &r.app,
+            Request::get("/dispatch/runs-on")
+                .header(header::COOKIE, &c)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        serde_json::from_str::<serde_json::Value>(&body).unwrap()
+    };
+    assert_eq!(
+        runs_on().await,
+        json!({
+            "runs_on": "claude",
+            "label": "Claude Code",
+            "model": "",
+            "agents": {
+                "claude": { "label": "Claude Code", "model": "" },
+                "codex": { "label": "Codex", "model": "" },
+            },
+        }),
+        "nothing set keeps Claude Code on its own default model"
+    );
+
+    let mut cfg = Config::load(&r.app.cfg_path).unwrap();
+    cfg.dispatch.runs_on = crate::config::RunsOn::Codex;
+    cfg.dispatch.model = "haiku".into();
+    cfg.dispatch.codex_model = "gpt-6.1-sol".into();
+    cfg.agents.push(crate::agents::Agent {
+        name: "codex".into(),
+        label: Some("Codex CLI".into()),
+        command: "codex".into(),
+        resume: "codex resume --last".into(),
+        process: None,
+        prompt_arg: None,
+    });
+    cfg.save(&r.app.cfg_path).unwrap();
+    assert_eq!(
+        runs_on().await,
+        json!({
+            "runs_on": "codex",
+            "label": "Codex CLI",
+            "model": "gpt-6.1-sol",
+            "agents": {
+                "claude": { "label": "Claude Code", "model": "haiku" },
+                "codex": { "label": "Codex CLI", "model": "gpt-6.1-sol" },
+            },
+        }),
+        "the label is the one sessions show for the agent"
+    );
 }
 
 #[tokio::test]

@@ -967,6 +967,8 @@ body.resizing { cursor: col-resize; user-select: none; }
 .trigger-head-text strong { font-weight: 600; color: var(--ink); overflow-wrap: anywhere; }
 .trigger-head-text span { color: var(--muted); font-size: 12.5px; overflow-wrap: anywhere; }
 .trigger-head-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.runs-on { min-width: 0; overflow: hidden; padding: 2px 8px; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 12px; font-weight: 500; text-decoration: none; text-overflow: ellipsis; white-space: nowrap; }
+.runs-on:hover { color: var(--ink); }
 .backend-note { margin: 0; padding: 8px 12px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--side); color: var(--muted); font-size: 12.5px; line-height: 1.5; }
 .convo-trigger { display: inline-flex; color: var(--muted); }
 .convo-trigger .icon { width: 12px; height: 12px; }
@@ -1321,6 +1323,7 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 #servers > .help { margin: 0 0 12px; }
 #dispatch-form textarea { font-family: var(--sans); font-size: 14px; }
 .dispatch-help { margin: -6px 0 14px; }
+.warn-note { color: var(--warn-text); }
 .rules-head { display: flex; align-items: center; gap: 10px; margin: 4px 0 6px; }
 .rules-head h3 { flex: 1; margin: 0; font-size: 13px; font-weight: 600; color: var(--ink); }
 .rules-head + .dispatch-help { margin: 0 0 10px; }

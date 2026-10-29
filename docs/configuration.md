@@ -305,9 +305,11 @@ dispatch:
 host, `claude` or `codex`; `agent` only chooses what it starts on the machines. `model` stays the
 Claude Code model whichever `runs_on` says, so switching never leaves an invalid model behind.
 `codex_model` is any Codex model name, up to 64 letters, digits, dots, dashes and underscores, and
-Settings suggests the ones in Codex's own list. Either one only applies to new conversations; a
-conversation stays on the agent it started on. With both at their defaults neither is written to
-`yardbell.yml`, so 0.7.5 still reads it.
+Settings suggests the ones in Codex's own list and says when the name is not in it. A change to
+`runs_on` only applies to new conversations, since a conversation stays on the agent it started on.
+A change to either model applies from the next message, in open conversations too. With
+`runs_on` and `codex_model` at their defaults neither is written to `yardbell.yml`, so 0.7.5 still
+reads it.
 
 `approval` decides what happens when Dispatch starts, stops, types into or reviews a session:
 `prompt` makes it a step that waits for you to approve, edit or reject it, `allow` runs it at once

@@ -641,15 +641,25 @@ class Suite:
         b = self.b
         before = self.api("GET", "/api/settings")["dispatch"]
         self.api("POST", "/api/settings/dispatch", {**before, "rules": [], "approval": "prompt"})
+        write(os.path.join(self.y.env["HOME"], ".codex", "models_cache.json"), json.dumps(
+            {"models": [{"slug": "gpt-6.1-sol", "visibility": "list"}, {"slug": "gpt-6.1-mini", "visibility": "list"}]}))
         try:
             b.goto(self.url("/settings#dispatch"))
             b.wait("document.querySelector('#dispatch-form [name=runs_on]').value === 'claude'", "Claude Code, the default")
+            b.wait("[...document.querySelectorAll('#dispatch-form [name=runs_on] option')].map((o) => o.textContent).join() === 'Claude Code,Codex'",
+                   "only the agents Dispatch can run on, named as sessions name them")
             b.wait("!document.querySelector('[data-runs-on=claude]').hidden && document.querySelector('[data-runs-on=codex]').hidden", "the Claude model")
             b.js("(() => { const s = document.querySelector('#dispatch-form [name=runs_on]'); s.value = 'codex'; s.dispatchEvent(new Event('change')); })()")
             b.wait("document.querySelector('[data-runs-on=claude]').hidden && !document.querySelector('[data-runs-on=codex]').hidden", "the Codex model in its place")
             b.wait("document.getElementById('dispatch-foot').textContent.startsWith('Dispatch runs Codex')", "the footer naming Codex")
+            b.wait("[...document.querySelectorAll('#codex-models option')].map((o) => o.value).join() === 'gpt-6.1-sol,gpt-6.1-mini'", "the models Codex lists")
             b.click("#dispatch-form [name=codex_model]")
+            b.type("gpt-9-unlisted")
+            b.wait("!document.getElementById('codex-model-note').hidden && document.getElementById('codex-model-note').textContent.includes('Codex does not list gpt-9-unlisted')",
+                   "the note on a model Codex does not list")
+            b.js("(() => { const i = document.querySelector('#dispatch-form [name=codex_model]'); i.value = ''; i.dispatchEvent(new Event('input')); })()")
             b.type("gpt-6.1-sol")
+            b.wait("document.getElementById('codex-model-note').hidden", "no note on a listed model")
             b.click("#dispatch-form button[type=submit]")
             b.wait("!document.getElementById('undo-bar').hidden", "the settings to save")
             saved = self.api("GET", "/api/settings")["dispatch"]
@@ -657,7 +667,8 @@ class Suite:
                 raise Failure(f"saved {saved}")
 
             b.goto(self.url("/dispatch"))
-            b.wait("document.querySelector('.dispatch-intro')?.textContent.includes('Dispatch runs Codex on this machine')", "the intro naming Codex")
+            b.wait("document.querySelector('.dispatch-intro')?.textContent.includes('Dispatch runs Codex (gpt-6.1-sol) on this machine')", "the intro naming Codex and its model")
+            b.wait("document.getElementById('runs-on').textContent === 'Codex · gpt-6.1-sol'", "the label naming Codex and its model")
             b.click("#dispatch-form textarea")
             b.type("Fix the login redirect in demo-app")
             b.click("#dispatch-form button[type=submit]")
@@ -679,12 +690,16 @@ class Suite:
             b.wait("[...document.querySelectorAll('#dispatch-log .msg')].some((m) => m.textContent.includes('Understood, nothing started.'))",
                    "a reply from the resumed thread that heard about the rejection", timeout=20)
 
-            self.api("POST", "/api/settings/dispatch", {**before, "rules": [], "approval": "prompt"})
+            self.api("POST", "/api/settings/dispatch", {**before, "rules": [], "approval": "prompt", "model": "haiku", "codex_model": "gpt-6.1-mini"})
             b.goto(self.url(f"/dispatch?c={id}"))
-            b.wait("document.querySelector('#dispatch-log .backend-note')?.textContent.includes('This conversation runs on Codex, so it carries on there. New conversations start on Claude Code.')",
-                   "the note that this conversation stays on Codex")
+            b.wait("document.querySelector('#dispatch-log .backend-note')?.textContent.includes('This conversation runs on Codex (gpt-6.1-mini), so it carries on there. New conversations start on Claude Code (Haiku).')",
+                   "the note that this conversation stays on Codex, with Codex's new model")
+            b.wait("document.getElementById('runs-on').textContent === 'Codex · gpt-6.1-mini'", "the label for this conversation")
+            b.click("#new-chat")
+            b.wait("document.getElementById('runs-on').textContent === 'Claude Code · Haiku'", "the label for a new conversation")
         finally:
             self.api("POST", "/api/settings/dispatch", before)
+            os.remove(os.path.join(self.y.env["HOME"], ".codex", "models_cache.json"))
 
     def test_dispatch_review_card_diff_and_evidence(self):
         b = self.b

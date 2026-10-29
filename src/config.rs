@@ -167,8 +167,17 @@ pub enum RunsOn {
 }
 
 impl RunsOn {
+    pub const ALL: [RunsOn; 2] = [RunsOn::Claude, RunsOn::Codex];
+
     pub fn is_default(&self) -> bool {
         *self == RunsOn::default()
+    }
+
+    pub fn name(&self) -> &'static str {
+        match self {
+            RunsOn::Claude => "claude",
+            RunsOn::Codex => "codex",
+        }
     }
 
     pub fn label(&self) -> &'static str {
@@ -230,6 +239,15 @@ pub struct DispatchSettings {
 impl DispatchSettings {
     fn is_default(&self) -> bool {
         *self == DispatchSettings::default()
+    }
+
+    // Each agent keeps its own model, so switching agents never hands one a model only the other
+    // knows. Empty is the agent's own default.
+    pub fn model_for(&self, runs_on: RunsOn) -> &str {
+        match runs_on {
+            RunsOn::Claude => &self.model,
+            RunsOn::Codex => &self.codex_model,
+        }
     }
 }
 
