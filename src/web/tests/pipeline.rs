@@ -401,3 +401,38 @@ async fn settings_are_saved_to_yardbell_yml() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn an_empty_pipeline_is_created_and_cannot_run() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        "/api/pipelines",
+        Some(json!({ "empty": true })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        (body["name"].clone(), body["steps"].clone()),
+        (json!("New pipeline"), json!([]))
+    );
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        "/api/pipelines/new-pipeline/runs",
+        Some(json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .contains("New pipeline has no steps yet"),
+        "{body}"
+    );
+}

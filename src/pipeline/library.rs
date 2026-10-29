@@ -1,4 +1,4 @@
-use super::definition::{check, slug, Definition, MachineChoice, StepKind, Workspace};
+use super::definition::{check, slug, Definition, MachineChoice, StepKind, Trigger, Workspace};
 use crate::config::Config;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
@@ -108,18 +108,7 @@ impl Library {
             .into_iter()
             .find(|t| t.name == name)
             .ok_or_else(|| vec![format!("there is no template named {name}")])?;
-        let taken: Vec<String> = self.lock().keys().cloned().collect();
-        def.id = slug(&def.name, &taken);
-        if let Some(n) = def
-            .id
-            .rsplit('-')
-            .next()
-            .and_then(|n| n.parse::<u32>().ok())
-        {
-            if def.id != slug(&def.name, &[]) {
-                def.name = format!("{} {n}", def.name);
-            }
-        }
+        self.name_uniquely(&mut def);
         def.enabled = false;
         for step in &mut def.steps {
             // A template tests on devbox; without one, the test runs where the code already is.
@@ -135,6 +124,36 @@ impl Library {
             }
         }
         self.save(def, cfg)
+    }
+
+    pub fn create_empty(&self, cfg: &Config) -> Result<Definition, Vec<String>> {
+        let mut def = Definition {
+            id: String::new(),
+            name: "New pipeline".into(),
+            enabled: false,
+            version: 0,
+            trigger: Trigger::Manual,
+            start: String::new(),
+            steps: vec![],
+        };
+        self.name_uniquely(&mut def);
+        self.save(def, cfg)
+    }
+
+    // A second copy of the same name becomes "Name 2", with the id to match.
+    fn name_uniquely(&self, def: &mut Definition) {
+        let taken: Vec<String> = self.lock().keys().cloned().collect();
+        def.id = slug(&def.name, &taken);
+        if let Some(n) = def
+            .id
+            .rsplit('-')
+            .next()
+            .and_then(|n| n.parse::<u32>().ok())
+        {
+            if def.id != slug(&def.name, &[]) {
+                def.name = format!("{} {n}", def.name);
+            }
+        }
     }
 
     pub fn set_enabled(
@@ -279,6 +298,22 @@ mod tests {
             &kept.step("qa").unwrap().kind,
             StepKind::Agent { machine: MachineChoice::Name(m), .. } if m == "devbox"
         ));
+    }
+
+    #[test]
+    fn copying_an_empty_pipeline_twice_gives_new_pipeline_2() {
+        let (lib, _dir) = library();
+        let a = lib.create_empty(&cfg()).unwrap();
+        let b = lib.create_empty(&cfg()).unwrap();
+        assert_eq!(
+            (a.id.as_str(), a.name.as_str(), a.steps.len(), a.enabled),
+            ("new-pipeline", "New pipeline", 0, false)
+        );
+        assert_eq!(
+            (b.id.as_str(), b.name.as_str()),
+            ("new-pipeline-2", "New pipeline 2")
+        );
+        assert_eq!(a.version, 1);
     }
 
     #[test]

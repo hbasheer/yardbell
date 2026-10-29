@@ -114,6 +114,8 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
 
 #[derive(Deserialize)]
 struct CreateReq {
+    #[serde(default)]
+    empty: bool,
     template: Option<String>,
     definition: Option<Definition>,
 }
@@ -125,6 +127,7 @@ async fn create(
     let cfg = app.config()?;
     let library = app.pipelines.library();
     let out = match (req.template, req.definition) {
+        (None, None) if req.empty => library.create_empty(&cfg),
         (Some(name), None) => library.copy_template(&name, &cfg),
         (None, Some(mut def)) => {
             let taken: Vec<String> = library.list().into_iter().map(|d| d.id).collect();
@@ -132,7 +135,7 @@ async fn create(
             def.version = 0;
             library.save(def, &cfg)
         }
-        _ => return Err(bad("send a template name or a definition".into())),
+        _ => return Err(bad("send empty, a template name or a definition".into())),
     };
     saved(&app, out)
 }
@@ -321,7 +324,10 @@ async fn start(
     Path(id): Path<String>,
     body: Option<Json<StartReq>>,
 ) -> Result<Response, ApiError> {
-    found(&app, &id)?;
+    let def = found(&app, &id)?;
+    if def.steps.is_empty() {
+        return Err(bad(format!("{} has no steps yet", def.name)));
+    }
     let req = body.map(|Json(r)| r).unwrap_or(StartReq {
         tickets: Vec::new(),
         prs: Vec::new(),

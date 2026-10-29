@@ -302,7 +302,13 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
             out.push(format!("two steps are named {}", s.name));
         }
     }
-    if def.step(&def.start).is_none() {
+    if def.steps.is_empty() {
+        if def.enabled {
+            out.push("the pipeline needs at least one step".into());
+        }
+    } else if def.start.trim().is_empty() {
+        out.push("the pipeline needs a first step".into());
+    } else if def.step(&def.start).is_none() {
         out.push(format!("the start step {} does not exist", def.start));
     }
     let reached = def.reached();
@@ -509,6 +515,25 @@ pub(crate) mod tests {
 
     fn problems(d: &Definition) -> Vec<String> {
         check(d, &cfg()).err().unwrap_or_default()
+    }
+
+    #[test]
+    fn check_allows_an_empty_pipeline_while_off() {
+        let mut empty = Definition {
+            steps: vec![],
+            start: String::new(),
+            enabled: false,
+            ..def(vec![agent("a", "A", MachineChoice::Name("hp".into()))])
+        };
+        assert_eq!(check(&empty, &cfg()), Ok(()));
+        empty.enabled = true;
+        assert_eq!(
+            problems(&empty),
+            vec!["the pipeline needs at least one step"]
+        );
+        let mut unstarted = def(vec![agent("a", "A", MachineChoice::Name("hp".into()))]);
+        unstarted.start = String::new();
+        assert!(problems(&unstarted).contains(&"the pipeline needs a first step".to_string()));
     }
 
     #[test]
