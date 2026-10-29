@@ -34,7 +34,7 @@ pub use review::{
     ReviewOf, ScanKind, Screenshots,
 };
 pub use rules::{
-    decide as decide_step, decide_memory, folder_matches, valid_folder_pattern,
+    decide as decide_step, decide_always_wait, decide_memory, folder_matches, valid_folder_pattern,
     validate as validate_rules, Rule, Step, Verdict,
 };
 pub(crate) use store::new_id as new_conversation_id;

@@ -3,7 +3,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 10] = [
+const CHANGING: [&str; 11] = [
     "start_session",
     "send_to_session",
     "stop_session",
@@ -14,6 +14,7 @@ const CHANGING: [&str; 10] = [
     "push_branch",
     "move_session",
     "remember",
+    "change_settings",
 ];
 
 pub fn changes_something(tool: &str) -> bool {
@@ -208,6 +209,7 @@ fn what(action: &Value) -> String {
             "forget" => format!("forgetting \"{}\" from your memory", text(input, "old")),
             _ => format!("adding \"{}\" to your memory", text(input, "entry")),
         },
+        "change_settings" => format!("changing the {} settings", text(input, "area")),
         other => other.to_string(),
     }
 }
@@ -233,6 +235,7 @@ fn changed(action: &Value) -> String {
         ("prompt", "task"),
         ("text", "text"),
         ("entry", "entry"),
+        ("value", "settings"),
     ] {
         let (a, b) = (before.get(key), after.get(key));
         if !(a == b || blank(a) && blank(b)) && !fields.contains(&word) {

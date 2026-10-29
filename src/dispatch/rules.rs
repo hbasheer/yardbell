@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
 pub const REMEMBER: &str = "remember";
-const ACTIONS: [&str; 10] = [
+const ACTIONS: [&str; 11] = [
     "start_session",
     "stop_session",
     "send_to_session",
@@ -14,6 +14,7 @@ const ACTIONS: [&str; 10] = [
     "integrate_branches",
     "push_branch",
     "move_session",
+    "change_settings",
     REMEMBER,
 ];
 
@@ -170,6 +171,19 @@ pub fn decide_memory(default: Approval, rules: &[Rule]) -> Verdict<'_> {
                 Approval::Allow | Approval::Prompt => Approval::Prompt,
             },
             rule: None,
+        },
+    }
+}
+
+// Some changes outlast the conversation and steer Dispatch itself, so a rule may refuse them but
+// never let them run alone: anything short of a refusal waits for the person.
+pub fn decide_always_wait<'a>(default: Approval, rules: &'a [Rule], step: &Step) -> Verdict<'a> {
+    let verdict = decide(default, rules, step);
+    match verdict.approval {
+        Approval::Deny => verdict,
+        Approval::Allow | Approval::Prompt => Verdict {
+            approval: Approval::Prompt,
+            rule: verdict.rule.filter(|r| r.approval == Approval::Prompt),
         },
     }
 }
@@ -451,7 +465,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, remember, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, remember, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],

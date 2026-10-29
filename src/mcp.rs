@@ -130,7 +130,7 @@ pub async fn handle(
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools()
             .into_iter()
-            .filter(|t| dispatch || t["name"] != "remember")
+            .filter(|t| dispatch || !dispatch_only(t["name"].as_str().unwrap_or_default()))
             .collect::<Vec<_>>() })),
         // A call that changes something finishes, and is recorded, even when the caller hangs up.
         "tools/call" => {
@@ -348,11 +348,26 @@ fn tools() -> Vec<Value> {
                 "old": { "type": "string", "description": "For replace and forget: the entry exactly as it is in memory" },
                 "reason": { "type": "string", "description": "What the user said or did that makes this worth remembering" },
             }),
-            &["change", "reason"],
+                        &["change", "reason"],
+        ),
+        tool(
+            "change_settings",
+            "Propose a change to one settings area. Read the area first with read_settings, edit the value it returns and send the whole area back as value. Leave every (hidden) as it is: it keeps the stored credential. The change is checked as Settings checks it, and any problem comes back to you to correct. Unless the user's rules say otherwise it becomes a step the user approves; a change to the dispatch area always waits for the user. Once saved, Settings, Undo reverses it. security and about are read only, and machines cannot be added or removed here.",
+            json!({
+                "area": { "type": "string", "enum": crate::mcp_change::CHANGEABLE },
+                "value": { "type": ["object", "array"], "description": "The whole area as read_settings returned it, with your edits" },
+            }),
+            &["area", "value"],
         ),
     ];
     all.extend(crate::mcp_read::tools());
     all
+}
+
+const WAIT_FOR_PROPOSALS: [&str; 3] = ["change_settings", "save_task", "run_trigger"];
+
+fn dispatch_only(tool: &str) -> bool {
+    tool == "remember" || WAIT_FOR_PROPOSALS.contains(&tool)
 }
 
 async fn call(app: &AppState, params: &Value, caller: &Caller) -> Value {
@@ -362,6 +377,13 @@ async fn call(app: &AppState, params: &Value, caller: &Caller) -> Value {
         .cloned()
         .unwrap_or_else(|| json!({}));
     let outcome = match caller {
+        Caller::Client if WAIT_FOR_PROPOSALS.contains(&name) => Err(ApiError(
+            StatusCode::FORBIDDEN,
+            "Not run: changes from outside clients arrive with the Proposals inbox, which this \
+Yardbell does not have yet. Ask the user to make the change in Yardbell's Settings, or to ask \
+Dispatch for it."
+                .into(),
+        )),
         Caller::Dispatch(conversation) if name == "start_group" => {
             dispatch_group(app, conversation.as_deref(), args).await
         }
@@ -400,10 +422,13 @@ async fn dispatch_step(
     let cfg = app.config()?;
     let (tool, input, review) = plan(app, &cfg, name, args)?;
     let step = step_of(app, name, &input);
-    let verdict = if name == "remember" {
-        crate::dispatch::decide_memory(cfg.dispatch.approval, &cfg.dispatch.rules)
-    } else {
-        crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step)
+    let (default, rules) = (cfg.dispatch.approval, &cfg.dispatch.rules);
+    let verdict = match name {
+        "remember" => crate::dispatch::decide_memory(default, rules),
+        "change_settings" if input["area"] == "dispatch" => {
+            crate::dispatch::decide_always_wait(default, rules, &step)
+        }
+        _ => crate::dispatch::decide_step(default, rules, &step),
     };
     match (verdict.approval, conversation) {
         (Approval::Deny, _) => Err(ApiError(
@@ -631,7 +656,7 @@ started or proposed.",
 // in or scans, the folder of the session it reviews, or the folder of the session it stops or
 // types into.
 pub(crate) fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
-    if called == "remember" {
+    if called == "remember" || called == "change_settings" {
         return Step {
             action: called.to_string(),
             machine: String::new(),
@@ -724,8 +749,57 @@ pub(crate) fn plan(
         check_memory(app, &change)?;
         return Ok((name.to_string(), json!(change), None));
     }
+    if name == "change_settings" {
+        let change: SettingsChange = arg(args)?;
+        check_settings(cfg, &change)?;
+        let before = crate::mcp_read::shown_area(app, cfg, &change.area);
+        let diff = crate::mcp_change::diff(&before, &change.value);
+        let input =
+            json!({ "area": change.area, "value": change.value, "before": before, "diff": diff });
+        return Ok((name.to_string(), input, None));
+    }
     check(app, cfg, name, &args)?;
     Ok((name.to_string(), args, None))
+}
+
+#[derive(Deserialize)]
+struct SettingsChange {
+    area: String,
+    value: Value,
+    #[serde(default)]
+    before: Value,
+}
+
+fn check_settings(cfg: &Config, change: &SettingsChange) -> Result<(), ApiError> {
+    let area = change.area.as_str();
+    match area {
+        "security" => {
+            return Err(bad(
+                "security is read only for tools. Change this in Settings, Security.".into(),
+            ))
+        }
+        "about" => {
+            return Err(bad(
+                "about is read only: it shows Yardbell's version. Updates are installed from Settings, About."
+                    .into(),
+            ))
+        }
+        _ if !crate::mcp_change::CHANGEABLE.contains(&area) => {
+            return Err(bad(format!(
+                "there is no settings area {area:?} that can be changed; the areas that can are {}",
+                crate::mcp_change::CHANGEABLE.join(", ")
+            )))
+        }
+        _ => {}
+    }
+    crate::mcp_change::check(cfg, area, &change.value)
+        .map(|_| ())
+        .map_err(|problems| {
+            bad(format!(
+                "Not proposed, correct this and send the whole area again: {}",
+                problems.join("; ")
+            ))
+        })
 }
 
 fn check_memory(app: &AppState, change: &MemoryChange) -> Result<(), ApiError> {
@@ -750,6 +824,7 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
             Ok(())
         }
         "remember" => check_memory(app, &arg(input.clone())?),
+        "change_settings" => check_settings(cfg, &arg(input.clone())?),
         tool if crate::web::worktrees_api::TOOLS.contains(&tool) => {
             crate::web::worktrees_api::check(app, cfg, tool, input)
         }
@@ -960,7 +1035,23 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
             .apply(&arg(input)?, By::Dispatch)
             .map_err(bad);
     }
+    if tool == "change_settings" {
+        return change_settings(app, arg(input)?);
+    }
     run_tool(app, tool, input).await
+}
+
+// The change is applied to the area as it is now. When the area moved on after the card was
+// drawn, the outcome says so and shows what was replaced.
+fn change_settings(app: &AppState, change: SettingsChange) -> Result<Value, ApiError> {
+    let now = crate::mcp_read::shown_area(app, &app.config()?, &change.area);
+    crate::mcp_change::apply(&app.settings, &change.area, change.value).map_err(bad)?;
+    let mut outcome = json!({ "saved": change.area, "undo": "Settings, Undo reverses it" });
+    if !change.before.is_null() && change.before != now {
+        outcome["note"] = json!("The area had changed since this was proposed; this replaced it.");
+        outcome["replaced"] = now;
+    }
+    Ok(outcome)
 }
 
 fn arg<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ApiError> {

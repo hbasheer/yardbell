@@ -290,17 +290,13 @@ fn shown<T: serde::Serialize>(value: &T) -> Value {
 async fn settings(app: &AppState, area: &str) -> Result<Value, ApiError> {
     let cfg = app.config()?;
     let machines: Vec<&str> = cfg.machines.iter().map(|m| m.name.as_str()).collect();
-    let agents: Vec<String> = cfg.agents().into_iter().map(|a| a.name).collect();
-    let (value, choices) = match area {
-        "dispatch" => (
-            dispatch_view(&cfg),
-            json!({
-                "approval": ["allow", "prompt", "deny"],
-                "agents": agents,
-                "runs_on": crate::config::RunsOn::ALL,
-                "models": crate::config::DISPATCH_MODELS,
-            }),
-        ),
+    let choices = match area {
+        "dispatch" => json!({
+            "approval": ["allow", "prompt", "deny"],
+            "agents": cfg.agents().into_iter().map(|a| a.name).collect::<Vec<_>>(),
+            "runs_on": crate::config::RunsOn::ALL,
+            "models": crate::config::DISPATCH_MODELS,
+        }),
         "triggers" => {
             let tasks: Vec<String> = app
                 .dispatch
@@ -309,40 +305,27 @@ async fn settings(app: &AppState, area: &str) -> Result<Value, ApiError> {
                 .filter(|t| !t.hidden)
                 .map(|t| t.name)
                 .collect();
-            let mut triggers = shown(&cfg.triggers);
-            for (t, set) in triggers
-                .as_array_mut()
-                .into_iter()
-                .flatten()
-                .zip(&cfg.triggers)
-            {
-                t["enabled"] = json!(set.enabled);
-            }
-            (
-                triggers,
-                json!({ "tasks": tasks, "kinds": ["schedule", "linear", "github"] }),
-            )
+            json!({ "tasks": tasks, "kinds": ["schedule", "linear", "github"] })
         }
-        "worktree_setup" => (shown(&cfg.worktree_setup), json!({ "machines": machines })),
-        "agents" => (
-            json!({ "default_agent": cfg.default_agent(), "custom": shown(&cfg.agents), "all": agents }),
-            json!({}),
-        ),
-        "session_mcp_servers" => (shown(&cfg.mcp_servers), json!({ "machines": machines })),
-        "phone" => (shown(&cfg.phone_notifications), json!({})),
-        "machines" => (machines_of(&cfg), json!({})),
-        "pipelines" => (shown(&cfg.pipelines), json!({})),
-        "pull_requests" => (shown(&cfg.pull_requests), json!({})),
-        "security" => (
-            json!({
-                "passcode_set": cfg.passcode_hash.is_some(),
-                "mcp_on": cfg.mcp_token.is_some(),
-                "mesh": cfg.mesh,
-                "listen_ip": cfg.listen_ip,
-                "change_in": "Settings, Security; these are never changed through tools",
-            }),
-            json!({}),
-        ),
+        "worktree_setup" | "session_mcp_servers" => json!({ "machines": machines }),
+        "agents" | "phone" | "machines" | "pipelines" | "pull_requests" | "security" | "about" => {
+            json!({})
+        }
+        _ => {
+            return Err(bad(format!(
+                "there is no settings area {area:?}; the areas are {}",
+                AREAS.join(", ")
+            )))
+        }
+    };
+    let value = match area {
+        "security" => json!({
+            "passcode_set": cfg.passcode_hash.is_some(),
+            "mcp_on": cfg.mcp_token.is_some(),
+            "mesh": cfg.mesh,
+            "listen_ip": cfg.listen_ip,
+            "change_in": "Settings, Security; these are never changed through tools",
+        }),
         "about" => {
             let version = env!("CARGO_PKG_VERSION");
             let latest = match app.updates.check(version).await {
@@ -356,16 +339,45 @@ async fn settings(app: &AppState, area: &str) -> Result<Value, ApiError> {
                     json!({ "newest": null, "unknown": reason })
                 }
             };
-            (json!({ "version": version, "latest": latest }), json!({}))
+            json!({ "version": version, "latest": latest })
         }
-        _ => {
-            return Err(bad(format!(
-                "there is no settings area {area:?}; the areas are {}",
-                AREAS.join(", ")
-            )))
-        }
+        _ => value_of(&cfg, area),
     };
     Ok(json!({ "area": area, "value": value, "choices": choices }))
+}
+
+// A changeable area as read_settings shows it, with every credential hidden.
+pub fn shown_area(app: &AppState, cfg: &Config, area: &str) -> Value {
+    sweep(value_of(cfg, area), &saved_values(app))
+}
+
+fn value_of(cfg: &Config, area: &str) -> Value {
+    match area {
+        "dispatch" => dispatch_view(cfg),
+        "triggers" => {
+            let mut triggers = shown(&cfg.triggers);
+            for (t, set) in triggers
+                .as_array_mut()
+                .into_iter()
+                .flatten()
+                .zip(&cfg.triggers)
+            {
+                t["enabled"] = json!(set.enabled);
+            }
+            triggers
+        }
+        "worktree_setup" => shown(&cfg.worktree_setup),
+        "agents" => {
+            let all: Vec<String> = cfg.agents().into_iter().map(|a| a.name).collect();
+            json!({ "default_agent": cfg.default_agent(), "custom": shown(&cfg.agents), "all": all })
+        }
+        "session_mcp_servers" => shown(&cfg.mcp_servers),
+        "phone" => shown(&cfg.phone_notifications),
+        "machines" => machines_of(cfg),
+        "pipelines" => shown(&cfg.pipelines),
+        "pull_requests" => shown(&cfg.pull_requests),
+        _ => Value::Null,
+    }
 }
 
 fn machines_of(cfg: &Config) -> Value {
