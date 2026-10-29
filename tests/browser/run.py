@@ -1840,6 +1840,60 @@ class Suite:
         b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {version + 1})()", "Ctrl+S saving")
         self.check_errors("the keyboard path")
 
+    def test_new_empty_pipeline_and_build_it(self):
+        b = self.b
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url("/pipeline"))
+        b.click("#pl-new")
+        b.wait("document.querySelector('#pl-templates button[data-empty]')", "Empty pipeline in the menu")
+        if b.js("document.querySelector('#pl-templates button').hasAttribute('data-empty')") is not True:
+            raise Failure("Empty pipeline is not the first choice")
+        b.click("#pl-templates button[data-empty]")
+        b.wait("new URLSearchParams(location.search).get('tab') === 'build' && document.querySelector('.pl-canvas-hint')", "the empty pipeline on the canvas with its hint")
+        pid = b.js("new URLSearchParams(location.search).get('p')")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"agent\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-agent.selected')", "the first step")
+        self.set_field('#pl-inspector select[name=machine_mode]', "name")
+        b.wait("document.querySelector('#pl-inspector select[name=machine]')", "the machine to pick")
+        self.set_field('#pl-inspector textarea[name=instructions]', "Say hello")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"report\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-report.selected')", "Report to me after it")
+        b.js("document.activeElement.blur()")
+        b.key("s", "Control")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/{pid}')).json()).steps.length === 2)()", "the new pipeline saved with two steps")
+        b.click("#pl-run-now")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/{pid}/runs')).json()).runs.length === 1)()", "Run now starting a run")
+        self.check_errors("building from empty")
+
+    def test_builder_warns_before_losing_changes(self):
+        b = self.b
+        self.open_builder()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
+        b.js("window.__asked = ''; window.confirm = (m) => { window.__asked = m; return false; }")
+        b.click("#pl-back")
+        if b.js("window.__asked") != "Leave without saving your changes?":
+            raise Failure("leaving with unsaved changes did not ask")
+        if not b.js("!!document.querySelector('.pl-node.kind-wait')"):
+            raise Failure("saying no still threw the change away")
+        b.js("window.confirm = () => true")
+        b.click("#pl-back")
+        b.wait("!new URLSearchParams(location.search).get('p')", "leaving once confirmed")
+
+    def test_history_preview_then_restore(self):
+        b = self.b
+        definition = self.api("GET", "/api/pipelines/review")
+        definition["steps"][0]["name"] = "Read the MR"
+        saved = self.api("PUT", "/api/pipelines/review", definition)
+        b.goto(self.url("/pipeline?p=review&tab=history"))
+        b.wait("document.querySelector('.pl-history-row[data-version=\"1\"]')", "the first version")
+        b.click('.pl-history-row[data-version="1"] .pl-history-pick')
+        b.wait("document.querySelector('.pl-history-preview')?.textContent.includes('Version 1')", "the preview bar")
+        if b.js("document.querySelector('.pl-canvas .pl-node[data-step=\"understand\"] b').textContent") != "Understand":
+            raise Failure("the canvas does not show version 1")
+        b.js("[...document.querySelectorAll('.pl-history-preview button')].find((x) => x.textContent.trim() === 'Restore').click()")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
+
     def test_pipeline_run_graph_and_waiting_box(self):
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-a"))
@@ -1917,7 +1971,7 @@ class Suite:
         saved = self.api("PUT", "/api/pipelines/review", definition)
         b.goto(self.url("/pipeline?p=review&tab=history"))
         b.wait(f"document.querySelector('.pl-history-row')?.dataset.version === '{saved['version']}'", "the newest version first")
-        b.click('.pl-history-row[data-version="1"] button')
+        b.click('.pl-history-row[data-version="1"] .btn')
         b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
         if self.api("GET", "/api/pipelines/review")["steps"][0]["name"] != first:
             raise Failure("restoring version 1 did not bring its step names back")

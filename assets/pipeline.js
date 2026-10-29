@@ -150,9 +150,14 @@ function card(p) {
   </article>`;
 }
 
+const TEMPLATE_HINTS = {
+  "Implement my Linear tickets": "Plan, implement, review and fix, QA, push a draft, move the ticket, report",
+  "Review my merge requests": "Understand, root cause, security, test on devbox, report",
+};
+
 function newPipeline(template) {
   doing(async () => {
-    const d = await api("POST", "/api/pipelines", { template });
+    const d = await api("POST", "/api/pipelines", template ? { template } : { empty: true });
     go(`p=${encodeURIComponent(d.id)}&tab=build`);
   });
 }
@@ -221,8 +226,15 @@ function listView() {
       </div>
     </header>
     ${show.templates ? html`<div class="pl-panel" id="pl-templates">
-      <p class="pl-field-head">Start from a template <span>It is saved switched off, so you can set its trigger and steps first.</span></p>
-      <div class="pl-template-list">${data.templates.map((t) => html`<button class="btn" type="button" ?disabled=${busy} @click=${() => newPipeline(t)}>${t}</button>`)}</div>
+      <p class="pl-field-head">New pipeline <span>It is saved switched off, so you can set its trigger and steps before it runs.</span></p>
+      <div class="pl-template-list">
+        <button class="pl-template pl-template-empty" type="button" data-empty ?disabled=${busy} @click=${() => newPipeline(null)}>
+          <span class="pl-kind-icon">${icon("start")}</span><span><b>Empty pipeline</b><small>Start with nothing and build it on the canvas</small></span>
+        </button>
+        ${data.templates.map((t) => html`<button class="pl-template" type="button" ?disabled=${busy} @click=${() => newPipeline(t)}>
+          <span class="pl-kind-icon">${icon("agent")}</span><span><b>${t}</b><small>${TEMPLATE_HINTS[t] || "A template"}</small></span>
+        </button>`)}
+      </div>
     </div>` : nothing}
     ${show.settings ? settingsForm() : nothing}
     ${show.waiting ? html`<section class="pl-section" id="pl-waiting" aria-label="Waiting for me">${waitingList()}</section>` : nothing}
@@ -847,18 +859,41 @@ function buildTab(d) {
   </div>`;
 }
 
+let previewing = null;
+
+function restore(v) {
+  if (unsaved() && !confirm("Leave without saving your changes?")) return;
+  doing(async () => {
+    def = await api("POST", `/api/pipelines/${encodeURIComponent(def.id)}/restore`, { version: v.version });
+    draft = structuredClone(def);
+    previewing = null;
+    toast(`Restored v${v.version} as v${def.version}`, "ok");
+    await load();
+  });
+}
+
 function historyTab() {
-  return html`<ol class="pl-history">${versions.map((v, i) => html`<li class="pl-history-row" data-version=${String(v.version)}>
-    <span class="pl-v">v${v.version}</span>
-    <span class="pl-history-steps">${v.definition.steps.map((s) => s.name).join(" · ")}</span>
-    <time>${clock(v.saved)}</time>
-    ${i === 0 ? html`<span class="pl-current">Current</span>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => doing(async () => {
-      def = await api("POST", `/api/pipelines/${encodeURIComponent(def.id)}/restore`, { version: v.version });
-      draft = structuredClone(def);
-      toast(`Restored v${v.version} as v${def.version}`, "ok");
-      await load();
-    })}>Restore</button>`}
-  </li>`)}</ol>`;
+  const shown = versions.find((v) => v.version === previewing) || versions[0];
+  const current = shown === versions[0];
+  return html`<div class="pl-history-view">
+    <ol class="pl-history">${versions.map((v, i) => html`<li class=${`pl-history-row ${v === shown ? "sel" : ""}`} data-version=${String(v.version)}>
+      <button class="pl-history-pick" type="button" aria-current=${v === shown ? "true" : "false"} @click=${() => { previewing = v.version; draw(); }}>
+        <span class="pl-v">v${v.version}</span>
+        <span class="pl-history-steps">${v.definition.steps.map((s) => s.name).join(" · ") || "No steps"}</span>
+        <time>${clock(v.saved)}</time>
+      </button>
+      ${i === 0 ? html`<span class="pl-current">Current</span>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => restore(v)}>Restore</button>`}
+    </li>`)}</ol>
+    ${shown ? canvas({
+      def: shown.definition,
+      key: `${def.id}:history:${shown.version}`,
+      bar: html`<div class="pl-history-preview pl-canvas-bar">
+        <span>${current ? `Version ${shown.version}, the current one` : `Version ${shown.version}, saved ${clock(shown.saved)}`}</span>
+        ${current ? nothing : html`<button class="btn" type="button" @click=${() => restore(shown)}>Restore</button>
+          <button class="btn quiet" type="button" @click=${() => { previewing = null; draw(); }}>Back to the current version</button>`}
+      </div>`,
+    }) : nothing}
+  </div>`;
 }
 
 function runNow(d) {
@@ -905,6 +940,16 @@ function removePipeline(d) {
 
 let full = remembered("yb-pipeline-full", true);
 
+function unsaved() {
+  return !!(def && draft && JSON.stringify(draft) !== JSON.stringify(def));
+}
+
+window.addEventListener("beforeunload", (e) => {
+  if (!unsaved()) return;
+  e.preventDefault();
+  e.returnValue = "";
+});
+
 function pipelineView() {
   const d = def;
   const runs = runsOf(d.id);
@@ -920,7 +965,7 @@ function pipelineView() {
   const tabs = [["build", "Build"], ["runs", runs.length ? `Runs ${runs.length}` : "Runs"], ["history", "History"]];
   return html`<div class=${`pl-builder ${full ? "full" : ""}`}>
     <header class="pl-bar">
-      <button class="btn quiet pl-back" type="button" id="pl-back" title="Back to Pipelines" @click=${() => go("")}>${chevron("left")}<span>Pipelines</span></button>
+      <button class="btn quiet pl-back" type="button" id="pl-back" title="Back to Pipelines" @click=${() => { if (!unsaved() || confirm("Leave without saving your changes?")) go(""); }}>${chevron("left")}<span>Pipelines</span></button>
       <input class="pl-name pl-title-name" aria-label="Pipeline name" .value=${draft.name} @input=${(e) => { draft.name = e.target.value; draw(); }}>
       ${onOff(d)}
       <span class="pl-version">v${d.version}</span>

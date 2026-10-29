@@ -146,6 +146,8 @@ class Browser:
             "app.update.disabledForTesting": True,
             "layout.css.prefers-color-scheme.content-override": 1,
             "ui.prefersReducedMotion": 1,
+            # Pages may ask before leaving with unsaved work; a test moving on must not stall on it.
+            "dom.disable_beforeunload": True,
         }
         with open(os.path.join(self.profile, "user.js"), "w") as f:
             for k, v in prefs.items():
