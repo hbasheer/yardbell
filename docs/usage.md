@@ -295,6 +295,14 @@ stays with its server or host: if Dispatch changes where an entry points, it has
 again in Settings. Security settings, machines being added or removed,
 secrets and the passcode are never changed this way.
 
+Dispatch builds pipelines the same way: "make a pipeline that reviews my merge requests, tests on
+devbox and reports to me", "on fail, send the review back to the fix step", "turn the nightly
+pipeline on", "run the review on !87" or "tell the waiting run to use the shared stack". A new or
+changed pipeline is drawn small on its card, with the steps and lines that changed and each
+agent's wording as a diff, and always waits for you. **Edit in the builder** opens it in the
+builder, where **Approve and save** saves it; a new pipeline starts switched off. In the builder,
+**Ask Dispatch to change it** starts a message to Dispatch about that pipeline.
+
 Dispatch asks before it acts. Each step that starts, stops or types into a session appears as a
 card with the machine, folder, branch, agent and task (or the text to type), and waits for you:
 

@@ -31,6 +31,13 @@ and the project uses [Semantic Versioning](https://semver.org).
   sent back as it is keeps them, and none ever reaches a card or a conversation. Changes to
   Dispatch's own settings always wait for you; a rule can refuse them but never let them run
   alone. Dispatch rules can name the new steps `change_settings`, `save_task` and `run_trigger`.
+- **Dispatch builds and runs pipelines.** Ask for a pipeline in plain words and Dispatch proposes it
+  drawn small on a card, with the steps, lines and wording that changed. It always waits for you,
+  and **Edit in the builder** opens it in the builder, where saving approves it. Dispatch can also
+  switch a pipeline on or off, start runs on tickets or pull requests, and answer, retry, continue
+  or drop a waiting run, each as a card your rules decide. The builder's **Ask Dispatch to change
+  it** starts that conversation for you. A run's own Dispatch turn can never change settings,
+  pipelines or runs, so a ticket's text cannot approve its own run.
 - On a phone, Settings and Log out in the header show as their icons, to make room for Pipelines.
 
 ## [0.7.10] - 2026-10-29

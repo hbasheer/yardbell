@@ -99,9 +99,14 @@ Dispatch also has tools that change things, each a step its approval setting and
 | `change_settings` | replaces one changeable area (every `read_settings` area except `security` and `about`) with an edited copy, checked as Settings checks it and saved so Settings' Undo reverses it; a `(hidden)` left as it is keeps the saved value; machines are never added or removed; text around a `(hidden)` cannot be edited, and an entry whose url, host or command changes loses its kept credentials; the `dispatch` area, and any change that adds a `${secret:NAME}` reference, always wait for you |
 | `save_task` | saves a new task, or a new version of one |
 | `run_trigger` | runs a trigger now, as Settings' Run now does |
+| `save_pipeline` | saves a new pipeline (switched off) or a new version of one, checked as the builder checks it; it always waits for you, and its card opens in the builder |
+| `set_pipeline_enabled` | switches a pipeline on or off, after checking that its trigger can run |
+| `run_pipeline` | starts runs of a pipeline on Linear tickets or pull and merge request links |
+| `answer_run` | answers a waiting run, retries its step, continues it as passed or failed, or drops it |
 
 Other clients do not see these, and calling one from them is refused until changes from outside
-clients can wait in a Proposals inbox.
+clients can wait in a Proposals inbox. A pipeline run's own Dispatch turn cannot call any of them,
+whatever the rules say, so text in a ticket cannot answer the run it belongs to.
 
 **MCP servers for sessions** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code

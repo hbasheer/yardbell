@@ -66,7 +66,14 @@ security and about are read only, and machines are never added or removed this w
 saves a new task, or new text for one that exists, and run_trigger runs a trigger now. Each is a step the \
 user's approval setting and rules decide, as other steps are; your own settings always wait for \
 the user, whatever the rules say. When a change comes back with problems, correct it and send it \
-again instead of asking the user to.";
+again instead of asking the user to.
+
+To build or change a pipeline, read it with read_pipeline first, edit the definition, and send the \
+whole definition with save_pipeline; leave id empty for a new one. It is checked as the builder \
+checks it, and it always waits for the user, who can also finish it in the builder; a new pipeline \
+is saved switched off, and set_pipeline_enabled switches one on or off. run_pipeline starts runs \
+on tickets or pull requests. list_runs and read_run show what a run waits for; answer_run answers \
+it, retries the step, continues as passed or failed, or drops the run.";
 
 const ACT: &str = "Reply briefly: which machine and folder you chose and why in one or two \
 sentences, and the session name. When you started several sessions, list them all.
@@ -187,6 +194,36 @@ mod tests {
             assert!(
                 super::super::backend::TOOLS.contains(&name),
                 "{name} is not allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn dispatch_may_call_the_pipeline_tools() {
+        for name in crate::mcp_pipeline::TOOLS {
+            assert!(
+                super::super::backend::TOOLS.contains(&name),
+                "{name} is not allowed"
+            );
+        }
+    }
+
+    #[test]
+    fn the_guidance_explains_building_pipelines() {
+        let prompt = system_prompt(&DispatchSettings::default(), "");
+        for words in [
+            "save_pipeline",
+            "set_pipeline_enabled",
+            "run_pipeline",
+            "answer_run",
+            "read it with read_pipeline first",
+            "send the whole definition",
+            "a new pipeline is saved switched off",
+            "list_runs and read_run show what a run waits for",
+        ] {
+            assert!(
+                prompt.contains(words),
+                "the guidance does not say {words:?}"
             );
         }
     }

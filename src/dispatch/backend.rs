@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 const RESULT_PREVIEW: usize = 4000;
-pub(super) const TOOLS: [&str; 30] = [
+pub(super) const TOOLS: [&str; 34] = [
     "list_machines",
     "list_sessions",
     "list_folders",
@@ -38,6 +38,10 @@ pub(super) const TOOLS: [&str; 30] = [
     "change_settings",
     "save_task",
     "run_trigger",
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
 ];
 
 pub(super) struct TurnSpec<'a> {
