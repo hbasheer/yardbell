@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-30
+
 - Fixed: a Claude Code step could finish with a good result and the run still said it ended without
   one, because only what fit on the terminal's screen was read. Results are now read from the
   transcript too, and a reviewer that goes quiet is asked to print its result rather than stopped and
