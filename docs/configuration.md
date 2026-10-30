@@ -413,6 +413,8 @@ pull_requests:
   enabled: true        # false: no badges, no cards, gh and GitLab are never asked
   poll_seconds: 120    # how often each branch is asked, at least 30
   cards: true          # false: badges only, no cards in Dispatch
+  use_github: true     # false: gh is never asked for badges and cards
+  use_gitlab: true     # false: GitLab hosts are kept but never asked for badges and cards
   gitlab:              # optional
     - host: git.example.com               # the host as the remote URL names it
       token: '${secret:gitlab}'           # a personal access token with read_api

@@ -826,6 +826,46 @@ async fn without_gitlab_hosts_no_remote_is_read() {
 }
 
 #[tokio::test]
+async fn with_github_off_gh_is_never_asked() {
+    let rig = Rig::new("pull_requests:\n  use_github: false\n");
+    rig.fake
+        .stub(BRANCH, Output::ok_with(&view_with("passing", "abc", &[])));
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    assert_eq!(rig.gh_calls(), 0);
+    assert!(pulls.health().machines.is_empty(), "no claim about gh");
+}
+
+#[tokio::test]
+async fn with_gitlab_off_its_hosts_are_not_asked() {
+    let stub = serve(Answers::default()).await;
+    let rig = Rig::new(&format!(
+        "pull_requests:\n  use_gitlab: false\n  gitlab:\n    - {{host: git.commslayer.com, url: '{}', token: tok}}\n",
+        stub.base
+    ));
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    assert_eq!(stub.asked("/merge_requests"), 0);
+    assert_eq!(rig.asked("git config --get"), 0, "no remote is read");
+}
+
+#[tokio::test]
 async fn the_remote_is_read_once_per_ten_minutes() {
     let stub = serve(Answers::default()).await;
     let rig = gitlab_rig(&stub);
@@ -1383,7 +1423,7 @@ async fn a_remote_gh_cannot_read_points_at_the_settings() {
         .await;
     let why = rig.why(0).expect("a reason");
     assert!(
-        why.contains("add its host in Settings, Pull requests"),
+        why.contains("add its host in Settings, GitHub and GitLab"),
         "{why}"
     );
 }

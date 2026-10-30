@@ -4,7 +4,7 @@ mod remote;
 
 pub use github::GitHub;
 pub use gitlab::{accesses, Answer, GitLab, GitLabAccess, Mr};
-pub use remote::{Remotes, Repo};
+pub use remote::{folder_remotes_command, parse_folder_remotes, service_of, Remotes, Repo};
 
 use crate::config::{Config, Machine};
 use crate::dispatch::Dispatch;
@@ -603,7 +603,7 @@ fn no_gh(machine: &str) -> String {
 
 fn gh_failed(why: &str) -> String {
     if why.contains("known GitHub host") {
-        return "This branch's remote is not on GitHub. If it is on GitLab, add its host in Settings, Pull requests".into();
+        return "This branch's remote is not on GitHub. If it is on GitLab, add its host in Settings, GitHub and GitLab".into();
     }
     format!("gh could not read this branch: {why}")
 }
@@ -838,6 +838,10 @@ impl Pulls {
                                 };
                             out.push((t, Some(host), got));
                         }
+                        // Told as no pull request, so a badge from before it was switched off goes.
+                        None if !cfg.pull_requests.use_github => {
+                            out.push((t, None, Got::Fetched(Fetched::NoPull)));
+                        }
                         None => {
                             if no_gh {
                                 continue;
@@ -870,9 +874,10 @@ impl Pulls {
                             .machines
                             .insert(t.machine.clone(), Some(no_gh(&t.machine)));
                     }
-                    (_, None) => {
+                    (_, None) if cfg.pull_requests.use_github => {
                         inner.health.machines.insert(t.machine.clone(), None);
                     }
+                    (_, None) => {}
                 }
                 let mut why = None;
                 let (next, pull) = match got {
@@ -1033,7 +1038,10 @@ impl Pulls {
             state.set_pull_status(HashMap::new(), PullHealth::default());
             return;
         }
-        let hosts = accesses(&cfg.pull_requests, secrets);
+        let hosts = match cfg.pull_requests.use_gitlab {
+            true => accesses(&cfg.pull_requests, secrets),
+            false => Vec::new(),
+        };
         let targets = targets(cfg, state);
         let notices = self.poll(cfg, &hosts, &targets, now).await;
         state.set_pulls(self.views());

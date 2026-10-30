@@ -137,12 +137,20 @@ impl PhoneNotifications {
 
 pub const PULL_POLL_MIN: u64 = 30;
 
+fn is_on(on: &bool) -> bool {
+    *on
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PullRequests {
     pub enabled: bool,
     pub poll_seconds: u64,
     pub cards: bool,
+    #[serde(skip_serializing_if = "is_on")]
+    pub use_github: bool,
+    #[serde(skip_serializing_if = "is_on")]
+    pub use_gitlab: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gitlab: Vec<GitLabHost>,
 }
@@ -211,6 +219,8 @@ impl Default for PullRequests {
             enabled: true,
             poll_seconds: 120,
             cards: true,
+            use_github: true,
+            use_gitlab: true,
             gitlab: Vec::new(),
         }
     }

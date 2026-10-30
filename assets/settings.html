@@ -70,7 +70,7 @@
       <a href="#dispatch">Dispatch</a>
       <a href="#triggers">Triggers</a>
       <a href="#worktree-setup">Worktree setup</a>
-      <a href="#pull-requests">Pull requests</a>
+      <a href="#pull-requests">GitHub and GitLab</a>
       <a href="#mcp">Agent tools (MCP)</a>
       <a href="#servers">MCP servers</a>
       <p class="nav-label">General</p>
@@ -315,16 +315,40 @@
   </section>
 
   <section id="pull-requests">
-    <div class="section-head"><h2>Pull requests</h2><button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button></div>
-    <p class="help">Sessions show their pull or merge request and its CI. GitHub is read through <code>gh</code> on each session's machine; GitLab through its API, with a token saved under MCP servers, Secrets.</p>
-    <form class="panel" id="pr-form">
+    <div class="section-head"><h2>GitHub and GitLab</h2></div>
+    <p class="help">A session shows its branch's pull or merge request next to the branch, with its state and CI.</p>
+    <form class="panel pr-panel" id="pr-form">
       <div class="phone-switches">
         <label class="choice"><input type="checkbox" name="enabled">Show pull and merge requests</label>
         <label class="choice"><input type="checkbox" name="cards">Post a card in Dispatch when CI fails or a reviewer comments</label>
         <label class="choice phone-wait">Check every <input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required> seconds</label>
       </div>
-      <ul class="rows pr-hosts" id="pr-hosts"></ul>
-      <ul class="pr-status" id="pr-status"></ul>
+
+      <div class="pr-part">
+        <label class="choice"><input type="checkbox" name="use_github"><strong>GitHub</strong></label>
+        <p class="help">Nothing to enter here. Yardbell asks <code>gh</code> on each session's machine, so each machine needs it installed and signed in with <code>gh auth login</code>.</p>
+        <ul class="pr-status" id="pr-github"></ul>
+      </div>
+
+      <div class="pr-part">
+        <div class="pr-part-head">
+          <label class="choice"><input type="checkbox" name="use_gitlab"><strong>GitLab</strong></label>
+          <button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button>
+        </div>
+        <p class="help">Add each GitLab server your folders use. Yardbell asks its API with a personal access token that has the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Save the token as a secret first, under <a href="#servers">MCP servers, Secrets</a>.</p>
+        <p class="pr-none" id="pr-no-hosts">No GitLab hosts yet, so merge requests do not show.</p>
+        <ul class="rows pr-hosts" id="pr-hosts"></ul>
+      </div>
+
+      <div class="pr-part">
+        <div class="pr-part-head">
+          <strong>Your folders</strong>
+          <button class="btn small-link" type="button" id="pr-folders-refresh">Check again</button>
+        </div>
+        <p class="help">Read from each folder's <code>origin</code> remote.</p>
+        <ul class="pr-folders" id="pr-folders"></ul>
+      </div>
+
       <div class="form-foot">
         <p class="help" id="pr-note" role="status"></p>
         <button class="btn primary" type="submit">Save</button>

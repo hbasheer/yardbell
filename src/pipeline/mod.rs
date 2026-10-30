@@ -40,12 +40,6 @@ pub struct Pipelines {
     orphans: Mutex<Vec<(String, String)>>,
 }
 
-pub enum DeleteRun {
-    Missing,
-    Active,
-    Stopping,
-}
-
 fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
     let mut step = None;
     let mut notes = Vec::new();
@@ -82,7 +76,11 @@ impl Pipelines {
     }
 
     pub fn runs(&self) -> Vec<Run> {
-        self.store.all()
+        self.store
+            .all()
+            .into_iter()
+            .filter(|r| !r.deleting)
+            .collect()
     }
 
     pub fn run(&self, id: &str) -> Option<Run> {
@@ -239,17 +237,27 @@ impl Pipelines {
         self.person(id, Seen::Continue(outcome), Self::waiting)
     }
 
-    // Only a run with nothing left to do: one still active has sessions, and one just ended may
-    // still be stopping them and tearing down.
-    pub fn delete_run(&self, id: &str) -> Result<(), DeleteRun> {
-        match self.store.get(id) {
-            None => Err(DeleteRun::Missing),
-            Some(run) if run.state.active() => Err(DeleteRun::Active),
-            Some(run) if run.pending.is_some() || self.busy(id) => Err(DeleteRun::Stopping),
-            Some(_) => {
-                self.store.remove(id);
-                Ok(())
-            }
+    // A run still going is dropped first, so its sessions stop and its worktree is torn down as
+    // for any drop. It leaves the lists at once; its record goes when that is done.
+    pub fn delete_run(&self, id: &str) -> bool {
+        let Some(run) = self.store.get(id) else {
+            return false;
+        };
+        if run.state.active() {
+            let _ = self.drop_run(id);
+        }
+        self.store.update(id, |r| r.deleting = true);
+        self.finish_deleting(id);
+        true
+    }
+
+    fn finish_deleting(&self, id: &str) {
+        let done = self
+            .store
+            .get(id)
+            .is_some_and(|r| r.deleting && !r.state.active() && r.pending.is_none());
+        if done && !self.busy(id) {
+            self.store.remove(id);
         }
     }
 
@@ -304,6 +312,9 @@ impl Pipelines {
             }
         }
         self.store.prune(KEEP_FINISHED);
+        for run in self.store.all().into_iter().filter(|r| r.deleting) {
+            self.finish_deleting(&run.id);
+        }
         let up = |m: &str| view.machines.iter().any(|x| x.name == m && x.up);
         for id in engine::admit(&self.store.all(), cfg, &up) {
             if !self.busy(&id) {
@@ -406,6 +417,7 @@ impl Pipelines {
             }
         }
         self.busy.lock().expect("pipelines busy").remove(&id);
+        self.finish_deleting(&id);
     }
 
     pub fn start_loop(

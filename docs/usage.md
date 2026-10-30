@@ -31,8 +31,9 @@ stop leaves the list at once.
   title and the checks that failed, click it to open it. Yardbell asks `gh` on the session's
   machine, or GitLab's API, every two minutes or so. A branch with no pull request has no badge. When
   something stops Yardbell from asking, such as `gh` not being signed in or a GitLab host that is not
-  listed, the session shows **No PR info**: hover it for the reason, click it for **Settings, Pull
-  requests**, where you switch this on or off, add GitLab hosts and see what each check found. See
+  listed, the session shows **No PR info**: hover it for the reason, click it for **Settings, GitHub
+  and GitLab**, where you switch each one on or off, add GitLab hosts and see which service each of
+  your folders uses. See
   [`pull_requests`](configuration.md#pull_requests-optional).
 
 Sessions started outside tmux, and sessions that ended, fold into the footer of their machine's
@@ -268,8 +269,10 @@ A pipeline opens full screen (the button beside **Delete** puts it back in the p
   **Back to the current version**.
   Under the canvas is the run's live terminal, which follows the run you pick. During a review it
   shows the reviewer, with a switch back to the main session; **Stop session** stops the one shown.
-  **Stop this run**, or **Drop** while it waits for you, ends a run and stops its sessions; once it
-  has ended, **Delete this run** removes its record. The branch and any pull request stay.
+  **Stop this run**, or **Drop** while it waits for you, ends a run and stops its sessions. **Delete
+  this run** works in any state: it stops the run and its sessions first, then removes its record.
+  The worktree, the branch and any pull request stay. **Show terminal** opens the terminal under the
+  canvas, and it stays closed until you do.
 
 On every canvas, drag or scroll with two fingers to move around; pinch, Ctrl or Cmd with the wheel,
 or **−**, **+** and **Fit** zoom; the overview at the bottom right moves the view. Leaving with

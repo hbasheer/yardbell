@@ -224,7 +224,7 @@ function listView() {
       <div class="pl-head-actions">
         <button class="btn" type="button" id="pl-waiting-toggle" aria-pressed=${show.waiting ? "true" : "false"} @click=${() => { show.waiting = !show.waiting; draw(); }}>Waiting for me${waiting ? html` <span class="pl-count">${waiting}</span>` : nothing}</button>
         <button class="btn" type="button" id="pl-settings-open" aria-expanded=${show.settings ? "true" : "false"} @click=${openSettings}>Settings</button>
-        <button class="btn primary" type="button" id="pl-new" aria-expanded=${show.templates ? "true" : "false"} @click=${() => { show.templates = !show.templates; draw(); }}>New pipeline</button>
+        <button class="btn primary" type="button" id="pl-new" aria-expanded=${show.templates ? "true" : "false"} @click=${() => { show.templates = !show.templates; draw(); }}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>New pipeline</button>
       </div>
     </header>
     ${show.templates ? html`<div class="pl-panel" id="pl-templates">
@@ -262,7 +262,10 @@ function stateWord(run, d) {
 }
 
 async function removeRun(run) {
-  if (!(await ask("Delete this run?", "Its record and reports go. The branch and any pull request stay.", { confirm: "Delete", danger: true }))) return;
+  const going = !["done", "dropped"].includes(run.state);
+  const lose = going ? "The run stops. Its agent sessions stop and close, and its record and reports go." : "Its record and reports go.";
+  const keep = going ? "The worktree, the branch and any pull request stay." : "The branch and any pull request stay.";
+  if (!(await ask("Delete this run?", `${lose} ${keep}`, { confirm: "Delete", danger: true }))) return;
   doing(async () => {
     await api("DELETE", `/api/runs/${encodeURIComponent(run.id)}`);
     const q = params();
@@ -324,8 +327,10 @@ function detail(run, d) {
     </div>
     ${run.state === "waiting" ? needBox(run, d) : nothing}
     ${run.teardown_problem ? html`<p class="pl-teardown-problem" role="alert">${run.teardown_problem}</p>` : nothing}
-    ${["queued", "running"].includes(run.state) ? html`<div class="pl-need-actions"><button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Stop this run</button></div>` : nothing}
-    ${["done", "dropped"].includes(run.state) ? html`<div class="pl-need-actions"><button class="btn quiet danger" type="button" id="pl-delete-run" ?disabled=${busy} @click=${() => removeRun(run)}>Delete this run</button></div>` : nothing}
+    <div class="pl-need-actions">
+      ${["queued", "running"].includes(run.state) ? html`<button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Stop this run</button>` : nothing}
+      <button class="btn quiet danger" type="button" id="pl-delete-run" ?disabled=${busy} @click=${() => removeRun(run)}>Delete this run</button>
+    </div>
     <ol class="pl-steps">${d.steps.filter((st) => run.steps?.[st.id]).map((st) => {
       const state = run.steps[st.id];
       const n = nodeState(run, st);
@@ -351,6 +356,12 @@ async function stopSession(run, t) {
   });
 }
 
+function toggleTerminal() {
+  terminalOpen = !terminalOpen;
+  remember("yb-pipeline-terminal", terminalOpen);
+  draw();
+}
+
 function terminal(run) {
   const list = run.terminals || [];
   if (!list.length) return html`<section class="pl-terminal empty"><p class="help">This run has no live session.</p></section>`;
@@ -358,6 +369,7 @@ function terminal(run) {
   const src = `/term/${encodeURIComponent(shown.machine)}/${encodeURIComponent(shown.name)}`;
   return html`<section class="pl-terminal">
     <header class="pl-terminal-head">
+      <button class="btn quiet small-link" type="button" id="pl-terminal-toggle" aria-expanded=${terminalOpen ? "true" : "false"} @click=${toggleTerminal}>${terminalOpen ? "Hide terminal" : "Show terminal"}</button>
       ${list.length > 1
         ? html`<div class="segmented pl-terminal-switch" role="group" aria-label="Sessions of this run">${list.map((t) => html`<button type="button" aria-pressed=${t === shown ? "true" : "false"} @click=${() => { shownTerminal.set(run.id, t.name); draw(); }}>${t.label}</button>`)}</div>`
         : html`<strong>${shown.label}</strong>`}
@@ -365,7 +377,7 @@ function terminal(run) {
       <a class="btn quiet small-link" href=${src} target="_blank" rel="noopener">Open</a>
       <button class="btn quiet danger small-link" type="button" id="pl-stop-session" ?disabled=${busy} @click=${() => stopSession(run, shown)}>Stop session</button>
     </header>
-    <iframe class="pl-terminal-frame" title=${`Terminal of ${shown.label}`} src=${`${src}?embed=1`}></iframe>
+    ${terminalOpen ? html`<iframe class="pl-terminal-frame" title=${`Terminal of ${shown.label}`} src=${`${src}?embed=1`}></iframe>` : nothing}
   </section>`;
 }
 
@@ -385,7 +397,7 @@ function runsTab(d) {
       <span class="pl-run-title"><span class=${`pl-dot ${dot[r.state] || "off"}`}></span>${label(r)}</span>
       <small>${stateWord(r, r.definition || d)}</small>
     </button>`)}</nav>
-    <div class="pl-run-main">
+    <div class=${`pl-run-main ${terminalOpen && chosen.terminals?.length ? "" : "terminal-closed"}`}>
       ${canvas({ def: chosen.definition || d, run: chosen, key: `${d.id}:${chosen.version}:${chosen.id}` })}
       ${terminal(chosen)}
     </div>
@@ -508,7 +520,7 @@ function triggerFields(d, redraw) {
       ${t.kind === "gitlab_reviewer" ? field("GitLab host", data.gitlab_hosts.length
         ? html`<select name="host" @change=${(e) => { t.host = e.target.value; redraw(); }}>${data.gitlab_hosts.map((h) => html`<option value=${h} ?selected=${t.host === h}>${h}</option>`)}</select>`
         : html`<input name="host" .value=${t.host || ""} @input=${(e) => { t.host = e.target.value; redraw(); }}>`,
-        data.gitlab_hosts.length ? "" : "Add the host under Settings, Pull requests first.") : nothing}
+        data.gitlab_hosts.length ? "" : "Add the host under Settings, GitHub and GitLab first.") : nothing}
       ${field("First step", stepSelect(d.start, d.steps, (v) => { d.start = v; redraw(); }))}
     </div>
   </fieldset>`;
@@ -539,6 +551,7 @@ const LIBRARY = [
 
 let selected = null;
 let libraryOpen = remembered("yb-pipeline-library", true);
+let terminalOpen = remembered("yb-pipeline-terminal", false);
 let inspectorOpen = true;
 
 function remembered(key, fallback) {

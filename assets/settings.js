@@ -392,6 +392,7 @@ async function load() {
   renderSecrets();
   renderDispatch();
   renderPullRequests();
+  pullFoldersWanted();
   await loadTriggers().catch((err) => toast(err.message));
   await loadSetups();
   await loadMemory().catch((err) => toast(err.message));
@@ -496,37 +497,138 @@ document.querySelectorAll('input[name="term-theme"]').forEach((input) => {
 
 let gitlabHosts = [];
 
+function serviceLine(why, fine) {
+  if (why) return { cls: "pr-bad", text: why };
+  return fine ? { cls: "pr-ok", text: fine } : { cls: "pr-wait", text: "Not checked yet. It is checked once a session has a branch here." };
+}
+
 function renderPullRequests() {
   const { value, status } = data.pull_requests;
   const f = $("pr-form");
   f.elements.enabled.checked = value.enabled;
   f.elements.cards.checked = value.cards;
   f.elements.poll_seconds.value = value.poll_seconds;
+  f.elements.use_github.checked = value.use_github !== false;
+  f.elements.use_gitlab.checked = value.use_gitlab !== false;
   gitlabHosts = (value.gitlab || []).map((g) => ({ host: g.host, url: g.url || "", token: g.token }));
   renderHosts();
-  const line = (name, why, fine) => `<li class="${why ? "pr-bad" : "pr-ok"}"><strong>${esc(name)}</strong> ${esc(why || fine)}</li>`;
-  const rows = [
-    ...Object.entries(status.machines).map(([m, why]) => line(m, why, "gh works")),
-    ...Object.entries(status.hosts).map(([h, why]) => line(h, why, "the token works")),
-  ];
-  $("pr-status").innerHTML = rows.join("");
-  $("pr-note").textContent = rows.length ? "" : "Not checked yet: machines and hosts show here once a session's branch has been asked about.";
+  $("pr-github").innerHTML = (data.machines || []).map((m) => {
+    const seen = Object.hasOwn(status.machines, m.name);
+    const line = serviceLine(status.machines[m.name], seen ? "gh works" : "");
+    return `<li class="${line.cls}"><strong>${esc(m.name)}</strong> ${esc(line.text)}</li>`;
+  }).join("");
+  renderFolders();
 }
 
 function renderHosts() {
+  const status = data.pull_requests.status.hosts;
   const names = (data.secrets?.list || []).map((s) => `\${secret:${s.name}}`);
   const tokenOptions = (g) => {
     const all = g.token && !names.includes(g.token) ? [g.token, ...names] : names;
     const word = (t) => (t === "(hidden)" ? "Typed into yardbell.yml, kept" : t);
-    return `<option value="" ${g.token ? "" : "selected"}>Pick a saved secret</option>${all.map((t) => `<option value="${esc(t)}"${t === g.token ? " selected" : ""}>${esc(word(t))}</option>`).join("")}`;
+    const empty = names.length ? "Pick a saved secret" : "No saved secrets yet";
+    return `<option value="" ${g.token ? "" : "selected"}>${empty}</option>${all.map((t) => `<option value="${esc(t)}"${t === g.token ? " selected" : ""}>${esc(word(t))}</option>`).join("")}`;
   };
-  $("pr-hosts").innerHTML = gitlabHosts.map((g, i) => `<li class="row pr-host" data-host="${i}">
-    <input type="text" data-key="host" aria-label="GitLab host" value="${esc(g.host)}" placeholder="git.example.com" autocapitalize="off" spellcheck="false">
-    <input type="text" data-key="url" aria-label="Address, if it differs" value="${esc(g.url)}" placeholder="https://git.example.com:8443 (optional)" autocapitalize="off" spellcheck="false">
-    <select data-key="token" aria-label="Token">${tokenOptions(g)}</select>
+  $("pr-no-hosts").hidden = gitlabHosts.length > 0;
+  $("pr-hosts").hidden = !gitlabHosts.length;
+  $("pr-hosts").innerHTML = gitlabHosts.map((g, i) => {
+    const key = g.host.trim().toLowerCase();
+    const line = serviceLine(status[key], Object.hasOwn(status, key) ? "The token works" : "");
+    return `<li class="row pr-host" data-host="${i}">
+    <label>Host, as in the remote address<input type="text" data-key="host" value="${esc(g.host)}" placeholder="git.example.com" autocapitalize="off" spellcheck="false"></label>
+    <label>Address, only if it differs<input type="text" data-key="url" value="${esc(g.url)}" placeholder="https://git.example.com:8443" autocapitalize="off" spellcheck="false"></label>
+    <label>Token<select data-key="token">${tokenOptions(g)}</select></label>
     <button class="btn quiet danger" type="button" data-remove-host="${i}" aria-label="Remove host" title="Remove host">${CROSS}</button>
-  </li>`).join("");
+    <p class="pr-host-state ${line.cls}">${esc(line.text)}</p>
+  </li>`;
+  }).join("");
+  renderFolders();
 }
+
+let pullFolders = null;
+
+const SERVICE = {
+  github: "GitHub",
+  gitlab: "GitLab",
+  gitlab_unlisted: "GitLab",
+  unknown: "Not known",
+  none: "No remote",
+};
+
+function folderState(f) {
+  const form = $("pr-form").elements;
+  const listed = gitlabHosts.some((g) => g.host.trim().toLowerCase() === f.host);
+  if (f.service === "none") return { cls: "pr-wait", text: "This folder has no origin remote." };
+  if (f.service === "github") {
+    if (!form.use_github.checked) return { cls: "pr-wait", text: "GitHub is switched off." };
+    const { machines } = data.pull_requests.status;
+    if (machines[f.machine]) return { cls: "pr-bad", text: machines[f.machine] };
+    return Object.hasOwn(machines, f.machine) ? { cls: "pr-ok", text: "Read with gh, which works." } : { cls: "pr-wait", text: "Read with gh. Not checked yet." };
+  }
+  if (listed) {
+    if (!form.use_gitlab.checked) return { cls: "pr-wait", text: "GitLab is switched off." };
+    const { hosts } = data.pull_requests.status;
+    if (hosts[f.host]) return { cls: "pr-bad", text: hosts[f.host] };
+    return Object.hasOwn(hosts, f.host) ? { cls: "pr-ok", text: "Read with its token, which works." } : { cls: "pr-wait", text: "Read with its token. Not checked yet." };
+  }
+  if (f.service === "gitlab_unlisted") return { cls: "pr-bad", text: `Add ${f.host} to see its merge requests.`, add: "Add this host" };
+  return { cls: "pr-wait", text: `Yardbell cannot tell what ${f.host} runs. If it is GitLab, add it.`, add: "Add as GitLab" };
+}
+
+function renderFolders() {
+  const list = $("pr-folders");
+  if (!pullFolders) {
+    list.innerHTML = `<li class="pr-wait">Checking your folders...</li>`;
+    return;
+  }
+  const rows = pullFolders.folders.map((f) => {
+    const state = folderState(f);
+    const word = gitlabHosts.some((g) => g.host.trim().toLowerCase() === f.host) ? "GitLab" : SERVICE[f.service];
+    return `<li class="pr-folder">
+      <span class="pr-folder-name"><strong>${esc(f.folder)}</strong> <small>${esc(f.machine)}${f.project ? ` · ${esc(f.host)}/${esc(f.project)}` : ""}</small></span>
+      <span class="pr-service">${esc(word)}</span>
+      <span class="pr-folder-state ${state.cls}">${esc(state.text)}</span>
+      ${state.add ? `<button class="btn small-link" type="button" data-add-host="${esc(f.host)}">${esc(state.add)}</button>` : ""}
+    </li>`;
+  });
+  const away = pullFolders.unreachable.map((u) => `<li class="pr-bad"><strong>${esc(u.machine)}</strong> could not be asked: ${esc(u.why)}</li>`);
+  list.innerHTML = [...rows, ...away].join("") || `<li class="pr-wait">No folders yet.</li>`;
+}
+
+async function loadPullFolders() {
+  pullFolders = null;
+  renderFolders();
+  try {
+    pullFolders = await api("GET", "/api/settings/pull-requests/folders");
+  } catch (err) {
+    pullFolders = { folders: [], unreachable: [{ machine: "Yardbell", why: err.message }] };
+  }
+  renderFolders();
+}
+
+let pullFoldersAsked = false;
+
+function pullFoldersWanted() {
+  if (pullFoldersAsked || location.hash !== "#pull-requests") return;
+  pullFoldersAsked = true;
+  loadPullFolders();
+}
+
+window.addEventListener("hashchange", pullFoldersWanted);
+
+$("pr-folders-refresh").addEventListener("click", loadPullFolders);
+
+$("pr-form").addEventListener("change", (e) => {
+  if (["use_github", "use_gitlab"].includes(e.target.name)) renderFolders();
+});
+
+$("pr-folders").addEventListener("click", (e) => {
+  const button = e.target.closest("[data-add-host]");
+  if (!button) return;
+  gitlabHosts.push({ host: button.dataset.addHost, url: "", token: "" });
+  renderHosts();
+  $("pr-hosts").querySelector(".row:last-child [data-key=token]").focus();
+});
 
 $("pr-add-host").addEventListener("click", () => {
   gitlabHosts.push({ host: "", url: "", token: "" });
@@ -554,13 +656,16 @@ $("pr-form").addEventListener("submit", async (e) => {
   const body = {
     enabled: f.elements.enabled.checked,
     cards: f.elements.cards.checked,
+    use_github: f.elements.use_github.checked,
+    use_gitlab: f.elements.use_gitlab.checked,
     poll_seconds: Number(f.elements.poll_seconds.value),
     gitlab: gitlabHosts.map((g) => ({ host: g.host.trim(), ...(g.url.trim() ? { url: g.url.trim() } : {}), token: g.token })),
   };
   try {
     await api("POST", "/api/settings/pull-requests", body);
-    saved("Pull requests updated.");
+    saved("GitHub and GitLab updated.");
     await load();
+    loadPullFolders();
   } catch (err) {
     toast(err.message);
   }

@@ -5,6 +5,15 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-30
+
+- **Settings, GitHub and GitLab** replaces Pull requests. GitHub and GitLab each have their own
+  switch and say what they need, each GitLab host shows whether its token works, and **Your folders**
+  says which service each folder's `origin` uses, with a button to add a GitLab host it is missing.
+- **Delete this run** now works on a run in any state: it stops the run, stops its sessions, and then
+  removes its record. The worktree, branch and any pull request stay.
+- The terminal on the run page is closed until you choose **Show terminal**, so the canvas has room.
+
 ## [0.9.0] - 2026-10-30
 
 - **A pipeline run uses one agent session.** Its steps take turns in one session and one worktree,
