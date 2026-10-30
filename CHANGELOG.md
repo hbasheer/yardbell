@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.9.1] - 2026-10-30
+
 - **Settings, GitHub and GitLab** replaces Pull requests. GitHub and GitLab each have their own
   switch and say what they need, each GitLab host shows whether its token works, and **Your folders**
   says which service each folder's `origin` uses, with a button to add a GitLab host it is missing.
