@@ -57,11 +57,19 @@
     el.innerHTML = markup;
   }
 
+  function proposalsBadge(state) {
+    const waiting = document.getElementById("nav-proposals-count");
+    if (!waiting) return;
+    waiting.textContent = state.proposals ? String(state.proposals) : "";
+    waiting.hidden = !state.proposals;
+  }
+
   function render(state, selected) {
     const up = state.machines.filter((m) => m.up).length;
     const summary = document.getElementById("nav-summary");
     const counted = `${up} of ${state.machines.length} connected`;
     if (summary.textContent !== counted) summary.textContent = counted;
+    proposalsBadge(state);
     const onDashboard = page === "dashboard";
     const all = item("/", "", "All machines", running(state), onDashboard && !selected, ALL_ICON);
     const machines = order(state.machines).map((m) => item(
@@ -294,10 +302,11 @@
     });
   }
 
-  window.YardbellNav = { loadUsage, render, order, memPct, limitPct, RATED, appKey, tabKey, confirm: ask, checkBuild };
+  window.YardbellNav = { loadUsage, render, order, memPct, limitPct, RATED, appKey, tabKey, confirm: ask, checkBuild, proposalsBadge };
   if (document.documentElement.classList.contains("embedded")) return;
   if (page !== "dashboard") {
     load();
+    window.YardbellNav.refresh = load;
     window.YardbellLive.follow(load, 10000);
   }
   loadUsage();

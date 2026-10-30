@@ -1,9 +1,11 @@
 import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
+import { openHistory } from "/dispatch-tasks.js";
+import { canvas, fitAll, settle as fitCanvases, triggerWords } from "/pipeline-canvas.js";
 
 // Dispatch's steps that change something (start, stop or type into a session) and the results of
 // reviews, drawn as cards the person approves, edits, rejects or acts on.
 
-export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember"]);
+export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 const ICONS = {
   start_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
@@ -14,6 +16,13 @@ const ICONS = {
   push_branch: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12.5v-9M4.5 7 8 3.5 11.5 7M3.5 13.5h9"/></svg>`,
   move_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8h10M9 4.5 12.5 8 9 11.5"/></svg>`,
   remember: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 2.5h7v11L8 11l-3.5 2.5z"/></svg>`,
+  change_settings: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11M2.5 11.5h11"/><circle cx="5.5" cy="4.5" r="1.5"/><circle cx="10.5" cy="11.5" r="1.5"/></svg>`,
+  save_task: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 2.5h7l2 2v9h-9z"/><path d="M5.5 2.5v3.5h4.5V2.5M5.5 13.5v-4h5v4"/></svg>`,
+  run_trigger: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9 2 4 9h4l-1 5 5-7H8z"/></svg>`,
+  save_pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="4" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/><path d="M5 8h2.5c1.5 0 1.5-4 3.5-4M7.5 8c1.5 0 1.5 4 3.5 4"/></svg>`,
+  set_pipeline_enabled: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="5" width="11" height="6" rx="3"/><circle cx="10.5" cy="8" r="1.5"/></svg>`,
+  run_pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
+  answer_run: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>`,
   review: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg>`,
   scan: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3M2.5 8h11"/></svg>`,
   file: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h5l3 3v8H4z"/><path d="M9 2.5v3h3"/></svg>`,
@@ -34,6 +43,23 @@ const TITLES = {
 
 const MEMORY_TITLES = { add: "Remember this", replace: "Change a memory", forget: "Forget a memory" };
 
+const SETTINGS_AREAS = {
+  dispatch: ["Dispatch", "/settings#dispatch"],
+  triggers: ["Triggers", "/settings#triggers"],
+  worktree_setup: ["Worktree setup", "/settings#worktree-setup"],
+  agents: ["Agents", "/settings"],
+  session_mcp_servers: ["MCP servers for sessions", "/settings#servers"],
+  phone: ["Phone notifications", "/settings#phone"],
+  machines: ["Machines", "/settings#machines"],
+  pipelines: ["Pipelines", "/pipeline"],
+  pull_requests: ["Pull requests", "/settings"],
+};
+const RUN_ACTIONS = { answer: "Answer", retry: "Retry", continue_pass: "Continue", continue_fail: "Continue", drop: "Drop" };
+const RUN_DONE = { queued: "Queued", running: "Running again", waiting: "Still waiting", done: "Finished", dropped: "Dropped" };
+const pipelineLink = (id, tab) => `/pipeline?p=${encodeURIComponent(id)}&tab=${tab}`;
+const areaName = (area) => SETTINGS_AREAS[area]?.[0] || area;
+const areaLink = (area) => SETTINGS_AREAS[area]?.[1] || "/settings";
+
 const SEVERITY = { high: "High", medium: "Medium", low: "Low" };
 const SEVERITY_ORDER = ["high", "medium", "low"];
 
@@ -49,6 +75,7 @@ const CHANGE = { M: "Modified", A: "Added", D: "Deleted", R: "Renamed", C: "Copi
 
 let ctx = null;
 const drafts = new Map();
+const problems = new Map();
 const working = new Map();
 const expanded = new Set();
 const picks = new Map();
@@ -159,6 +186,12 @@ function where(e) {
   if (e.tool === "push_branch") return html`<code>${i.branch}</code> on ${i.machine} to ${i.remote || "origin"}`;
   if (e.tool === "move_session") return html`<strong>${i.name}</strong> from ${i.machine} to ${i.to || "the machine with the most room"}`;
   if (e.tool === "remember") return "Dispatch's memory, read at the start of every turn";
+  if (e.tool === "change_settings") return `Settings, ${areaName(i.area)}`;
+  if (e.tool === "save_task") return i.before ? "A new version of a saved task" : "A new task";
+  if (e.tool === "run_trigger") return "Runs it now, as Run now in Settings does";
+  if (e.tool === "save_pipeline") return i.before ? `Pipelines, version ${i.before.version} to the next` : "Pipelines, a new pipeline, saved switched off";
+  if (e.tool === "set_pipeline_enabled" || e.tool === "run_pipeline") return html`Pipelines, <code>${i.id}</code>`;
+  if (e.tool === "answer_run") return `A run of ${i.pipeline}`;
   if (e.tool === "start_session") {
     const folder = i.folder || ctx.short(i.path);
     const branch = i.branch ? html` · <code>${i.branch}</code>${i.new_branch ? ` new${i.base ? ` from ${i.base}` : ""}` : ""}` : nothing;
@@ -218,12 +251,98 @@ function body(e) {
       return html`<div class="step-card-body"><p class="step-card-text muted">Every commit it would push is checked for keys, tokens and your saved secrets first, and a hit stops it. Never forced.</p></div>`;
     case "remember":
       return memoryBody(i);
+    case "change_settings":
+    case "save_task":
+    case "run_trigger":
+      return changeBody(e);
+    case "save_pipeline":
+      return pipelineBody(e);
+    case "set_pipeline_enabled":
+    case "run_pipeline":
+    case "answer_run":
+      return runBody(e);
     case "move_session":
       return html`<div class="step-card-body"><p class="step-card-text muted">The branch and its uncommitted changes go over ssh; nothing is committed or pushed. The same agent starts there with the task${i.stop_original ? ", and the original stops" : ""}.</p>
         ${i.task ? html`<p class="step-card-label">Task</p>${longText(e.id || i.task, i.task)}` : nothing}</div>`;
     default:
       return nothing;
   }
+}
+
+// Long stretches that stay the same shrink to a few lines either side of a change.
+function trimmed(text, first, last) {
+  const lines = text.split("\n");
+  const keep = 3;
+  if (lines.length <= keep * 2 + 1) return text;
+  const head = first ? [] : lines.slice(0, keep);
+  const tail = last ? [] : lines.slice(-keep);
+  return [...head, "  …", ...tail].join("\n");
+}
+
+function changeDiff(parts) {
+  if (!parts?.length) return nothing;
+  if (!parts.some((p) => p.op !== "same")) return html`<p class="step-card-text muted">Nothing changes from what is saved now.</p>`;
+  return html`<div class="th-diff change-diff" role="group" aria-label="Changes">${parts.map((p, n) => p.op === "add"
+    ? html`<ins><span class="visually-hidden">added </span>${p.text}</ins>`
+    : p.op === "del"
+      ? html`<del><span class="visually-hidden">removed </span>${p.text}</del>`
+      : html`<span>${trimmed(p.text, n === 0, n === parts.length - 1)}</span>`)}</div>`;
+}
+
+const OUTCOME_WORDS = { pass: "pass", fail: "fail", needs_you: "needs you", start: "start" };
+
+function pipelineBody(e) {
+  const i = e.input || {};
+  const c = i.changes || {};
+  const lists = [
+    c.trigger ? html`<li>The trigger changed: ${triggerWords(i.definition.trigger)}.</li>` : nothing,
+    c.added?.length ? html`<li>Steps added: ${c.added.join(", ")}.</li>` : nothing,
+    c.removed?.length ? html`<li>Steps removed: ${c.removed.join(", ")}.</li>` : nothing,
+    ...(c.changed || []).map((x) => html`<li>${x.step}: ${x.fields.join(", ")} changed.</li>`),
+  ];
+  return html`<div class="step-card-body">
+    <div class="step-card-pipeline">${canvas({ def: i.definition, key: `proposal-${e.id}` })}</div>
+    ${lists.some((l) => l !== nothing) ? html`<ul class="step-card-list">${lists}</ul>` : nothing}
+    ${c.lines?.length ? html`<ul class="step-card-list pipeline-lines">${c.lines.map((l) => html`<li>On ${OUTCOME_WORDS[l.outcome] || l.outcome}, ${l.from} went to ${l.was}, now goes to ${l.now}</li>`)}</ul>` : nothing}
+    ${(c.wording || []).map((w) => html`<p class="step-card-label">${w.step}: instructions</p>${changeDiff(w.diff)}`)}
+    <p class="step-card-text muted">A new or changed pipeline always waits for you.</p>
+  </div>`;
+}
+
+function runBody(e) {
+  const i = e.input || {};
+  if (e.tool === "set_pipeline_enabled") {
+    return html`<div class="step-card-body"><p class="step-card-text muted">${i.on ? "It starts runs on its own from now on, as its trigger says." : "It stops starting runs on its own; runs already going carry on."}</p></div>`;
+  }
+  if (e.tool === "run_pipeline") {
+    const subjects = [...(i.tickets || []), ...(i.prs || [])];
+    return html`<div class="step-card-body">
+      ${subjects.length ? html`<ul class="step-card-list">${subjects.map((s) => html`<li>${/^https?:/.test(s) ? html`<a href=${s} target="_blank" rel="noopener">${s}</a>` : html`<code>${s}</code>`}</li>`)}</ul>`
+        : html`<p class="step-card-text muted">One run with no ticket or pull request.</p>`}
+    </div>`;
+  }
+  const w = i.waiting || {};
+  return html`<div class="step-card-body">
+    <div class="run-waiting">
+      <p class="step-card-label">${i.subject}, at ${w.step}</p>
+      <p class="step-card-text">${w.reason}</p>
+      ${w.screen ? html`<details class="step-card-more"><summary>What the session showed</summary><p class="step-card-text step-card-mono">${w.screen}</p></details>` : nothing}
+    </div>
+    ${i.action === "answer" ? html`<p class="step-card-label">Answer</p><p class="step-card-text">${i.text}</p>` : nothing}
+  </div>`;
+}
+
+function changeBody(e) {
+  const i = e.input || {};
+  if (e.tool === "run_trigger") {
+    return html`<div class="step-card-body"><p class="step-card-text muted">A schedule starts its task in a new conversation now; a Linear or GitHub trigger checks for new items.</p></div>`;
+  }
+  const own = e.tool === "change_settings" && i.area === "dispatch"
+    ? html`<p class="step-card-text muted">Dispatch's own settings always wait for you.</p>` : nothing;
+  const shown = i.diff ? changeDiff(i.diff) : html`<p class="step-card-text step-card-mono">${e.tool === "save_task" ? i.text : JSON.stringify(i.value, null, 2)}</p>`;
+  const secrets = i.secrets?.length
+    ? html`<p class="step-card-text">It uses saved secrets: ${i.secrets.map((s, n) => html`${n ? ", " : ""}<code>${s}</code>`)}. A change that uses a saved secret always waits for you.</p>` : nothing;
+  return html`<div class="step-card-body">${shown}${secrets}${own}</div>`;
 }
 
 // The change as a diff of the memory: the entry it removes and the one it adds.
@@ -249,6 +368,20 @@ function editor(e) {
   if (e.tool === "send_to_session") {
     return html`<div class="step-card-form">
       <label>Text<textarea rows="3" .value=${draft.text ?? ""} @input=${(ev) => { draft.text = ev.target.value; }}></textarea></label>
+    </div>`;
+  }
+  const problem = problems.get(e.id) ? html`<p class="step-card-outcome step-card-error" role="alert">${problems.get(e.id)}</p>` : nothing;
+  if (e.tool === "change_settings") {
+    return html`<div class="step-card-form">
+      <label>${areaName(draft.area)}, as JSON<textarea class="step-card-json" rows=${Math.min(18, (draft.json || "").split("\n").length + 1)} spellcheck="false" .value=${draft.json ?? ""} @input=${(ev) => { draft.json = ev.target.value; }}></textarea></label>
+      <p class="help">Leave each (hidden) as it is to keep what is saved.</p>
+      ${problem}
+    </div>`;
+  }
+  if (e.tool === "save_task") {
+    return html`<div class="step-card-form">
+      <label>${draft.name}<textarea rows="6" .value=${draft.text ?? ""} @input=${(ev) => { draft.text = ev.target.value; }}></textarea></label>
+      ${problem}
     </div>`;
   }
   if (e.tool === "remember") {
@@ -283,8 +416,15 @@ function editor(e) {
   </div>`;
 }
 
+// The edited step goes back without the old diff, which no longer describes it.
 function edited(e) {
   const draft = { ...drafts.get(e.id) };
+  if (e.tool === "change_settings") {
+    let value;
+    try { value = JSON.parse(draft.json); } catch (err) { throw new Error(`This is not valid JSON: ${err.message}`); }
+    return { area: e.input.area, value, before: e.input.before };
+  }
+  if (e.tool === "save_task") return { name: e.input.name, text: draft.text, before: e.input.before };
   for (const key of Object.keys(draft)) {
     if (draft[key] === "" && !(key in e.input)) delete draft[key];
     if (draft[key] === false && !(key in e.input)) delete draft[key];
@@ -293,18 +433,32 @@ function edited(e) {
   return draft;
 }
 
+// Dispatch's steps live in a conversation; the Proposals page gives its own address for each.
+const stepUrl = (e) => ctx.stepUrl?.(e) || `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/actions/${e.id}`;
+const builderKey = (e) => ctx.builderKey?.(e) || `${ctx.conversation()}.${e.id}`;
+
 export async function decide(e, decision) {
-  const input = decision === "approve" && drafts.has(e.id) ? edited(e) : null;
+  const editingNow = decision === "approve" && drafts.has(e.id);
+  let input = null;
+  try {
+    input = editingNow ? edited(e) : null;
+  } catch (err) {
+    problems.set(e.id, err.message);
+    ctx.draw();
+    return;
+  }
   working.set(e.id, decision);
   ctx.draw();
   try {
-    const step = await ctx.api("POST", `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/actions/${e.id}`, { decision, ...(input ? { input } : {}) });
+    const step = await ctx.api("POST", stepUrl(e), { decision, ...(input ? { input } : {}) });
     drafts.delete(e.id);
+    problems.delete(e.id);
     ctx.replaceStep(step);
     ctx.decided();
     if (step.result && !step.result.ok) ctx.toast(step.result.text);
   } catch (err) {
-    ctx.toast(err.message);
+    if (editingNow && !/already|withdrawn/.test(err.message)) problems.set(e.id, err.message);
+    else ctx.toast(err.message);
     if (/already|withdrawn/.test(err.message)) ctx.reload();
   } finally {
     working.delete(e.id);
@@ -330,7 +484,8 @@ async function decideAll(decision, pending) {
 }
 
 export function startEditing(e) {
-  drafts.set(e.id, { ...e.input });
+  drafts.set(e.id, e.tool === "change_settings" ? { area: e.input.area, json: JSON.stringify(e.input.value, null, 2) } : { ...e.input });
+  problems.delete(e.id);
   if (!ctx.state()) ctx.loadState().then(() => ctx.draw());
   ctx.draw();
 }
@@ -347,11 +502,41 @@ function outcome(e, state) {
   const said = worktreeOutcome(e.tool, r.text);
   if (said?.stopped) return html`<p class="step-card-outcome step-card-warn">${said.text}</p>`;
   if (said) return html`<p class="step-card-outcome">${ICONS.check}<span class="step-card-said">${said.text}</span>${s ? html`<a class="btn" href=${ctx.termUrl(s.machine, s.name)} target="_blank" rel="noopener" title="Open ${s.name}"><span class="btn-label">Open</span></a>` : nothing}</p>`;
+  const v = parsed(r.text);
+  if (e.tool === "change_settings") {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>Saved. Settings, Undo reverses it.</span><a class="btn" href=${areaLink(e.input.area)}><span class="btn-label">Open in Settings</span></a></p>
+      ${v?.note ? html`<p class="step-card-outcome step-card-warn">${v.note}</p>` : nothing}`;
+  }
+  if (e.tool === "save_task") {
+    const name = e.input.name;
+    return html`<p class="step-card-outcome">${ICONS.check}<span>Saved as version ${v?.version ?? 1}</span><button class="btn" type="button" @click=${() => openHistory({ name, customised: true, api: ctx.api, toast: ctx.toast, changed: () => ctx.decided() })}><span class="btn-label">See task</span></button></p>`;
+  }
+  if (e.tool === "save_pipeline" && v) {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>Saved as version ${v.version}</span><a class="btn" href=${pipelineLink(v.saved, "build")}><span class="btn-label">Open pipeline</span></a></p>
+      ${v.note ? html`<p class="step-card-outcome step-card-warn">${v.note} It replaced version ${v.replaced}.</p>` : nothing}`;
+  }
+  if (e.tool === "set_pipeline_enabled" && v) {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>${v.enabled ? "Turned on" : "Turned off"}</span><a class="btn" href=${pipelineLink(v.id, "build")}><span class="btn-label">Open pipeline</span></a></p>`;
+  }
+  if (e.tool === "run_pipeline" && v) {
+    const n = v.runs?.length || 0;
+    return html`<p class="step-card-outcome">${ICONS.check}<span>Started ${n} ${n === 1 ? "run" : "runs"}</span><a class="btn" href=${pipelineLink(e.input.id, "runs")}><span class="btn-label">Open runs</span></a></p>`;
+  }
+  if (e.tool === "answer_run" && v) {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>${RUN_DONE[v.state] || "Done"}</span></p>`;
+  }
+  if (e.tool === "run_trigger") {
+    return html`<p class="step-card-outcome">${ICONS.check}<span>${v?.text || (v?.conversation ? "Started" : "Done")}</span>${v?.conversation ? html`<a class="btn" href=${`/dispatch?c=${encodeURIComponent(v.conversation)}`}><span class="btn-label">Open conversation</span></a>` : nothing}</p>`;
+  }
   if (e.tool === "remember") {
     return html`<p class="step-card-outcome">${ICONS.check}<span>${e.input.change === "forget" ? "Forgotten" : "Saved to memory"}</span><a class="btn" href="/settings#dispatch-memory"><span class="btn-label">See memory</span></a></p>`;
   }
   const word = { send_to_session: "Sent", stop_session: "Stopped" }[e.tool] || "Done";
   return html`<p class="step-card-outcome">${ICONS.check}<span>${word}</span></p>`;
+}
+
+function parsed(text) {
+  try { return JSON.parse(text); } catch { return null; }
 }
 
 // What a worktree step did, from the result it returned. An integration that stopped at a conflict
@@ -368,10 +553,11 @@ function worktreeOutcome(tool, text) {
   }
 }
 
-const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory" };
+const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
+const UNPLACED = new Set(["remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 export function ruleText(r) {
-  if (r.action === "remember") return RULE_STEPS.remember;
+  if (UNPLACED.has(r.action)) return RULE_STEPS[r.action];
   const machine = !r.machine || r.machine === "any" ? "any machine" : r.machine;
   return `${RULE_STEPS[r.action] || "any step"} on ${machine}${r.folder ? ` in ${r.folder}` : ""}`;
 }
@@ -390,7 +576,9 @@ function trail(e, state) {
   if (e.legacy) return "Ran without asking";
   const parts = [];
   const mine = e.by === "you";
-  if (e.status === "auto") parts.push(`Ran without asking ${clock(e.at)}`);
+  if (e.by === "pipeline") parts.push(`Ran as part of the pipeline run started at ${clock(e.run_started || e.at)}`);
+  else if (e.status === "auto") parts.push(`Ran without asking ${clock(e.at)}`);
+  else if (e.by === "client") parts.push(`Proposed by ${e.from} ${clock(e.at)}`);
   else parts.push(`${mine ? "You asked for this" : "Proposed by Dispatch"} ${clock(e.at)}`);
   if (e.rule) parts.push(`Your rule: ${ruleText(e.rule)}`);
   if (e.status === "approved") parts.push(`${mine ? mineWords(e).done : "Approved"} ${clock(e.decided)}`);
@@ -412,9 +600,11 @@ function actions(e, state) {
       <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve with changes"}</button>
     </div>`;
   }
-  const editable = e.tool === "start_session" || e.tool === "send_to_session" || (e.tool === "remember" && e.input?.change !== "forget");
+  const editable = ["start_session", "send_to_session", "change_settings", "save_task"].includes(e.tool) || (e.tool === "remember" && e.input?.change !== "forget");
   return html`<div class="step-card-actions">
     <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => decide(e, "reject")}>${mine ? "Cancel" : "Reject"}</button>
+    ${e.tool === "change_settings" ? html`<a class="btn quiet" href=${areaLink(e.input?.area)}>Open in Settings</a>` : nothing}
+    ${e.tool === "save_pipeline" ? html`<a class="btn" href=${`/pipeline?proposal=${encodeURIComponent(builderKey(e))}`}>${ICONS.edit}Edit in the builder</a>` : nothing}
     ${editable ? html`<button class="btn" type="button" ?disabled=${busy} @click=${() => startEditing(e)}>${ICONS.edit}Edit</button>` : nothing}
     <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve"}</button>
   </div>`;
@@ -424,7 +614,32 @@ function stepTitle(e) {
   const scan = scanOf(e.review);
   if (scan) return `Start a ${SCANS[scan].toLowerCase()}`;
   if (e.tool === "remember") return MEMORY_TITLES[e.input?.change] || MEMORY_TITLES.add;
+  if (e.tool === "change_settings") return `Change Settings: ${areaName(e.input?.area)}`;
+  if (e.tool === "save_task") return `Save the task ${e.input?.name || ""}`.trim();
+  if (e.tool === "run_trigger") return `Run the trigger ${e.input?.name || ""}`.trim();
+  if (e.tool === "save_pipeline") return `${e.input?.before ? "Change the pipeline" : "New pipeline:"} ${e.input?.definition?.name || ""}`.trim();
+  if (e.tool === "set_pipeline_enabled") return `${e.input?.on ? "Turn on" : "Turn off"} ${e.input?.name || ""}`.trim();
+  if (e.tool === "run_pipeline") return `Run ${e.input?.name || ""}`.trim();
+  if (e.tool === "answer_run") {
+    const a = e.input?.action;
+    const how = a === "continue_pass" ? " as passed" : a === "continue_fail" ? " as failed" : "";
+    return `${RUN_ACTIONS[a] || "Answer"} ${e.input?.subject || ""}${how}`.trim();
+  }
   return e.review ? "Start a review" : TITLES[e.tool] || e.tool;
+}
+
+// A pipeline drawn on a card shows whole the first time it is on the page.
+const fitted = new Set();
+
+export function afterDraw() {
+  const drawn = document.querySelectorAll(".step-card .pl-canvas");
+  if (!drawn.length) return;
+  fitCanvases();
+  for (const c of drawn) {
+    if (fitted.has(c.dataset.key)) continue;
+    fitted.add(c.dataset.key);
+    fitAll(c);
+  }
 }
 
 export function stepCard(e) {
@@ -460,6 +675,7 @@ function changes(e) {
   if (was("prompt") !== (e.input.prompt || "")) fields.push(e.review ? "instructions" : "task");
   if (was("text") !== (e.input.text || "")) fields.push("text");
   if (was("entry") !== (e.input.entry || "")) fields.push("entry");
+  if ("value" in e.original && JSON.stringify(e.original.value) !== JSON.stringify(e.input.value)) fields.push("settings");
   return fields.length > 1 ? `${fields.slice(0, -1).join(", ")} and ${fields.at(-1)}` : fields[0] || "";
 }
 

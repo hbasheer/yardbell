@@ -77,8 +77,39 @@ server to `~/.claude.json` by hand.
 | `push_branch` | push a branch, never forced, after a scan for keys, tokens and saved secret values |
 | `move_session` | move a session's branch, uncommitted changes and task to another machine, without committing or pushing |
 
-Dispatch also has `remember`, which proposes a change to its own [memory](usage.md#memory). Other
-clients do not see it, and calling it from one is refused.
+These read Yardbell's own settings and data, change nothing, and never show a secret: a setting
+that uses one shows its `${secret:NAME}` reference, and any other credential shows `(hidden)`.
+
+| Tool | What it does |
+|---|---|
+| `read_settings` | one area of Settings with what it may be set to: `dispatch`, `triggers`, `worktree_setup`, `agents`, `session_mcp_servers`, `phone`, `machines`, `pipelines`, `pull_requests`, `security` or `about` |
+| `list_conversations`, `read_conversation` | Dispatch conversations and who started each; one conversation's newest 20 events, long text clipped, under about 30 000 characters |
+| `list_tasks`, `read_task` | saved Dispatch tasks and their versions |
+| `list_pipelines`, `read_pipeline` | pipelines with their run counts; one definition and its versions |
+| `list_runs`, `read_run` | pipeline runs as summaries, newest first; one run in full |
+| `read_insights` | a session's working, waiting and idle time and its commands, or every session seen on a machine |
+| `list_pulls` | pull and merge requests for watched branches, with review state, CI and failing jobs |
+| `read_usage` | Claude and Codex usage as the sidebar shows it |
+
+Dispatch also has tools that change things, each a step its approval setting and rules decide:
+
+| Tool | What it does |
+|---|---|
+| `remember` | proposes a change to its own [memory](usage.md#memory) |
+| `change_settings` | replaces one changeable area (every `read_settings` area except `security` and `about`) with an edited copy, checked as Settings checks it and saved so Settings' Undo reverses it; a `(hidden)` left as it is keeps the saved value; machines are never added or removed; text around a `(hidden)` cannot be edited, and an entry whose url, host or command changes loses its kept credentials; the `dispatch` area, and any change that adds a `${secret:NAME}` reference, always wait for you |
+| `save_task` | saves a new task, or a new version of one |
+| `run_trigger` | runs a trigger now, as Settings' Run now does |
+| `save_pipeline` | saves a new pipeline (switched off) or a new version of one, checked as the builder checks it; it always waits for you, and its card opens in the builder |
+| `set_pipeline_enabled` | switches a pipeline on or off, after checking that its trigger can run |
+| `run_pipeline` | starts runs of a pipeline on Linear tickets or pull and merge request links |
+| `answer_run` | answers a waiting run, retries its step, continues it as passed or failed, or drops it |
+
+Other clients, such as Claude Code with Yardbell added, can call every one of these except
+`remember`. Each call is checked as it is for Dispatch, and a problem goes back to the client; a
+change that passes waits in the **Proposals** inbox, and nothing changes until you approve it
+there, whatever your approval setting or allow rules say (a rule that refuses the action still
+refuses it). The client's answer names the proposal. A pipeline run's own Dispatch turn cannot call
+any of them, whatever the rules say, so text in a ticket cannot answer the run it belongs to.
 
 **MCP servers for sessions** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code

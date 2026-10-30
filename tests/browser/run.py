@@ -3,6 +3,7 @@ import argparse
 import base64
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -10,7 +11,9 @@ import tempfile
 import time
 import traceback
 import urllib.request
+import threading
 import zlib
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from bidi import Browser, Failure, free_port  # noqa: E402
@@ -32,6 +35,13 @@ RESULTS_CHAT = "browserresults01"
 MEMORY_CHAT = "browsermemory001"
 MEMORY_OLD = "Run docker on hp"
 MEMORY_NEW = "Always use the shared docker stack on hp"
+SETTINGS_CHAT = "browsersettings1"
+SETTINGS_EDIT_CHAT = "browsersettings2"
+TASK_CHAT = "browsersavetask1"
+NEW_TASK = "Standup notes"
+PIPE_CHAT = "browserpipeline1"
+RUNS_CHAT = "browserpiperuns1"
+PROPOSAL_CHAT = "browserproposal1"
 REFUSED = "the user's Dispatch rule \"deny start_session on pro\" refuses it"
 PULL_SESSION = "hp-pull-test"
 FAKE_PR = {
@@ -303,6 +313,207 @@ def memory_chat():
     ])
 
 
+# Dispatch proposed changing the phone notifications: the wait goes from 2 minutes to `wait`.
+def settings_chat(id, step, wait):
+    before = {"agent_waiting": True, "machines": True, "memory": True, "session_ended": True, "wait_minutes": 2}
+    head = '{\n  "agent_waiting": true,\n  "machines": true,\n  "memory": true,\n  "session_ended": true,\n  "wait_minutes": '
+    change = {"role": "action", "id": step, "tool": "change_settings", "by": "dispatch", "status": "pending",
+              "at": "2026-01-01T10:00:00+00:00",
+              "input": {"area": "phone", "value": {**before, "wait_minutes": wait}, "before": before,
+                        "diff": [{"op": "same", "text": head}, {"op": "del", "text": "2"},
+                                 {"op": "add", "text": str(wait)}, {"op": "same", "text": "\n}"}]}}
+    return conversation(id, "Wait longer before phoning", [
+        {"role": "user", "text": f"Only tell my phone after {wait} minutes"},
+        change,
+    ])
+
+
+def task_chat():
+    text = "List what changed yesterday and what waits for review."
+    step = {"role": "action", "id": "taskstp1", "tool": "save_task", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00",
+            "input": {"name": NEW_TASK, "text": text, "before": "", "diff": [{"op": "add", "text": text}]}}
+    return conversation(TASK_CHAT, "Keep my standup as a task", [
+        {"role": "user", "text": "Save my standup question as a task"},
+        step,
+    ])
+
+
+# Dispatch proposed new pipelines: ask the person, then fix.
+def proposed_pipeline(chat, names):
+    def define(name):
+        return {
+            "id": "", "name": name, "enabled": False, "version": 1,
+            "trigger": {"kind": "manual"}, "start": "plan",
+            "steps": [
+                {"id": "plan", "name": "Plan", "kind": "plan", "machines": [], "max_runs": 2,
+                 "next": {"pass": "ask", "fail": "wait", "needs_you": "wait"}, "x": -240, "y": 80},
+                {"id": "ask", "name": "Ask me", "kind": "wait", "message": "Go ahead?", "max_runs": 2,
+                 "next": {"pass": "fix", "fail": "fix", "needs_you": "wait"}, "x": 40, "y": 80},
+                {"id": "fix", "name": "Fix", "kind": "agent", "instructions": "Fix the issue in {ticket}.", "agent": "",
+                 "machine": {"name": MACHINE}, "workspace": {"kind": "new_worktree"}, "session": "new",
+                 "read_only": False, "mcp_servers": [], "max_runs": 2,
+                 "next": {"pass": "end", "fail": "wait", "needs_you": "wait"}, "x": 320, "y": 80},
+            ],
+        }
+    events = [{"role": "user", "text": "Make a pipeline that asks me, then fixes"}]
+    for id, name in names:
+        events.append({"role": "action", "id": id, "tool": "save_pipeline", "by": "dispatch", "status": "pending",
+                       "at": "2026-01-01T10:00:00+00:00", "input": {"definition": define(name), "before": None, "changes": {}}})
+    return conversation(chat, "A pipeline that asks first", events)
+
+
+# Dispatch proposed changing the seeded review pipeline: a line moved and the Test wording edited.
+def review_card_chat():
+    before, after = review_pipeline(), review_pipeline()
+    understand = next(s for s in after["steps"] if s["id"] == "understand")
+    understand["next"]["fail"] = "root-cause"
+    test = next(s for s in after["steps"] if s["id"] == "test")
+    test["instructions"] = "Run the specs and the linters for {branch}."
+    changes = {"trigger": False, "added": [], "removed": [], "changed": [{"step": "Test", "fields": ["instructions"]}],
+               "lines": [{"from": "Understand", "outcome": "fail", "was": "Report to me", "now": "Root cause"}],
+               "wording": [{"step": "Test", "diff": [{"op": "same", "text": "Run the specs "},
+                                                    {"op": "add", "text": "and the linters "}, {"op": "same", "text": "for {branch}."}]}]}
+    step = {"role": "action", "id": "pipestp1", "tool": "save_pipeline", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00", "input": {"definition": after, "before": before, "changes": changes}}
+    return conversation(PIPE_CHAT, "Lint in the review pipeline", [
+        {"role": "user", "text": "Make the review pipeline run the linters too"}, step])
+
+
+def review_change_chat():
+    after = review_pipeline()
+    after["steps"][-1]["name"] = "Report to the team"
+    step = {"role": "action", "id": "propstp3", "tool": "save_pipeline", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00",
+            "input": {"definition": after, "before": review_pipeline(),
+                      "changes": {"trigger": False, "added": [], "removed": [], "lines": [], "wording": [],
+                                  "changed": [{"step": "Report to the team", "fields": ["name"]}]}}}
+    return conversation("browserreviewchg", "Rename the report step", [
+        {"role": "user", "text": "Call the report step Report to the team"}, step])
+
+
+# Three changes an outside MCP client asked for, waiting in the Proposals inbox.
+def inbox_proposals():
+    before = {"agent_waiting": True, "machines": True, "memory": True, "session_ended": True, "wait_minutes": 2}
+    head = '{\n  "agent_waiting": true,\n  "machines": true,\n  "memory": true,\n  "session_ended": true,\n  "wait_minutes": '
+    def proposal(id, tool, input):
+        return {"role": "action", "id": id, "tool": tool, "input": input, "status": "pending", "by": "client",
+                "from": "claude-code", "at": "2026-01-01T10:00:00+00:00"}
+    pipeline = proposed_pipeline("unused0000000000", (("x", "From the inbox"),))["events"][1]["input"]
+    return [
+        proposal("inbxphn1", "change_settings", {"area": "phone", "value": {**before, "wait_minutes": 15}, "before": before,
+                                                 "diff": [{"op": "same", "text": head}, {"op": "del", "text": "2"},
+                                                          {"op": "add", "text": "15"}, {"op": "same", "text": "\n}"}]}),
+        proposal("inbxtsk1", "save_task", {"name": "Inbox task", "text": "Sum up my day.", "before": "",
+                                           "diff": [{"op": "add", "text": "Sum up my day."}]}),
+        proposal("inbxpip1", "save_pipeline", pipeline),
+    ]
+
+
+def run_steps_chat():
+    def step(id, tool, input):
+        return {"role": "action", "id": id, "tool": tool, "by": "dispatch", "status": "pending",
+                "at": "2026-01-01T10:00:00+00:00", "input": input}
+    return conversation(RUNS_CHAT, "Runs of the review pipeline", [
+        {"role": "user", "text": "Run the review on !87 and clear the old run"},
+        step("runstp01", "run_pipeline", {"id": "review", "name": "Review my merge requests", "tickets": [],
+                                          "prs": ["https://git.example.com/acme/app/-/merge_requests/87"]}),
+        step("ansstp01", "answer_run", {"id": "run-c", "action": "drop", "text": "",
+                                        "pipeline": "Review my merge requests", "subject": "COM-1284 Login redirect",
+                                        "waiting": {"kind": "needs_you", "step": "test", "reason": "Test needs you",
+                                                    "screen": "rspec: 3 examples, 1 failure"}}),
+    ])
+
+
+# Linear's GraphQL API as the Pipeline page's ticket picker asks it: my open tickets.
+LINEAR_TICKETS = [
+    {"id": "u-12", "identifier": "COM-12", "title": "Redirect after login", "url": "https://linear.app/acme/issue/COM-12", "state": {"name": "Todo"}},
+    {"id": "u-21", "identifier": "COM-21", "title": "Search by email", "url": "https://linear.app/acme/issue/COM-21", "state": {"name": "Todo"}},
+    {"id": "u-22", "identifier": "COM-22", "title": "Export invoices", "url": "https://linear.app/acme/issue/COM-22", "state": {"name": "In Progress"}},
+]
+
+
+class FakeLinear(BaseHTTPRequestHandler):
+    def do_POST(self):
+        self.rfile.read(int(self.headers.get("Content-Length") or 0))
+        body = json.dumps({"data": {"viewer": {"assignedIssues": {"nodes": LINEAR_TICKETS}}}}).encode()
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def log_message(self, *args):
+        pass
+
+
+def ago_stamp(minutes):
+    return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - minutes * 60))
+
+
+def review_pipeline():
+    def agent(id, name, x, machine, workspace, nxt, instructions):
+        return {"id": id, "name": name, "kind": "agent", "instructions": instructions, "agent": "",
+                "machine": machine, "workspace": workspace, "session": "new", "read_only": True,
+                "mcp_servers": [], "max_runs": 2, "next": nxt, "x": x, "y": 80}
+    same = {"same_as": "understand"}
+    return {
+        "id": "review", "name": "Review my merge requests", "enabled": False, "version": 1,
+        "trigger": {"kind": "gitlab_reviewer", "host": "git.example.com"}, "start": "plan",
+        "steps": [
+            {"id": "plan", "name": "Plan", "kind": "plan", "machines": [], "max_runs": 2,
+             "next": {"pass": "understand", "fail": "wait", "needs_you": "wait"}, "x": -240, "y": 80},
+            agent("understand", "Understand", 40, {"name": MACHINE}, {"kind": "new_worktree"},
+                  {"pass": "root-cause", "fail": "report", "needs_you": "wait"}, "Read {ticket} and {pr}."),
+            agent("root-cause", "Root cause", 320, same, {"kind": "same_as", "step": "understand"},
+                  {"pass": "test", "fail": "report", "needs_you": "wait"}, "Does {pr} fix the root cause?"),
+            agent("test", "Test", 600, same, {"kind": "copy", "from": "understand"},
+                  {"pass": "report", "fail": "root-cause", "needs_you": "wait"}, "Run the specs for {branch}."),
+            {"id": "report", "name": "Report to me", "kind": "report", "max_runs": 2,
+             "next": {"pass": "end", "fail": "end", "needs_you": "wait"}, "x": 880, "y": 80},
+        ],
+    }
+
+
+def pipeline_runs():
+    definition = review_pipeline()
+
+    def run(id, number, title, state, step, steps, waiting=None):
+        url = f"https://git.example.com/acme/app/-/merge_requests/{number}"
+        ticket = f"COM-{1200 + number}"
+        return {
+            "id": id, "pipeline": "review", "pipeline_name": definition["name"], "version": 1,
+            "definition": definition, "key": f"pr:{url}", "started_by": "trigger", "started": ago_stamp(40 - number % 10),
+            "subject": {"ticket": {"linear_id": f"u-{number}", "id": ticket, "title": title,
+                                   "url": f"https://linear.app/acme/issue/{ticket}"},
+                        "pr": {"url": url, "number": number, "branch": f"{ticket.lower()}-fix", "host": "git.example.com",
+                               "project": "acme/app", "forge": "gitlab"}},
+            # A machine that does not exist keeps the loop from starting real sessions for these runs.
+            "place": {"machine": "nowhere", "folder": "demo-app", "branch": f"{ticket.lower()}-fix"},
+            "state": state, "step": step, "step_since": ago_stamp(12),
+            "steps": {name: {"runs": 1, "machine": "nowhere", "outcome": outcome, "report": report,
+                             "started": ago_stamp(30), "ended": ago_stamp(20)}
+                      for name, outcome, report in steps},
+            "history": [{"step": name, "outcome": outcome, "at": ago_stamp(20)} for name, outcome, _ in steps],
+            "waiting": waiting,
+        }
+
+    return {
+        "run-a": run("run-a", 87, "Fix the webhook dedup", "waiting", "root-cause",
+                     [("understand", "pass", "The duplicate check keys on the payload id only."),
+                      ("root-cause", "needs_you", "Which window is right?")],
+                     {"kind": "needs_you", "step": "root-cause", "reason": "Root cause needs you",
+                      "screen": "The ticket says 5 minutes, the MR drops them within 60 seconds. Which window is right?"}),
+        "run-b": run("run-b", 91, "Inbox filter", "waiting", "test",
+                     [("understand", "pass", "Filters by label."), ("root-cause", "pass", "Fixes it."),
+                      ("test", "fail", "The filter spec fails on an empty inbox.")],
+                     {"kind": "stopped", "step": "test", "reason": "Test failed"}),
+        "run-c": run("run-c", 84, "Login redirect", "done", "",
+                     [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes."),
+                      ("test", "pass", "Specs pass."), ("report", "pass", "Looks good.")]),
+    }
+
+
 def conversation(id, title, events):
     stamp = "2026-01-01T10:00:00+00:00"
     return {"id": id, "title": title, "created": stamp, "updated": stamp, "events": events}
@@ -328,6 +539,15 @@ class Yardbell:
             git("add", "README.md", cwd=path)
             git("commit", "-q", "-m", "init", cwd=path)
         self.seed_dispatch()
+        os.makedirs(os.path.join(self.state, "pipelines"))
+        with open(os.path.join(self.state, "pipelines", "review.json"), "w") as f:
+            json.dump({"history": [{"version": 1, "saved": ago_stamp(60), "definition": review_pipeline()}]}, f)
+        with open(os.path.join(self.state, "runs.json"), "w") as f:
+            json.dump(pipeline_runs(), f)
+        with open(os.path.join(self.state, "proposals.json"), "w") as f:
+            json.dump(inbox_proposals(), f)
+        self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
+        threading.Thread(target=self.linear.serve_forever, daemon=True).start()
         # gh on the server's PATH answers for every branch with one failing pull request.
         fake_bin = os.path.join(tmp, "bin")
         os.makedirs(fake_bin)
@@ -376,6 +596,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "TMUX_TMPDIR": self.tmux_dir,
             "YARDBELL_STATE": self.state,
             "CLAUDE_CONFIG_DIR": os.path.join(home, ".claude"),
+            "YARDBELL_LINEAR_URL": f"http://127.0.0.1:{self.linear.server_address[1]}/graphql",
         }
         for agent, fake in (("claude", self.fake_claude), ("codex", self.fake_codex)):
             out = subprocess.run(["bash", "-lic", f"command -v {agent}"], env=self.env, capture_output=True, text=True)
@@ -488,7 +709,12 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         with open(os.path.join(self.state, "insights.json"), "w") as f:
             json.dump({f"{MACHINE}:{OLD_RUN}": {"machine": MACHINE, "name": OLD_RUN, "agent": "shell", "folder": "demo-app",
                                                 "branch": "main", "marks": marks}}, f)
-        for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight):
+        for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
+                     settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat(),
+                     review_card_chat(), run_steps_chat(),
+                     proposed_pipeline(PROPOSAL_CHAT, (("propstp1", "Built in the builder"),
+                                                       ("propstp2", "Broken in the builder"))),
+                     review_change_chat()):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -651,7 +877,8 @@ class Suite:
         self.b.wait("document.querySelector('[data-theme-toggle] .theme-word')", f"the menu on {path}")
         return self.b.js(
             """[...document.querySelectorAll('.side-foot .side-link, .ws-nav .side-link')]
-                 .map((el) => el.matches('[data-theme-toggle]') ? 'theme' : el.textContent.trim())"""
+                 .map((el) => el.matches('[data-theme-toggle]') ? 'theme'
+                   : [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join('').trim())"""
         )
 
     def test_workspace_sidebar_matches_the_other_pages(self):
@@ -691,7 +918,7 @@ class Suite:
                       const walk = document.createTreeWalker(side, NodeFilter.SHOW_TEXT);
                       const out = [];
                       for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-                        if (!n.textContent.trim() || n.parentElement.closest('.rail-initial')) continue;
+                        if (!n.textContent.trim() || n.parentElement.closest('.rail-initial, .side-count')) continue;
                         const range = document.createRange();
                         range.selectNodeContents(n);
                         if ([...range.getClientRects()].some((r) => r.width > 0 && r.height > 0)) out.push(n.textContent.trim().slice(0, 30));
@@ -701,6 +928,17 @@ class Suite:
                 )
                 if drawn:
                     raise Failure(f"the collapsed sidebar on {path} still draws words: {drawn}")
+                b.wait("document.getElementById('nav-proposals-count') && !document.getElementById('nav-proposals-count').hidden", f"the proposals count on {path}")
+                on_icon = b.js(
+                    """(() => {
+                      const c = document.getElementById('nav-proposals-count').getBoundingClientRect();
+                      const l = document.querySelector('.side-link[href="/proposals"]').getBoundingClientRect();
+                      const x = c.left + c.width / 2, y = c.top + c.height / 2;
+                      return x >= l.left && x <= l.right && y >= l.top && y <= l.bottom;
+                    })()"""
+                )
+                if not on_icon:
+                    raise Failure(f"the collapsed sidebar on {path} draws the proposals count away from its icon")
         finally:
             b.js("localStorage.removeItem('yardbell.side')")
 
@@ -1435,6 +1673,84 @@ class Suite:
         if os.stat(os.path.join(self.y.state, "dispatch", "memory.md")).st_mode & 0o777 != 0o600:
             raise Failure("memory.md is readable by other accounts")
 
+    def wait_minutes(self):
+        with open(self.y.config) as f:
+            found = re.search(r"wait_minutes: (\d+)", f.read())
+        return int(found.group(1)) if found else None
+
+    def test_dispatch_change_settings_card(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={SETTINGS_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .change-diff')", "the settings step with its diff")
+        seen = b.js(f"""(() => {{
+          const c = document.querySelector('{card}');
+          return {{ title: c.querySelector('.step-card-title strong').textContent,
+                   del: c.querySelector('.change-diff del')?.textContent,
+                   ins: c.querySelector('.change-diff ins')?.textContent,
+                   link: c.querySelector('a[href="/settings#phone"]')?.textContent.trim() }};
+        }})()""")
+        if seen != {"title": "Change Settings: Phone notifications", "del": "removed 2", "ins": "added 7", "link": "Open in Settings"}:
+            raise Failure(f"the card shows {seen}")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome a[href=\"/settings#phone\"]')", "the change saved, with a link to Settings")
+        said = b.js("document.querySelector('#dispatch-log .step-card.done .step-card-outcome').textContent")
+        if "Settings, Undo reverses it" not in said:
+            raise Failure(f"the outcome says {said!r}")
+        if self.wait_minutes() != 7:
+            raise Failure(f"yardbell.yml waits {self.wait_minutes()} minutes")
+        self.check_errors("the settings card")
+        b.click("#dispatch-log .step-card.done .step-card-outcome a")
+        b.wait("!document.getElementById('undo-bar').hidden && document.getElementById('undo-text').textContent === 'Dispatch changed the phone settings.'", "Undo for Dispatch's change in Settings")
+        b.click("#undo-btn")
+        b.wait("document.getElementById('undo-title').textContent === 'Undone.'", "the change undone")
+        if self.wait_minutes() == 7:
+            raise Failure("Undo left the change in yardbell.yml")
+
+    def test_dispatch_change_settings_edit(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={SETTINGS_EDIT_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .change-diff')", "the settings step")
+        b.js(f"[...document.querySelectorAll('{card} .step-card-actions button')].find((x) => x.textContent.trim() === 'Edit').click()")
+        area = f"{card} .step-card-form textarea"
+        b.wait(f"document.querySelector('{area}')?.value.includes('\"wait_minutes\": 9')", "the value as JSON to edit")
+
+        def put(text):
+            b.js(f"""(() => {{ const t = document.querySelector('{area}'); t.value = {json.dumps(text)};
+              t.dispatchEvent(new Event('input')); }})()""")
+
+        value = b.js(f"document.querySelector('{area}').value")
+        put(value.replace('"wait_minutes": 9', '"wait_minutes": 500'))
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait(f"document.querySelector('{card} .step-card-form [role=alert]')?.textContent.includes('from 0 to 60')", "the problem on the card")
+        put("{ not json")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait(f"document.querySelector('{card} .step-card-form [role=alert]')?.textContent.includes('JSON')", "a note that the value is not JSON")
+        put(value.replace('"wait_minutes": 9', '"wait_minutes": 12'))
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done')", "the edited change saved")
+        note = b.js("document.querySelector('#dispatch-log .step-card.done .step-card-note').textContent")
+        if "you changed the settings" not in note:
+            raise Failure(f"the card says {note!r}")
+        if self.wait_minutes() != 12:
+            raise Failure(f"yardbell.yml waits {self.wait_minutes()} minutes")
+
+    def test_dispatch_save_task_card(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={TASK_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .change-diff ins')", "the task step with its text")
+        title = b.js(f"document.querySelector('{card} .step-card-title strong').textContent")
+        if title != f"Save the task {NEW_TASK}":
+            raise Failure(f"the card is titled {title!r}")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome')?.textContent.includes('Saved as version 1')", "the task saved")
+        b.wait(f"[...document.querySelectorAll('#task-list .task')].some((t) => t.textContent.includes({json.dumps(NEW_TASK)}))", "the task in the list")
+        b.click("#dispatch-log .step-card.done .step-card-outcome .btn")
+        b.wait("document.querySelectorAll('.th-dialog .th-version').length === 1", "the task's history")
+        b.js("document.querySelector('.th-dialog').close()")
+
     def test_task_history_diff_and_restore(self):
         b = self.b
         b.goto(self.url("/dispatch"))
@@ -1530,6 +1846,644 @@ class Suite:
         b.wait(f"!document.getElementById('task-form').hidden && document.querySelector('#task-form textarea').value === {json.dumps(PROMPT)} && !document.querySelector('#task-form input[name=name]').value",
                "the proposal in a new task's form")
         b.click("#task-cancel")
+
+    def test_pipeline_in_the_sidebar(self):
+        for page in ("/", "/workspace", "/dispatch", "/settings", "/pipeline"):
+            self.b.goto(self.url(page))
+            self.b.wait("document.querySelector('.side-link[href=\"/pipeline\"]')", f"the Pipeline link on {page}")
+            order = self.b.js("[...document.querySelectorAll('a.side-link[href]')].map((a) => a.getAttribute('href')).join(' ')")
+            if "/workspace /pipeline /dispatch" not in order:
+                raise Failure(f"the sidebar on {page} reads {order}")
+
+    def set_field(self, selector, value):
+        self.b.js(f"""(() => {{
+          const el = document.querySelector({json.dumps(selector)});
+          el.value = {json.dumps(value)};
+          el.dispatchEvent(new Event("input", {{ bubbles: true }}));
+          el.dispatchEvent(new Event("change", {{ bubbles: true }}));
+        }})()""")
+
+    def run_of(self, id):
+        runs = self.api("GET", "/api/runs")["runs"]
+        return next(r for r in runs if r["id"] == id)
+
+    def test_pipelines_list_cards(self):
+        b = self.b
+        b.goto(self.url("/pipeline"))
+        card = '.pl-card[data-id="review"]'
+        b.wait(f"document.querySelector('{card}')", "the review pipeline's card")
+        text = b.js(f"document.querySelector('{card}').textContent.replace(/\\s+/g, ' ')")
+        for want in ("When a GitLab merge request on git.example.com adds me as reviewer",
+                     "Understand", "Test ⟲ Root cause", "v1", "2 waiting · 1 done", "Needs you"):
+            if want not in text:
+                raise Failure(f"the card does not say {want!r}: {text}")
+        if b.js(f"document.querySelector('{card} input[type=checkbox]').checked"):
+            raise Failure("a pipeline that is off shows as on")
+        b.click(f"{card} input[type=checkbox]")
+        b.wait("document.getElementById('toast').textContent.includes('gitlab_reviewer names git.example.com')",
+               "the checks' problem when switching on")
+        b.wait(f"!document.querySelector('{card} input[type=checkbox]').checked", "the switch back off")
+        b.click("#pl-waiting-toggle")
+        b.wait("document.querySelectorAll('#pl-waiting .pl-wait-item').length === 2", "two runs waiting for me")
+        if "!87 COM-1287 Fix the webhook dedup" not in b.js("document.getElementById('pl-waiting').textContent"):
+            raise Failure("the waiting list does not name the merge request")
+        self.check_errors("the Pipelines list")
+
+    def test_pipeline_new_from_template(self):
+        b = self.b
+        b.goto(self.url("/pipeline"))
+        b.click("#pl-new")
+        b.wait("document.querySelector('#pl-templates button')", "the templates")
+        b.js("[...document.querySelectorAll('#pl-templates button')].find((x) => x.textContent.includes('Implement my Linear tickets')).click()")
+        b.wait("new URLSearchParams(location.search).get('p') === 'implement-my-linear-tickets'", "the new pipeline opened")
+        b.wait("document.querySelector('.pl-title-name')?.value === 'Implement my Linear tickets'", "its name")
+        b.click("#pl-back")
+        b.wait("document.querySelectorAll('.pl-card[data-id]').length === 2", "two pipeline cards")
+
+    def test_builder_opens_full_screen_and_toggles(self):
+        b = self.b
+        b.js("localStorage.removeItem('yb-pipeline-full')")
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.querySelector('.pl-builder.full .pl-canvas.editable')", "the builder, full screen")
+        fills = "(() => { const r = document.querySelector('.pl-builder').getBoundingClientRect(); return Math.round(r.left) === 0 && Math.round(r.width) === innerWidth && Math.round(r.height) === innerHeight; })()"
+        if not b.js(fills):
+            raise Failure("the full-screen builder does not cover the window")
+        if b.js("document.querySelector('.pl-canvas').getBoundingClientRect().height") < b.js("innerHeight") * 0.7:
+            raise Failure("the canvas does not take the height of the window")
+        groups = b.js("[...document.querySelectorAll('.pl-library h3')].map((h) => h.textContent.trim()).join('|')")
+        if groups != "Start when|Agent|Yardbell|You":
+            raise Failure(f"the library groups read {groups}")
+        b.click("#pl-full")
+        b.wait("document.querySelector('.pl-builder:not(.full)') && document.querySelector('.side').getBoundingClientRect().width > 0", "the builder back in the page")
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-builder:not(.full) .pl-run-view')", "the Runs tab remembering the choice")
+        if b.js("document.querySelector('.pl-canvas').getBoundingClientRect().bottom") < b.js("innerHeight") - 40:
+            raise Failure("the Runs canvas does not reach the bottom of the window")
+        b.click("#pl-full")
+        b.wait("document.querySelector('.pl-builder.full .pl-run-view')", "the Runs tab full screen")
+        self.check_errors("the builder shell")
+
+    def test_builder_inspector_edits_and_saves(self):
+        b = self.b
+        self.open_builder()
+        b.wait("document.querySelector('.pl-node[data-step=\"test\"]')", "the Test card")
+        if b.js("document.querySelector('#pl-inspector')?.textContent.includes('Click a step')") is not True:
+            raise Failure("the inspector does not say what to do with nothing selected")
+        b.click('.pl-node[data-step="test"]')
+        b.wait("document.querySelector('#pl-inspector .pl-step-form[data-step=\"test\"]')", "the Test step in the inspector")
+        if b.js("document.querySelector('.pl-canvas').scrollLeft + document.querySelector('.pl-canvas').scrollTop") != 0:
+            raise Failure("selecting a card scrolled the canvas box and hid its controls")
+        version = self.api("GET", "/api/pipelines/review")["version"]
+        self.set_field('#pl-inspector input[name=name]', "Test on hp")
+        b.wait("document.querySelector('.pl-node[data-step=\"test\"] b').textContent === 'Test on hp'", "the card renamed as you type")
+        b.click("#pl-save")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {version + 1})()", "the new version saved")
+        b.wait("document.getElementById('pl-save').classList.contains('pl-saved')", "Save showing it is saved")
+        b.click('.pl-node[data-step="@start"]')
+        b.wait("document.querySelector('#pl-inspector select[name=trigger]')", "the trigger in the inspector")
+        self.check_errors("the inspector")
+
+    def test_builder_save_problems_ring_the_step(self):
+        b = self.b
+        self.open_builder()
+        b.click('.pl-node[data-step="report"]')
+        b.wait("document.querySelector('#pl-inspector input[name=max_runs]')", "Report to me in the inspector")
+        self.set_field('#pl-inspector input[name=max_runs]', "0")
+        b.click("#pl-save")
+        b.wait("document.getElementById('pl-problems')?.textContent.includes('Report to me: max_runs must be from 1 to 10')", "the problem over the canvas")
+        if not b.js("document.querySelector('.pl-node[data-step=\"report\"]').classList.contains('problem')"):
+            raise Failure("the step the problem names is not ringed")
+        if "max_runs must be from 1 to 10" not in b.js("document.querySelector('#pl-inspector .pl-inspector-problems')?.textContent || ''"):
+            raise Failure("the inspector does not show the step's problem")
+        self.check_errors("save problems")
+
+    def open_builder(self):
+        b = self.b
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.querySelector('.pl-node[data-step=\"report\"]')", "the builder")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+
+    def empty_spot(self):
+        return self.b.js("(() => { const r = document.querySelector('.pl-canvas').getBoundingClientRect(); return [r.left + 90, r.bottom - 110]; })()")
+
+    def has_line(self, src, outcome, dst=None):
+        sel = f'.pl-edge-hit[data-from="{src}"][data-outcome="{outcome}"]'
+        if dst:
+            sel += f'[data-to="{dst}"]'
+        return self.b.js(f"!!document.querySelector({json.dumps(sel)})")
+
+    def test_builder_drag_from_library_creates_a_step(self):
+        b = self.b
+        self.open_builder()
+        spot = self.empty_spot()
+        b.drag('.pl-lib-item[data-kind="wait"]', tuple(spot), steps=10)
+        b.wait("document.querySelector('.pl-node.kind-wait')", "a Wait for me card where it was dropped")
+        if not b.js("document.querySelector('.pl-node.kind-wait').classList.contains('selected')"):
+            raise Failure("the new step is not selected")
+        if b.js("document.getElementById('pl-save').classList.contains('pl-saved')"):
+            raise Failure("Save stays off after adding a step")
+        self.check_errors("dragging from the library")
+
+    def test_builder_connect_ports_and_cut_a_line(self):
+        b = self.b
+        self.open_builder()
+        if self.has_line("understand", "needs_you"):
+            raise Failure("the fixture already has the line this test draws")
+        b.drag('.pl-node[data-step="understand"] .pl-port.out.needs_you', '.pl-node[data-step="report"]', steps=10)
+        b.wait("!!document.querySelector('.pl-edge-hit[data-from=\"understand\"][data-outcome=\"needs_you\"][data-to=\"report\"]')", "the new needs you line")
+        b.js("document.querySelector('.pl-edge-hit[data-from=\"understand\"][data-outcome=\"needs_you\"]').dispatchEvent(new MouseEvent('click', { bubbles: true }))")
+        b.wait("document.querySelector('.pl-edge.selected')", "the line selected")
+        b.key("Delete")
+        b.wait("!document.querySelector('.pl-edge-hit[data-from=\"understand\"][data-outcome=\"needs_you\"]')", "the line cut")
+        self.check_errors("connecting ports")
+
+    def test_builder_drop_a_line_on_empty_canvas_creates_a_connected_step(self):
+        b = self.b
+        self.open_builder()
+        b.drag('.pl-node[data-step="test"] .pl-port.out.needs_you', tuple(self.empty_spot()), steps=10)
+        b.wait("document.querySelector('#pl-add-menu button[data-kind=\"wait\"]')", "the add menu where the line was dropped")
+        b.click('#pl-add-menu button[data-kind="wait"]')
+        b.wait("document.querySelector('.pl-node.kind-wait')", "the new step")
+        new = b.js("document.querySelector('.pl-node.kind-wait').dataset.step")
+        if not self.has_line("test", "needs_you", new):
+            raise Failure("the new step is not connected to the line that made it")
+
+    def test_builder_delete_step_repoints_lines(self):
+        b = self.b
+        self.open_builder()
+        b.click('.pl-node[data-step="root-cause"]')
+        b.key("Delete")
+        b.wait("!document.querySelector('.pl-node[data-step=\"root-cause\"]')", "Root cause removed")
+        if b.js("!!document.querySelector('.pl-edge-hit[data-to=\"root-cause\"]')"):
+            raise Failure("a line still points at the removed step")
+        if self.has_line("understand", "pass"):
+            raise Failure("Understand's pass line did not go back to End")
+
+    def test_builder_move_undo_redo_and_tidy(self):
+        b = self.b
+        self.open_builder()
+        left = lambda: b.js("parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left)")
+        start = left()
+        box = b.centre('.pl-node[data-step="report"] .pl-node-head b')
+        b.drag((box["x"], box["y"]), (box["x"] + 120, box["y"]), steps=10)
+        moved = left()
+        if moved <= start + 60:
+            raise Failure(f"dragging the card moved it from {start} to {moved}")
+        b.key("z", "Control")
+        b.wait(f"parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left) === {start}", "undo putting it back")
+        b.key("z", "Control", "Shift")
+        b.wait(f"parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left) === {moved}", "redo moving it again")
+        b.click("#pl-tidy")
+        b.wait(f"parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left) !== {moved}", "Tidy laying the steps out")
+        b.key("z", "Control")
+        b.wait(f"parseFloat(document.querySelector('.pl-node[data-step=\"report\"]').style.left) === {moved}", "one undo for the whole Tidy")
+
+    def test_builder_keyboard_only(self):
+        b = self.b
+        self.open_builder()
+        version = self.api("GET", "/api/pipelines/review")["version"]
+        b.click('.pl-node[data-step="understand"]')
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"agent\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-agent.selected[data-step=\"agent-step\"]')", "the new agent step after Understand")
+        if not self.has_line("understand", "pass", "agent-step") or not self.has_line("agent-step", "pass", "root-cause"):
+            raise Failure("the new step was not put on Understand's pass line")
+        before = b.js("parseFloat(document.querySelector('.pl-node[data-step=\"agent-step\"]').style.left)")
+        b.js("document.activeElement.blur()")
+        b.key("ArrowRight")
+        if b.js("parseFloat(document.querySelector('.pl-node[data-step=\"agent-step\"]').style.left)") != before + 8:
+            raise Failure("the arrow key did not nudge the step 8px")
+        self.set_field('#pl-inspector select[name=machine_mode]', "name")
+        b.wait("document.querySelector('#pl-inspector select[name=machine]')", "the machine to pick")
+        self.set_field('#pl-inspector textarea[name=instructions]', "Check the change is small")
+        b.js("document.activeElement.blur()")
+        b.key("s", "Control")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {version + 1})()", "Ctrl+S saving")
+        self.check_errors("the keyboard path")
+
+    def test_new_empty_pipeline_and_build_it(self):
+        b = self.b
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url("/pipeline"))
+        b.click("#pl-new")
+        b.wait("document.querySelector('#pl-templates button[data-empty]')", "Empty pipeline in the menu")
+        if b.js("document.querySelector('#pl-templates button').hasAttribute('data-empty')") is not True:
+            raise Failure("Empty pipeline is not the first choice")
+        b.click("#pl-templates button[data-empty]")
+        b.wait("new URLSearchParams(location.search).get('tab') === 'build' && document.querySelector('.pl-canvas-hint')", "the empty pipeline on the canvas with its hint")
+        pid = b.js("new URLSearchParams(location.search).get('p')")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"plan\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-plan.selected')", "Plan as the first step")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"agent\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-agent.selected')", "the agent step after it")
+        self.set_field('#pl-inspector select[name=machine_mode]', "name")
+        b.wait("document.querySelector('#pl-inspector select[name=machine]')", "the machine to pick")
+        self.set_field('#pl-inspector textarea[name=instructions]', "Say hello")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"report\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-report.selected')", "Report to me after it")
+        b.js("document.activeElement.blur()")
+        b.key("s", "Control")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/{pid}')).json()).steps.length === 3)()", "the new pipeline saved with three steps")
+        b.click("#pl-run-now")
+        b.wait("document.querySelector('#pl-run-now-panel')", "the Run now panel")
+        b.js("[...document.querySelectorAll('#pl-run-now-panel button')].find((x) => x.textContent.trim() === 'Start').click()")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/{pid}/runs')).json()).runs.length === 1)()", "Run now starting a run")
+        self.check_errors("building from empty")
+
+    def test_builder_warns_before_losing_changes(self):
+        b = self.b
+        self.open_builder()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
+        b.js("window.__asked = ''; window.confirm = (m) => { window.__asked = m; return false; }")
+        b.click("#pl-back")
+        if b.js("window.__asked") != "Leave without saving your changes?":
+            raise Failure("leaving with unsaved changes did not ask")
+        if not b.js("!!document.querySelector('.pl-node.kind-wait')"):
+            raise Failure("saying no still threw the change away")
+        b.js("window.confirm = () => true")
+        b.click("#pl-back")
+        b.wait("!new URLSearchParams(location.search).get('p')", "leaving once confirmed")
+
+    def test_history_preview_then_restore(self):
+        b = self.b
+        definition = self.api("GET", "/api/pipelines/review")
+        definition["steps"][0]["name"] = "Read the MR"
+        saved = self.api("PUT", "/api/pipelines/review", definition)
+        b.goto(self.url("/pipeline?p=review&tab=history"))
+        b.wait("document.querySelector('.pl-history-row[data-version=\"1\"]')", "the first version")
+        b.click('.pl-history-row[data-version="1"] .pl-history-pick')
+        b.wait("document.querySelector('.pl-history-preview')?.textContent.includes('Version 1')", "the preview bar")
+        if b.js("document.querySelector('.pl-canvas .pl-node[data-step=\"understand\"] b').textContent") != "Understand":
+            raise Failure("the canvas does not show version 1")
+        b.js("[...document.querySelectorAll('.pl-history-preview button')].find((x) => x.textContent.trim() === 'Restore').click()")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
+
+    def test_builder_on_a_phone(self):
+        b = self.b
+        b.viewport(390, 844, 3)
+        try:
+            self.open_builder()
+            if b.js("(() => { const l = document.querySelector('.pl-library'); return !!l && l.getBoundingClientRect().width > 0; })()"):
+                raise Failure("the library takes room on a phone")
+            if b.js("document.querySelector('.pl-canvas').getBoundingClientRect().width") < 380:
+                raise Failure("the canvas does not take the width on a phone")
+            b.click("#pl-add-step")
+            b.wait("document.querySelector('#pl-add-sheet .pl-lib-item[data-kind=\"agent\"]')", "the Add step sheet")
+            b.click('#pl-add-sheet .pl-lib-item[data-kind="agent"]')
+            b.wait("!document.querySelector('#pl-add-sheet') && document.querySelector('.pl-node.kind-agent.selected')", "the new step, with the sheet closed")
+            b.wait("document.querySelector('.pl-inspector.sheet') && document.querySelector('.pl-inspector.sheet').getBoundingClientRect().height > 100", "the step in a bottom sheet")
+            b.click("#pl-sheet-done")
+            b.wait("!document.querySelector('.pl-inspector.sheet')", "the sheet closed")
+            if b.js("document.documentElement.scrollWidth") > b.js("innerWidth"):
+                raise Failure("the builder scrolls sideways on a phone")
+            self.check_errors("the builder on a phone")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_builder_a_click_on_a_port_changes_nothing(self):
+        b = self.b
+        self.open_builder()
+        b.click('.pl-node[data-step="understand"] .pl-port.out.pass')
+        if not self.has_line("understand", "pass", "root-cause") or self.has_line("understand", "pass", "understand"):
+            raise Failure("clicking a port rewired the step")
+        b.drag('.pl-node[data-step="understand"] .pl-port.out.fail', '.pl-node[data-step="understand"]', steps=8)
+        if self.has_line("understand", "fail", "understand"):
+            raise Failure("dragging a port back onto its own card made a loop")
+
+    def test_builder_renaming_a_step_keeps_its_reports(self):
+        b = self.b
+        self.open_builder()
+        b.click('.pl-node[data-step="test"]')
+        b.wait("document.querySelector('#pl-inspector textarea[name=instructions]')", "the Test step")
+        self.set_field('#pl-inspector textarea[name=instructions]', "Use {report:Understand}")
+        b.click('.pl-node[data-step="understand"]')
+        b.wait("document.querySelector('#pl-inspector .pl-step-form[data-step=\"understand\"]')", "Understand")
+        self.set_field('#pl-inspector input[name=name]', "Understand it")
+        b.wait("document.querySelector('.pl-node[data-step=\"test\"] .pl-node-text').textContent.includes('{report:Understand it}')",
+               "the other step's {report:...} following the rename")
+
+    def test_builder_switching_on_survives_a_save(self):
+        b = self.b
+        made = self.api("POST", "/api/pipelines", {"template": "Implement my Linear tickets"})
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url(f"/pipeline?p={made['id']}&tab=build"))
+        b.wait("document.querySelector('.pl-node')", "the builder")
+        self.set_field(".pl-bar .pl-name", "Implement mine")
+        b.click(".pl-bar input.switch")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/{made['id']}')).json()).enabled)()", "the pipeline switched on")
+        b.click("#pl-save")
+        b.wait(f"(async () => {{ const d = await (await fetch('/api/pipelines/{made['id']}')).json(); return d.enabled && d.version === {made['version'] + 1}; }})()",
+               "the save keeping it on")
+
+    def test_builder_browser_back_asks_before_losing_changes(self):
+        b = self.b
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url("/pipeline"))
+        b.click('.pl-card[data-id="review"]')
+        b.wait("document.querySelector('.pl-builder')", "the pipeline")
+        b.js("[...document.querySelectorAll('.pl-builder [role=tab]')].find((t) => t.textContent.trim() === 'Build').click()")
+        b.wait("document.querySelector('.pl-canvas.editable')", "Build")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
+        b.js("window.__asked = ''; window.confirm = (m) => { window.__asked = m; return false; }")
+        b.js("history.back()")
+        b.wait("window.__asked === 'Leave without saving your changes?'", "the question")
+        b.wait("new URLSearchParams(location.search).get('p') === 'review' && document.querySelector('.pl-node.kind-wait')", "the change kept")
+
+    def test_run_now_on_a_manual_pipeline_takes_a_ticket(self):
+        b = self.b
+        made = self.api("POST", "/api/pipelines", {"empty": True})
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url(f"/pipeline?p={made['id']}&tab=build"))
+        b.click("#pl-run-now")
+        b.wait("document.querySelector('#pl-run-now-panel textarea')", "the Run now panel")
+        if b.js("[...document.querySelectorAll('#pl-run-now-panel button')].find((x) => x.textContent.trim().startsWith('Start')).disabled"):
+            raise Failure("a manual pipeline cannot start without a ticket")
+
+    def test_settings_no_longer_offers_the_ticket_pipeline(self):
+        b = self.b
+        b.goto(self.url("/settings"))
+        b.wait("document.querySelector('form')", "the settings page")
+        if b.js("!!document.querySelector('option[value=\"pipeline\"], input[name=pl_state]')"):
+            raise Failure("Settings still offers the removed ticket pipeline")
+
+    def test_pipeline_run_graph_and_waiting_box(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-node[data-step=\"root-cause\"].waiting')", "Root cause marked waiting")
+        for step, cls in (("understand", "done"), ("test", "later"), ("report", "later")):
+            if not b.js(f"document.querySelector('.pl-node[data-step=\"{step}\"]').classList.contains('{cls}')"):
+                raise Failure(f"the {step} node is not {cls}")
+        if b.js("document.querySelectorAll('.pl-canvas svg path').length") < 5:
+            raise Failure("the graph does not draw the lines between steps")
+        if b.js("getComputedStyle(document.querySelector('.pl-canvas')).overflow") != "clip":
+            raise Failure("the graph scrolls instead of panning")
+        fitted = b.js("document.querySelector('.pl-pan').style.transform")
+        b.js("document.querySelector('.pl-canvas').dispatchEvent(new WheelEvent('wheel', { deltaX: 80, deltaY: 30, bubbles: true, cancelable: true }))")
+        if b.js("document.querySelector('.pl-pan').style.transform") == fitted:
+            raise Failure("two-finger scrolling does not pan the graph")
+        panned = b.js("document.querySelector('.pl-pan').style.transform")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        if b.js("document.querySelector('.pl-pan').style.transform") == panned:
+            raise Failure("Fit does not bring the graph back")
+        box = "#pl-need"
+        b.wait(f"document.querySelector('{box}')?.textContent.includes('Which window is right?')", "the agent's question")
+        b.click(f"{box} textarea")
+        b.type("Five minutes")
+        b.click(f"{box} .btn.primary")
+        b.wait("(async () => (await (await fetch('/api/runs')).json()).runs.find((r) => r.id === 'run-a').steps['root-cause'].answer === 'Five minutes')()",
+               "the answer kept on the run")
+        b.click('.pl-run-item[data-id="run-b"]')
+        b.wait(f"document.querySelector('{box}')?.textContent.includes('Test failed')", "run B's waiting box")
+        b.js(f"[...document.querySelectorAll('{box} button')].find((x) => x.textContent.trim() === 'Continue on fail').click()")
+        b.wait("(async () => (await (await fetch('/api/runs')).json()).runs.find((r) => r.id === 'run-b').step === 'root-cause')()",
+               "run B back at Root cause")
+        self.check_errors("the Runs tab")
+
+    def test_canvas_zoom_controls(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-c"))
+        b.wait("document.querySelector('.pl-zoom-pct')", "the zoom controls")
+        pct = lambda: b.js("document.querySelector('.pl-zoom-pct').textContent.trim()")
+        b.js("document.querySelector('.pl-zoom-pct').closest('.pl-zoom').querySelector('[aria-label=\"Zoom in\"]').click()")
+        first = pct()
+        b.js("document.querySelector('[aria-label=\"Zoom out\"]').click()")
+        b.js("document.querySelector('[aria-label=\"Zoom in\"]').click()")
+        if pct() != first or not first.endswith("%"):
+            raise Failure(f"zooming out and in again reads {pct()}, not {first}")
+        before = pct()
+        b.js("""(() => {
+          const c = document.querySelector('.pl-canvas'), r = c.getBoundingClientRect();
+          c.dispatchEvent(new WheelEvent('wheel', { deltaY: -200, ctrlKey: true, clientX: r.left + 100, clientY: r.top + 100, bubbles: true, cancelable: true }));
+        })()""")
+        if int(pct().rstrip("%")) <= int(before.rstrip("%")):
+            raise Failure(f"Ctrl and the wheel did not zoom in: {before} then {pct()}")
+        b.js("document.querySelector('.pl-zoom-pct').textContent")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        if int(pct().rstrip("%")) > 100:
+            raise Failure(f"Fit leaves the graph at {pct()}")
+
+    def test_canvas_minimap_moves_the_view(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-c"))
+        b.wait("document.querySelector('.pl-minimap .pl-mini-view')", "the minimap")
+        if b.js("document.querySelectorAll('.pl-minimap .pl-mini-node').length") != 6:
+            raise Failure("the minimap does not show the Start node and the five steps")
+        before = b.js("document.querySelector('.pl-pan').style.transform")
+        box = b.js("(() => { const r = document.querySelector('.pl-minimap').getBoundingClientRect(); return [r.right - 8, r.bottom - 8]; })()")
+        b.drag((box[0] - 1, box[1] - 1), (box[0], box[1]), steps=1)
+        if b.js("document.querySelector('.pl-pan').style.transform") == before:
+            raise Failure("pressing the minimap does not move the view")
+        self.check_errors("the canvas")
+
+    def test_pipeline_history_restore(self):
+        b = self.b
+        definition = self.api("GET", "/api/pipelines/review")
+        first = definition["steps"][0]["name"]
+        definition["steps"][0]["name"] = "Read it"
+        saved = self.api("PUT", "/api/pipelines/review", definition)
+        b.goto(self.url("/pipeline?p=review&tab=history"))
+        b.wait(f"document.querySelector('.pl-history-row')?.dataset.version === '{saved['version']}'", "the newest version first")
+        b.click('.pl-history-row[data-version="1"] .btn')
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
+        if self.api("GET", "/api/pipelines/review")["steps"][0]["name"] != first:
+            raise Failure("restoring version 1 did not bring its step names back")
+
+    def test_pipeline_settings_panel(self):
+        b = self.b
+        b.goto(self.url("/pipeline"))
+        b.click("#pl-settings-open")
+        b.wait("document.querySelector('#pl-settings input[name=per_machine]')", "the settings form")
+        self.set_field("#pl-settings input[name=per_machine]", "3")
+        self.set_field("#pl-settings input[name=minutes]", "90")
+        b.click("#pl-note-add")
+        self.set_field("#pl-settings .pl-note:last-child input[name=folder]", "demo-app")
+        self.set_field("#pl-settings .pl-note:last-child input[name=note]", "Run bin/rspec")
+        b.click("#pl-settings-save")
+        b.wait("document.getElementById('toast').textContent.includes('Saved')", "the settings saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        for want in ("per_machine: 3", "minutes: 90", "demo-app: Run bin/rspec"):
+            if want not in config:
+                raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
+
+    # Last, so the change it saves to the review pipeline comes after the Pipelines tests.
+    def test_dispatch_save_pipeline_card(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={PIPE_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .pl-canvas .pl-node[data-step=\"test\"]')", "the proposed pipeline drawn on the card")
+        seen = b.js(f"""(() => {{
+          const c = document.querySelector('{card}');
+          return {{ title: c.querySelector('.step-card-title strong').textContent,
+                   lines: c.querySelector('.pipeline-lines')?.textContent.replace(/\\s+/g, ' ').trim(),
+                   ins: c.querySelector('.change-diff ins')?.textContent,
+                   waits: c.textContent.includes('A new or changed pipeline always waits for you.') }};
+        }})()""")
+        if seen != {"title": "Change the pipeline Review my merge requests", "lines": "On fail, Understand went to Report to me, now goes to Root cause",
+                    "ins": "added and the linters ", "waits": True}:
+            raise Failure(f"the card shows {seen}")
+        self.check_errors("the pipeline card")
+        b.click(f"{card} .step-card-actions .btn.primary")
+        b.wait("document.querySelector('#dispatch-log .step-card.done .step-card-outcome')?.textContent.includes('Saved as version')", "the pipeline saved")
+        href = b.js("document.querySelector('#dispatch-log .step-card.done .step-card-outcome a').getAttribute('href')")
+        if href != "/pipeline?p=review&tab=build":
+            raise Failure(f"Open pipeline goes to {href}")
+
+    def test_dispatch_run_cards(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={RUNS_CHAT}"))
+        b.wait("document.querySelectorAll('#dispatch-log .step-card.pending').length === 2", "both run cards")
+        titles = b.js("[...document.querySelectorAll('#dispatch-log .step-card .step-card-title strong')].map((t) => t.textContent)")
+        if titles != ["Run Review my merge requests", "Drop COM-1284 Login redirect"]:
+            raise Failure(f"the cards are titled {titles}")
+        reason = b.js("document.querySelector('[aria-label=\"Drop COM-1284 Login redirect\"] .run-waiting')?.textContent || ''")
+        if "Test needs you" not in reason:
+            raise Failure(f"the answer card shows {reason!r}")
+        b.click("[aria-label=\"Run Review my merge requests\"] .step-card-actions .btn.danger")
+        b.wait("document.querySelector('[aria-label=\"Run Review my merge requests\"].rejected')", "the run card rejected")
+        b.click("[aria-label=\"Drop COM-1284 Login redirect\"] .step-card-actions .btn.primary")
+        b.wait("document.querySelector('[aria-label=\"Drop COM-1284 Login redirect\"].failed .step-card-outcome')?.textContent.includes('has already ended')", "the drop refused, on the card")
+        self.check_errors("the run cards")
+
+    def step_status(self, chat, step):
+        return self.b.js(f"(async () => (await (await fetch('/dispatch/conversations/{chat}')).json()).events.find((e) => e.id === '{step}').status)()")
+
+    def test_builder_edits_a_proposal(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={PROPOSAL_CHAT}"))
+        card = '[aria-label="New pipeline: Built in the builder"]'
+        b.wait(f"document.querySelector('{card} .step-card-actions a')", "the proposal with Edit in the builder")
+        b.js(f"[...document.querySelectorAll('{card} .step-card-actions a')].find((a) => a.textContent.trim() === 'Edit in the builder').click()")
+        b.wait("document.querySelector('.pl-proposal')?.textContent.includes('Proposed by Dispatch. Saving approves it.')", "the builder holding the proposal")
+        if b.js("document.querySelector('.pl-tabs')"):
+            raise Failure("the builder shows its tabs for a proposal")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        b.click('.pl-node[data-step="fix"]')
+        b.wait("document.querySelector('#pl-inspector input[name=name]')", "the Fix step in the inspector")
+        self.set_field("#pl-inspector input[name=name]", "Fix it")
+        if b.js("document.getElementById('pl-save').textContent.trim()") != "Approve and save":
+            raise Failure("Save does not say it approves")
+        b.click("#pl-save")
+        b.wait("new URLSearchParams(location.search).get('p') === 'built-in-the-builder'", "the saved pipeline opened")
+        saved = b.js("(async () => (await (await fetch('/api/pipelines/built-in-the-builder')).json()))()")
+        if [s["name"] for s in saved["steps"]] != ["Plan", "Ask me", "Fix it"] or saved["enabled"]:
+            raise Failure(f"the library holds {saved}")
+        if self.step_status(PROPOSAL_CHAT, "propstp1") != "edited":
+            raise Failure("the proposal is not marked edited")
+        self.check_errors("the builder with a proposal")
+
+    def test_builder_proposal_with_problems_keeps_waiting(self):
+        b = self.b
+        b.goto(self.url(f"/pipeline?proposal={PROPOSAL_CHAT}.propstp2"))
+        b.wait("document.querySelector('.pl-proposal')", "the builder holding the proposal")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        b.click('.pl-node[data-step="fix"]')
+        b.wait("document.querySelector('#pl-inspector input[name=max_runs]')", "the Fix step in the inspector")
+        self.set_field("#pl-inspector input[name=max_runs]", "0")
+        b.click("#pl-save")
+        b.wait("(document.querySelector('#pl-inspector .pl-inspector-problems')?.textContent || '').includes('max_runs must be from 1 to 10')", "the problem in the builder")
+        if self.step_status(PROPOSAL_CHAT, "propstp2") != "pending":
+            raise Failure("a refused save decided the proposal")
+        self.set_field("#pl-inspector input[name=max_runs]", "2")
+        b.click("#pl-save")
+        b.wait("new URLSearchParams(location.search).get('p') === 'broken-in-the-builder'", "the corrected pipeline saved")
+        b.goto(self.url(f"/pipeline?proposal={PROPOSAL_CHAT}.propstp2"))
+        b.wait("document.querySelector('.pl-proposal')?.textContent.includes('This proposal was already decided')", "a decided proposal said so")
+        if b.js("document.getElementById('pl-save')") or b.js("document.querySelector('.pl-canvas.editable')"):
+            raise Failure("a decided proposal can still be edited or saved")
+
+    def test_builder_save_key_approves_a_proposal(self):
+        b = self.b
+        b.goto(self.url("/pipeline?proposal=browserreviewchg.propstp3"))
+        b.wait("document.querySelector('.pl-proposal') && document.querySelector('.pl-canvas.editable')", "the change in the builder")
+        self.set_field(".pl-title-name", "Review my merge requests, renamed")
+        b.click(".pl-canvas")
+        b.key("s", "Control")
+        b.wait("new URLSearchParams(location.search).get('p') === 'review'", "the change approved and opened")
+        if self.step_status("browserreviewchg", "propstp3") != "edited":
+            raise Failure("Ctrl+S saved around the proposal instead of approving it")
+
+    def test_builder_asks_dispatch(self):
+        b = self.b
+        name = b.js("(async () => (await (await fetch('/api/pipelines/review')).json()).name)()")
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.getElementById('pl-ask')", "Ask Dispatch in the builder")
+        b.click("#pl-ask")
+        want = f'Change the pipeline "{name}" (review): '
+        b.wait(f"location.pathname === '/dispatch' && document.querySelector('#dispatch-form textarea[name=text]')?.value === {json.dumps(want)}", "Dispatch with the request started")
+        if "ask=" in b.js("location.search"):
+            raise Failure("the ask parameter stayed in the address")
+
+    def test_sidebar_has_proposals_on_every_page(self):
+        b = self.b
+        for path in PAGES + ["/pipeline", "/proposals"]:
+            b.goto(self.url(path))
+            b.wait("document.querySelector('.side-link[href=\"/proposals\"]')", f"Proposals in the menu on {path}")
+
+    def test_proposals_page_approves_and_rejects(self):
+        b = self.b
+        b.goto(self.url("/proposals"))
+        b.wait("document.querySelectorAll('.step-card.pending').length === 3", "three waiting proposals")
+        b.wait("document.getElementById('nav-proposals-count')?.textContent === '3'", "the badge counting them")
+        trail = b.js("document.querySelector('[aria-label=\"Change Settings: Phone notifications\"] .step-card-trail').textContent")
+        if "Proposed by claude-code" not in trail:
+            raise Failure(f"the card says {trail!r}")
+        b.click('[aria-label="Change Settings: Phone notifications"] .step-card-actions .btn.primary')
+        b.wait("document.querySelector('[aria-label=\"Change Settings: Phone notifications\"].done')", "the phone change approved")
+        b.click('[aria-label="Save the task Inbox task"] .step-card-actions .btn.danger')
+        b.wait("document.querySelector('[aria-label=\"Save the task Inbox task\"].rejected')", "the task rejected")
+        b.wait("document.getElementById('nav-proposals-count')?.textContent === '1'", "the badge down to one")
+        heads = b.js("[...document.querySelectorAll('.pr-head')].map((h) => h.textContent)")
+        if heads != ["Waiting for you", "Decided"]:
+            raise Failure(f"the page has the sections {heads}")
+        if self.wait_minutes() != 15:
+            raise Failure(f"yardbell.yml waits {self.wait_minutes()} minutes")
+        self.check_errors("the Proposals page")
+
+    def test_proposal_pipeline_edited_in_the_builder(self):
+        b = self.b
+        b.goto(self.url("/proposals"))
+        card = '[aria-label="New pipeline: From the inbox"]'
+        b.wait(f"document.querySelector('{card} .step-card-actions a')", "the pipeline proposal")
+        b.js(f"[...document.querySelectorAll('{card} .step-card-actions a')].find((a) => a.textContent.trim() === 'Edit in the builder').click()")
+        b.wait("document.querySelector('.pl-proposal')?.textContent.includes('Proposed by claude-code. Saving approves it.')", "the builder holding the proposal")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        b.click('.pl-node[data-step="fix"]')
+        b.wait("document.querySelector('#pl-inspector input[name=name]')", "the Fix step in the inspector")
+        self.set_field("#pl-inspector input[name=name]", "Fix from the inbox")
+        b.click("#pl-save")
+        b.wait("new URLSearchParams(location.search).get('p') === 'from-the-inbox'", "the pipeline saved")
+        status = b.js("(async () => (await (await fetch('/api/proposals/inbxpip1')).json()).status)()")
+        if status != "edited":
+            raise Failure(f"the proposal is {status}")
+        saved = b.js("(async () => (await (await fetch('/api/pipelines/from-the-inbox')).json()))()")
+        if saved["enabled"] or "Fix from the inbox" not in [s["name"] for s in saved["steps"]]:
+            raise Failure(f"the library holds {saved}")
+        b.goto(self.url("/proposals"))
+        b.wait(f"document.querySelector('{card}') && !document.querySelector('{card}.pending')", "the proposal among the decided")
+
+    def test_proposals_can_be_deleted_and_cleared(self):
+        b = self.b
+        b.goto(self.url("/proposals"))
+        card = '[aria-label="Save the task Inbox task"]'
+        b.wait(f"document.querySelector('{card}')", "the task proposal")
+        b.click(f"{card} + .pr-delete")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the delete confirmation")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait(f"!document.querySelector('{card}')", "the proposal gone")
+        if b.js("(async () => (await (await fetch('/api/proposals/inbxtsk1')).status))()") != 404:
+            raise Failure("the deleted proposal is still kept")
+        phone = '[aria-label="Change Settings: Phone notifications"]'
+        if b.js(f"!!document.querySelector('{phone}.pending')"):
+            b.click(f"{phone} .step-card-actions .btn.danger")
+            b.wait(f"document.querySelector('{phone}.rejected')", "the phone change rejected")
+        b.click("#pr-clear")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the clear confirmation")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("![...document.querySelectorAll('.pr-head')].some((h) => h.textContent === 'Decided')", "the decided proposals cleared")
+        self.check_errors("deleting proposals")
 
     def check_errors(self, where):
         if self.b.errors:

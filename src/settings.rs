@@ -31,6 +31,34 @@ pub struct MachineEdit {
     pub mesh: Option<MeshProvider>,
 }
 
+// What Settings checks when a machine is edited, shared with changes made through tools.
+pub fn edit_machine(cfg: &mut Config, name: &str, edit: &MachineEdit) -> Result<(), String> {
+    for host in [edit.ssh.as_deref(), edit.mesh_ip.as_deref()]
+        .into_iter()
+        .flatten()
+    {
+        if !valid_host(host) {
+            return Err(format!("{host:?} is not a valid host or address"));
+        }
+    }
+    if edit.root.trim().is_empty() || edit.root.contains('\n') {
+        return Err("enter the project folder on that machine".into());
+    }
+    let m = cfg
+        .machines
+        .iter_mut()
+        .find(|m| m.name == name)
+        .ok_or_else(|| format!("no machine named {name}"))?;
+    m.ssh = edit.ssh.clone().filter(|s| !s.is_empty());
+    m.mesh_ip = edit.mesh_ip.clone().filter(|s| !s.is_empty());
+    if !m.local {
+        m.port_prefix = edit.port_prefix;
+    }
+    m.root = edit.root.trim().to_string();
+    m.mesh = edit.mesh;
+    Ok(())
+}
+
 #[derive(Debug, Deserialize)]
 pub struct AgentEdit {
     pub label: String,
@@ -69,6 +97,8 @@ pub struct MeshApply {
 struct Undo {
     config: PathBuf,
     ssh: Option<PathBuf>,
+    // Who made the change, when it was not the person on the Settings page.
+    note: Option<String>,
 }
 
 fn stamp(clock: &Clock) -> String {
@@ -358,6 +388,20 @@ impl Settings {
         }
     }
 
+    pub fn note_last(&self, note: &str) {
+        if let Some(undo) = self.last.lock().expect("settings lock").as_mut() {
+            undo.note = Some(note.to_string());
+        }
+    }
+
+    pub fn undo_note(&self) -> Option<String> {
+        self.last
+            .lock()
+            .expect("settings lock")
+            .as_ref()
+            .and_then(|u| u.note.clone())
+    }
+
     pub fn can_undo(&self) -> bool {
         self.last.lock().expect("settings lock").is_some()
     }
@@ -388,6 +432,7 @@ impl Settings {
         *self.last.lock().expect("settings lock") = Some(Undo {
             config: backup,
             ssh,
+            note: None,
         });
         Ok(())
     }
@@ -436,33 +481,37 @@ impl Settings {
     }
 
     pub fn update_machine(&self, name: &str, edit: &MachineEdit) -> Result<(), String> {
+        self.change(|cfg| edit_machine(cfg, name, edit))
+    }
+
+    // One change to the config: checked as a whole, saved once, so Undo reverses all of it.
+    pub fn change(
+        &self,
+        edit: impl FnOnce(&mut Config) -> Result<(), String>,
+    ) -> Result<(), String> {
         let mut cfg = self.load()?;
-        for host in [edit.ssh.as_deref(), edit.mesh_ip.as_deref()]
-            .into_iter()
-            .flatten()
-        {
-            if !valid_host(host) {
-                return Err(format!("{host:?} is not a valid host or address"));
-            }
-        }
-        if edit.root.trim().is_empty() || edit.root.contains('\n') {
-            return Err("enter the project folder on that machine".into());
-        }
-        let m = cfg
-            .machines
-            .iter_mut()
-            .find(|m| m.name == name)
-            .ok_or_else(|| format!("no machine named {name}"))?;
-        m.ssh = edit.ssh.clone().filter(|s| !s.is_empty());
-        m.mesh_ip = edit.mesh_ip.clone().filter(|s| !s.is_empty());
-        if !m.local {
-            m.port_prefix = edit.port_prefix;
-        }
-        m.root = edit.root.trim().to_string();
-        m.mesh = edit.mesh;
+        edit(&mut cfg)?;
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
         self.save(&cfg, backup, None)
+    }
+
+    pub fn set_agents(&self, default: Option<String>, agents: Vec<Agent>) -> Result<(), String> {
+        self.change(|cfg| {
+            cfg.default_agent = default;
+            cfg.agents = agents;
+            Ok(())
+        })
+    }
+
+    pub fn set_pull_requests(
+        &self,
+        pull_requests: crate::config::PullRequests,
+    ) -> Result<(), String> {
+        self.change(|cfg| {
+            cfg.pull_requests = pull_requests;
+            Ok(())
+        })
     }
 
     pub fn add_agent(&self, edit: &AgentEdit) -> Result<Agent, String> {
@@ -569,6 +618,14 @@ impl Settings {
     pub fn set_triggers(&self, triggers: Vec<crate::triggers::Trigger>) -> Result<(), String> {
         let mut cfg = self.load()?;
         cfg.triggers = triggers;
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
+    pub fn set_pipelines(&self, pipelines: crate::config::Pipelines) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.pipelines = pipelines;
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
         self.save(&cfg, backup, None)

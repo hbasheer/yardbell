@@ -439,6 +439,21 @@ reviewer asking for changes or approving as on GitHub. A request for changes wit
 changes the badge but posts no card, and only the newest 500 comments of
 one merge request are watched.
 
+### `pipelines` (optional)
+
+Settings for [pipelines](automation.md#pipelines). The pipelines themselves are made and changed
+on the Pipelines page and kept in the state folder, not here. The page's **Settings** button writes
+this section.
+
+```yaml
+pipelines:
+  per_machine: 2      # agent steps at once on each machine, 1 to 6
+  minutes: 120        # an agent step running longer waits for you, 10 to 1440; a step can set its own
+  qa_notes:           # optional: added to every agent step working in that folder
+    acme/web: |
+      Run specs with: docker compose exec web bin/rspec <files>
+```
+
 ### `triggers` (optional)
 
 Start a saved Dispatch task on a schedule, or when a Linear or GitHub ticket comes your way. The
@@ -467,6 +482,9 @@ triggers:
 ```
 
 Each trigger has a `name`, a `task` and exactly one of `schedule`, `linear` or `github`.
+
+A pipeline has a trigger of its own, set on the Pipelines page; see
+[Pipelines](automation.md#pipelines).
 
 `schedule` is one of:
 

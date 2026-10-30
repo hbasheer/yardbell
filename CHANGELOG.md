@@ -5,6 +5,48 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-30
+
+- **Pipelines** carry tickets and merge requests through steps you define, and stop only when they
+  need you. A pipeline has a trigger (by hand, a schedule, a Linear ticket, a GitHub review request,
+  or a GitLab merge request that adds you as reviewer) and steps: agents with your instructions,
+  Plan (Dispatch picks the machine, folder and branch), push and draft pull or merge request, move
+  or comment in Linear, a report to you, and wait for me. Each step's pass, fail and needs-you lines
+  go to another step, so a review can loop back to a fix. Two templates ship: **Implement my Linear
+  tickets** and **Review my merge requests**. The new **Pipelines** page lists them with what waits
+  for you and opens each one full screen on a canvas: build it from nothing or a template by
+  dragging steps from a library and drawing lines between their pass, fail and needs-you dots,
+  edit each step beside the canvas, follow every run on the same canvas with its reports, and look
+  back through every saved version. Its settings write the new `pipelines` section of
+  `yardbell.yml`. `yardbell doctor` checks what each pipeline
+  that is on needs.
+- **Dispatch can read all of Yardbell.** New read tools on Yardbell's MCP server, for Dispatch and
+  any connected client, return each area of Settings (with what it may be set to), Dispatch
+  conversations, saved tasks, pipelines and their runs, Insights, pull and merge requests with
+  their CI, and usage. They change nothing, and no secret is ever shown: a setting that uses one
+  shows its `${secret:NAME}` reference, any other credential shows `(hidden)`.
+- **Dispatch can change Yardbell's settings, tasks and triggers.** Ask in plain words and Dispatch
+  proposes a card: the settings area before and after as a word diff, a task's new text, or a
+  trigger to run now. Settings' own checks run first, so a mistake goes back to Dispatch rather
+  than to you. **Edit** changes the value on the card, **Open in Settings** goes to the section,
+  and Settings' **Undo** reverses a saved change. Saved credentials stay saved: a `(hidden)` value
+  sent back as it is keeps them, and none ever reaches a card or a conversation. Changes to
+  Dispatch's own settings always wait for you; a rule can refuse them but never let them run
+  alone. Dispatch rules can name the new steps `change_settings`, `save_task` and `run_trigger`.
+- **Dispatch builds and runs pipelines.** Ask for a pipeline in plain words and Dispatch proposes it
+  drawn small on a card, with the steps, lines and wording that changed. It always waits for you,
+  and **Edit in the builder** opens it in the builder, where saving approves it. Dispatch can also
+  switch a pipeline on or off, start runs on tickets or pull requests, and answer, retry, continue
+  or drop a waiting run, each as a card your rules decide. The builder's **Ask Dispatch to change
+  it** starts that conversation for you. A run's own Dispatch turn can never change settings,
+  pipelines or runs, so a ticket's text cannot approve its own run.
+- **Proposals inbox.** MCP clients other than Dispatch, such as Claude Code with Yardbell added,
+  can now ask for the same changes. Each one is checked, then waits on the new **Proposals** page
+  (in the sidebar, with a count) until you approve, edit or reject it; your phone says one waits.
+  Your rules can refuse them, but never let them run alone. Delete a proposal, or clear the decided
+  ones; they are kept in `proposals.json` in the state folder for 30 days after a decision.
+- On a phone, Settings and Log out in the header show as their icons, to make room for Pipelines.
+
 ## [0.7.10] - 2026-10-29
 
 - Dispatch's cards are shorter and easier to read. A review or scan groups its findings under

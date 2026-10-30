@@ -3,7 +3,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 10] = [
+const CHANGING: [&str; 17] = [
     "start_session",
     "send_to_session",
     "stop_session",
@@ -14,6 +14,13 @@ const CHANGING: [&str; 10] = [
     "push_branch",
     "move_session",
     "remember",
+    "change_settings",
+    "save_task",
+    "run_trigger",
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
 ];
 
 pub fn changes_something(tool: &str) -> bool {
@@ -39,6 +46,7 @@ pub(super) fn new_id() -> String {
 pub enum By {
     Dispatch,
     You,
+    Pipeline,
 }
 
 pub fn event(
@@ -54,7 +62,11 @@ pub fn event(
         "id": new_id(),
         "tool": tool,
         "input": input,
-        "by": if by == By::You { "you" } else { "dispatch" },
+        "by": match by {
+            By::You => "you",
+            By::Dispatch => "dispatch",
+            By::Pipeline => "pipeline",
+        },
         "status": status,
         "at": at,
     });
@@ -203,6 +215,35 @@ fn what(action: &Value) -> String {
             "forget" => format!("forgetting \"{}\" from your memory", text(input, "old")),
             _ => format!("adding \"{}\" to your memory", text(input, "entry")),
         },
+        "change_settings" => format!("changing the {} settings", text(input, "area")),
+        "save_task" => format!("saving the task \"{}\"", text(input, "name")),
+        "run_trigger" => format!("running the trigger {} now", text(input, "name")),
+        "save_pipeline" if input["before"].is_object() => format!(
+            "changing the pipeline \"{}\"",
+            input["definition"]["name"].as_str().unwrap_or_default()
+        ),
+        "save_pipeline" => format!(
+            "saving a new pipeline \"{}\"",
+            input["definition"]["name"].as_str().unwrap_or_default()
+        ),
+        "set_pipeline_enabled" => format!(
+            "turning the pipeline \"{}\" {}",
+            text(input, "name"),
+            if input["on"] == true { "on" } else { "off" }
+        ),
+        "run_pipeline" => format!("running the pipeline \"{}\"", text(input, "name")),
+        "answer_run" => format!(
+            "{} the run of \"{}\" for {}",
+            match text(input, "action") {
+                "answer" => "answering",
+                "retry" => "retrying",
+                "continue_pass" => "continuing as passed",
+                "continue_fail" => "continuing as failed",
+                _ => "dropping",
+            },
+            text(input, "pipeline"),
+            text(input, "subject")
+        ),
         other => other.to_string(),
     }
 }
@@ -228,6 +269,7 @@ fn changed(action: &Value) -> String {
         ("prompt", "task"),
         ("text", "text"),
         ("entry", "entry"),
+        ("value", "settings"),
     ] {
         let (a, b) = (before.get(key), after.get(key));
         if !(a == b || blank(a) && blank(b)) && !fields.contains(&word) {

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
 pub const REMEMBER: &str = "remember";
-const ACTIONS: [&str; 10] = [
+const ACTIONS: [&str; 17] = [
     "start_session",
     "stop_session",
     "send_to_session",
@@ -14,7 +14,25 @@ const ACTIONS: [&str; 10] = [
     "integrate_branches",
     "push_branch",
     "move_session",
+    "change_settings",
+    "save_task",
+    "run_trigger",
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
     REMEMBER,
+];
+
+// Steps that change Yardbell itself rather than a machine, so a rule for them names neither.
+const UNPLACED: [&str; 7] = [
+    "change_settings",
+    "save_task",
+    "run_trigger",
+    "save_pipeline",
+    "set_pipeline_enabled",
+    "run_pipeline",
+    "answer_run",
 ];
 
 fn any() -> String {
@@ -102,8 +120,8 @@ impl Rule {
     }
 
     pub fn describe(&self) -> String {
-        if self.action == REMEMBER {
-            return format!("{} {REMEMBER}", word(self.approval));
+        if self.action == REMEMBER || UNPLACED.contains(&self.action.as_str()) {
+            return format!("{} {}", word(self.approval), self.action);
         }
         let action = if self.action == ANY {
             "any step"
@@ -174,6 +192,19 @@ pub fn decide_memory(default: Approval, rules: &[Rule]) -> Verdict<'_> {
     }
 }
 
+// Some changes outlast the conversation and steer Dispatch itself, so a rule may refuse them but
+// never let them run alone: anything short of a refusal waits for the person.
+pub fn decide_always_wait<'a>(default: Approval, rules: &'a [Rule], step: &Step) -> Verdict<'a> {
+    let verdict = decide(default, rules, step);
+    match verdict.approval {
+        Approval::Deny => verdict,
+        Approval::Allow | Approval::Prompt => Verdict {
+            approval: Approval::Prompt,
+            rule: verdict.rule.filter(|r| r.approval == Approval::Prompt),
+        },
+    }
+}
+
 pub fn folder_matches(glob: &str, folders: &[String]) -> bool {
     pattern(glob).is_ok_and(|re| folders.iter().any(|f| re.is_match(f)))
 }
@@ -227,6 +258,12 @@ pub fn validate(rules: &[Rule], known_machine: impl Fn(&str) -> bool) -> Result<
         if r.action == REMEMBER && (r.machine != ANY || !r.folder.is_empty()) {
             return Err(format!(
                 "dispatch rule {n}: a remember rule is for Dispatch's memory, which is on no machine or folder, so leave both as any"
+            ));
+        }
+        if UNPLACED.contains(&r.action.as_str()) && (r.machine != ANY || !r.folder.is_empty()) {
+            return Err(format!(
+                "dispatch rule {n}: a {} rule is on no machine or folder, so leave both as any",
+                r.action
             ));
         }
         if r.machine != ANY && !known_machine(&r.machine) {
@@ -451,7 +488,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, remember, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, save_pipeline, set_pipeline_enabled, run_pipeline, answer_run, remember, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],
@@ -520,5 +557,40 @@ mod tests {
             Approval::Deny
         );
         assert!(validate(&allowed, |_| true).is_ok());
+    }
+
+    #[test]
+    fn a_rule_for_settings_tasks_or_triggers_names_no_machine_or_folder() {
+        for action in ["change_settings", "save_task", "run_trigger"] {
+            let placed = [rule(action, "hp", "", Approval::Allow)];
+            assert_eq!(
+                validate(&placed, |_| true).unwrap_err(),
+                format!("dispatch rule 1: a {action} rule is on no machine or folder, so leave both as any")
+            );
+            let anywhere = rule(action, "any", "", Approval::Deny);
+            assert_eq!(anywhere.describe(), format!("deny {action}"));
+            assert!(validate(&[anywhere], |_| true).is_ok());
+        }
+    }
+
+    #[test]
+    fn decide_always_wait_lets_a_refusal_stand_and_waits_otherwise() {
+        let step = Step {
+            action: "change_settings".into(),
+            machine: String::new(),
+            folders: Some(Vec::new()),
+        };
+        let allow = [rule("change_settings", "any", "", Approval::Allow)];
+        let verdict = decide_always_wait(Approval::Allow, &allow, &step);
+        assert_eq!((verdict.approval, verdict.rule), (Approval::Prompt, None));
+        let deny = [rule("any", "any", "", Approval::Deny)];
+        assert_eq!(
+            decide_always_wait(Approval::Allow, &deny, &step).approval,
+            Approval::Deny
+        );
+        assert_eq!(
+            decide_always_wait(Approval::Deny, &[], &step).approval,
+            Approval::Deny
+        );
     }
 }

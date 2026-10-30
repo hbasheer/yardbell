@@ -56,6 +56,8 @@ terminal and uses Copy text and Copy all, checks that overflowing Workspace tabs
 one in view, and shows saved Dispatch conversations at desktop and phone width. Any page error or
 `console.error` fails the test it happened in. Dispatch is never asked anything, and the server
 cannot find a real `claude`. Set `FIREFOX` or pass `--firefox` when Firefox is not on the `PATH`.
+The suite also runs a stand-in for Linear's API and points the server at it with
+`YARDBELL_LINEAR_URL`, which Yardbell reads only for that.
 CI runs it on Linux.
 
 ## Dependency audit

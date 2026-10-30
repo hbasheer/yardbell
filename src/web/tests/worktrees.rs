@@ -264,6 +264,42 @@ async fn move_session_follows_the_rules_and_starts_the_task_on_the_roomiest_mach
 }
 
 #[tokio::test]
+async fn a_move_can_start_read_only() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    pro_is_up(&r);
+    set_rules(&r, "allow", json!([]));
+    r.fake.stub(
+        "CHANGES",
+        Output::ok_with(&format!(
+            "TOP\t/r/slots/slot2\nMAIN\t/r/slots/slot2\nBRANCH\teng-1301-inbox\nHEAD\t{HEAD}\nORIGIN\tgit@github.com:acme/app.git\nCHANGES\t0\n"
+        )),
+    );
+    r.fake.stub(
+        "HAVE%09",
+        Output::ok_with(
+            "REPO\t/p/slots/slot2\nORIGIN\thttps://github.com/acme/app\nHAVE\taaaaaaa1111111\n",
+        ),
+    );
+    r.fake.stub(
+        "git bundle create",
+        Output::ok_with(&format!(
+            "BRANCH\teng-1301-inbox\nHEAD\t{HEAD}\nBUNDLE\tQlVORExF\nPATCH\t\n"
+        )),
+    );
+    r.fake.stub(
+        "git bundle verify",
+        Output::ok_with("PATH\t/p/slots/slot2-worktrees/eng-1301-inbox\nAPPLIED\n"),
+    );
+    r.fake.stub("tmux new", Output::ok_with("pro-eng-1301\n"));
+    let args = json!({ "machine": "hp", "name": "hp-eng-1301", "to": "pro", "task": "check it", "read_only": true });
+    let moved = dispatch_tool(&r, Some(&id), "move_session", args).await;
+    assert_eq!(moved["isError"], false, "{moved}");
+    let start = r.fake.calls()[position(&r, "tmux new")].join(" ");
+    assert!(start.contains("--disallowed-tools"), "{start}");
+}
+
+#[tokio::test]
 async fn a_push_with_a_saved_secret_in_it_is_blocked_without_showing_it() {
     let r = rig();
     let id = dispatch_conversation(&r).await;

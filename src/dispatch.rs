@@ -1,6 +1,6 @@
 mod actions;
 mod backend;
-mod diff;
+pub(crate) mod diff;
 mod follow;
 mod group;
 mod mcp_config;
@@ -15,16 +15,18 @@ mod tasks;
 mod turn;
 mod usage;
 
-pub use actions::{changes_something, valid_id as valid_action_id, By};
+pub use actions::{changes_something, result as step_result, valid_id as valid_action_id, By};
 pub use diff::{Op as DiffOp, Part as DiffPart};
 pub use follow::Change;
 pub use group::{
-    clash as group_clash, clash_message as group_clash_message, plan as plan_group, ChildStart,
-    Due as GroupDue, Opened as GroupOpened, Place as GroupPlace, Plan as GroupPlan,
+    clash as group_clash, clash_message as group_clash_message, parse as parse_result,
+    plan as plan_group, with_request as with_result_request, ChildStart, Due as GroupDue,
+    Opened as GroupOpened, Outcome as GroupOutcome, Place as GroupPlace, Plan as GroupPlan,
     MAX_CHILDREN as GROUP_MAX, MAX_MINUTES as GROUP_MAX_MINUTES, MIN_CHILDREN as GROUP_MIN,
 };
 pub use mcp_config::CONVERSATION_HEADER;
 pub use memory::{Memory, MemoryChange};
+pub(crate) use review::{bullet, clip, is_marker, unframed, value_of};
 pub use review::{
     changed_file as review_file, changed_files as review_files, evidence_folder, file_view,
     fix_request, found_by, picked as review_picked, places as finding_files,
@@ -32,9 +34,10 @@ pub use review::{
     ReviewOf, ScanKind, Screenshots,
 };
 pub use rules::{
-    decide as decide_step, decide_memory, folder_matches, valid_folder_pattern,
+    decide as decide_step, decide_always_wait, decide_memory, folder_matches, valid_folder_pattern,
     validate as validate_rules, Rule, Step, Verdict,
 };
+pub(crate) use store::new_id as new_conversation_id;
 pub use store::valid_id;
 pub use store::write_private;
 pub use tasks::{History as TaskHistory, SavedTask, Version as TaskVersion, MAX_VERSIONS};
@@ -310,13 +313,32 @@ impl Dispatch {
         rule: Option<&Rule>,
         outcome: &Result<Value, String>,
     ) {
+        self.record_as(id, tool, input, review, rule, outcome, By::Dispatch, None);
+    }
+
+    // The pipeline's steps are not Dispatch's, so Dispatch hears of them at its next turn.
+    #[allow(clippy::too_many_arguments)]
+    pub fn record_as(
+        &self,
+        id: &str,
+        tool: &str,
+        input: Value,
+        review: Option<ReviewOf>,
+        rule: Option<&Rule>,
+        outcome: &Result<Value, String>,
+        by: By,
+        run_started: Option<&str>,
+    ) {
         let at = now();
-        let mut event = actions::event(tool, input, By::Dispatch, review.as_ref(), "auto", &at);
+        let mut event = actions::event(tool, input, by, review.as_ref(), "auto", &at);
         if let Some(rule) = rule {
             event["rule"] = json!(rule);
         }
+        if let Some(started) = run_started {
+            event["run_started"] = json!(started);
+        }
         event["result"] = actions::result(outcome, &at);
-        event["told"] = json!(true);
+        event["told"] = json!(by != By::Pipeline);
         let recorded = self.shared.edit(id, |s| {
             track(s, &event);
             s.events.push(event.clone());
@@ -677,6 +699,7 @@ mod tests {
             host_terminal: crate::config::HostTerminal::None,
             mesh: None,
             server: None,
+            proposals: 0,
         }
     }
 
@@ -926,6 +949,30 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         assert_eq!(failed["result"]["text"], "can't find session: gone");
         assert_eq!(convo["sessions"][0]["name"], "hp-eng-1");
         assert_eq!(dispatch.list()[0]["waiting"], 0);
+    }
+
+    #[tokio::test]
+    async fn a_pipeline_step_is_recorded_as_the_pipelines() {
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = fake_claude(dir.path(), "true");
+        let id = dispatch.open_conversation("COM-1: Fix the login");
+        dispatch.record_as(
+            &id,
+            "start_session",
+            start_input(),
+            None,
+            None,
+            &Ok(json!({ "machine": "hp", "name": "hp-com-1", "path": "/r/app" })),
+            By::Pipeline,
+            Some("2026-10-29T09:40:00+03:00"),
+        );
+        let convo = dispatch.get(&id).unwrap();
+        let step = convo["events"].as_array().unwrap().last().unwrap().clone();
+        assert_eq!(step["by"], "pipeline");
+        assert_eq!(step["status"], "auto");
+        assert_eq!(step["run_started"], "2026-10-29T09:40:00+03:00");
+        assert_eq!(step["result"]["ok"], true);
+        assert_eq!(convo["sessions"][0]["name"], "hp-com-1");
     }
 
     #[tokio::test]

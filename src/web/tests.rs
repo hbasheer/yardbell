@@ -12,7 +12,12 @@ use std::path::Path;
 use tower::ServiceExt;
 
 mod insights;
+mod mcp_change;
+mod mcp_pipeline;
+mod mcp_read;
 mod memory;
+mod pipeline;
+mod proposals;
 mod worktrees;
 
 struct FakePorts;
@@ -157,6 +162,12 @@ fn rig() -> Rig {
         )),
         insights: Arc::new(crate::insights::Insights::load(
             dir.path().join("insights.json"),
+        )),
+        pipelines: Arc::new(crate::pipeline::Pipelines::new(
+            dir.path().join("pipelines-state"),
+        )),
+        proposals: Arc::new(crate::proposals::Proposals::load(
+            dir.path().join("proposals.json"),
         )),
         refresh: {
             let refreshes = refreshes.clone();
@@ -1603,7 +1614,26 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "remove_worktree",
             "integrate_branches",
             "push_branch",
-            "move_session"
+            "move_session",
+            "change_settings",
+            "save_task",
+            "run_trigger",
+            "save_pipeline",
+            "set_pipeline_enabled",
+            "run_pipeline",
+            "answer_run",
+            "read_settings",
+            "list_conversations",
+            "read_conversation",
+            "list_tasks",
+            "read_task",
+            "list_pipelines",
+            "read_pipeline",
+            "list_runs",
+            "read_run",
+            "read_insights",
+            "list_pulls",
+            "read_usage"
         ]
     );
     let (_, body) = mcp(&r.app, Some("yb_secret"), None, rpc("nope", json!({}))).await;

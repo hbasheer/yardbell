@@ -138,6 +138,9 @@ pub struct StateView {
     pub mesh: Option<crate::mesh::MeshView>,
     #[serde(default)]
     pub server: Option<ServerView>,
+    // Proposals from MCP clients waiting for the person, for the sidebar's badge.
+    #[serde(default)]
+    pub proposals: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -222,6 +225,17 @@ impl State {
             .pulls
             .get(&(machine.to_string(), path, branch.to_string()))
             .cloned()
+    }
+
+    pub fn pulls(&self) -> Vec<(crate::pulls::Key, crate::pulls::PullView)> {
+        let inner = self.inner.read().expect("state lock");
+        let mut all: Vec<_> = inner
+            .pulls
+            .iter()
+            .map(|(k, v)| (k.clone(), v.clone()))
+            .collect();
+        all.sort_by(|a, b| a.0.cmp(&b.0));
+        all
     }
 
     pub fn set_pulls(&self, pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>) {
@@ -365,6 +379,7 @@ impl State {
             host_terminal: cfg.host_terminal,
             mesh: None,
             server: None,
+            proposals: 0,
         };
         for m in &cfg.machines {
             let status = inner.statuses.get(&m.name);

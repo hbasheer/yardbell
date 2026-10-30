@@ -938,6 +938,7 @@ mod tests {
             host_terminal: crate::config::HostTerminal::None,
             mesh: None,
             server: None,
+            proposals: 0,
         }
     }
 

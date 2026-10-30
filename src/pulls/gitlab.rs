@@ -37,6 +37,15 @@ impl std::fmt::Debug for GitLabAccess {
     }
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct Mr {
+    pub url: String,
+    pub iid: u64,
+    pub title: String,
+    pub source_branch: String,
+    pub project: String,
+}
+
 pub fn accesses(cfg: &PullRequests, secrets: &Result<Secrets, String>) -> Vec<GitLabAccess> {
     cfg.gitlab
         .iter()
@@ -251,6 +260,60 @@ impl GitLab {
         serde_json::from_str::<User>(&body)
             .map(|u| u.username)
             .map_err(|_| not_gitlab())
+    }
+
+    // The open merge requests that list the token's account as a reviewer, on any project.
+    pub async fn reviewing(&self, access: &GitLabAccess) -> Result<Vec<Mr>, String> {
+        #[derive(Deserialize)]
+        struct Raw {
+            iid: u64,
+            #[serde(default)]
+            title: String,
+            #[serde(default)]
+            web_url: String,
+            #[serde(default)]
+            source_branch: String,
+        }
+        let me = self.whoami(access).await?;
+        let body = self
+            .text(
+                access,
+                &["merge_requests"],
+                &[
+                    ("reviewer_username", me.as_str()),
+                    ("state", "opened"),
+                    ("scope", "all"),
+                    ("per_page", "100"),
+                ],
+            )
+            .await
+            .map_err(|p| match p {
+                Problem::Refused(m) | Problem::Failed(m) => m,
+                Problem::Forbidden => forbidden(access, "merge requests"),
+                Problem::NotFound => format!("{} did not answer as GitLab does", access.host),
+            })?;
+        let raw: Vec<Raw> = serde_json::from_str(&body).map_err(|_| {
+            format!(
+                "{} sent a merge request list Yardbell cannot read",
+                access.host
+            )
+        })?;
+        Ok(raw
+            .into_iter()
+            .map(|r| Mr {
+                project: r
+                    .web_url
+                    .split_once("://")
+                    .and_then(|(_, rest)| rest.split_once('/'))
+                    .and_then(|(_, path)| path.split_once("/-/merge_requests"))
+                    .map(|(project, _)| project.to_string())
+                    .unwrap_or_default(),
+                url: r.web_url,
+                iid: r.iid,
+                title: r.title,
+                source_branch: r.source_branch,
+            })
+            .collect())
     }
 
     pub async fn fetch(&self, access: &GitLabAccess, project: &str, branch: &str) -> Answer {
@@ -1067,6 +1130,25 @@ mod http_tests {
 
     fn failing_ci() -> Answers {
         Answers::default()
+    }
+
+    #[tokio::test]
+    async fn gitlab_reviewing_lists_my_merge_requests() {
+        let stub = serve(failing_ci()).await;
+        let gl = GitLab::new();
+        let mrs = gl.reviewing(&stub.access("glpat-good")).await.unwrap();
+        assert_eq!(mrs.len(), 2);
+        assert_eq!(mrs[0].iid, 99);
+        assert_eq!(
+            mrs[0].url,
+            "https://git.commslayer.com/commslayer/app/-/merge_requests/99"
+        );
+        assert_eq!(mrs[0].source_branch, "eng-2");
+        assert_eq!(mrs[0].project, "commslayer/app");
+        assert_eq!(stub.asked("reviewer_username=me-bot"), 1);
+        assert_eq!(stub.asked("state=opened"), 1);
+        let err = gl.reviewing(&stub.access("glpat-bad")).await.unwrap_err();
+        assert!(!err.contains("glpat-bad"), "{err}");
     }
 
     #[tokio::test]

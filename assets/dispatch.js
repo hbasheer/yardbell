@@ -58,6 +58,7 @@ const ICONS = {
   edit: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 13l.6-2.6L10.8 3.2a1.4 1.4 0 0 1 2 2L5.6 12.4z"/></svg>`,
   close: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`,
   trigger: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8.5" r="5"/><path d="M8 6v2.5l1.8 1.2M6.5 2h3"/></svg>`,
+  pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="12.5" cy="8" r="1.5"/><path d="M5 8h1.5M9.5 8H11"/></svg>`,
 };
 
 const INLINE = /`([^`\n]+)`|\*\*([^*\n]+)\*\*|\[([^\]\n]+)\]\((https?:\/\/[^)\s]+)\)/g;
@@ -171,7 +172,7 @@ function convoItem(c) {
   return html`<li class="convo ${selected ? "selected" : ""}">
     <a href="/dispatch?c=${c.id}" aria-current=${selected ? "true" : nothing} @click=${(e) => switchTo(e, c)}>
       <span class="convo-title">${c.title}</span>
-      <span class="convo-meta">${c.trigger ? html`<span class="convo-trigger" title="Started by the trigger ${c.trigger}" aria-label="Started by a trigger">${ICONS.trigger}</span>` : nothing}${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
+      <span class="convo-meta">${pipelined.has(c.id) ? html`<span class="convo-trigger" title="A pipeline run" aria-label="A pipeline run">${ICONS.pipeline}</span>` : nothing}${c.trigger ? html`<span class="convo-trigger" title="Started by the trigger ${c.trigger}" aria-label="Started by a trigger">${ICONS.trigger}</span>` : nothing}${c.busy ? html`<span class="dot ok"></span>working` : c.waiting ? html`<span class="dot warn"></span>${c.waiting} waiting for you` : ago(c.updated)}</span>
     </a>
     <button class="btn quiet danger delete" type="button" aria-label="Delete ${c.title}" title="Delete" @click=${() => deleteConvo(c)}>${ICONS.close}</button>
   </li>`;
@@ -207,8 +208,16 @@ async function deleteConvo(c) {
   }
 }
 
+// Conversations a pipeline run keeps, one per run, get its mark in the list.
+let pipelined = new Set();
+
 async function loadList() {
-  conversations = await api("GET", "/dispatch/conversations");
+  const [list, pipeline] = await Promise.all([
+    api("GET", "/dispatch/conversations"),
+    api("GET", "/api/runs").catch(() => ({ runs: [] })),
+  ]);
+  conversations = list;
+  pipelined = new Set(pipeline.runs.map((r) => r.conversation).filter(Boolean));
   compose.keep(conversations.map((c) => c.id));
   renderList();
 }
@@ -446,6 +455,7 @@ function draw() {
   render(!current && !events.length
     ? intro()
     : html`${triggerHead()}${backendNote()}${repeat(blocks(events), (b) => `${view}:${b.key}`, block)}${steps.waitingBar(events)}`, log);
+  steps.afterDraw();
 }
 
 async function loadRunsOn() {
@@ -713,7 +723,10 @@ steps.setup({
   state: () => lastState,
   loadState,
   reload: () => catchUp(false),
-  decided: () => loadList().catch(() => {}),
+  decided: () => {
+    loadList().catch(() => {});
+    loadTasks();
+  },
   addStep(step) {
     events.push(step);
     shownEvents = Math.max(shownEvents, events.length);
@@ -1059,9 +1072,23 @@ const handedOver = window.YardbellInsights.takeOver();
 loadRunsOn();
 loadTasks();
 loadState().then(() => draw());
+// Another page can start a message here, such as the builder's Ask Dispatch to change it.
+const asked = new URLSearchParams(location.search).get("ask");
+if (asked !== null) history.replaceState(null, "", location.pathname);
+
+function startWith(text) {
+  form.text.value = text;
+  form.text.dispatchEvent(new Event("input", { bubbles: true }));
+  form.text.focus();
+  form.text.setSelectionRange(text.length, text.length);
+}
+
 loadList()
-  .then(() => open(!handedOver && current && conversations.some((c) => c.id === current) ? current : null))
-  .then(() => { if (handedOver) suggestFor(handedOver.machine, handedOver.name); })
+  .then(() => open(!handedOver && asked === null && current && conversations.some((c) => c.id === current) ? current : null))
+  .then(() => {
+    if (handedOver) suggestFor(handedOver.machine, handedOver.name);
+    if (asked) startWith(asked);
+  })
   .catch((err) => toast(err.message));
 
 // Inside the Workspace, Dispatch opens sessions as Workspace panes and other pages in the whole window.
