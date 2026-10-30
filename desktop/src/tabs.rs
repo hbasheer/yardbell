@@ -260,6 +260,7 @@ mod tests {
             host_terminal: HostTerminal::None,
             mesh: None,
             server: None,
+            proposals: 0,
         }
     }
 
