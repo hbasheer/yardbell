@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-30
+
 - **A pipeline run uses one agent session.** Its steps take turns in one session and one worktree,
   so a run holds far less memory. A review step gets its own read-only session, and a step on
   another machine or with another agent gets its own; each stops as soon as nothing needs it. When a
