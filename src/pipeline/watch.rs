@@ -131,7 +131,7 @@ mod tests {
     }
 
     const RESULT: &str =
-        "YARDBELL RESULT\nstep: implement-1\nstatus: pass\nsummary: Fixed the redirect.\n- 12 passed\nEND RESULT\n";
+        "YARDBELL RESULT\nstep: implement-1-r1\nstatus: pass\nsummary: Fixed the redirect.\n- 12 passed\nEND RESULT\n";
 
     fn running(step: &str) -> Run {
         let mut run = run_of("Implement my Linear tickets");
@@ -191,7 +191,7 @@ mod tests {
         let run = running("fix");
         let v = view(&[("hp-app-com-1", Activity::Idle)], true);
         assert_eq!(seen(&run, &v, Some(RESULT), at(1)), None);
-        let fixed = RESULT.replace("implement-1", "fix-1");
+        let fixed = RESULT.replace("implement-1-r1", "fix-1-r1");
         assert!(matches!(
             seen(&run, &v, Some(&fixed), at(1)),
             Some(Seen::Ended { .. })
@@ -203,9 +203,9 @@ mod tests {
         let mut run = running("fix");
         run.state_of("fix").runs = 2;
         let v = view(&[("hp-app-com-1", Activity::Idle)], true);
-        let first = RESULT.replace("implement-1", "fix-1");
+        let first = RESULT.replace("implement-1-r1", "fix-1-r1");
         assert_eq!(seen(&run, &v, Some(&first), at(1)), None);
-        let second = RESULT.replace("implement-1", "fix-2");
+        let second = RESULT.replace("implement-1-r1", "fix-2-r1");
         assert!(matches!(
             seen(&run, &v, Some(&second), at(1)),
             Some(Seen::Ended { .. })
@@ -217,7 +217,7 @@ mod tests {
         let mut run = running("fix");
         run.state_of("implement").report = "Fixed the redirect.".into();
         let v = view(&[("hp-app-com-1", Activity::Idle)], true);
-        let same = RESULT.replace("implement-1", "fix-1");
+        let same = RESULT.replace("implement-1-r1", "fix-1-r1");
         assert!(matches!(
             seen(&run, &v, Some(&same), at(1)),
             Some(Seen::Ended { .. })

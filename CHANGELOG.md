@@ -5,6 +5,16 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.9.2] - 2026-10-30
+
+- Fixed: a Claude Code step could finish with a good result and the run still said it ended without
+  one, because only what fit on the terminal's screen was read. Results are now read from the
+  transcript too, and a reviewer that goes quiet is asked to print its result rather than stopped and
+  started again.
+- Fixed: a long summary was cut at its first line, which could lose an agent's question.
+- A run with no result no longer says it needs your answer, and says what you can do. A phone
+  notification from a pipeline now opens that run.
+
 ## [0.9.1] - 2026-10-30
 
 - **Settings, GitHub and GitLab** replaces Pull requests. GitHub and GitLab each have their own

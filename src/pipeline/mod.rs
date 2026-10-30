@@ -183,8 +183,11 @@ impl Pipelines {
             }
             notes
         });
+        let Some(run) = self.store.get(id) else {
+            return;
+        };
         for note in notes.unwrap_or_default() {
-            world.notify(run::Note::Waiting, &note);
+            world.notify(run::Note::Waiting, &note, &run);
         }
     }
 
@@ -361,7 +364,22 @@ impl Pipelines {
                 .find(|s| !name.is_empty() && s.tmux.as_deref() == Some(name.as_str()));
             let screen = match shown {
                 Some(s) if s.activity != crate::snapshot::Activity::Active => {
-                    world.screen(&s.machine, &name).await
+                    let on_screen = world.screen(&s.machine, &name).await;
+                    let marker = prompts::marker(&run, &run.step);
+                    let seen_it = on_screen
+                        .as_deref()
+                        .is_some_and(|text| prompts::outcome(text, &marker).is_some());
+                    if run.state == RunState::Running
+                        && s.activity == crate::snapshot::Activity::Idle
+                        && !seen_it
+                    {
+                        world
+                            .written_result(&s.machine, &s.agent, &s.path, &marker)
+                            .await
+                            .or(on_screen)
+                    } else {
+                        on_screen
+                    }
                 }
                 _ => None,
             };

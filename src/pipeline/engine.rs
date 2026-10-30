@@ -43,7 +43,9 @@ fn wait(
     reason: String,
     screen: &str,
 ) -> (Run, Vec<Effect>) {
-    let text = if kind.answerable() {
+    let text = if kind == WaitKind::NoResult {
+        format!("{}: {reason}", run.subject.label())
+    } else if kind.answerable() {
         format!("{} needs your answer", run.subject.label())
     } else {
         format!("{} stopped: {reason}", run.subject.label())
@@ -678,6 +680,28 @@ pub(crate) mod tests {
         assert_eq!((kind, step_id.as_str()), (WaitKind::NeedsYou, "implement"));
         assert_eq!(run.waiting.clone().unwrap().screen, "Which page?");
         assert_eq!(run.slot, None, "a waiting run gives its machine slot back");
+    }
+
+    #[test]
+    fn no_result_does_not_say_it_needs_an_answer() {
+        let mut run = at_step("Implement my Linear tickets", "fix");
+        run.retried = true;
+        let (_, did) = step(
+            run,
+            Seen::NoResult {
+                step: "fix".into(),
+                screen: String::new(),
+            },
+            &cfg(),
+            at(9),
+        );
+        match &did[..] {
+            [Effect::Notify { text }] => {
+                assert!(!text.contains("needs your answer"), "{text}");
+                assert!(text.contains("without a result"), "{text}");
+            }
+            other => panic!("{other:?}"),
+        }
     }
 
     #[test]

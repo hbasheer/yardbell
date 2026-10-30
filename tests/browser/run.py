@@ -2843,6 +2843,26 @@ class Suite:
         if b.js(f"(async () => (await fetch('/api/pipelines/{made}')).status)()") != 404:
             raise Failure("the pipeline was not deleted")
 
+    def test_a_run_with_no_result_says_what_to_do(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-detail')", "the run")
+        b.js("""(() => {
+          const real = window.fetch;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (!String(url).startsWith('/api/runs')) return res;
+            const body = await res.json();
+            for (const r of body.runs) if (r.id === 'run-a') {
+              r.state = 'waiting';
+              r.waiting = { kind: 'no_result', step: 'root-cause', reason: 'Root cause ended without a result', screen: '❯' };
+            }
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          };
+        })()""")
+        b.wait("document.querySelector('#pl-need')?.textContent.includes('Show the terminal')", "what to do next")
+        self.check_errors("a run with no result")
+
     def test_delete_a_run_in_progress(self):
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-a"))

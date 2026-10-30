@@ -34,6 +34,7 @@ pub(crate) struct Fake {
     pub stale: Mutex<Vec<String>>,
     pub stop_fails: Mutex<bool>,
     pub hold_stops: Mutex<Option<std::sync::Arc<tokio::sync::Semaphore>>>,
+    pub transcript: Mutex<HashMap<String, String>>,
 }
 
 impl Fake {
@@ -250,7 +251,17 @@ impl World for Fake {
         })
     }
 
-    fn notify(&self, kind: super::run::Note, text: &str) {
+    fn written_result<'a>(
+        &'a self,
+        _machine: &'a str,
+        _agent: &'a str,
+        _path: &'a str,
+        marker: &'a str,
+    ) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move { self.transcript.lock().unwrap().get(marker).cloned() })
+    }
+
+    fn notify(&self, kind: super::run::Note, text: &str, _run: &Run) {
         self.note_kinds.lock().unwrap().push(kind);
         self.notes.lock().unwrap().push(text.into());
     }
@@ -895,6 +906,43 @@ async fn a_retried_step_keeps_the_shared_session() {
 }
 
 #[tokio::test]
+async fn a_quiet_reviewer_is_asked_for_its_result_not_stopped() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    run.state_of("review").runs = 1;
+    run.retried = true;
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Idle);
+    let calls = enter_step(&fake, &mut run, "review").await;
+    assert_eq!(count(&calls, "stop_session"), 0, "{calls:?}");
+    assert_eq!(count(&calls, "start_session"), 0, "{calls:?}");
+    let sent = calls
+        .iter()
+        .find(|c| c.starts_with("send_to_session"))
+        .expect("a reminder");
+    assert!(
+        sent.contains("hp-review") && sent.contains("review-1-r1"),
+        "{sent}"
+    );
+}
+
+#[tokio::test]
+async fn a_working_reviewer_is_left_alone_on_a_second_try() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    run.state_of("review").runs = 1;
+    run.retried = true;
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Active);
+    let calls = enter_step(&fake, &mut run, "review").await;
+    assert!(calls.is_empty(), "{calls:?}");
+}
+
+#[tokio::test]
 async fn a_retried_reviewer_starts_afresh() {
     let fake = Fake::default();
     let mut run = run_of("Implement my Linear tickets");
@@ -1191,6 +1239,55 @@ mod pipelines {
             handle.await.unwrap();
         }
         assert!(fake.calls().iter().any(|c| c.contains("hp-review")));
+    }
+
+    #[tokio::test]
+    async fn a_result_off_the_screen_is_read_from_the_transcript() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.step = "review".into();
+        run.state = RunState::Running;
+        run.pending = None;
+        run.step_since = chrono::Local::now().to_rfc3339();
+        let st = run.state_of("review");
+        st.session = "hp-review".into();
+        st.machine = "hp".into();
+        st.runs = 1;
+        let marker = marker(&run, "review");
+        let id = run.id.clone();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-review", "b", Activity::Idle);
+        fake.screens
+            .lock()
+            .unwrap()
+            .insert("hp-review".into(), "❯".into());
+        fake.transcript
+            .lock()
+            .unwrap()
+            .insert(marker.clone(), result(&marker, "pass", "Reviewed it."));
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.steps["review"].outcome, Some(Outcome::Pass));
+        assert_eq!(run.steps["review"].report, "Reviewed it.");
+    }
+
+    #[test]
+    fn a_notification_opens_its_run() {
+        let mut run = crate::pipeline::engine::tests::run_of("Implement my Linear tickets");
+        run.id = "run-1".into();
+        run.pipeline = "implement".into();
+        assert_eq!(
+            super::super::run::run_link("http://hp:4000", &run),
+            "http://hp:4000/pipeline?p=implement&run=run-1"
+        );
     }
 
     #[tokio::test]

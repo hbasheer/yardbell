@@ -54,7 +54,14 @@ pub trait World: Send + Sync {
         run: &'a Run,
         path: &'a str,
     ) -> BoxFuture<'a, Result<PullRef, String>>;
-    fn notify(&self, kind: Note, text: &str);
+    fn notify(&self, kind: Note, text: &str, run: &Run);
+    fn written_result<'a>(
+        &'a self,
+        machine: &'a str,
+        agent: &'a str,
+        path: &'a str,
+        marker: &'a str,
+    ) -> BoxFuture<'a, Option<String>>;
     fn teardown<'a>(
         &'a self,
         machine: &'a str,
@@ -80,7 +87,9 @@ impl Note {
     }
 }
 
-const NAME_TAG_LEN: usize = 6;
+pub fn run_link(base: &str, run: &Run) -> String {
+    format!("{base}/pipeline?p={}&run={}", run.pipeline, run.id)
+}
 
 enum Halt {
     Refused(String),
@@ -157,7 +166,7 @@ async fn started(
     tool: &str,
     mut input: Value,
 ) -> Vec<Seen> {
-    input["name_tag"] = json!(run.id[run.id.len().saturating_sub(NAME_TAG_LEN)..]);
+    input["name_tag"] = json!(run.tag());
     match run_step(world, run, tool, input).await {
         Ok(v) => {
             let field = |k: &str| v[k].as_str().unwrap_or_default().to_string();
@@ -312,6 +321,20 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
     // A reviewer run again starts afresh, so it reads the code rather than its earlier opinion.
     if *read_only {
         if let Some(old) = session(&view, &state.session) {
+            // A second try comes from the watcher finding no result, and the reviewer may well
+            // have one that never showed. A person's Retry clears `retried` and starts afresh.
+            if run.retried {
+                if old.activity != crate::snapshot::Activity::Idle {
+                    return vec![];
+                }
+                let text = prompts::result_reminder(&prompts::marker(run, &step.id));
+                let input = json!({ "machine": old.machine, "name": state.session, "text": text });
+                return match run_step(world, run, "send_to_session", input).await {
+                    Ok(_) => vec![Seen::Sent(Ok(()))],
+                    Err(Halt::Refused(reason)) => vec![Seen::Refused(reason)],
+                    Err(Halt::Failed(e)) => vec![Seen::Sent(Err(e))],
+                };
+            }
             let input = json!({ "machine": old.machine, "name": state.session });
             let _ = world.perform("stop_session", input).await;
         }
@@ -459,11 +482,15 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 .ok()
                 .and_then(|t| t.lines().next())
                 .unwrap_or("its report could not be written");
-            world.notify(Note::Finished, &format!("{}: {line}", run.subject.label()));
+            world.notify(
+                Note::Finished,
+                &format!("{}: {line}", run.subject.label()),
+                run,
+            );
             vec![Seen::Reported(written)]
         }
         Effect::Notify { text } => {
-            world.notify(Note::Waiting, text);
+            world.notify(Note::Waiting, text, run);
             vec![]
         }
         Effect::StopSessions => {
@@ -765,11 +792,30 @@ impl World for Live {
         })
     }
 
-    fn notify(&self, kind: Note, text: &str) {
+    // Agents draw on tmux's alternate screen, so the screen holds only what fits in the pane right
+    // now. Claude Code's transcript has the whole reply whatever size or scroll position it is at.
+    fn written_result<'a>(
+        &'a self,
+        machine: &'a str,
+        agent: &'a str,
+        path: &'a str,
+        marker: &'a str,
+    ) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            if self.cfg.agent(agent)?.process_name() != "claude" {
+                return None;
+            }
+            let m = self.cfg.machine(machine)?;
+            let lines = self.app.sessions.transcript_lines(m, path, marker).await?;
+            prompts::written_result(&lines, marker)
+        })
+    }
+
+    fn notify(&self, kind: Note, text: &str, run: &Run) {
         if !kind.allowed(&self.cfg.phone_notifications) {
             return;
         }
-        let click = crate::phone::base_url(&self.cfg).map(|base| format!("{base}/pipeline"));
+        let click = crate::phone::base_url(&self.cfg).map(|base| run_link(&base, run));
         self.app.phone.inbox.add(&[Push {
             title: "Yardbell pipelines".into(),
             message: text.to_string(),
