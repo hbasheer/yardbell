@@ -1,8 +1,8 @@
-use super::definition::{LinearAction, Outcome, SessionChoice, Step, StepKind, Workspace};
+use super::definition::{LinearAction, Outcome, Step, StepKind, Workspace};
 use super::forge::{Draft, Forge};
 use super::linear::Linear;
 use super::prompts::{self, TicketText};
-use super::record::{Effect, PullRef, Run, Seen};
+use super::record::{Effect, PullRef, Run, Seen, StepState};
 use crate::config::{Approval, Config, Pipelines as Cfg};
 use crate::dispatch::{By, ReviewOf};
 use crate::phone::Push;
@@ -148,11 +148,46 @@ async fn started(world: &dyn World, run: &Run, step: &str, tool: &str, input: Va
     }
 }
 
+fn agent_of(step: &Step) -> Option<(&str, bool)> {
+    match &step.kind {
+        StepKind::Agent {
+            agent, read_only, ..
+        } => Some((agent, *read_only)),
+        _ => None,
+    }
+}
+
+// The session this step can type into instead of starting one: the run's newest live session on
+// the same machine, with the same agent and the same read-only setting, which cannot change in a
+// running agent. A reviewer run again never reuses its own.
+fn shared_session(run: &Run, view: &StateView, step: &Step, machine: &str) -> Option<StepState> {
+    let wanted = agent_of(step)?;
+    let def = run.def();
+    run.steps
+        .iter()
+        .filter(|(id, st)| {
+            st.machine == machine
+                && session(view, &st.session).is_some()
+                && !(wanted.1 && **id == step.id)
+                && def.step(id).and_then(agent_of) == Some(wanted)
+        })
+        .map(|(_, st)| st)
+        .max_by_key(|st| st.started.clone())
+        .cloned()
+}
+
+fn folder_on(run: &Run, machine: &str) -> Option<String> {
+    run.steps
+        .values()
+        .filter(|st| st.machine == machine && !st.path.is_empty())
+        .max_by_key(|st| st.started.clone())
+        .map(|st| st.path.clone())
+}
+
 async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen> {
     let StepKind::Agent {
         agent,
         workspace,
-        session: choice,
         read_only,
         ..
     } = &step.kind
@@ -173,37 +208,32 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
     let prompt = prompts::agent(run, step, &text, answer, &notes);
     let view = world.view();
     let machine = state.machine.clone();
-    if let SessionChoice::Continue(other) = choice {
-        let theirs = run.steps.get(other).cloned().unwrap_or_default();
-        let Some(live) = session(&view, &theirs.session) else {
-            let name = run
-                .def()
-                .step(other)
-                .map_or(other.as_str(), |s| s.name.as_str());
-            return vec![Seen::Ended {
-                step: step.id.clone(),
-                outcome: Outcome::NeedsYou,
-                report: format!("{name}'s session has ended"),
-                details: vec![],
-            }];
-        };
-        let live_machine = live.machine.clone();
-        let input = json!({ "machine": live_machine, "name": theirs.session, "text": prompt });
+    if let Some(shared) = shared_session(run, &view, step, &machine) {
+        let live_machine =
+            session(&view, &shared.session).map_or_else(|| machine.clone(), |s| s.machine.clone());
+        let input = json!({ "machine": live_machine, "name": shared.session, "text": prompt });
         return match run_step(world, run, "send_to_session", input).await {
             Ok(_) => vec![Seen::Started {
                 step: step.id.clone(),
-                result: Ok((theirs.session, live_machine, theirs.path)),
+                result: Ok((shared.session, live_machine, shared.path)),
             }],
             Err(Halt::Refused(reason)) => vec![Seen::Refused(reason)],
             Err(Halt::Failed(e)) => vec![Seen::Sent(Err(e))],
         };
     }
-    // A step run again starts afresh; its earlier session would otherwise work in the same folder.
-    if let Some(old) = session(&view, &state.session) {
-        let input = json!({ "machine": old.machine, "name": state.session });
-        let _ = world.perform("stop_session", input).await;
+    // A reviewer run again starts afresh, so it reads the code rather than its earlier opinion.
+    if *read_only {
+        if let Some(old) = session(&view, &state.session) {
+            let input = json!({ "machine": old.machine, "name": state.session });
+            let _ = world.perform("stop_session", input).await;
+        }
     }
     let mut input = match workspace {
+        // The run's folder outlives a session that died, so its work is picked up there.
+        Workspace::NewWorktree if folder_on(run, &machine).is_some() => {
+            let path = folder_on(run, &machine).unwrap_or_default();
+            json!({ "machine": machine, "path": path, "prompt": prompt, "read_only": read_only, "wait": true })
+        }
         Workspace::NewWorktree => {
             let wanted = branch(run);
             json!({

@@ -1,4 +1,4 @@
-use super::definition::{SessionChoice, StepKind};
+use super::definition::StepKind;
 use super::prompts;
 use super::record::{Run, RunState, Seen};
 use crate::snapshot::Activity;
@@ -14,26 +14,18 @@ fn settled(run: &Run, now: DateTime<Local>) -> bool {
         .is_ok_and(|since| (now - since.with_timezone(&Local)).num_minutes() >= GRACE_MINUTES)
 }
 
-// Reports already on the screen of a session this step continues are the earlier step's, not
-// this one's.
+// Reports already on the screen of a session steps share are the earlier steps', not this one's.
 fn known_reports(run: &Run) -> Vec<String> {
-    let mut known: Vec<String> = run
+    let name = run
         .steps
         .get(&run.step)
+        .map(|s| s.session.as_str())
+        .unwrap_or_default();
+    run.steps
+        .values()
+        .filter(|s| s.session == name && !s.report.is_empty())
         .map(|s| s.report.clone())
-        .into_iter()
-        .collect();
-    if let Some(StepKind::Agent {
-        session: SessionChoice::Continue(other),
-        ..
-    }) = run.def().step(&run.step).map(|s| &s.kind)
-    {
-        if let Some(s) = run.steps.get(other) {
-            known.push(s.report.clone());
-        }
-    }
-    known.retain(|r| !r.is_empty());
-    known
+        .collect()
 }
 
 // What the poll shows about a run's current step, if anything new.
@@ -218,6 +210,17 @@ mod tests {
             seen(&run, &v, Some(&fixed), at(1)),
             Some(Seen::Ended { .. })
         ));
+    }
+
+    #[test]
+    fn a_shared_sessions_earlier_report_is_not_this_steps() {
+        let mut run = running("qa");
+        let shared = run.state_of("qa").session.clone();
+        let earlier = run.state_of("push");
+        earlier.session = shared;
+        earlier.report = "Fixed the redirect.".into();
+        let v = view(&[("hp-app-com-1", Activity::Idle)], true);
+        assert_eq!(seen(&run, &v, Some(RESULT), at(1)), None);
     }
 
     #[test]
