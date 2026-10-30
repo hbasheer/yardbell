@@ -298,6 +298,9 @@ pub async fn serve(
         dispatch,
         triggers,
         insights,
+        proposals: Arc::new(crate::proposals::Proposals::load(
+            dir.join("proposals.json"),
+        )),
         pipelines: pipelines.clone(),
         releases: crate::about::github(),
         refresh: Arc::new(move |machine: Option<String>| {

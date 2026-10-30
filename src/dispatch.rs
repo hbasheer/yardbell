@@ -15,7 +15,7 @@ mod tasks;
 mod turn;
 mod usage;
 
-pub use actions::{changes_something, valid_id as valid_action_id, By};
+pub use actions::{changes_something, result as step_result, valid_id as valid_action_id, By};
 pub use diff::{Op as DiffOp, Part as DiffPart};
 pub use follow::Change;
 pub use group::{

@@ -259,7 +259,7 @@ async fn security_and_about_are_read_only() {
 }
 
 #[tokio::test]
-async fn outside_clients_cannot_change_yet() {
+async fn an_outside_change_is_proposed_not_saved() {
     let r = rig();
     mcp_on(&r);
     let result = tool_call(
@@ -268,40 +268,33 @@ async fn outside_clients_cannot_change_yet() {
         json!({ "area": "phone", "value": phone(4) }),
     )
     .await;
-    assert_eq!(result["isError"], true, "{result}");
+    assert_eq!(result["isError"], false, "{result}");
     assert!(
-        text(&result).contains("changes from outside clients arrive with the Proposals inbox"),
+        text(&result).contains("waiting in Yardbell's Proposals inbox"),
         "{result}"
     );
     assert_eq!(saved(&r).phone_notifications.wait_minutes, 2);
-    let (_, listed) = mcp(
-        &r.app,
-        Some("yb_secret"),
-        None,
-        rpc("tools/list", json!({})),
-    )
-    .await;
-    assert!(!listed.to_string().contains("change_settings"), "{listed}");
+    assert_eq!(r.app.proposals.waiting(), 1);
 }
 
 #[tokio::test]
-async fn outside_clients_cannot_save_tasks_or_run_triggers_yet() {
+async fn outside_tasks_and_triggers_are_checked_then_proposed() {
     let r = rig();
     mcp_on(&r);
-    for (tool, args) in [
-        (
-            "save_task",
-            json!({ "name": "Notes", "text": "Sum up my day" }),
-        ),
-        ("run_trigger", json!({ "name": "Morning" })),
-    ] {
-        let result = tool_call(&r, tool, args).await;
-        assert!(
-            text(&result).contains("Proposals inbox"),
-            "{tool}: {result}"
-        );
-    }
+    let result = tool_call(
+        &r,
+        "save_task",
+        json!({ "name": "Notes", "text": "Sum up my day" }),
+    )
+    .await;
+    assert!(text(&result).contains("Proposals inbox"), "{result}");
+    let result = tool_call(&r, "run_trigger", json!({ "name": "Morning" })).await;
+    assert!(
+        text(&result).contains("there is no trigger called Morning"),
+        "{result}"
+    );
     assert!(!r.app.dispatch.tasks().iter().any(|t| t.name == "Notes"));
+    assert_eq!(r.app.proposals.waiting(), 1);
 }
 
 #[tokio::test]

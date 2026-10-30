@@ -244,7 +244,7 @@ async fn set_pipeline_enabled_follows_the_rules() {
 }
 
 #[tokio::test]
-async fn pipeline_tools_are_hidden_from_outside_clients() {
+async fn pipeline_tools_reach_outside_clients_as_proposals() {
     let r = rig();
     mcp_on(&r);
     let (_, listed) = mcp(
@@ -260,13 +260,17 @@ async fn pipeline_tools_are_hidden_from_outside_clients() {
         "run_pipeline",
         "answer_run",
     ] {
-        assert!(!listed.to_string().contains(tool), "{tool} is listed");
-        let result = tool_call(&r, tool, json!({})).await;
-        assert!(
-            text(&result).contains("Proposals inbox"),
-            "{tool}: {result}"
-        );
+        assert!(listed.to_string().contains(tool), "{tool} is not listed");
     }
+    let def = by_hand(&r, IMPLEMENT);
+    let result = tool_call(
+        &r,
+        "set_pipeline_enabled",
+        json!({ "id": def.id, "on": true }),
+    )
+    .await;
+    assert!(text(&result).contains("Proposals inbox"), "{result}");
+    assert!(!r.app.pipelines.library().get(&def.id).unwrap().enabled);
 }
 
 async fn fake_linear() -> String {

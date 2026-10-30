@@ -21,6 +21,7 @@ pub mod phone;
 pub mod pipeline;
 pub mod poller;
 pub mod probe;
+pub mod proposals;
 pub mod pulls;
 pub mod secrets;
 pub mod service;

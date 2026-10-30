@@ -53,7 +53,28 @@ pub fn new_token() -> String {
 // holding the MCP token.
 enum Caller {
     Dispatch(Option<String>),
-    Client,
+    // The client's name as its User-Agent gives it, for the person to see on its proposals.
+    Client(String),
+}
+
+fn client_name(headers: &HeaderMap) -> String {
+    let agent = headers
+        .get(header::USER_AGENT)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default();
+    let name: String = agent
+        .split(['/', ' '])
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || "-_.".contains(*c))
+        .take(40)
+        .collect();
+    if name.is_empty() {
+        "an MCP client".into()
+    } else {
+        name
+    }
 }
 
 fn bearer(headers: &HeaderMap) -> &str {
@@ -127,14 +148,14 @@ pub async fn handle(
         }
         Caller::Dispatch(conversation)
     } else {
-        Caller::Client
+        Caller::Client(client_name(&headers))
     };
     let result = match rpc.method.as_str() {
         "initialize" => Ok(initialize(&rpc.params)),
         "ping" => Ok(json!({})),
         "tools/list" => Ok(json!({ "tools": tools()
             .into_iter()
-            .filter(|t| dispatch || !dispatch_only(t["name"].as_str().unwrap_or_default()))
+            .filter(|t| dispatch || t["name"] != "remember")
             .collect::<Vec<_>>() })),
         // A call that changes something finishes, and is recorded, even when the caller hangs up.
         "tools/call" => {
@@ -394,10 +415,6 @@ const WAIT_FOR_PROPOSALS: [&str; 7] = [
     "answer_run",
 ];
 
-fn dispatch_only(tool: &str) -> bool {
-    tool == "remember" || WAIT_FOR_PROPOSALS.contains(&tool)
-}
-
 async fn call(app: &AppState, params: &Value, caller: &Caller) -> Value {
     let name = params["name"].as_str().unwrap_or_default();
     let args = params
@@ -405,13 +422,9 @@ async fn call(app: &AppState, params: &Value, caller: &Caller) -> Value {
         .cloned()
         .unwrap_or_else(|| json!({}));
     let outcome = match caller {
-        Caller::Client if WAIT_FOR_PROPOSALS.contains(&name) => Err(ApiError(
-            StatusCode::FORBIDDEN,
-            "Not run: changes from outside clients arrive with the Proposals inbox, which this \
-Yardbell does not have yet. Ask the user to make the change in Yardbell's Settings, or to ask \
-Dispatch for it."
-                .into(),
-        )),
+        Caller::Client(from) if WAIT_FOR_PROPOSALS.contains(&name) => {
+            client_proposal(app, from, name, args).await
+        }
         Caller::Dispatch(conversation) if name == "start_group" => {
             dispatch_group(app, conversation.as_deref(), args).await
         }
@@ -427,6 +440,32 @@ Dispatch for it."
         Err(ApiError(_, message)) => (message, true),
     };
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
+}
+
+// An outside client's change is checked as Dispatch's is, then kept for the person to decide on;
+// the approval setting and allow rules never let it run alone, and a refusing rule still refuses.
+async fn client_proposal(
+    app: &AppState,
+    from: &str,
+    name: &str,
+    args: Value,
+) -> Result<String, ApiError> {
+    let cfg = app.config()?;
+    let (tool, input, _) = plan(app, &cfg, name, args)?;
+    let step = step_of(app, name, &input);
+    let verdict = crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);
+    if verdict.approval == Approval::Deny {
+        return Err(ApiError(
+            StatusCode::FORBIDDEN,
+            refusal(verdict.rule, &step),
+        ));
+    }
+    let proposal = app.proposals.add(&tool, input, from, chrono::Local::now());
+    Ok(format!(
+        "Not run yet. This is proposal {}, waiting in Yardbell's Proposals inbox for the user, who \
+can approve it, edit it first, or reject it. Do not call it again.",
+        proposal["id"].as_str().unwrap_or_default()
+    ))
 }
 
 fn proposal_note(id: &str) -> String {
