@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-10-30
+
 - **Pipelines** carry tickets and merge requests through steps you define, and stop only when they
   need you. A pipeline has a trigger (by hand, a schedule, a Linear ticket, a GitHub review request,
   or a GitLab merge request that adds you as reviewer) and steps: agents with your instructions,
