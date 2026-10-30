@@ -70,6 +70,7 @@
       <a href="#dispatch">Dispatch</a>
       <a href="#triggers">Triggers</a>
       <a href="#worktree-setup">Worktree setup</a>
+      <a href="#pull-requests">Pull requests</a>
       <a href="#mcp">Agent tools (MCP)</a>
       <a href="#servers">MCP servers</a>
       <p class="nav-label">General</p>
@@ -308,6 +309,24 @@
       <ul class="rows setup-rows" id="setup-rows"></ul>
       <div class="form-foot">
         <p class="help">The command runs through your login shell in the new worktree, with the main checkout's path in <code>$YARDBELL_MAIN_CHECKOUT</code>.</p>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="pull-requests">
+    <div class="section-head"><h2>Pull requests</h2><button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button></div>
+    <p class="help">Sessions show their pull or merge request and its CI. GitHub is read through <code>gh</code> on each session's machine; GitLab through its API, with a token saved under MCP servers, Secrets.</p>
+    <form class="panel" id="pr-form">
+      <div class="phone-switches">
+        <label class="choice"><input type="checkbox" name="enabled">Show pull and merge requests</label>
+        <label class="choice"><input type="checkbox" name="cards">Post a card in Dispatch when CI fails or a reviewer comments</label>
+        <label class="choice phone-wait">Check every <input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required> seconds</label>
+      </div>
+      <ul class="rows pr-hosts" id="pr-hosts"></ul>
+      <ul class="pr-status" id="pr-status"></ul>
+      <div class="form-foot">
+        <p class="help" id="pr-note" role="status"></p>
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>

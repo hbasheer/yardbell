@@ -677,6 +677,7 @@ mod tests {
             sessions: activity
                 .into_iter()
                 .map(|activity| SessionView {
+                    pull_why: None,
                     id: "x".into(),
                     machine: "hp".into(),
                     agent: "claude".into(),

@@ -15,6 +15,10 @@ and the project uses [Semantic Versioning](https://semver.org).
   pick, with **Stop session**. A finished run can be deleted with **Delete this run**.
 - **Pipeline notifications in Settings.** Phone notifications has switches for **Pipeline needs
   you**, **Pipeline finished** and **Proposals**.
+- **Pull requests in Settings.** A new section switches badges and Dispatch cards on or off, sets how
+  often they are checked, adds GitLab hosts with a token from your saved secrets, and shows whether
+  `gh` and each token work. A session with no badge because of a problem now says **No PR info**, with
+  the reason.
 - Fixed: the run page could not scroll on a phone or tablet.
 - Fixed: Delete on a pipeline did nothing in the desktop app, because the page used a dialog the
   app's webview does not have.

@@ -2575,6 +2575,47 @@ class Suite:
         if "A new session" in b.js("document.querySelector('#pl-inspector').textContent"):
             raise Failure("the Session choice is still there")
 
+    def test_settings_pull_requests_section(self):
+        b = self.b
+        self.api("POST", "/api/settings/secrets", {"name": "gitlab", "value": "glpat-browser-test"})
+        b.goto(self.url("/settings#pull-requests"))
+        b.wait("document.querySelector('#pr-form [name=enabled]')?.checked === true", "the Pull requests section")
+        b.click("#pr-add-host")
+        b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
+        self.set_field("#pr-hosts .row:last-child [data-key=host]", "git.example.com")
+        self.set_field("#pr-hosts .row:last-child [data-key=token]", "${secret:gitlab}")
+        self.set_field("#pr-form [name=poll_seconds]", "300")
+        b.click("#pr-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the section saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        for want in ("host: git.example.com", "poll_seconds: 300"):
+            if want not in config:
+                raise Failure(f"yardbell.yml does not hold {want}:\n{config}")
+        if "glpat-browser-test" in config:
+            raise Failure("the token's value reached yardbell.yml")
+        self.check_errors("the Pull requests section")
+
+    def test_a_session_says_why_it_has_no_badge(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait("document.querySelector('.side-link[href=\"/proposals\"]')", "the dashboard")
+        b.js("""(() => {
+          const real = window.fetch;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (!String(url).startsWith('/state')) return res;
+            const body = await res.json();
+            for (const s of body.sessions) { delete s.pull; s.pull_why = 'gh is not installed or not signed in on hp'; }
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json', 'x-yardbell-build': res.headers.get('x-yardbell-build') || '' } });
+          };
+        })()""")
+        self.y.tmux("new", "-d", "-s", "hp-why-test", "-c", os.path.join(self.y.root, "demo-app"), self.y.shell)
+        try:
+            b.wait("document.querySelector('.pr-why[href=\"/settings#pull-requests\"]')?.title.includes('gh is not installed')", "the reason on the session")
+        finally:
+            self.y.tmux("kill-session", "-t", "=hp-why-test")
+
     def test_run_page_scrolls_on_a_phone(self):
         b = self.b
         try:

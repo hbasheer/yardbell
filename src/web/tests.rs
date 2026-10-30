@@ -4119,3 +4119,49 @@ async fn an_approved_review_stays_read_only_even_when_edited() {
     let cmd = last_start(&r);
     assert!(cmd.contains("--disallowed-tools"), "{cmd}");
 }
+
+#[tokio::test]
+async fn pull_request_settings_are_saved_with_tokens_kept_hidden() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let mut cfg = r.app.config().unwrap();
+    cfg.pull_requests.gitlab = vec![crate::config::GitLabHost {
+        host: "git.example.com".into(),
+        url: String::new(),
+        token: "glpat-planted-real".into(),
+    }];
+    cfg.save(&r._dir.path().join("yardbell.yml")).unwrap();
+    let (data, text) = get_settings(&r, &c).await;
+    assert!(!text.contains("glpat-planted-real"), "{text}");
+    let mut value = data["pull_requests"]["value"].clone();
+    assert_eq!(value["gitlab"][0]["token"], "(hidden)");
+    value["poll_seconds"] = json!(300);
+    value["gitlab"]
+        .as_array_mut()
+        .unwrap()
+        .push(json!({ "host": "gitlab.example.org", "token": "${secret:gitlab}" }));
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/pull-requests",
+        &value.to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = r.app.config().unwrap().pull_requests;
+    assert_eq!(saved.poll_seconds, 300);
+    assert_eq!(saved.gitlab[0].token, "glpat-planted-real");
+    assert_eq!(saved.gitlab[1].token, "${secret:gitlab}");
+    assert!(r.app.settings.can_undo());
+
+    value["poll_seconds"] = json!(5);
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/pull-requests",
+        &value.to_string(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("poll_seconds must be at least 30"), "{body}");
+}

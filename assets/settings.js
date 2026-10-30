@@ -391,6 +391,7 @@ async function load() {
   renderServers();
   renderSecrets();
   renderDispatch();
+  renderPullRequests();
   await loadTriggers().catch((err) => toast(err.message));
   await loadSetups();
   await loadMemory().catch((err) => toast(err.message));
@@ -491,6 +492,78 @@ document.querySelectorAll('input[name="theme"]').forEach((input) => {
 document.querySelectorAll('input[name="term-theme"]').forEach((input) => {
   input.checked = input.value === window.YardbellTheme.terminalChosen();
   input.addEventListener("change", () => window.YardbellTheme.setTerminal(input.value));
+});
+
+let gitlabHosts = [];
+
+function renderPullRequests() {
+  const { value, status } = data.pull_requests;
+  const f = $("pr-form");
+  f.elements.enabled.checked = value.enabled;
+  f.elements.cards.checked = value.cards;
+  f.elements.poll_seconds.value = value.poll_seconds;
+  gitlabHosts = (value.gitlab || []).map((g) => ({ host: g.host, url: g.url || "", token: g.token }));
+  renderHosts();
+  const line = (name, why, fine) => `<li class="${why ? "pr-bad" : "pr-ok"}"><strong>${esc(name)}</strong> ${esc(why || fine)}</li>`;
+  const rows = [
+    ...Object.entries(status.machines).map(([m, why]) => line(m, why, "gh works")),
+    ...Object.entries(status.hosts).map(([h, why]) => line(h, why, "the token works")),
+  ];
+  $("pr-status").innerHTML = rows.join("");
+  $("pr-note").textContent = rows.length ? "" : "Not checked yet: machines and hosts show here once a session's branch has been asked about.";
+}
+
+function renderHosts() {
+  const names = (data.secrets?.list || []).map((s) => `\${secret:${s.name}}`);
+  const tokenOptions = (g) => {
+    const all = g.token && !names.includes(g.token) ? [g.token, ...names] : names;
+    const word = (t) => (t === "(hidden)" ? "Typed into yardbell.yml, kept" : t);
+    return `<option value="" ${g.token ? "" : "selected"}>Pick a saved secret</option>${all.map((t) => `<option value="${esc(t)}"${t === g.token ? " selected" : ""}>${esc(word(t))}</option>`).join("")}`;
+  };
+  $("pr-hosts").innerHTML = gitlabHosts.map((g, i) => `<li class="row pr-host" data-host="${i}">
+    <input type="text" data-key="host" aria-label="GitLab host" value="${esc(g.host)}" placeholder="git.example.com" autocapitalize="off" spellcheck="false">
+    <input type="text" data-key="url" aria-label="Address, if it differs" value="${esc(g.url)}" placeholder="https://git.example.com:8443 (optional)" autocapitalize="off" spellcheck="false">
+    <select data-key="token" aria-label="Token">${tokenOptions(g)}</select>
+    <button class="btn quiet danger" type="button" data-remove-host="${i}" aria-label="Remove host" title="Remove host">${CROSS}</button>
+  </li>`).join("");
+}
+
+$("pr-add-host").addEventListener("click", () => {
+  gitlabHosts.push({ host: "", url: "", token: "" });
+  renderHosts();
+  $("pr-hosts").querySelector(".row:last-child [data-key=host]").focus();
+});
+
+for (const type of ["input", "change"]) {
+  $("pr-hosts").addEventListener(type, (e) => {
+    const row = e.target.closest("[data-host]");
+    if (row && e.target.dataset.key) gitlabHosts[Number(row.dataset.host)][e.target.dataset.key] = e.target.value;
+  });
+}
+
+$("pr-hosts").addEventListener("click", (e) => {
+  const button = e.target.closest("[data-remove-host]");
+  if (!button) return;
+  gitlabHosts.splice(Number(button.dataset.removeHost), 1);
+  renderHosts();
+});
+
+$("pr-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    enabled: f.elements.enabled.checked,
+    cards: f.elements.cards.checked,
+    poll_seconds: Number(f.elements.poll_seconds.value),
+    gitlab: gitlabHosts.map((g) => ({ host: g.host.trim(), ...(g.url.trim() ? { url: g.url.trim() } : {}), token: g.token })),
+  };
+  try {
+    await api("POST", "/api/settings/pull-requests", body);
+    saved("Pull requests updated.");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  }
 });
 
 $("phone-form").addEventListener("submit", async (e) => {

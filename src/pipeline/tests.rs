@@ -72,6 +72,7 @@ impl World for Fake {
                 .unwrap()
                 .iter()
                 .map(|(machine, name, branch, activity)| SessionView {
+                    pull_why: None,
                     id: name.clone(),
                     machine: machine.clone(),
                     agent: "claude".into(),

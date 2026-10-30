@@ -916,6 +916,7 @@ mod tests {
             sessions: sessions
                 .iter()
                 .map(|(name, activity)| SessionView {
+                    pull_why: None,
                     id: name.to_string(),
                     machine: "hp".into(),
                     agent: "claude".into(),

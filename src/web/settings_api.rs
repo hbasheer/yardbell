@@ -21,6 +21,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/mesh/apply", post(mesh_apply))
         .route("/api/settings/machines/{name}", post(machine))
         .route("/api/settings/phone", post(phone_save))
+        .route("/api/settings/pull-requests", post(pull_requests_save))
         .route("/api/settings/agents", post(add_agent))
         .route("/api/settings/mcp/on", post(mcp_on))
         .route("/api/settings/mcp/off", post(mcp_off))
@@ -105,7 +106,11 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
                 .map(|ip| format!("http://{ip}:{}/mcp", cfg.port))
                 .collect::<Vec<_>>(),
         },
-                "can_undo": app.settings.can_undo(),
+                        "pull_requests": {
+            "value": crate::mcp_read::shown_area(&app, &cfg, "pull_requests"),
+            "status": app.state.pull_health(),
+        },
+        "can_undo": app.settings.can_undo(),
         "undo_note": app.settings.undo_note(),
         "service_installed": crate::service::installed(),
     }))
@@ -258,6 +263,17 @@ async fn machine(
     find_machine(&cfg, &name)?;
     app.settings.update_machine(&name, &edit).map_err(bad)?;
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+// Saved as tools save it, so a token shown as (hidden) stays what it was, and Undo reverses it.
+async fn pull_requests_save(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(value): Json<serde_json::Value>,
+) -> Result<Response, ApiError> {
+    let saved = crate::mcp_read::saved_values(&app);
+    crate::mcp_change::apply(&app.settings, "pull_requests", value, &saved).map_err(bad)?;
+    app.state.touch();
+    Ok(Json(json!({ "saved": true })).into_response())
 }
 
 async fn phone_save(

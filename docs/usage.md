@@ -29,8 +29,11 @@ stop leaves the list at once.
   GitLab host you listed, shows its number (`#12` or `!12`) and state next to the branch: CI
   failing, changes requested, CI running, approved, CI passing, merged or closed. Hover it for the
   title and the checks that failed, click it to open it. Yardbell asks `gh` on the session's
-  machine, or GitLab's API, every two minutes or so; without `gh` or a GitLab token, or without a
-  pull request, there is simply no badge. See [`pull_requests`](configuration.md#pull_requests-optional).
+  machine, or GitLab's API, every two minutes or so. A branch with no pull request has no badge. When
+  something stops Yardbell from asking, such as `gh` not being signed in or a GitLab host that is not
+  listed, the session shows **No PR info**: hover it for the reason, click it for **Settings, Pull
+  requests**, where you switch this on or off, add GitLab hosts and see what each check found. See
+  [`pull_requests`](configuration.md#pull_requests-optional).
 
 Sessions started outside tmux, and sessions that ended, fold into the footer of their machine's
 section, since Yardbell can see them but cannot attach to them. Open the list and press **Move to
