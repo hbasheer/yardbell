@@ -166,13 +166,14 @@ fn follow(mut run: Run, outcome: Outcome, now: &DateTime<Local>) -> (Run, Vec<Ef
 }
 
 // A step that ended without a usable result runs once more before the run waits.
-fn again(mut run: Run, screen: &str) -> (Run, Vec<Effect>) {
+fn again(mut run: Run, screen: &str, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
     let id = run.step.clone();
     if run.retried {
         let reason = format!("{} ended without a result", name_of(&run, &id));
         return wait(run, WaitKind::NoResult, &id, reason, screen);
     }
     run.retried = true;
+    run.step_since = now.to_rfc3339();
     let effect = match current(&run).map(|s| s.kind) {
         Some(StepKind::Plan { .. }) => Effect::Plan { step: id },
         _ => Effect::Agent { step: id },
@@ -265,6 +266,13 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.teardown_problem = problem.unwrap_or_default();
             return (run, vec![]);
         }
+        // Comes ahead of its session, which a run dropped meanwhile still stops and tears down.
+        Seen::WorktreeMade { step, path, repo } => {
+            let st = run.state_of(&step);
+            st.made = path;
+            st.repo = repo;
+            return (run, vec![]);
+        }
         other => other,
     };
     if !run.state.active() {
@@ -338,7 +346,7 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.next_try = Some((*now + Duration::minutes(RETRY_MINUTES[at])).to_rfc3339());
             (run, vec![])
         }
-        Seen::Planned(Err(e)) => again(run, &e),
+        Seen::Planned(Err(e)) => again(run, &e, now),
         Seen::Started {
             step,
             result: Ok((session, machine, path)),
@@ -349,9 +357,16 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             st.path = path;
             (run, vec![])
         }
-        Seen::Started { result: Err(e), .. } => again(run, &e),
-        Seen::NoResult { screen, .. } => again(run, &screen),
-        Seen::Sent(Err(e)) => again(run, &e),
+        Seen::Started { result: Err(e), .. } => again(run, &e, now),
+        Seen::NoResult { screen, .. } => again(run, &screen, now),
+        Seen::Sent(Err(e)) => again(run, &e, now),
+        Seen::PersonStopped(name) if run.steps.get(&id).is_some_and(|s| s.session == name) => wait(
+            run,
+            WaitKind::Stopped,
+            &id,
+            "You stopped the session".into(),
+            "",
+        ),
         Seen::Waiting { step, screen } => wait(
             run,
             WaitKind::Asking,
@@ -663,6 +678,43 @@ pub(crate) mod tests {
         assert_eq!((kind, step_id.as_str()), (WaitKind::NeedsYou, "implement"));
         assert_eq!(run.waiting.clone().unwrap().screen, "Which page?");
         assert_eq!(run.slot, None, "a waiting run gives its machine slot back");
+    }
+
+    #[test]
+    fn a_second_try_gets_its_own_grace() {
+        let run = at_step("Implement my Linear tickets", "fix");
+        let (run, _) = step(
+            run,
+            Seen::NoResult {
+                step: "fix".into(),
+                screen: String::new(),
+            },
+            &cfg(),
+            at(9),
+        );
+        assert_eq!(run.step_since, at(9).to_rfc3339());
+    }
+
+    #[test]
+    fn a_person_stopping_the_session_makes_the_step_wait() {
+        let mut run = at_step("Implement my Linear tickets", "fix");
+        run.state_of("fix").session = "hp-main".into();
+        let (same, did) = step(
+            run.clone(),
+            Seen::PersonStopped("hp-old".into()),
+            &cfg(),
+            at(5),
+        );
+        assert_eq!((same.state, did), (RunState::Running, vec![]));
+        let (run, _) = step(run, Seen::PersonStopped("hp-main".into()), &cfg(), at(5));
+        assert_eq!(
+            waiting(&run),
+            (
+                WaitKind::Stopped,
+                "fix".into(),
+                "You stopped the session".into()
+            )
+        );
     }
 
     #[test]

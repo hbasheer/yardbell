@@ -28,6 +28,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/runs/{id}/retry", post(retry))
         .route("/api/runs/{id}/continue", post(continue_on))
         .route("/api/runs/{id}/drop", post(drop_run))
+        .route("/api/runs/{id}/stop-session", post(stop_session))
 }
 
 fn bad(msg: String) -> ApiError {
@@ -236,7 +237,7 @@ fn with_terminals(app: &AppState, runs: Vec<Run>) -> Result<Vec<Value>, ApiError
             let current = run.steps.get(&run.step).map(|st| st.session.as_str());
             let mut seen = Vec::new();
             let mut terminals = Vec::new();
-            for (id, st) in steps {
+            for (id, st) in steps.into_iter().filter(|_| run.state.active()) {
                 if st.session.is_empty() || seen.contains(&st.session.as_str()) {
                     continue;
                 }
@@ -441,6 +442,10 @@ async fn delete_run(
     app.pipelines.delete_run(&id).map_err(|e| match e {
         DeleteRun::Missing => ApiError(StatusCode::NOT_FOUND, format!("{id} is not a run")),
         DeleteRun::Active => ApiError(StatusCode::CONFLICT, "stop this run first".into()),
+        DeleteRun::Stopping => ApiError(
+            StatusCode::CONFLICT,
+            "this run is still stopping, try again in a moment".into(),
+        ),
     })?;
     app.state.touch();
     Ok(Json(json!({ "deleted": id })).into_response())
@@ -451,6 +456,34 @@ async fn drop_run(
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     acted(&app, app.pipelines.drop_run(&id))
+}
+
+#[derive(Deserialize)]
+struct StopSessionReq {
+    name: String,
+}
+
+async fn stop_session(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<StopSessionReq>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let run = app.pipelines.session_stopped(&id, &req.name).map_err(bad)?;
+    let machine = run
+        .steps
+        .values()
+        .find(|s| s.session == req.name)
+        .map(|s| s.machine.clone())
+        .unwrap_or_default();
+    let m = super::find_machine(&cfg, &machine)?;
+    app.sessions
+        .stop(&m, &req.name)
+        .await
+        .map_err(ApiError::gateway)?;
+    app.recheck(&m.name);
+    app.state.touch();
+    Ok(Json(json!({ "ok": true })).into_response())
 }
 
 async fn settings(

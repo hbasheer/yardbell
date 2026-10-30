@@ -24,6 +24,16 @@ pub fn session_name(machine: &str, ticket: &str, folder: &str) -> String {
         .collect()
 }
 
+// A pipeline run's sessions carry its id in their names, so a name it remembers can never be a
+// session someone else started later.
+pub fn tagged(ticket: &str, folder_label: &str, tag: &str) -> String {
+    match (tag, ticket) {
+        ("", _) => ticket.to_string(),
+        (_, "-") => format!("{folder_label}-{tag}"),
+        _ => format!("{ticket}-{tag}"),
+    }
+}
+
 #[derive(Clone, Copy)]
 pub enum Start<'a> {
     New,
@@ -431,6 +441,13 @@ mod tests {
 
     fn sessions(fake: Arc<FakeRunner>) -> Sessions {
         Sessions::new(fake, Ssh::new(tempfile::tempdir().unwrap().keep()))
+    }
+
+    #[test]
+    fn a_tag_goes_on_the_ticket_or_the_folder() {
+        assert_eq!(tagged("COM-1", "app", "ab12"), "COM-1-ab12");
+        assert_eq!(tagged("-", "app", "ab12"), "app-ab12");
+        assert_eq!(tagged("COM-1", "app", ""), "COM-1");
     }
 
     #[test]

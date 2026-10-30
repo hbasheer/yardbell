@@ -143,6 +143,13 @@ pub struct MoveSession {
     // A tester that checks the work and changes nothing, such as the pipeline's QA.
     #[serde(default)]
     pub read_only: bool,
+    // Where the work is when the session has already stopped, as a pipeline's copy step may find.
+    #[serde(default)]
+    pub path: String,
+    #[serde(default)]
+    pub agent: String,
+    #[serde(default)]
+    pub name_tag: String,
 }
 
 pub fn arg<T: serde::de::DeserializeOwned>(args: Value) -> Result<T, ApiError> {
@@ -224,17 +231,8 @@ fn session_on(
         })
 }
 
-// Runs the folder's setup command, if it has one, in a worktree Yardbell just created.
-pub async fn run_setup(
-    app: &AppState,
-    cfg: &Config,
-    m: &Machine,
-    repo: &str,
-    path: &str,
-) -> Option<SetupRun> {
-    if cfg.worktree_setup.is_empty() {
-        return None;
-    }
+// The names a repository goes by in setup patterns: its labels on the machine and its path.
+fn names_of(app: &AppState, m: &Machine, repo: &str) -> Vec<String> {
     let snap = app.state.snapshot(&m.name).unwrap_or_default();
     let mut folders: Vec<String> = snap
         .folder_paths
@@ -243,10 +241,21 @@ pub async fn run_setup(
         .map(|(label, _)| label.clone())
         .collect();
     folders.push(repo.to_string());
-    let setup = crate::worktrees::setup::pick(&cfg.worktree_setup, &m.name, &folders)?.clone();
-    if setup.command.is_empty() {
-        return None;
-    }
+    folders
+}
+
+// Runs the folder's setup command, if it has one, in a worktree Yardbell just created.
+pub async fn run_setup(
+    app: &AppState,
+    cfg: &Config,
+    m: &Machine,
+    repo: &str,
+    path: &str,
+) -> Option<SetupRun> {
+    let folders = names_of(app, m, repo);
+    let setup =
+        crate::worktrees::setup::pick(&cfg.worktree_setup, &m.name, &folders, |s| &s.command)?
+            .clone();
     let run = app.worktrees.setup(m, path, &setup).await;
     if run.ok {
         tracing::info!(machine = %m.name, path, "worktree setup finished");
@@ -262,13 +271,12 @@ pub async fn run_teardown(
     app: &AppState,
     cfg: &Config,
     m: &Machine,
-    folders: Vec<String>,
+    repo: &str,
     path: &str,
 ) -> Option<SetupRun> {
-    let setup = crate::worktrees::setup::pick(&cfg.worktree_setup, &m.name, &folders)?;
-    if setup.teardown.is_empty() {
-        return None;
-    }
+    let folders = names_of(app, m, repo);
+    let setup =
+        crate::worktrees::setup::pick(&cfg.worktree_setup, &m.name, &folders, |s| &s.teardown)?;
     let run = app.worktrees.teardown(m, path, setup).await;
     if !run.ok {
         tracing::warn!(machine = %m.name, path, summary = %run.summary(), "worktree teardown failed");
@@ -421,13 +429,20 @@ left off.",
 pub async fn move_session(app: &AppState, r: &MoveSession) -> Result<Value, ApiError> {
     let cfg = app.config()?;
     let from = find_machine(&cfg, &r.machine)?;
-    let s = session_on(app, &from.name, &r.name)?;
+    let (cwd, agent_name) = match session_on(app, &from.name, &r.name) {
+        Ok(s) => (s.cwd, s.agent),
+        Err(_) if !r.path.is_empty() && r.agent.is_empty() => {
+            (r.path.clone(), cfg.default_agent().to_string())
+        }
+        Err(_) if !r.path.is_empty() => (r.path.clone(), r.agent.clone()),
+        Err(e) => return Err(e),
+    };
     let agent = cfg
-        .agent(&s.agent)
-        .ok_or_else(|| bad(format!("no agent named {}", s.agent)))?;
+        .agent(&agent_name)
+        .ok_or_else(|| bad(format!("no agent named {agent_name}")))?;
     let src = app
         .worktrees
-        .source(&from, &s.cwd)
+        .source(&from, &cwd)
         .await
         .map_err(ApiError::gateway)?;
     let snap = app.state.snapshot(&from.name).unwrap_or_default();
@@ -487,6 +502,7 @@ pub async fn move_session(app: &AppState, r: &MoveSession) -> Result<Value, ApiE
     let prompt = parts.join("\n\n");
     let mcp = mcp_config(&cfg, &to, &agent, &app.secrets()?)?;
     let ticket = crate::snapshot::ticket(&src.branch, cfg.ticket_regex().as_ref());
+    let ticket = crate::sessions::tagged(&ticket, &label_of(&landed.path), &r.name_tag);
     let name = app
         .sessions
         .create(
@@ -517,6 +533,8 @@ pub async fn move_session(app: &AppState, r: &MoveSession) -> Result<Value, ApiE
     app.recheck(&from.name);
     app.recheck(&to.name);
     Ok(json!({
+        "created": landed.created,
+        "repo": repo,
         "machine": to.name,
         "name": name,
         "path": landed.path,

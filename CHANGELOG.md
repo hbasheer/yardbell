@@ -10,7 +10,14 @@ and the project uses [Semantic Versioning](https://semver.org).
   another machine or with another agent gets its own; each stops as soon as nothing needs it. When a
   run ends or is dropped, every session stops and the worktree stays.
 - **Teardown command.** Worktree setup can now run a command when a run ends, such as
-  `docker compose down`, so containers go too. If it fails the run still ends, and the run page says so.
+  `docker compose down`, so containers go too. It only runs in a worktree that run made, and is
+  skipped while another session or run uses the folder. Whatever goes wrong, the run still ends and
+  the run page says so.
+- Pipeline sessions now have the run's id at the end of their names. A step saved as continuing a
+  session on another machine now gets its own session there.
+- **Stop session** on the run page makes the step wait for you instead of starting the agent again.
+- Agents now copy a `step:` line into their result block, so a result is matched to the exact run
+  of the step it answers.
 - **Terminal on the run page.** The run's live terminal sits under its steps and follows the run you
   pick, with **Stop session**. A finished run can be deleted with **Delete this run**.
 - **Pipeline notifications in Settings.** Phone notifications has switches for **Pipeline needs

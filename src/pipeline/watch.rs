@@ -14,20 +14,6 @@ fn settled(run: &Run, now: DateTime<Local>) -> bool {
         .is_ok_and(|since| (now - since.with_timezone(&Local)).num_minutes() >= GRACE_MINUTES)
 }
 
-// Reports already on the screen of a session steps share are the earlier steps', not this one's.
-fn known_reports(run: &Run) -> Vec<String> {
-    let name = run
-        .steps
-        .get(&run.step)
-        .map(|s| s.session.as_str())
-        .unwrap_or_default();
-    run.steps
-        .values()
-        .filter(|s| s.session == name && !s.report.is_empty())
-        .map(|s| s.report.clone())
-        .collect()
-}
-
 // What the poll shows about a run's current step, if anything new.
 pub fn seen(
     run: &Run,
@@ -78,8 +64,7 @@ pub fn seen(
             step: step.clone(),
             screen: screen.to_string(),
         }),
-        Activity::Idle => match prompts::outcome(screen) {
-            Some((_, report, _)) if known_reports(run).contains(&report) => no_result(),
+        Activity::Idle => match prompts::outcome(screen, &prompts::marker(run, &step)) {
             Some((outcome, report, details)) => Some(Seen::Ended {
                 step: step.clone(),
                 outcome,
@@ -146,7 +131,7 @@ mod tests {
     }
 
     const RESULT: &str =
-        "YARDBELL RESULT\nstatus: pass\nsummary: Fixed the redirect.\n- 12 passed\nEND RESULT\n";
+        "YARDBELL RESULT\nstep: implement-1\nstatus: pass\nsummary: Fixed the redirect.\n- 12 passed\nEND RESULT\n";
 
     fn running(step: &str) -> Run {
         let mut run = run_of("Implement my Linear tickets");
@@ -155,6 +140,7 @@ mod tests {
         run.step_since = at(0).to_rfc3339();
         run.state_of("implement").session = "hp-app-com-1".into();
         run.state_of(step).session = "hp-app-com-1".into();
+        run.state_of(step).runs = 1;
         run
     }
 
@@ -201,12 +187,11 @@ mod tests {
     }
 
     #[test]
-    fn a_continued_session_ignores_the_result_it_already_had() {
-        let mut run = running("fix");
-        run.state_of("implement").report = "Fixed the redirect.".into();
+    fn a_shared_sessions_earlier_result_is_not_this_steps() {
+        let run = running("fix");
         let v = view(&[("hp-app-com-1", Activity::Idle)], true);
         assert_eq!(seen(&run, &v, Some(RESULT), at(1)), None);
-        let fixed = RESULT.replace("Fixed the redirect.", "Fixed both findings.");
+        let fixed = RESULT.replace("implement-1", "fix-1");
         assert!(matches!(
             seen(&run, &v, Some(&fixed), at(1)),
             Some(Seen::Ended { .. })
@@ -214,14 +199,29 @@ mod tests {
     }
 
     #[test]
-    fn a_shared_sessions_earlier_report_is_not_this_steps() {
-        let mut run = running("qa");
-        let shared = run.state_of("qa").session.clone();
-        let earlier = run.state_of("push");
-        earlier.session = shared;
-        earlier.report = "Fixed the redirect.".into();
+    fn a_step_run_again_needs_its_new_result() {
+        let mut run = running("fix");
+        run.state_of("fix").runs = 2;
         let v = view(&[("hp-app-com-1", Activity::Idle)], true);
-        assert_eq!(seen(&run, &v, Some(RESULT), at(1)), None);
+        let first = RESULT.replace("implement-1", "fix-1");
+        assert_eq!(seen(&run, &v, Some(&first), at(1)), None);
+        let second = RESULT.replace("implement-1", "fix-2");
+        assert!(matches!(
+            seen(&run, &v, Some(&second), at(1)),
+            Some(Seen::Ended { .. })
+        ));
+    }
+
+    #[test]
+    fn the_same_words_twice_still_end_the_step() {
+        let mut run = running("fix");
+        run.state_of("implement").report = "Fixed the redirect.".into();
+        let v = view(&[("hp-app-com-1", Activity::Idle)], true);
+        let same = RESULT.replace("implement-1", "fix-1");
+        assert!(matches!(
+            seen(&run, &v, Some(&same), at(1)),
+            Some(Seen::Ended { .. })
+        ));
     }
 
     #[test]

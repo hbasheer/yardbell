@@ -109,9 +109,11 @@ pub fn pick<'a>(
     setups: &'a [WorktreeSetup],
     machine: &str,
     folders: &[String],
+    command: fn(&WorktreeSetup) -> &String,
 ) -> Option<&'a WorktreeSetup> {
     setups
         .iter()
+        .filter(|s| !command(s).is_empty())
         .filter(|s| is_any(&s.machine) || s.machine == machine)
         .filter(|s| crate::dispatch::folder_matches(&s.folder, folders))
         .max_by_key(|s| {
@@ -300,11 +302,32 @@ mod tests {
             setup("acme/web", "hp", "bin/setup"),
         ];
         let web = ["acme/web".to_string(), "/home/u/acme/web".to_string()];
-        assert_eq!(pick(&setups, "hp", &web).unwrap().command, "bin/setup");
-        assert_eq!(pick(&setups, "mini", &web).unwrap().command, "npm ci");
+        assert_eq!(
+            pick(&setups, "hp", &web, |s| &s.command).unwrap().command,
+            "bin/setup"
+        );
+        assert_eq!(
+            pick(&setups, "mini", &web, |s| &s.command).unwrap().command,
+            "npm ci"
+        );
         let api = ["acme/api".to_string()];
-        assert_eq!(pick(&setups, "mini", &api).unwrap().command, "make");
-        assert!(pick(&setups, "mini", &["shop".to_string()]).is_none());
+        assert_eq!(
+            pick(&setups, "mini", &api, |s| &s.command).unwrap().command,
+            "make"
+        );
+        assert!(pick(&setups, "mini", &["shop".to_string()], |s| &s.command).is_none());
+    }
+
+    #[test]
+    fn each_command_comes_from_a_setup_that_has_one() {
+        let mut general = setup("acme/*", "any", "");
+        general.teardown = "docker compose down".into();
+        let setups = [general, setup("acme/web", "any", "npm ci")];
+        let web = ["acme/web".to_string()];
+        let down = pick(&setups, "hp", &web, |s| &s.teardown).unwrap();
+        assert_eq!(down.teardown, "docker compose down");
+        let up = pick(&setups, "hp", &web, |s| &s.command).unwrap();
+        assert_eq!(up.command, "npm ci");
     }
 
     #[test]

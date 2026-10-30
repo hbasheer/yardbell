@@ -323,7 +323,7 @@ function detail(run, d) {
       </div>
     </div>
     ${run.state === "waiting" ? needBox(run, d) : nothing}
-    ${run.teardown_problem ? html`<p class="pl-teardown-problem" role="alert">Teardown failed: ${run.teardown_problem}</p>` : nothing}
+    ${run.teardown_problem ? html`<p class="pl-teardown-problem" role="alert">${run.teardown_problem}</p>` : nothing}
     ${["queued", "running"].includes(run.state) ? html`<div class="pl-need-actions"><button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Stop this run</button></div>` : nothing}
     ${["done", "dropped"].includes(run.state) ? html`<div class="pl-need-actions"><button class="btn quiet danger" type="button" id="pl-delete-run" ?disabled=${busy} @click=${() => removeRun(run)}>Delete this run</button></div>` : nothing}
     <ol class="pl-steps">${d.steps.filter((st) => run.steps?.[st.id]).map((st) => {
@@ -342,10 +342,11 @@ function detail(run, d) {
 // Which session's terminal is shown, per run, when the person picked one themselves.
 const shownTerminal = new Map();
 
-async function stopSession(t) {
-  if (!(await ask(`Stop ${t.name}?`, "The agent in it stops. The step then waits for you.", { confirm: "Stop session", danger: true }))) return;
+async function stopSession(run, t) {
+  const after = t.current ? "The agent in it stops. The step then waits for you." : "The agent in it stops.";
+  if (!(await ask(`Stop ${t.name}?`, after, { confirm: "Stop session", danger: true }))) return;
   doing(async () => {
-    await api("POST", `/sessions/${encodeURIComponent(t.machine)}/${encodeURIComponent(t.name)}/stop`, {});
+    await api("POST", `/api/runs/${encodeURIComponent(run.id)}/stop-session`, { name: t.name });
     await load();
   });
 }
@@ -362,7 +363,7 @@ function terminal(run) {
         : html`<strong>${shown.label}</strong>`}
       <span class="pl-bar-space"></span>
       <a class="btn quiet small-link" href=${src} target="_blank" rel="noopener">Open</a>
-      <button class="btn quiet danger small-link" type="button" id="pl-stop-session" ?disabled=${busy} @click=${() => stopSession(shown)}>Stop session</button>
+      <button class="btn quiet danger small-link" type="button" id="pl-stop-session" ?disabled=${busy} @click=${() => stopSession(run, shown)}>Stop session</button>
     </header>
     <iframe class="pl-terminal-frame" title=${`Terminal of ${shown.label}`} src=${`${src}?embed=1`}></iframe>
   </section>`;
@@ -1213,10 +1214,20 @@ async function load() {
 
 let here = location.href;
 
+let askingToLeave = false;
+
+// The address goes back to the draft while the question is open, so a reload behind it keeps the
+// draft, and a second Back only lands here again.
 window.addEventListener("popstate", async () => {
-  if (unsaved() && params().get("p") !== def.id && !(await leave())) {
+  if (unsaved() && params().get("p") !== def.id) {
+    const wanted = location.href;
     history.pushState(null, "", here);
-    return;
+    if (askingToLeave) return;
+    askingToLeave = true;
+    const going = await leave();
+    askingToLeave = false;
+    if (!going) return;
+    history.pushState(null, "", wanted);
   }
   load().catch((err) => toast(err.message));
 });

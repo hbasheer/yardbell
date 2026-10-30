@@ -2107,6 +2107,31 @@ class Suite:
         b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("!new URLSearchParams(location.search).get('p')", "leaving once confirmed")
 
+    def test_back_while_editing_asks_once_and_keeps_the_draft(self):
+        b = self.b
+        self.open_builder()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
+        builder = b.js("location.href")
+        b.js("history.replaceState(null, '', '/pipeline'); history.pushState(null, '', " + repr(builder) + ")")
+        b.js("history.back()")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+        b.wait("new URLSearchParams(location.search).get('p')", "the address still on the pipeline while it asks")
+        b.js("history.back()")
+        b.pump(6)
+        if b.js("document.querySelectorAll('dialog.confirm[open]').length") != 1:
+            raise Failure("a second Back stacked another question")
+        if not b.js("!!document.querySelector('.pl-node.kind-wait')"):
+            raise Failure("the page reloaded behind the question and lost the change")
+        b.click("dialog.confirm[open] [data-answer=no]")
+        b.wait("!document.querySelector('dialog.confirm[open]')", "the dialog closed")
+        if not b.js("!!document.querySelector('.pl-node.kind-wait')"):
+            raise Failure("saying no still threw the change away")
+        b.js("history.back()")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question again")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("!new URLSearchParams(location.search).get('p')", "leaving once confirmed")
+
     def test_history_preview_then_restore(self):
         b = self.b
         definition = self.api("GET", "/api/pipelines/review")
@@ -2556,6 +2581,17 @@ class Suite:
         if b.js("document.querySelector('.pl-terminal-switch')"):
             raise Failure("one session needs no switch")
         b.wait("document.getElementById('pl-stop-session')", "Stop session")
+        b.js("""window.__posted = []; const real = window.fetch; window.fetch = (u, o) => {
+          if (String(u).includes('stop')) { window.__posted.push(String(u) + ' ' + (o && o.body)); return Promise.resolve(new Response('{"ok":true}', {headers: {'content-type': 'application/json'}})); }
+          return real(u, o);
+        }""")
+        b.click("#pl-stop-session")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('The step then waits for you')", "the question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("window.__posted.length === 1", "the stop")
+        said = b.js("window.__posted[0]")
+        if "/api/runs/run-b/stop-session" not in said or "hp-term-b" not in said:
+            raise Failure(f"the page posted {said}")
 
     def test_run_without_a_session_says_so(self):
         b = self.b

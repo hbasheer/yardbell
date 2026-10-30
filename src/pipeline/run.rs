@@ -58,9 +58,10 @@ pub trait World: Send + Sync {
     fn teardown<'a>(
         &'a self,
         machine: &'a str,
-        folder: &'a str,
+        repo: &'a str,
         path: &'a str,
     ) -> BoxFuture<'a, Result<(), String>>;
+    fn other_runs(&self, id: &str) -> Vec<Run>;
 }
 
 // What a phone notification from a pipeline is about, for the switches in Settings.
@@ -78,6 +79,8 @@ impl Note {
         }
     }
 }
+
+const NAME_TAG_LEN: usize = 6;
 
 enum Halt {
     Refused(String),
@@ -147,26 +150,43 @@ async fn ticket_text(world: &dyn World, run: &Run) -> Result<TicketText, Seen> {
     }
 }
 
-async fn started(world: &dyn World, run: &Run, step: &str, tool: &str, input: Value) -> Seen {
+async fn started(
+    world: &dyn World,
+    run: &Run,
+    step: &str,
+    tool: &str,
+    mut input: Value,
+) -> Vec<Seen> {
+    input["name_tag"] = json!(run.id[run.id.len().saturating_sub(NAME_TAG_LEN)..]);
     match run_step(world, run, tool, input).await {
         Ok(v) => {
             let field = |k: &str| v[k].as_str().unwrap_or_default().to_string();
-            match field("name") {
-                name if !name.is_empty() => Seen::Started {
-                    step: step.into(),
-                    result: Ok((name, field("machine"), field("path"))),
-                },
-                _ => Seen::Started {
+            let name = field("name");
+            if name.is_empty() {
+                return vec![Seen::Started {
                     step: step.into(),
                     result: Err(format!("{tool} did not say which session it started")),
-                },
+                }];
             }
+            let mut seen = Vec::new();
+            if v["created"] == true {
+                seen.push(Seen::WorktreeMade {
+                    step: step.into(),
+                    path: field("path"),
+                    repo: field("repo"),
+                });
+            }
+            seen.push(Seen::Started {
+                step: step.into(),
+                result: Ok((name, field("machine"), field("path"))),
+            });
+            seen
         }
-        Err(Halt::Refused(reason)) => Seen::Refused(reason),
-        Err(Halt::Failed(e)) => Seen::Started {
+        Err(Halt::Refused(reason)) => vec![Seen::Refused(reason)],
+        Err(Halt::Failed(e)) => vec![Seen::Started {
             step: step.into(),
             result: Err(e),
-        },
+        }],
     }
 }
 
@@ -225,7 +245,9 @@ pub fn needless_sessions(run: &Run, view: &StateView) -> Vec<(String, String)> {
         .values()
         .filter(|st| st.session != current && st.session != writer)
         .filter_map(|st| {
-            session(view, &st.session).map(|s| (s.machine.clone(), st.session.clone()))
+            session(view, &st.session)
+                .filter(|s| !s.stale)
+                .map(|s| (s.machine.clone(), st.session.clone()))
         })
         .collect();
     out.sort_unstable();
@@ -266,8 +288,17 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
     let view = world.view();
     let machine = state.machine.clone();
     if let Some(shared) = shared_session(run, &view, step, &machine) {
-        let live_machine =
-            session(&view, &shared.session).map_or_else(|| machine.clone(), |s| s.machine.clone());
+        let live = session(&view, &shared.session);
+        let live_machine = live.map_or_else(|| machine.clone(), |s| s.machine.clone());
+        // Typing into an agent that is asking or working would answer its question or land in
+        // its turn. The step takes the session now: the watcher asks the person, and once the
+        // agent is quiet with no result for this step, the step runs again and types its task.
+        if live.is_some_and(|s| s.activity != crate::snapshot::Activity::Idle) {
+            return vec![Seen::Started {
+                step: step.id.clone(),
+                result: Ok((shared.session, live_machine, shared.path)),
+            }];
+        }
         let input = json!({ "machine": live_machine, "name": shared.session, "text": prompt });
         return match run_step(world, run, "send_to_session", input).await {
             Ok(_) => vec![Seen::Started {
@@ -323,15 +354,17 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
                     "task": prompt,
                     "stop_original": false,
                     "read_only": read_only,
+                    "path": theirs.path,
+                    "agent": agent,
                 });
-                return vec![started(world, run, &step.id, "move_session", input).await];
+                return started(world, run, &step.id, "move_session", input).await;
             }
         }
     };
     if !agent.is_empty() {
         input["agent"] = json!(agent);
     }
-    vec![started(world, run, &step.id, "start_session", input).await]
+    started(world, run, &step.id, "start_session", input).await
 }
 
 async fn closed(world: &dyn World, run: &Run) -> bool {
@@ -444,22 +477,45 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 .collect();
             live.sort_unstable();
             live.dedup();
-            for (machine, name) in live {
+            let mut problems = Vec::new();
+            for (machine, name) in &live {
                 let input = json!({ "machine": machine, "name": name });
-                let _ = world.perform("stop_session", input).await;
+                if let Err(e) = world.perform("stop_session", input).await {
+                    problems.push(format!("{name} on {machine} did not stop: {e}"));
+                }
             }
-            let mut places: Vec<(&str, &str)> = run
+            let mut places: Vec<(&str, &str, &str)> = run
                 .steps
                 .values()
-                .filter(|st| !st.machine.is_empty() && !st.path.is_empty())
-                .map(|st| (st.machine.as_str(), st.path.as_str()))
+                .filter(|st| !st.made.is_empty())
+                .map(|st| (st.machine.as_str(), st.made.as_str(), st.repo.as_str()))
                 .collect();
             places.sort_unstable();
             places.dedup();
-            let mut problems = Vec::new();
-            for (machine, path) in places {
-                if let Err(e) = world.teardown(machine, &run.place.folder, path).await {
-                    problems.push(e);
+            let others = world.other_runs(&run.id);
+            for (machine, path, repo) in places {
+                let inside = format!("{path}/");
+                let someone = view.sessions.iter().find(|s| {
+                    s.machine == machine
+                        && (s.path == path || s.path.starts_with(&inside))
+                        && !live
+                            .iter()
+                            .any(|(_, name)| s.tmux.as_deref() == Some(*name))
+                });
+                if let Some(s) = someone {
+                    let who = s.tmux.as_deref().unwrap_or(&s.agent);
+                    problems.push(format!("Teardown skipped in {path}: {who} works there"));
+                } else if others.iter().any(|r| {
+                    r.state.active()
+                        && r.steps
+                            .values()
+                            .any(|st| st.machine == machine && st.path == path)
+                }) {
+                    problems.push(format!(
+                        "Teardown skipped in {path}: another run still uses it"
+                    ));
+                } else if let Err(e) = world.teardown(machine, repo, path).await {
+                    problems.push(format!("Teardown failed: {e}"));
                 }
             }
             vec![Seen::TornDown(
@@ -516,10 +572,19 @@ impl Live {
 }
 
 impl World for Live {
+    fn other_runs(&self, id: &str) -> Vec<Run> {
+        self.app
+            .pipelines
+            .runs()
+            .into_iter()
+            .filter(|r| r.id != id)
+            .collect()
+    }
+
     fn teardown<'a>(
         &'a self,
         machine: &'a str,
-        folder: &'a str,
+        repo: &'a str,
         path: &'a str,
     ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
@@ -527,9 +592,7 @@ impl World for Live {
                 .cfg
                 .machine(machine)
                 .ok_or_else(|| format!("{machine} is not a machine"))?;
-            let folders = vec![folder.to_string(), path.to_string()];
-            match crate::web::worktrees_api::run_teardown(&self.app, &self.cfg, m, folders, path)
-                .await
+            match crate::web::worktrees_api::run_teardown(&self.app, &self.cfg, m, repo, path).await
             {
                 Some(run) if !run.ok => Err(run.summary()),
                 _ => Ok(()),

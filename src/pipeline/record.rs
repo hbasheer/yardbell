@@ -103,6 +103,10 @@ pub struct StepState {
     pub session: String,
     pub machine: String,
     pub path: String,
+    // The worktree this step's start made, and the repository it belongs to. A run only tears
+    // down what it made.
+    pub made: String,
+    pub repo: String,
     pub outcome: Option<Outcome>,
     pub report: String,
     pub details: Vec<String>,
@@ -244,14 +248,32 @@ pub struct Plan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "effect", rename_all = "snake_case")]
 pub enum Effect {
-    Plan { step: String },
-    Agent { step: String },
-    Answer { step: String, text: String },
-    Push { step: String },
-    OpenPull { step: String },
-    Linear { step: String },
-    Report { step: String },
-    Notify { text: String },
+    Plan {
+        step: String,
+    },
+    Agent {
+        step: String,
+    },
+    Answer {
+        step: String,
+        text: String,
+    },
+    Push {
+        step: String,
+    },
+    OpenPull {
+        step: String,
+    },
+    Linear {
+        step: String,
+    },
+    Report {
+        step: String,
+    },
+    Notify {
+        text: String,
+    },
+    #[serde(alias = "stop_read_only")]
     StopSessions,
 }
 
@@ -259,6 +281,12 @@ pub enum Effect {
 #[derive(Debug, Clone, PartialEq)]
 pub enum Seen {
     TornDown(Option<String>),
+    WorktreeMade {
+        step: String,
+        path: String,
+        repo: String,
+    },
+    PersonStopped(String),
     Tick,
     Admitted,
     Offline,
