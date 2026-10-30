@@ -433,6 +433,10 @@ function edited(e) {
   return draft;
 }
 
+// Dispatch's steps live in a conversation; the Proposals page gives its own address for each.
+const stepUrl = (e) => ctx.stepUrl?.(e) || `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/actions/${e.id}`;
+const builderKey = (e) => ctx.builderKey?.(e) || `${ctx.conversation()}.${e.id}`;
+
 export async function decide(e, decision) {
   const editingNow = decision === "approve" && drafts.has(e.id);
   let input = null;
@@ -446,7 +450,7 @@ export async function decide(e, decision) {
   working.set(e.id, decision);
   ctx.draw();
   try {
-    const step = await ctx.api("POST", `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/actions/${e.id}`, { decision, ...(input ? { input } : {}) });
+    const step = await ctx.api("POST", stepUrl(e), { decision, ...(input ? { input } : {}) });
     drafts.delete(e.id);
     problems.delete(e.id);
     ctx.replaceStep(step);
@@ -574,6 +578,7 @@ function trail(e, state) {
   const mine = e.by === "you";
   if (e.by === "pipeline") parts.push(`Ran as part of the pipeline run started at ${clock(e.run_started || e.at)}`);
   else if (e.status === "auto") parts.push(`Ran without asking ${clock(e.at)}`);
+  else if (e.by === "client") parts.push(`Proposed by ${e.from} ${clock(e.at)}`);
   else parts.push(`${mine ? "You asked for this" : "Proposed by Dispatch"} ${clock(e.at)}`);
   if (e.rule) parts.push(`Your rule: ${ruleText(e.rule)}`);
   if (e.status === "approved") parts.push(`${mine ? mineWords(e).done : "Approved"} ${clock(e.decided)}`);
@@ -599,7 +604,7 @@ function actions(e, state) {
   return html`<div class="step-card-actions">
     <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => decide(e, "reject")}>${mine ? "Cancel" : "Reject"}</button>
     ${e.tool === "change_settings" ? html`<a class="btn quiet" href=${areaLink(e.input?.area)}>Open in Settings</a>` : nothing}
-    ${e.tool === "save_pipeline" ? html`<a class="btn" href=${`/pipeline?proposal=${encodeURIComponent(ctx.conversation())}.${e.id}`}>${ICONS.edit}Edit in the builder</a>` : nothing}
+    ${e.tool === "save_pipeline" ? html`<a class="btn" href=${`/pipeline?proposal=${encodeURIComponent(builderKey(e))}`}>${ICONS.edit}Edit in the builder</a>` : nothing}
     ${editable ? html`<button class="btn" type="button" ?disabled=${busy} @click=${() => startEditing(e)}>${ICONS.edit}Edit</button>` : nothing}
     <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve"}</button>
   </div>`;

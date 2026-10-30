@@ -392,6 +392,24 @@ def review_change_chat():
         {"role": "user", "text": "Call the report step Report to the team"}, step])
 
 
+# Three changes an outside MCP client asked for, waiting in the Proposals inbox.
+def inbox_proposals():
+    before = {"agent_waiting": True, "machines": True, "memory": True, "session_ended": True, "wait_minutes": 2}
+    head = '{\n  "agent_waiting": true,\n  "machines": true,\n  "memory": true,\n  "session_ended": true,\n  "wait_minutes": '
+    def proposal(id, tool, input):
+        return {"role": "action", "id": id, "tool": tool, "input": input, "status": "pending", "by": "client",
+                "from": "claude-code", "at": "2026-01-01T10:00:00+00:00"}
+    pipeline = proposed_pipeline("unused0000000000", (("x", "From the inbox"),))["events"][1]["input"]
+    return [
+        proposal("inbxphn1", "change_settings", {"area": "phone", "value": {**before, "wait_minutes": 15}, "before": before,
+                                                 "diff": [{"op": "same", "text": head}, {"op": "del", "text": "2"},
+                                                          {"op": "add", "text": "15"}, {"op": "same", "text": "\n}"}]}),
+        proposal("inbxtsk1", "save_task", {"name": "Inbox task", "text": "Sum up my day.", "before": "",
+                                           "diff": [{"op": "add", "text": "Sum up my day."}]}),
+        proposal("inbxpip1", "save_pipeline", pipeline),
+    ]
+
+
 def run_steps_chat():
     def step(id, tool, input):
         return {"role": "action", "id": id, "tool": tool, "by": "dispatch", "status": "pending",
@@ -526,6 +544,8 @@ class Yardbell:
             json.dump({"history": [{"version": 1, "saved": ago_stamp(60), "definition": review_pipeline()}]}, f)
         with open(os.path.join(self.state, "runs.json"), "w") as f:
             json.dump(pipeline_runs(), f)
+        with open(os.path.join(self.state, "proposals.json"), "w") as f:
+            json.dump(inbox_proposals(), f)
         self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
         threading.Thread(target=self.linear.serve_forever, daemon=True).start()
         # gh on the server's PATH answers for every branch with one failing pull request.
@@ -857,7 +877,8 @@ class Suite:
         self.b.wait("document.querySelector('[data-theme-toggle] .theme-word')", f"the menu on {path}")
         return self.b.js(
             """[...document.querySelectorAll('.side-foot .side-link, .ws-nav .side-link')]
-                 .map((el) => el.matches('[data-theme-toggle]') ? 'theme' : el.textContent.trim())"""
+                 .map((el) => el.matches('[data-theme-toggle]') ? 'theme'
+                   : [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join('').trim())"""
         )
 
     def test_workspace_sidebar_matches_the_other_pages(self):
@@ -897,7 +918,7 @@ class Suite:
                       const walk = document.createTreeWalker(side, NodeFilter.SHOW_TEXT);
                       const out = [];
                       for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-                        if (!n.textContent.trim() || n.parentElement.closest('.rail-initial')) continue;
+                        if (!n.textContent.trim() || n.parentElement.closest('.rail-initial, .side-count')) continue;
                         const range = document.createRange();
                         range.selectNodeContents(n);
                         if ([...range.getClientRects()].some((r) => r.width > 0 && r.height > 0)) out.push(n.textContent.trim().slice(0, 30));
@@ -2383,6 +2404,54 @@ class Suite:
         b.wait(f"location.pathname === '/dispatch' && document.querySelector('#dispatch-form textarea[name=text]')?.value === {json.dumps(want)}", "Dispatch with the request started")
         if "ask=" in b.js("location.search"):
             raise Failure("the ask parameter stayed in the address")
+
+    def test_sidebar_has_proposals_on_every_page(self):
+        b = self.b
+        for path in PAGES + ["/pipeline", "/proposals"]:
+            b.goto(self.url(path))
+            b.wait("document.querySelector('.side-link[href=\"/proposals\"]')", f"Proposals in the menu on {path}")
+
+    def test_proposals_page_approves_and_rejects(self):
+        b = self.b
+        b.goto(self.url("/proposals"))
+        b.wait("document.querySelectorAll('.step-card.pending').length === 3", "three waiting proposals")
+        b.wait("document.getElementById('nav-proposals-count')?.textContent === '3'", "the badge counting them")
+        trail = b.js("document.querySelector('[aria-label=\"Change Settings: Phone notifications\"] .step-card-trail').textContent")
+        if "Proposed by claude-code" not in trail:
+            raise Failure(f"the card says {trail!r}")
+        b.click('[aria-label="Change Settings: Phone notifications"] .step-card-actions .btn.primary')
+        b.wait("document.querySelector('[aria-label=\"Change Settings: Phone notifications\"].done')", "the phone change approved")
+        b.click('[aria-label="Save the task Inbox task"] .step-card-actions .btn.danger')
+        b.wait("document.querySelector('[aria-label=\"Save the task Inbox task\"].rejected')", "the task rejected")
+        b.wait("document.getElementById('nav-proposals-count')?.textContent === '1'", "the badge down to one")
+        heads = b.js("[...document.querySelectorAll('.pr-head')].map((h) => h.textContent)")
+        if heads != ["Waiting for you", "Decided"]:
+            raise Failure(f"the page has the sections {heads}")
+        if self.wait_minutes() != 15:
+            raise Failure(f"yardbell.yml waits {self.wait_minutes()} minutes")
+        self.check_errors("the Proposals page")
+
+    def test_proposal_pipeline_edited_in_the_builder(self):
+        b = self.b
+        b.goto(self.url("/proposals"))
+        card = '[aria-label="New pipeline: From the inbox"]'
+        b.wait(f"document.querySelector('{card} .step-card-actions a')", "the pipeline proposal")
+        b.js(f"[...document.querySelectorAll('{card} .step-card-actions a')].find((a) => a.textContent.trim() === 'Edit in the builder').click()")
+        b.wait("document.querySelector('.pl-proposal')?.textContent.includes('Proposed by claude-code. Saving approves it.')", "the builder holding the proposal")
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        b.click('.pl-node[data-step="fix"]')
+        b.wait("document.querySelector('#pl-inspector input[name=name]')", "the Fix step in the inspector")
+        self.set_field("#pl-inspector input[name=name]", "Fix from the inbox")
+        b.click("#pl-save")
+        b.wait("new URLSearchParams(location.search).get('p') === 'from-the-inbox'", "the pipeline saved")
+        status = b.js("(async () => (await (await fetch('/api/proposals/inbxpip1')).json()).status)()")
+        if status != "edited":
+            raise Failure(f"the proposal is {status}")
+        saved = b.js("(async () => (await (await fetch('/api/pipelines/from-the-inbox')).json()))()")
+        if saved["enabled"] or "Fix from the inbox" not in [s["name"] for s in saved["steps"]]:
+            raise Failure(f"the library holds {saved}")
+        b.goto(self.url("/proposals"))
+        b.wait(f"document.querySelector('{card}') && !document.querySelector('{card}.pending')", "the proposal among the decided")
 
     def check_errors(self, where):
         if self.b.errors:

@@ -981,18 +981,27 @@ function removePipeline(d) {
 
 let full = remembered("yb-pipeline-full", true);
 
+// A key is "<conversation>.<step>" for a Dispatch step, or "inbox.<id>" for a proposal from an
+// MCP client; both are drawn and approved the same way, at their own address.
 async function loadProposal(key) {
   const at = key.lastIndexOf(".");
   const conversation = key.slice(0, at), step = key.slice(at + 1);
-  const convo = await api("GET", `/dispatch/conversations/${encodeURIComponent(conversation)}`);
-  const e = convo.events.find((x) => x.role === "action" && x.id === step && x.tool === "save_pipeline");
+  const inbox = conversation === "inbox";
+  const e = inbox
+    ? await api("GET", `/api/proposals/${encodeURIComponent(step)}`).then((p) => (p.tool === "save_pipeline" ? p : null), () => null)
+    : (await api("GET", `/dispatch/conversations/${encodeURIComponent(conversation)}`)).events.find((x) => x.role === "action" && x.id === step && x.tool === "save_pipeline");
   if (!e) {
     toast("There is no such proposal");
     history.replaceState(null, "", location.pathname);
     proposal = def = draft = null;
     return;
   }
-  proposal = { key, conversation, step, before: e.input.before, decided: e.status !== "pending" };
+  proposal = {
+    key, conversation, step, before: e.input.before, decided: e.status !== "pending",
+    url: inbox ? `/api/proposals/${encodeURIComponent(step)}` : `/dispatch/conversations/${encodeURIComponent(conversation)}/actions/${step}`,
+    back: inbox ? ["/proposals", "Proposals"] : [`/dispatch?c=${encodeURIComponent(conversation)}`, "Dispatch"],
+    by: inbox ? e.from : "Dispatch",
+  };
   def = structuredClone(e.input.definition);
   draft = structuredClone(def);
   past = [];
@@ -1008,7 +1017,7 @@ function approveProposal() {
     const edited = JSON.stringify(draft) !== JSON.stringify(def);
     const body = { decision: "approve", ...(edited ? { input: { definition: draft, before: proposal.before } } : {}) };
     try {
-      const step = await api("POST", `/dispatch/conversations/${encodeURIComponent(proposal.conversation)}/actions/${proposal.step}`, body);
+      const step = await api("POST", proposal.url, body);
       if (step.result && !step.result.ok) {
         proposal.decided = true;
         toast(step.result.text);
@@ -1034,15 +1043,15 @@ function approveProposal() {
 }
 
 function proposalView() {
-  const back = `/dispatch?c=${encodeURIComponent(proposal.conversation)}`;
+  const [back, backName] = proposal.back;
   return html`<div class=${`pl-builder ${full ? "full" : ""}`}>
     <header class="pl-bar">
-      <a class="btn quiet pl-back" href=${back}>${chevron("left")}<span>Dispatch</span></a>
+      <a class="btn quiet pl-back" href=${back}>${chevron("left")}<span>${backName}</span></a>
       <input class="pl-name pl-title-name" aria-label="Pipeline name" .value=${draft.name} ?disabled=${proposal.decided} @input=${(e) => { draft.name = e.target.value; draw(); }}>
       <span class="pl-bar-space"></span>
       ${proposal.decided ? nothing : html`<button class="btn primary" type="button" id="pl-save" ?disabled=${busy} @click=${approveProposal}>Approve and save</button>`}
     </header>
-    <p class="pl-proposal" role="status">${proposal.decided ? "This proposal was already decided." : "Proposed by Dispatch. Saving approves it."} <a href=${back}>Back to Dispatch</a></p>
+    <p class="pl-proposal" role="status">${proposal.decided ? "This proposal was already decided." : `Proposed by ${proposal.by}. Saving approves it.`} <a href=${back}>Back to ${backName}</a></p>
     <div class="pl-body">${buildTab(def)}</div>
   </div>`;
 }

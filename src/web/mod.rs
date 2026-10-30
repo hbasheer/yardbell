@@ -418,6 +418,8 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/pipeline", get(|| async { asset("pipeline.html") }))
         .route("/dispatch.js", get(|| async { asset("dispatch.js") }))
         .route("/pipeline.js", get(|| async { asset("pipeline.js") }))
+        .route("/proposals", get(|| async { asset("proposals.html") }))
+        .route("/proposals.js", get(|| async { asset("proposals.js") }))
         .route(
             "/pipeline-canvas.js",
             get(|| async { asset("pipeline-canvas.js") }),

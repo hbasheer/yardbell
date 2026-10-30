@@ -1724,10 +1724,13 @@ html.embedded .dispatch-tabs { top: -10px; }
   .side-foot .side-link[href="/"] { display: none; }
   .side-foot .theme-toggle .icon { display: inline-block; width: 18px; height: 18px; }
   .side-foot .theme-toggle .theme-word { display: none; }
-  /* Four pages and two buttons share the header, so Settings and Log out show as their icons. */
-  .side-foot .side-link { padding: 4px 5px; }
-  .side-foot :is(#logout, .side-link[href="/settings"]) { font-size: 0; }
-  .side-foot :is(#logout, .side-link[href="/settings"]) .icon { display: inline-block; width: 18px; height: 18px; }
+  /* Four pages and two buttons share the header, so Proposals, Settings and Log out show as their icons. */
+  .side-foot { gap: 0; }
+  .side-foot .side-link { padding: 4px 3px; }
+  .side-foot :is(#logout, .side-link[href="/settings"], .side-link[href="/proposals"]) { font-size: 0; }
+  .side-foot :is(#logout, .side-link[href="/settings"], .side-link[href="/proposals"]) .icon { display: inline-block; width: 18px; height: 18px; }
+  .side-foot .side-link[href="/proposals"] { position: relative; }
+  .side-foot .side-count { position: absolute; top: -2px; right: -4px; min-width: 15px; padding: 0 3px; font-size: 10px; line-height: 15px; }
   .banner { flex-direction: column; align-items: stretch; }
 
   .main { padding: 14px 16px calc(48px + env(safe-area-inset-bottom)); }
@@ -1912,7 +1915,15 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .th-pick label { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 13px; }
 .th-pick select { height: 32px; }
 .step-card-pipeline .pl-minimap { display: none; }
-.step-card-pipeline .pl-canvas { height: 220px; border: 1px solid var(--line); border-radius: 8px; }
+.step-card-pipeline .pl-canvas { height: 220px; min-height: 0; border: 1px solid var(--line); border-radius: 8px; }
+.side-count { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--warn-text); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
+.side-count[hidden] { display: none; }
+.side-rail .side-count { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; line-height: 14px; font-size: 10px; }
+.proposals-main .pr-intro { margin: -4px 0 16px; }
+.pr-section + .pr-section { margin-top: 24px; }
+.pr-head { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.pr-list { display: grid; gap: 12px; max-width: 820px; }
+.pr-empty { max-width: 820px; padding: 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--ink-2); text-align: center; }
 .pl-proposal { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--info-bg, var(--side)); font-size: 13px; }
 .run-waiting { padding: 10px 12px; border-radius: 8px; background: var(--side); }
 .step-card-form textarea.step-card-json { font: 12.5px/1.6 var(--mono); tab-size: 2; }

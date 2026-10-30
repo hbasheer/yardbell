@@ -1080,6 +1080,11 @@ async function load() {
     if (res.status === 401) { location.href = "/login"; return; }
     if (!res.ok) return;
     state = await res.json();
+    const waiting = document.getElementById("nav-proposals-count");
+    if (waiting) {
+      waiting.textContent = state.proposals ? String(state.proposals) : "";
+      waiting.hidden = !state.proposals;
+    }
     trackActivity();
     render();
   } catch {}
