@@ -1136,6 +1136,7 @@ function renderSetups() {
       <input type="text" data-key="folder" aria-label="Folder" value="${esc(x.folder)}" placeholder="acme/web" autocapitalize="off" spellcheck="false">
       <select data-key="machine" aria-label="Machine">${options(machines, x.machine)}</select>
       <input type="text" class="mono" data-key="command" aria-label="Command" value="${esc(x.command)}" placeholder="bin/setup" autocapitalize="off" spellcheck="false">
+      <input type="text" class="mono" data-key="teardown" aria-label="When a run ends" title="Runs when a pipeline run that used this worktree ends" value="${esc(x.teardown || "")}" placeholder="When a run ends: docker compose down" autocapitalize="off" spellcheck="false">
       <input type="number" data-key="timeout_seconds" aria-label="Timeout in seconds" title="Timeout in seconds" value="${esc(x.timeout_seconds)}" min="1" max="3600">
       <button class="btn quiet danger" type="button" data-remove-setup="${i}" aria-label="Remove command" title="Remove command">${CROSS}</button>
     </li>`).join("")

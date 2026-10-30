@@ -213,6 +213,7 @@ pub struct Run {
     pub next_try: Option<String>,
     pub slot: Option<String>,
     pub offline_since: Option<String>,
+    pub teardown_problem: String,
     pub questions: Vec<Question>,
     pub pull: Option<PullRef>,
     pub notes: Vec<String>,
@@ -252,12 +253,12 @@ pub enum Effect {
     Report { step: String },
     Notify { text: String },
     StopSessions,
-    StopReadOnly,
 }
 
 // What the watcher, the runner or the person saw happen to one run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Seen {
+    TornDown(Option<String>),
     Tick,
     Admitted,
     Offline,

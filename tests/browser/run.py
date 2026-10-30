@@ -2486,6 +2486,21 @@ class Suite:
         b.wait("![...document.querySelectorAll('.pr-head')].some((h) => h.textContent === 'Decided')", "the decided proposals cleared")
         self.check_errors("deleting proposals")
 
+    def test_settings_saves_a_teardown_command(self):
+        b = self.b
+        b.goto(self.url("/settings#worktree-setup"))
+        b.wait("document.getElementById('setup-add')", "Worktree setup")
+        b.click("#setup-add")
+        b.wait("document.querySelector('.setup-row [data-key=teardown]')", "the teardown field")
+        self.set_field(".setup-row:last-child [data-key=folder]", "demo-app")
+        self.set_field(".setup-row:last-child [data-key=teardown]", "docker compose down")
+        b.click("#setup-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the setup saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        if "teardown: docker compose down" not in config:
+            raise Failure(f"yardbell.yml does not hold the teardown:\n{config}")
+
     def test_run_page_scrolls_on_a_phone(self):
         b = self.b
         try:

@@ -5,6 +5,7 @@ const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 fn with_setup(r: &Rig, command: &str) {
     let mut cfg = r.app.config().unwrap();
     cfg.worktree_setup = vec![crate::worktrees::setup::WorktreeSetup {
+        teardown: String::new(),
         folder: "slot2".into(),
         machine: "any".into(),
         command: command.into(),

@@ -36,7 +36,11 @@ pub struct WorktreeSetup {
     pub folder: String,
     #[serde(default = "any", skip_serializing_if = "is_any")]
     pub machine: String,
+    #[serde(default)]
     pub command: String,
+    // Runs when a pipeline run that used the worktree ends, such as `docker compose down`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub teardown: String,
     #[serde(
         default = "default_timeout",
         skip_serializing_if = "is_default_timeout"
@@ -71,10 +75,13 @@ pub fn validate(
                 s.machine
             ));
         }
-        if s.command.trim().is_empty() {
-            return Err(format!("worktree setup {n} needs a command"));
+        if s.command.trim().is_empty() && s.teardown.trim().is_empty() {
+            return Err(format!("worktree setup {n} needs a command or a teardown"));
         }
-        if s.command.len() > COMMAND_MAX || s.command.contains('\0') {
+        if [&s.command, &s.teardown]
+            .iter()
+            .any(|c| c.len() > COMMAND_MAX || c.contains('\0'))
+        {
             return Err(format!(
                 "worktree setup {n}: the command must be under {COMMAND_MAX} characters"
             ));
@@ -225,6 +232,14 @@ pub fn parse(command: &str, path: &str, out: &str) -> SetupRun {
 }
 
 impl Worktrees {
+    pub async fn teardown(&self, m: &Machine, path: &str, setup: &WorktreeSetup) -> SetupRun {
+        let down = WorktreeSetup {
+            command: setup.teardown.clone(),
+            ..setup.clone()
+        };
+        self.setup(m, path, &down).await
+    }
+
     pub async fn setup(&self, m: &Machine, path: &str, setup: &WorktreeSetup) -> SetupRun {
         let secs = setup.timeout_seconds.clamp(1, MAX_TIMEOUT_SECS);
         let script = script(path, &setup.command, secs);
@@ -255,6 +270,7 @@ mod tests {
 
     fn setup(folder: &str, machine: &str, command: &str) -> WorktreeSetup {
         WorktreeSetup {
+            teardown: String::new(),
             folder: folder.into(),
             machine: machine.into(),
             command: command.into(),
@@ -267,6 +283,13 @@ mod tests {
             fake,
             crate::ssh::Ssh::new(tempfile::tempdir().unwrap().keep()),
         )
+    }
+
+    #[test]
+    fn teardown_alone_is_a_valid_setup() {
+        let mut only = setup("web", "any", " ");
+        only.teardown = "docker compose down".into();
+        assert!(validate(&[only], |_| true).is_ok());
     }
 
     #[test]
@@ -300,7 +323,7 @@ mod tests {
                 vec![setup("web", "nope", "x")],
                 "worktree setup 1: machine \"nope\" is not in Yardbell",
             ),
-            (vec![setup("web", "any", " ")], "worktree setup 1 needs a command"),
+            (vec![setup("web", "any", " ")], "worktree setup 1 needs a command or a teardown"),
             (
                 vec![slow],
                 "worktree setup 1: timeout_seconds must be from 1 to 3600",

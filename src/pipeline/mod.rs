@@ -298,6 +298,15 @@ impl Pipelines {
             }
         }
         for run in self.store.all() {
+            if matches!(run.state, RunState::Running | RunState::Waiting)
+                && !self.busy(&run.id)
+                && run.pending.is_none()
+            {
+                for (machine, name) in run::needless_sessions(&run, &view) {
+                    let input = serde_json::json!({ "machine": machine, "name": name });
+                    let _ = world.perform("stop_session", input).await;
+                }
+            }
             let watched = matches!(run.state, RunState::Running | RunState::Queued);
             if !watched || self.busy(&run.id) || run.pending.is_some() {
                 continue;

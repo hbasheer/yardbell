@@ -55,6 +55,7 @@ async fn save_setup_settings(
             folder: s.folder.trim().to_string(),
             machine: s.machine.trim().to_string(),
             command: s.command.trim().to_string(),
+            teardown: s.teardown.trim().to_string(),
             ..s
         })
         .collect();
@@ -243,6 +244,9 @@ pub async fn run_setup(
         .collect();
     folders.push(repo.to_string());
     let setup = crate::worktrees::setup::pick(&cfg.worktree_setup, &m.name, &folders)?.clone();
+    if setup.command.is_empty() {
+        return None;
+    }
     let run = app.worktrees.setup(m, path, &setup).await;
     if run.ok {
         tracing::info!(machine = %m.name, path, "worktree setup finished");
@@ -250,6 +254,25 @@ pub async fn run_setup(
         tracing::warn!(machine = %m.name, path, summary = %run.summary(), "worktree setup failed");
     }
     app.state.set_setup(&m.name, run.clone());
+    Some(run)
+}
+
+// Runs the folder's teardown command, if it has one, when a pipeline run that used it ends.
+pub async fn run_teardown(
+    app: &AppState,
+    cfg: &Config,
+    m: &Machine,
+    folders: Vec<String>,
+    path: &str,
+) -> Option<SetupRun> {
+    let setup = crate::worktrees::setup::pick(&cfg.worktree_setup, &m.name, &folders)?;
+    if setup.teardown.is_empty() {
+        return None;
+    }
+    let run = app.worktrees.teardown(m, path, setup).await;
+    if !run.ok {
+        tracing::warn!(machine = %m.name, path, summary = %run.summary(), "worktree teardown failed");
+    }
     Some(run)
 }
 

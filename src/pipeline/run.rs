@@ -55,6 +55,12 @@ pub trait World: Send + Sync {
         path: &'a str,
     ) -> BoxFuture<'a, Result<PullRef, String>>;
     fn notify(&self, text: &str);
+    fn teardown<'a>(
+        &'a self,
+        machine: &'a str,
+        folder: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>>;
 }
 
 enum Halt {
@@ -174,6 +180,41 @@ fn shared_session(run: &Run, view: &StateView, step: &Step, machine: &str) -> Op
         .map(|(_, st)| st)
         .max_by_key(|st| st.started.clone())
         .cloned()
+}
+
+// Sessions of a live run that nothing needs any more: everything but the current step's and the
+// newest writer's, which later steps type into.
+pub fn needless_sessions(run: &Run, view: &StateView) -> Vec<(String, String)> {
+    let def = run.def();
+    let current = run
+        .steps
+        .get(&run.step)
+        .map(|s| s.session.as_str())
+        .unwrap_or_default();
+    let writer = run
+        .steps
+        .iter()
+        .filter(|(id, st)| {
+            !st.session.is_empty()
+                && def
+                    .step(id)
+                    .and_then(agent_of)
+                    .is_some_and(|(_, read_only)| !read_only)
+        })
+        .max_by_key(|(_, st)| st.started.clone())
+        .map(|(_, st)| st.session.as_str())
+        .unwrap_or_default();
+    let mut out: Vec<(String, String)> = run
+        .steps
+        .values()
+        .filter(|st| st.session != current && st.session != writer)
+        .filter_map(|st| {
+            session(view, &st.session).map(|s| (s.machine.clone(), st.session.clone()))
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 fn folder_on(run: &Run, machine: &str) -> Option<String> {
@@ -376,52 +417,38 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             world.notify(text);
             vec![]
         }
-        Effect::StopReadOnly => {
-            let view = world.view();
-            let def = run.def();
-            let writes = |name: &str| {
-                run.steps.iter().any(|(id, st)| {
-                    st.session == name
-                        && def.step(id).is_some_and(|s| {
-                            matches!(
-                                s.kind,
-                                StepKind::Agent {
-                                    read_only: false,
-                                    ..
-                                }
-                            )
-                        })
-                })
-            };
-            for (id, st) in &run.steps {
-                let read_only = def.step(id).is_some_and(|s| {
-                    matches!(
-                        s.kind,
-                        StepKind::Agent {
-                            read_only: true,
-                            ..
-                        }
-                    )
-                });
-                if !read_only || writes(&st.session) {
-                    continue;
-                }
-                if let Some(s) = session(&view, &st.session) {
-                    let input = json!({ "machine": s.machine, "name": st.session });
-                    let _ = world.perform("stop_session", input).await;
-                }
-            }
-            vec![]
-        }
         Effect::StopSessions => {
             let view = world.view();
-            for st in run.steps.values() {
-                if let Some(s) = session(&view, &st.session) {
-                    let input = json!({ "machine": s.machine, "name": st.session });
-                    let _ = world.perform("stop_session", input).await;
+            let mut live: Vec<(&str, &str)> = run
+                .steps
+                .values()
+                .filter_map(|st| {
+                    session(&view, &st.session).map(|s| (s.machine.as_str(), st.session.as_str()))
+                })
+                .collect();
+            live.sort_unstable();
+            live.dedup();
+            for (machine, name) in live {
+                let input = json!({ "machine": machine, "name": name });
+                let _ = world.perform("stop_session", input).await;
+            }
+            let mut places: Vec<(&str, &str)> = run
+                .steps
+                .values()
+                .filter(|st| !st.machine.is_empty() && !st.path.is_empty())
+                .map(|st| (st.machine.as_str(), st.path.as_str()))
+                .collect();
+            places.sort_unstable();
+            places.dedup();
+            let mut problems = Vec::new();
+            for (machine, path) in places {
+                if let Err(e) = world.teardown(machine, &run.place.folder, path).await {
+                    problems.push(e);
                 }
             }
-            vec![]
+            vec![Seen::TornDown(
+                (!problems.is_empty()).then(|| problems.join("; ")),
+            )]
         }
     }
 }
@@ -473,6 +500,27 @@ impl Live {
 }
 
 impl World for Live {
+    fn teardown<'a>(
+        &'a self,
+        machine: &'a str,
+        folder: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let m = self
+                .cfg
+                .machine(machine)
+                .ok_or_else(|| format!("{machine} is not a machine"))?;
+            let folders = vec![folder.to_string(), path.to_string()];
+            match crate::web::worktrees_api::run_teardown(&self.app, &self.cfg, m, folders, path)
+                .await
+            {
+                Some(run) if !run.ok => Err(run.summary()),
+                _ => Ok(()),
+            }
+        })
+    }
+
     fn view(&self) -> StateView {
         self.app
             .state

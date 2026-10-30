@@ -323,6 +323,7 @@ function detail(run, d) {
       </div>
     </div>
     ${run.state === "waiting" ? needBox(run, d) : nothing}
+    ${run.teardown_problem ? html`<p class="pl-teardown-problem" role="alert">Teardown failed: ${run.teardown_problem}</p>` : nothing}
     ${["queued", "running"].includes(run.state) ? html`<div class="pl-need-actions"><button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Stop this run</button></div>` : nothing}
     ${["done", "dropped"].includes(run.state) ? html`<div class="pl-need-actions"><button class="btn quiet danger" type="button" id="pl-delete-run" ?disabled=${busy} @click=${() => removeRun(run)}>Delete this run</button></div>` : nothing}
     <ol class="pl-steps">${d.steps.filter((st) => run.steps?.[st.id]).map((st) => {

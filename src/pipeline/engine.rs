@@ -148,7 +148,7 @@ fn follow(mut run: Run, outcome: Outcome, now: &DateTime<Local>) -> (Run, Vec<Ef
             run.step = String::new();
             run.slot = None;
             run.waiting = None;
-            (run, vec![Effect::StopReadOnly])
+            (run, vec![Effect::StopSessions])
         }
         WAIT if outcome == Outcome::NeedsYou => {
             let reason = format!("{} needs you", step.name);
@@ -259,6 +259,14 @@ pub fn start(run: Run, now: DateTime<Local>) -> (Run, Vec<Effect>) {
 
 pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, Vec<Effect>) {
     let now = &now;
+    // Teardown runs after a run has ended, so its answer comes to a run that is no longer active.
+    let seen = match seen {
+        Seen::TornDown(problem) => {
+            run.teardown_problem = problem.unwrap_or_default();
+            return (run, vec![]);
+        }
+        other => other,
+    };
     if !run.state.active() {
         return (run, vec![]);
     }
@@ -564,7 +572,7 @@ pub(crate) mod tests {
                 ),
                 (
                     Seen::Reported(Ok("All good.".into())),
-                    vec![Effect::StopReadOnly],
+                    vec![Effect::StopSessions],
                     "",
                     Done,
                 ),
@@ -829,11 +837,11 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn a_finished_run_stops_its_read_only_sessions() {
+    fn a_finished_run_stops_every_session() {
         let run = at_step("Review my merge requests", "report");
         let (run, did) = step(run, ended("report", Outcome::Pass), &cfg(), at(9));
         assert_eq!(run.state, RunState::Done);
-        assert_eq!(did, vec![Effect::StopReadOnly]);
+        assert_eq!(did, vec![Effect::StopSessions]);
     }
 
     #[test]

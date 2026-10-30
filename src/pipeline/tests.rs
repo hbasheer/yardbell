@@ -2,7 +2,7 @@ use super::definition::{Outcome, SessionChoice, StepKind};
 use super::engine::{self, tests::run_of};
 use super::prompts::TicketText;
 use super::record::{Effect, PrRef, PullRef, Run, RunState, Seen, WaitKind};
-use super::run::{act, World};
+use super::run::{act, needless_sessions, World};
 use super::watch;
 use crate::config::Pipelines;
 use crate::dispatch::ReviewOf;
@@ -26,6 +26,8 @@ pub(crate) struct Fake {
     pub started: Mutex<u32>,
     pub ticket_fails: Mutex<bool>,
     pub on_start: Mutex<Option<Box<dyn Fn() + Send>>>,
+    pub teardowns: Mutex<Vec<String>>,
+    pub teardown_fails: Mutex<bool>,
 }
 
 impl Fake {
@@ -229,6 +231,24 @@ impl World for Fake {
     fn notify(&self, text: &str) {
         self.notes.lock().unwrap().push(text.into());
     }
+
+    fn teardown<'a>(
+        &'a self,
+        machine: &'a str,
+        _folder: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.teardowns
+                .lock()
+                .unwrap()
+                .push(format!("{machine}:{path}"));
+            if *self.teardown_fails.lock().unwrap() {
+                return Err("docker compose down exited 1".to_string());
+            }
+            Ok(())
+        })
+    }
 }
 
 pub(crate) const PLANNED: &str = "TRIAGE\ndecision: start\nmachine: hp\nfolder: acme/app\nbranch: com-1-fix-the-login\nreason: hp has acme/app\nEND TRIAGE";
@@ -316,6 +336,98 @@ fn mr(run: &mut Run) {
         project: "commslayer/app".into(),
         forge: "gitlab".into(),
     });
+}
+
+#[test]
+fn a_finished_review_session_is_needless() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    run.step = "qa".into();
+    run.state = RunState::Running;
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Idle);
+    assert_eq!(
+        needless_sessions(&run, &fake.view()),
+        vec![("hp".to_string(), "hp-review".to_string())]
+    );
+}
+
+#[test]
+fn a_waiting_steps_session_stays() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    run.step = "review".into();
+    run.state = RunState::Waiting;
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Idle);
+    assert!(needless_sessions(&run, &fake.view()).is_empty());
+}
+
+#[test]
+fn a_shared_reviewer_stays_while_the_next_read_only_step_uses_it() {
+    let fake = Fake::default();
+    let mut run = run_of("Review my merge requests");
+    set_session(&mut run, "understand", "hp", "hp-reader", "/r/main");
+    set_session(&mut run, "root-cause", "hp", "hp-reader", "/r/main");
+    run.step = "root-cause".into();
+    run.state = RunState::Running;
+    fake.session("hp", "hp-reader", "b", Activity::Active);
+    assert!(needless_sessions(&run, &fake.view()).is_empty());
+}
+
+#[tokio::test]
+async fn a_run_that_ends_stops_every_session_and_keeps_the_worktree() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Idle);
+    run.state = RunState::Done;
+    let seen = act(&fake, &Pipelines::default(), &run, &Effect::StopSessions).await;
+    let calls = fake.calls();
+    assert_eq!(count(&calls, "stop_session"), 2, "{calls:?}");
+    assert_eq!(count(&calls, "remove_worktree"), 0, "{calls:?}");
+    assert_eq!(seen, vec![Seen::TornDown(None)]);
+}
+
+#[tokio::test]
+async fn teardown_runs_once_per_folder() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "fix", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "qa", "devbox", "devbox-qa", "/r/copy");
+    act(&fake, &Pipelines::default(), &run, &Effect::StopSessions).await;
+    let mut did = fake.teardowns.lock().unwrap().clone();
+    did.sort();
+    assert_eq!(did, vec!["devbox:/r/copy", "hp:/r/main"]);
+}
+
+#[tokio::test]
+async fn a_failing_teardown_still_ends_the_run() {
+    let fake = Fake::default();
+    *fake.teardown_fails.lock().unwrap() = true;
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    run.state = RunState::Done;
+    let seen = act(&fake, &Pipelines::default(), &run, &Effect::StopSessions).await;
+    let (run, _) = engine::step(
+        run,
+        seen.into_iter().next().unwrap(),
+        &Pipelines::default(),
+        chrono::Local::now(),
+    );
+    assert_eq!(run.state, RunState::Done);
+    assert!(
+        run.teardown_problem.contains("exited 1"),
+        "{}",
+        run.teardown_problem
+    );
 }
 
 fn set_session(run: &mut Run, id: &str, machine: &str, session: &str, path: &str) {
@@ -739,6 +851,39 @@ mod pipelines {
             }),
             pr: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_tick_stops_a_finished_reviewers_session() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.step = "qa".into();
+        run.state = RunState::Waiting;
+        run.pending = None;
+        run.state_of("implement").session = "hp-main".into();
+        run.state_of("implement").machine = "hp".into();
+        run.state_of("review").session = "hp-review".into();
+        run.state_of("review").machine = "hp".into();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-main", "b", Activity::Idle);
+        fake.session("hp", "hp-review", "b", Activity::Idle);
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let calls = fake.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.starts_with("stop_session") && c.contains("hp-review")),
+            "{calls:?}"
+        );
+        assert!(!calls.iter().any(|c| c.contains("hp-main")), "{calls:?}");
     }
 
     #[tokio::test]
