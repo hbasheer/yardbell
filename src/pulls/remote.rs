@@ -40,6 +40,42 @@ pub fn remote_command(branch: &str) -> String {
     )
 }
 
+// What a remote's host says about the service behind it. Only a host listed in Settings is sure
+// to be GitLab: a self-hosted one can have any name.
+pub fn service_of(host: &str, listed: &[String]) -> &'static str {
+    if listed.iter().any(|l| l == host) {
+        "gitlab"
+    } else if host == "github.com" || host.starts_with("github.") {
+        "github"
+    } else if host.contains("gitlab") {
+        "gitlab_unlisted"
+    } else {
+        "unknown"
+    }
+}
+
+// One line per folder, with the folder's origin as git has it. The address may hold a password,
+// so it goes through `parse` before it goes anywhere.
+pub fn folder_remotes_command(paths: &[&str]) -> String {
+    paths
+        .iter()
+        .map(|p| {
+            let p = quote(p);
+            format!(
+                "printf 'FOLDER\\t%s\\t' {p}; git -C {p} remote get-url origin 2>/dev/null; echo"
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ")
+}
+
+pub fn parse_folder_remotes(out: &str) -> Vec<(String, Option<Repo>)> {
+    out.lines()
+        .filter_map(|l| l.strip_prefix("FOLDER\t")?.split_once('\t'))
+        .map(|(path, url)| (path.to_string(), parse(url)))
+        .collect()
+}
+
 pub struct Remotes {
     runner: Arc<dyn Runner>,
     ssh: Ssh,
@@ -79,6 +115,31 @@ mod tests {
             host: host.into(),
             project: project.into(),
         })
+    }
+
+    #[test]
+    fn a_host_names_its_service() {
+        let listed = ["git.commslayer.com".to_string()];
+        assert_eq!(service_of("github.com", &listed), "github");
+        assert_eq!(service_of("github.acme.com", &listed), "github");
+        assert_eq!(service_of("git.commslayer.com", &listed), "gitlab");
+        assert_eq!(service_of("gitlab.com", &listed), "gitlab_unlisted");
+        assert_eq!(service_of("gitlab.acme.org", &listed), "gitlab_unlisted");
+        assert_eq!(service_of("bitbucket.org", &listed), "unknown");
+    }
+
+    #[test]
+    fn each_folder_gets_its_remote_without_any_password() {
+        let script = folder_remotes_command(&["/r/app", "/r/my app"]);
+        assert!(script.contains("'/r/my app'"), "{script}");
+        let out = "FOLDER\t/r/app\thttps://me:hunter2@gitlab.com/group/app.git\n\nFOLDER\t/r/my app\t\n\n";
+        assert_eq!(
+            parse_folder_remotes(out),
+            vec![
+                ("/r/app".to_string(), repo("gitlab.com", "group/app")),
+                ("/r/my app".to_string(), None),
+            ]
+        );
     }
 
     #[test]

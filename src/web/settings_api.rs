@@ -22,6 +22,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/machines/{name}", post(machine))
         .route("/api/settings/phone", post(phone_save))
         .route("/api/settings/pull-requests", post(pull_requests_save))
+        .route("/api/settings/pull-requests/folders", get(pull_folders))
         .route("/api/settings/agents", post(add_agent))
         .route("/api/settings/mcp/on", post(mcp_on))
         .route("/api/settings/mcp/off", post(mcp_off))
@@ -274,6 +275,67 @@ async fn pull_requests_save(
     crate::mcp_change::apply(&app.settings, "pull_requests", value, &saved).map_err(bad)?;
     app.state.touch();
     Ok(Json(json!({ "saved": true })).into_response())
+}
+
+const FOLDER_REMOTES_TIMEOUT: crate::shell::Duration = crate::shell::Duration::from_secs(20);
+
+// Which service each folder's origin is on. Asked when the section opens, not on a timer.
+async fn pull_folders(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let listed: Vec<String> = cfg
+        .pull_requests
+        .gitlab
+        .iter()
+        .map(|g| g.host.trim().to_ascii_lowercase())
+        .collect();
+    let app = &app;
+    let answers = futures::future::join_all(cfg.machines.iter().map(|m| async move {
+        let up = app.state.status(&m.name).is_some_and(|s| s.up);
+        let paths = app.state.snapshot(&m.name).unwrap_or_default().folder_paths;
+        if !up || paths.is_empty() {
+            return (
+                m,
+                paths,
+                up.then(String::new).ok_or("not connected".to_string()),
+            );
+        }
+        let list: Vec<&str> = paths.values().map(String::as_str).collect();
+        let asked = app
+            .folders
+            .exec(
+                m,
+                &crate::pulls::folder_remotes_command(&list),
+                FOLDER_REMOTES_TIMEOUT,
+            )
+            .await;
+        (m, paths, asked)
+    }))
+    .await;
+    let mut folders = Vec::new();
+    let mut unreachable = Vec::new();
+    for (m, paths, asked) in answers {
+        let out = match asked {
+            Ok(out) => out,
+            Err(e) => {
+                unreachable.push(json!({ "machine": m.name, "why": e }));
+                continue;
+            }
+        };
+        let remotes: std::collections::HashMap<_, _> = crate::pulls::parse_folder_remotes(&out)
+            .into_iter()
+            .collect();
+        for (label, path) in &paths {
+            let repo = remotes.get(path).cloned().flatten();
+            folders.push(json!({
+                "machine": m.name,
+                "folder": label,
+                "host": repo.as_ref().map(|r| r.host.as_str()),
+                "project": repo.as_ref().map(|r| r.project.as_str()),
+                "service": repo.as_ref().map_or("none", |r| crate::pulls::service_of(&r.host, &listed)),
+            }));
+        }
+    }
+    Ok(Json(json!({ "folders": folders, "unreachable": unreachable })).into_response())
 }
 
 async fn phone_save(

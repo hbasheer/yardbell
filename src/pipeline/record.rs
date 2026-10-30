@@ -218,6 +218,7 @@ pub struct Run {
     pub slot: Option<String>,
     pub offline_since: Option<String>,
     pub teardown_problem: String,
+    pub deleting: bool,
     pub questions: Vec<Question>,
     pub pull: Option<PullRef>,
     pub notes: Vec<String>,

@@ -438,15 +438,12 @@ async fn delete_run(
     AxState(app): AxState<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    use crate::pipeline::DeleteRun;
-    app.pipelines.delete_run(&id).map_err(|e| match e {
-        DeleteRun::Missing => ApiError(StatusCode::NOT_FOUND, format!("{id} is not a run")),
-        DeleteRun::Active => ApiError(StatusCode::CONFLICT, "stop this run first".into()),
-        DeleteRun::Stopping => ApiError(
-            StatusCode::CONFLICT,
-            "this run is still stopping, try again in a moment".into(),
-        ),
-    })?;
+    if !app.pipelines.delete_run(&id) {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!("{id} is not a run"),
+        ));
+    }
     app.state.touch();
     Ok(Json(json!({ "deleted": id })).into_response())
 }

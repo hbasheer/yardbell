@@ -2568,6 +2568,20 @@ class Suite:
         b.wait("document.querySelector('.pl-terminal')", "the terminal area")
         self.with_terminals()
         frame = "document.querySelector('.pl-terminal iframe')"
+        b.wait("document.getElementById('pl-terminal-toggle')?.getAttribute('aria-expanded') === 'false'", "the terminal closed at first")
+        if b.js(frame):
+            raise Failure("a closed terminal still holds a live connection")
+        tall = b.js("document.querySelector('.pl-run-main .pl-canvas').getBoundingClientRect().height")
+        closed = b.js("document.querySelector('.pl-terminal').getBoundingClientRect().height")
+        if closed > 60:
+            raise Failure(f"the closed terminal takes {closed}px")
+        b.click("#pl-terminal-toggle")
+        b.wait(f"{frame}", "the terminal opening")
+        if b.js("document.querySelector('.pl-run-main .pl-canvas').getBoundingClientRect().height") >= tall:
+            raise Failure("opening the terminal left the canvas no smaller")
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        self.with_terminals()
+        b.wait(f"{frame}", "the terminal staying open after a reload")
         b.wait(f"{frame}?.getAttribute('src') === '/term/hp/hp-term-a?embed=1'", "the current step's terminal")
         b.wait(f"{frame}.contentWindow.document.readyState === 'complete'", "the terminal loaded")
         b.js(f"{frame}.contentWindow.__kept = true")
@@ -2632,6 +2646,69 @@ class Suite:
         if "glpat-browser-test" in config:
             raise Failure("the token's value reached yardbell.yml")
         self.check_errors("the Pull requests section")
+
+    def test_settings_explains_github_and_gitlab(self):
+        b = self.b
+        cfg_before = self.api("GET", "/api/settings")["pull_requests"]["value"]
+        self.api("POST", "/api/settings/pull-requests", {**cfg_before, "gitlab": []})
+        b.goto(self.url("/settings#pull-requests"))
+        b.wait("document.querySelector('#pr-form [name=enabled]')?.checked === true", "the section")
+        said = b.js("document.getElementById('pull-requests').textContent")
+        for want in ("GitHub", "gh auth login", "GitLab", "read_api", "No GitLab hosts yet"):
+            if want not in said:
+                raise Failure(f"the section does not say {want!r}:\n{said}")
+        if "hp" not in b.js("document.getElementById('pr-github').textContent"):
+            raise Failure("GitHub does not list the machines")
+        b.click("#pr-add-host")
+        b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
+        for width in (1280, 390):
+            b.viewport(width, 844)
+            b.pump(0.2)
+            at = b.js("""(() => {
+              const row = document.querySelector('#pr-hosts .row').getBoundingClientRect();
+              const x = document.querySelector('#pr-hosts [data-remove-host]').getBoundingClientRect();
+              return { right: row.right - x.right, top: x.top - row.top };
+            })()""")
+            if not (0 <= at["right"] <= 12 and 0 <= at["top"] <= 12):
+                raise Failure(f"the close icon is not in the top right at {width}px: {at}")
+            if width == 390:
+                lefts = b.js("[...document.querySelectorAll('#pr-hosts .row:first-child label')].map((x) => x.getBoundingClientRect().left)")
+                if len(set(lefts)) != 1:
+                    raise Failure(f"the host's fields are not stacked on a phone: {lefts}")
+        b.viewport(1280, 800)
+        row = b.js("document.querySelector('#pr-hosts .row').textContent")
+        for want in ("Host", "Address", "Token", "Not checked yet"):
+            if want not in row:
+                raise Failure(f"the host row does not say {want!r}: {row}")
+        if "No GitLab hosts yet" in b.js("document.getElementById('pull-requests').innerText"):
+            raise Failure("the empty note stayed after adding a host")
+        if not b.js("document.querySelector('#pull-requests a[href=\"#servers\"]')"):
+            raise Failure("no way to the saved secrets")
+        b.js("""window.__real = window.fetch; window.fetch = (u, o) => String(u).includes('/pull-requests/folders')
+          ? Promise.resolve(new Response(JSON.stringify({ unreachable: [], folders: [
+              { machine: 'hp', folder: 'web', host: 'github.com', project: 'acme/web', service: 'github' },
+              { machine: 'hp', folder: 'app', host: 'gitlab.acme.org', project: 'acme/app', service: 'gitlab_unlisted' },
+            ] }), { headers: { 'content-type': 'application/json' } }))
+          : window.__real(u, o)""")
+        b.click("#pr-folders-refresh")
+        b.wait("document.querySelector('#pr-folders [data-add-host]')", "a folder on a GitLab host not listed")
+        folders = b.js("document.getElementById('pr-folders').textContent")
+        for want in ("web", "GitHub", "app", "GitLab", "Add gitlab.acme.org"):
+            if want not in folders:
+                raise Failure(f"the folders do not say {want!r}: {folders}")
+        if "Not checked" in b.js("document.getElementById('pr-github').textContent") and b.js("document.querySelector('#pr-folders .pr-folder .pr-ok')"):
+            raise Failure("a folder reads as working before anything was checked")
+        hosts = b.js("document.querySelectorAll('#pr-hosts .row').length")
+        b.click("#pr-folders [data-add-host]")
+        b.wait(f"document.querySelectorAll('#pr-hosts .row').length === {hosts + 1}", "the host added")
+        if b.js("document.querySelector('#pr-hosts .row:last-child [data-key=host]').value") != "gitlab.acme.org":
+            raise Failure("the added host is not the folder's")
+        if b.js("document.querySelector('#pr-folders [data-add-host]')"):
+            raise Failure("the folder still asks to add a host now listed")
+        b.js("document.querySelector('#pr-form [name=use_github]').click()")
+        b.wait("document.getElementById('pr-folders').textContent.includes('GitHub is switched off')", "GitHub off in the folder list")
+        b.js("window.fetch = window.__real")
+        self.check_errors("the GitHub and GitLab section")
 
     def test_a_session_says_why_it_has_no_badge(self):
         b = self.b
@@ -2702,7 +2779,8 @@ class Suite:
     def test_run_page_scrolls_on_a_phone(self):
         b = self.b
         try:
-            for width, height, ratio in ((390, 844, 3), (900, 600, 1)):
+            # Short screens: with the terminal closed the page fits a tall phone.
+            for width, height, ratio in ((390, 520, 3), (900, 500, 1)):
                 b.viewport(width, height, ratio)
                 b.goto(self.url("/pipeline?p=review&run=run-a"))
                 b.wait("document.querySelector('.pl-detail')", "the run's details")
@@ -2714,6 +2792,21 @@ class Suite:
                 })()""")
                 if moved["top"] <= 0 or moved["bottom"] > moved["height"] + 1:
                     raise Failure(f"the run page does not scroll to its end at {width}px: {moved}")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_pipeline_head_buttons_match(self):
+        b = self.b
+        try:
+            for width, height, ratio in ((1280, 800, 1), (390, 844, 3)):
+                b.viewport(width, height, ratio)
+                b.goto(self.url("/pipeline"))
+                b.wait("document.getElementById('pl-new')", "New pipeline")
+                heights = b.js("[...document.querySelectorAll('.pl-head-actions .btn')].map((x) => x.getBoundingClientRect().height)")
+                if len(set(heights)) != 1:
+                    raise Failure(f"the head's buttons differ at {width}px: {heights}")
+                if not b.js("document.querySelector('#pl-new .icon')"):
+                    raise Failure("New pipeline has no plus, unlike New session")
         finally:
             b.viewport(1280, 800)
 
@@ -2749,6 +2842,22 @@ class Suite:
         b.wait("!new URLSearchParams(location.search).get('p')", "back on the list")
         if b.js(f"(async () => (await fetch('/api/pipelines/{made}')).status)()") != 404:
             raise Failure("the pipeline was not deleted")
+
+    def test_delete_a_run_in_progress(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.getElementById('pl-delete-run')", "Delete this run on a run in progress")
+        b.js("""window.__deleted = []; const real = window.fetch; window.fetch = (u, o) => {
+          if (o && o.method === 'DELETE') { window.__deleted.push(String(u)); return Promise.resolve(new Response('{"deleted":"run-a"}', {headers: {'content-type': 'application/json'}})); }
+          return real(u, o);
+        }""")
+        b.click("#pl-delete-run")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Its agent sessions stop')", "the question saying what stops")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("window.__deleted.length === 1", "the delete")
+        if "/api/runs/run-a" not in b.js("window.__deleted[0]"):
+            raise Failure("the wrong run was deleted")
+        self.check_errors("deleting a run in progress")
 
     def test_delete_a_finished_run(self):
         b = self.b

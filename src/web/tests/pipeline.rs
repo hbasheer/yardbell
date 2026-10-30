@@ -438,7 +438,7 @@ async fn an_empty_pipeline_is_created_and_cannot_run() {
 }
 
 #[tokio::test]
-async fn a_run_can_be_deleted_once_it_has_ended() {
+async fn a_run_can_be_deleted_in_any_state() {
     let r = rig();
     let c = cookie(&r.app).await;
     let id = copy(&r, &c, IMPLEMENT).await;
@@ -450,22 +450,53 @@ async fn a_run_can_be_deleted_once_it_has_ended() {
         .remove(0);
     let url = format!("/api/runs/{}", run.id);
     let (status, body) = call(&r, &c, "DELETE", &url, None).await;
-    assert_eq!(status, StatusCode::CONFLICT, "{body}");
-    assert_eq!(body["error"], "stop this run first");
-    let mut dropped = r.app.pipelines.drop_run(&run.id).unwrap();
-    let (status, body) = call(&r, &c, "DELETE", &url, None).await;
-    assert_eq!(status, StatusCode::CONFLICT, "still stopping: {body}");
     assert_eq!(
-        body["error"],
-        "this run is still stopping, try again in a moment"
+        status,
+        StatusCode::OK,
+        "a run in progress can be deleted: {body}"
     );
-    dropped.pending = None;
-    r.app.pipelines.put(dropped);
+    let (_, listed) = call(&r, &c, "GET", "/api/runs", None).await;
+    assert_eq!(listed["runs"], json!([]));
+    let mut stopping = r.app.pipelines.run(&run.id).unwrap();
+    assert_eq!(stopping.state, RunState::Dropped);
+    stopping.pending = None;
+    r.app.pipelines.put(stopping);
     let (status, body) = call(&r, &c, "DELETE", &url, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
     assert!(r.app.pipelines.run(&run.id).is_none());
     let (status, _) = call(&r, &c, "DELETE", &url, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn settings_says_which_service_each_folder_uses() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let folder = r
+        .app
+        .state
+        .snapshot("hp")
+        .unwrap()
+        .folder_paths
+        .into_iter()
+        .next()
+        .expect("the rig has a folder");
+    r.fake.stub(
+        "FOLDER",
+        Output::ok_with(&format!(
+            "FOLDER\t{}\thttps://me:hunter2@gitlab.com/group/app.git\n\n",
+            folder.1
+        )),
+    );
+    let (status, body) = call(&r, &c, "GET", "/api/settings/pull-requests/folders", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let row = &body["folders"][0];
+    assert_eq!(row["machine"], "hp");
+    assert_eq!(row["folder"], json!(folder.0));
+    assert_eq!(row["host"], "gitlab.com");
+    assert_eq!(row["project"], "group/app");
+    assert_eq!(row["service"], "gitlab_unlisted");
+    assert!(!body.to_string().contains("hunter2"), "{body}");
 }
 
 #[tokio::test]
