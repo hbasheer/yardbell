@@ -1717,20 +1717,26 @@ html.embedded .dispatch-tabs { top: -10px; }
   .nav-item.selected { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: none; }
   body:not([data-page="dashboard"]) .machine-nav { display: none; }
   .vpn { display: none; }
-  .side-foot { margin: 0; padding: 0; border: 0; position: absolute; top: max(8px, env(safe-area-inset-top)); right: 8px; display: flex; gap: 2px; }
-  .side-foot .side-link { padding: 4px 6px; font-size: 12px; }
-  .side-foot .side-link .icon { display: none; }
-  /* The wordmark and the back links lead home on a phone, and the header has no room for one more. */
-  .side-foot .side-link[href="/"] { display: none; }
-  .side-foot .theme-toggle .icon { display: inline-block; width: 18px; height: 18px; }
+  /* The pages sit in a tab bar along the bottom, as a phone's own apps do. */
+  :root { --tabbar: calc(54px + env(safe-area-inset-bottom)); }
+  html.keyboard { --tabbar: 0px; }
+  html:not(.embedded) .app { box-sizing: border-box; padding-bottom: var(--tabbar); }
+  .side-foot, .ws-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 12; display: flex; gap: 0; margin: 0; padding: 0 0 env(safe-area-inset-bottom); border: 0; border-top: 1px solid var(--line); background: var(--surface); }
+  html.keyboard .side-foot { display: none; }
+  .side-foot .side-link, .ws-nav .side-link { position: relative; flex: 1 1 0; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; height: 54px; padding: 0; border-radius: 0; background: none; font-size: 10.5px; line-height: 1; white-space: nowrap; }
+  .side-foot .side-link .icon, .ws-nav .side-link .icon { display: inline-block; width: 20px; height: 20px; }
+  .side-foot [aria-current="page"].side-link, .ws-nav [aria-current="page"].side-link { background: none; box-shadow: none; color: var(--accent); font-weight: 600; }
+  .side-foot [aria-current="page"].side-link .icon, .ws-nav [aria-current="page"].side-link .icon { color: var(--accent); }
+  .side-foot .side-link[href="/proposals"] .side-count, .ws-nav .side-link[href="/proposals"] .side-count { position: absolute; top: 4px; left: calc(50% + 4px); min-width: 15px; margin: 0; padding: 0 3px; font-size: 10px; font-weight: 600; line-height: 15px; }
+  /* Theme and Log out stay in the top corner: they are not pages. The Workspace's corner is its own,
+     and Settings has both. */
+  .side-foot .theme-toggle, .side-foot #logout { position: fixed; top: max(8px, env(safe-area-inset-top)); flex: none; width: 34px; height: 34px; font-size: 0; }
+  .side-foot .theme-toggle { right: 44px; }
+  .side-foot #logout { right: 8px; }
   .side-foot .theme-toggle .theme-word { display: none; }
-  /* Four pages and two buttons share the header, so Proposals, Settings and Log out show as their icons. */
-  .side-foot { gap: 0; }
-  .side-foot .side-link { padding: 4px 3px; }
-  .side-foot :is(#logout, .side-link[href="/settings"], .side-link[href="/proposals"]) { font-size: 0; }
-  .side-foot :is(#logout, .side-link[href="/settings"], .side-link[href="/proposals"]) .icon { display: inline-block; width: 18px; height: 18px; }
-  .side-foot .side-link[href="/proposals"] { position: relative; }
-  .side-foot .side-count { position: absolute; top: -2px; right: -4px; min-width: 15px; padding: 0 3px; font-size: 10px; line-height: 15px; }
+  .ws-nav .theme-toggle, .ws-nav #logout, .ws-nav .vpn { display: none; }
+  .ws-side { padding-bottom: var(--tabbar); }
+  #toast { bottom: calc(var(--tabbar) + 12px); }
   .banner { flex-direction: column; align-items: stretch; }
 
   .main { padding: 14px 16px calc(48px + env(safe-area-inset-bottom)); }
@@ -2252,7 +2258,6 @@ details.pl-report summary { cursor: pointer; }
   .pl-history-row time { display: none; }
 }
 
-@media (max-width: 380px) {
-  .side-foot .side-link { font-size: 0; }
-  .side-foot .side-link .icon { display: inline-block; width: 18px; height: 18px; }
+@media (max-width: 340px) {
+  .side-foot .side-link, .ws-nav .side-link { font-size: 0; }
 }

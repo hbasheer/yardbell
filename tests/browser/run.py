@@ -1278,13 +1278,14 @@ class Suite:
                 """(() => {
                   const last = [...document.querySelectorAll('#dispatch-log .msg')].pop().getBoundingClientRect();
                   const form = document.getElementById('dispatch-form').getBoundingClientRect();
-                  return {last: last.bottom, top: form.top, bottom: form.bottom, height: innerHeight};
+                  const bar = document.querySelector('.side-foot').getBoundingClientRect();
+                  return {last: last.bottom, top: form.top, bottom: form.bottom, bar: bar.top};
                 })()"""
             )
             if box["last"] > box["top"] + 1:
                 raise Failure(f"the composer (top {box['top']}px) covers the last message (bottom {box['last']}px)")
-            if abs(box["bottom"] - box["height"]) > 1:
-                raise Failure(f"the composer ends at {box['bottom']}px, not at the bottom of the {box['height']}px screen")
+            if abs(box["bottom"] - box["bar"]) > 1:
+                raise Failure(f"the composer ends at {box['bottom']}px, not on the tab bar at {box['bar']}px")
         finally:
             b.viewport(1280, 800)
 
@@ -2615,6 +2616,52 @@ class Suite:
             b.wait("document.querySelector('.pr-why[href=\"/settings#pull-requests\"]')?.title.includes('gh is not installed')", "the reason on the session")
         finally:
             self.y.tmux("kill-session", "-t", "=hp-why-test")
+
+    def test_phone_menu_is_a_bottom_tab_bar(self):
+        b = self.b
+        b.viewport(390, 844, 3)
+        probe = """(() => {
+          const rect = (el) => el.getBoundingClientRect();
+          const bar = document.querySelector('.side-foot, .ws-nav');
+          const tabs = [...bar.querySelectorAll('.side-link:not(.theme-toggle):not(#logout):not(.desk-only)')].filter((el) => el.getClientRects().length);
+          const main = document.querySelector('.main, .ws-side');
+          return {
+            bottom: Math.round(rect(bar).bottom), height: innerHeight, wide: Math.round(rect(bar).width), page: innerWidth,
+            tabs: tabs.map((t) => t.textContent.trim().replace(/[0-9]+$/, '')),
+            row: new Set(tabs.map((t) => Math.round(rect(t).top))).size,
+            inside: tabs.every((t) => rect(t).left >= 0 && rect(t).right <= innerWidth),
+            hit: tabs.every((t) => { const r = rect(t); return t.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }),
+            mainEnd: Math.round(rect(main).bottom), barTop: Math.round(rect(bar).top),
+            sideways: document.documentElement.scrollWidth > innerWidth,
+          };
+        })()"""
+        want = ["Dashboard", "Workspace", "Pipelines", "Dispatch", "Proposals", "Settings"]
+        try:
+            for path in ("/", "/pipeline", "/settings", "/dispatch", "/proposals", "/workspace"):
+                b.goto(self.url(path))
+                b.wait("document.querySelector('.side-foot .side-link, .ws-nav .side-link')", f"the menu on {path}")
+                b.pump(0.4)
+                seen = b.js(probe)
+                problems = []
+                if seen["tabs"] != want:
+                    problems.append("tabs")
+                if abs(seen["bottom"] - seen["height"]) > 1 or seen["wide"] != seen["page"]:
+                    problems.append("not along the bottom")
+                if seen["row"] != 1 or not seen["inside"] or not seen["hit"]:
+                    problems.append("tabs not in one tappable row")
+                if seen["sideways"]:
+                    problems.append("sideways scroll")
+                if seen["mainEnd"] > seen["barTop"] + 1 and path != "/workspace":
+                    problems.append("the page runs under the bar")
+                if problems:
+                    raise Failure(f"{path}: {problems}: {seen}")
+            b.goto(self.url("/dispatch"))
+            b.wait("document.querySelector('.side-foot .side-link[aria-current=page]')", "the current tab")
+            b.js("document.documentElement.classList.add('keyboard')")
+            if b.js("document.querySelector('.side-foot').getClientRects().length"):
+                raise Failure("the tab bar stays up over the keyboard")
+        finally:
+            b.viewport(1280, 800)
 
     def test_run_page_scrolls_on_a_phone(self):
         b = self.b

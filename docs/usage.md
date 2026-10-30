@@ -159,8 +159,8 @@ including the terminal. Several devices can attach to one session. The one you a
 session's size: opening it, clicking in it or typing takes over, and a tab you cannot see or a
 phone in the background never does.
 
-On a phone the machines stay on top, sessions become cards, and the terminal gets a key row for Esc,
-Tab, Ctrl, the arrows and Ctrl-C. Yardbell follows the system light or dark setting, or the theme
+On a phone the pages sit in a tab bar along the bottom, the machines stay on top, sessions become
+cards, and the terminal gets a key row for Esc, Tab, Ctrl, the arrows and Ctrl-C. Yardbell follows the system light or dark setting, or the theme
 you pick with the button in the sidebar, on each device.
 
 <br clear="right">

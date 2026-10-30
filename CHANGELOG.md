@@ -19,6 +19,8 @@ and the project uses [Semantic Versioning](https://semver.org).
   often they are checked, adds GitLab hosts with a token from your saved secrets, and shows whether
   `gh` and each token work. A session with no badge because of a problem now says **No PR info**, with
   the reason.
+- **Tab bar on a phone.** The pages sit in a bar along the bottom of the screen, as in a phone's own
+  apps, so the header no longer collides with the menu. It hides while the keyboard is open.
 - Fixed: the run page could not scroll on a phone or tablet.
 - Fixed: Delete on a pipeline did nothing in the desktop app, because the page used a dialog the
   app's webview does not have.
