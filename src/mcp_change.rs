@@ -63,7 +63,7 @@ fn identity(v: &Value) -> Option<String> {
 }
 
 // Where an entry sends what it holds; a saved credential is only kept while these stay the same.
-const DESTINATIONS: [&str; 4] = ["url", "host", "command", "resume"];
+const DESTINATIONS: [&str; 5] = ["url", "host", "command", "resume", "teardown"];
 
 // Walks what was sent beside the area as stored and as read_settings showed it. A string that
 // still says (hidden) takes the stored string, but only when it is exactly what was shown: text

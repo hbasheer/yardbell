@@ -1,4 +1,4 @@
-use super::definition::{SessionChoice, StepKind};
+use super::definition::StepKind;
 use super::prompts;
 use super::record::{Run, RunState, Seen};
 use crate::snapshot::Activity;
@@ -12,28 +12,6 @@ const GRACE_MINUTES: i64 = 2;
 fn settled(run: &Run, now: DateTime<Local>) -> bool {
     DateTime::parse_from_rfc3339(&run.step_since)
         .is_ok_and(|since| (now - since.with_timezone(&Local)).num_minutes() >= GRACE_MINUTES)
-}
-
-// Reports already on the screen of a session this step continues are the earlier step's, not
-// this one's.
-fn known_reports(run: &Run) -> Vec<String> {
-    let mut known: Vec<String> = run
-        .steps
-        .get(&run.step)
-        .map(|s| s.report.clone())
-        .into_iter()
-        .collect();
-    if let Some(StepKind::Agent {
-        session: SessionChoice::Continue(other),
-        ..
-    }) = run.def().step(&run.step).map(|s| &s.kind)
-    {
-        if let Some(s) = run.steps.get(other) {
-            known.push(s.report.clone());
-        }
-    }
-    known.retain(|r| !r.is_empty());
-    known
 }
 
 // What the poll shows about a run's current step, if anything new.
@@ -86,8 +64,7 @@ pub fn seen(
             step: step.clone(),
             screen: screen.to_string(),
         }),
-        Activity::Idle => match prompts::outcome(screen) {
-            Some((_, report, _)) if known_reports(run).contains(&report) => no_result(),
+        Activity::Idle => match prompts::outcome(screen, &prompts::marker(run, &step)) {
             Some((outcome, report, details)) => Some(Seen::Ended {
                 step: step.clone(),
                 outcome,
@@ -126,6 +103,7 @@ mod tests {
             sessions: sessions
                 .iter()
                 .map(|(name, activity)| SessionView {
+                    pull_why: None,
                     id: name.to_string(),
                     machine: "hp".into(),
                     agent: "claude".into(),
@@ -153,7 +131,7 @@ mod tests {
     }
 
     const RESULT: &str =
-        "YARDBELL RESULT\nstatus: pass\nsummary: Fixed the redirect.\n- 12 passed\nEND RESULT\n";
+        "YARDBELL RESULT\nstep: implement-1\nstatus: pass\nsummary: Fixed the redirect.\n- 12 passed\nEND RESULT\n";
 
     fn running(step: &str) -> Run {
         let mut run = run_of("Implement my Linear tickets");
@@ -162,6 +140,7 @@ mod tests {
         run.step_since = at(0).to_rfc3339();
         run.state_of("implement").session = "hp-app-com-1".into();
         run.state_of(step).session = "hp-app-com-1".into();
+        run.state_of(step).runs = 1;
         run
     }
 
@@ -208,14 +187,39 @@ mod tests {
     }
 
     #[test]
-    fn a_continued_session_ignores_the_result_it_already_had() {
+    fn a_shared_sessions_earlier_result_is_not_this_steps() {
+        let run = running("fix");
+        let v = view(&[("hp-app-com-1", Activity::Idle)], true);
+        assert_eq!(seen(&run, &v, Some(RESULT), at(1)), None);
+        let fixed = RESULT.replace("implement-1", "fix-1");
+        assert!(matches!(
+            seen(&run, &v, Some(&fixed), at(1)),
+            Some(Seen::Ended { .. })
+        ));
+    }
+
+    #[test]
+    fn a_step_run_again_needs_its_new_result() {
+        let mut run = running("fix");
+        run.state_of("fix").runs = 2;
+        let v = view(&[("hp-app-com-1", Activity::Idle)], true);
+        let first = RESULT.replace("implement-1", "fix-1");
+        assert_eq!(seen(&run, &v, Some(&first), at(1)), None);
+        let second = RESULT.replace("implement-1", "fix-2");
+        assert!(matches!(
+            seen(&run, &v, Some(&second), at(1)),
+            Some(Seen::Ended { .. })
+        ));
+    }
+
+    #[test]
+    fn the_same_words_twice_still_end_the_step() {
         let mut run = running("fix");
         run.state_of("implement").report = "Fixed the redirect.".into();
         let v = view(&[("hp-app-com-1", Activity::Idle)], true);
-        assert_eq!(seen(&run, &v, Some(RESULT), at(1)), None);
-        let fixed = RESULT.replace("Fixed the redirect.", "Fixed both findings.");
+        let same = RESULT.replace("implement-1", "fix-1");
         assert!(matches!(
-            seen(&run, &v, Some(&fixed), at(1)),
+            seen(&run, &v, Some(&same), at(1)),
             Some(Seen::Ended { .. })
         ));
     }

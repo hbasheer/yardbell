@@ -103,6 +103,10 @@ pub struct StepState {
     pub session: String,
     pub machine: String,
     pub path: String,
+    // The worktree this step's start made, and the repository it belongs to. A run only tears
+    // down what it made.
+    pub made: String,
+    pub repo: String,
     pub outcome: Option<Outcome>,
     pub report: String,
     pub details: Vec<String>,
@@ -213,6 +217,7 @@ pub struct Run {
     pub next_try: Option<String>,
     pub slot: Option<String>,
     pub offline_since: Option<String>,
+    pub teardown_problem: String,
     pub questions: Vec<Question>,
     pub pull: Option<PullRef>,
     pub notes: Vec<String>,
@@ -243,21 +248,45 @@ pub struct Plan {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "effect", rename_all = "snake_case")]
 pub enum Effect {
-    Plan { step: String },
-    Agent { step: String },
-    Answer { step: String, text: String },
-    Push { step: String },
-    OpenPull { step: String },
-    Linear { step: String },
-    Report { step: String },
-    Notify { text: String },
+    Plan {
+        step: String,
+    },
+    Agent {
+        step: String,
+    },
+    Answer {
+        step: String,
+        text: String,
+    },
+    Push {
+        step: String,
+    },
+    OpenPull {
+        step: String,
+    },
+    Linear {
+        step: String,
+    },
+    Report {
+        step: String,
+    },
+    Notify {
+        text: String,
+    },
+    #[serde(alias = "stop_read_only")]
     StopSessions,
-    StopReadOnly,
 }
 
 // What the watcher, the runner or the person saw happen to one run.
 #[derive(Debug, Clone, PartialEq)]
 pub enum Seen {
+    TornDown(Option<String>),
+    WorktreeMade {
+        step: String,
+        path: String,
+        repo: String,
+    },
+    PersonStopped(String),
     Tick,
     Admitted,
     Offline,

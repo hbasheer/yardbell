@@ -587,6 +587,25 @@ struct Entry {
     next: Instant,
     pull: Option<Pull>,
     host: Option<String>,
+    why: Option<String>,
+}
+
+// What the last checks found: None means it worked, and something not listed has not been asked.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+pub struct PullHealth {
+    pub machines: BTreeMap<String, Option<String>>,
+    pub hosts: BTreeMap<String, Option<String>>,
+}
+
+fn no_gh(machine: &str) -> String {
+    format!("gh is not installed or not signed in on {machine}")
+}
+
+fn gh_failed(why: &str) -> String {
+    if why.contains("known GitHub host") {
+        return "This branch's remote is not on GitHub. If it is on GitLab, add its host in Settings, Pull requests".into();
+    }
+    format!("gh could not read this branch: {why}")
 }
 
 // gh missing or logged out is a machine's problem; a refused token is a GitLab host's.
@@ -608,6 +627,7 @@ struct Inner {
     away: HashMap<Away, Instant>,
     seen: BTreeMap<String, Seen>,
     remotes: HashMap<Key, (Instant, Option<Repo>)>,
+    health: PullHealth,
 }
 
 pub struct Pulls {
@@ -685,8 +705,35 @@ impl Pulls {
             .collect()
     }
 
+    pub fn health(&self) -> PullHealth {
+        self.lock().health.clone()
+    }
+
+    // Why each branch without a badge has none, when something is wrong rather than there simply
+    // being no pull request.
+    pub fn whys(&self, targets: &[Target]) -> HashMap<Key, String> {
+        let inner = self.lock();
+        targets
+            .iter()
+            .filter_map(|t| {
+                let key = t.key();
+                let entry = inner.entries.get(&key);
+                if entry.is_some_and(|e| e.pull.is_some()) {
+                    return None;
+                }
+                let why = entry.and_then(|e| e.why.clone()).or_else(|| {
+                    (entry.is_none_or(|e| e.host.is_none())
+                        && inner.away.contains_key(&Away::Machine(t.machine.clone())))
+                    .then(|| no_gh(&t.machine))
+                })?;
+                Some((key, why))
+            })
+            .collect()
+    }
+
     fn forget(&self) {
         let mut inner = self.lock();
+        inner.health = PullHealth::default();
         inner.entries.clear();
         inner.away.clear();
         inner.remotes.clear();
@@ -812,12 +859,29 @@ impl Pulls {
             let mut inner = self.lock();
             for (t, host, got) in fetched.into_iter().flatten() {
                 let partial = matches!(got, Got::Partial(_));
+                match (&got, &host) {
+                    (Got::Refused(..), _) | (Got::Fetched(Fetched::Failed(_)), _) => {}
+                    (_, Some(h)) => {
+                        inner.health.hosts.insert(h.clone(), None);
+                    }
+                    (Got::Fetched(Fetched::NoTool), None) => {
+                        inner
+                            .health
+                            .machines
+                            .insert(t.machine.clone(), Some(no_gh(&t.machine)));
+                    }
+                    (_, None) => {
+                        inner.health.machines.insert(t.machine.clone(), None);
+                    }
+                }
+                let mut why = None;
                 let (next, pull) = match got {
                     Got::Fetched(Fetched::Found(pull)) | Got::Partial(pull) => {
                         (now + every, Some(*pull))
                     }
                     Got::Fetched(Fetched::NoPull) => (now + every, None),
                     Got::Fetched(Fetched::NoTool) => {
+                        why = Some(no_gh(&t.machine));
                         inner
                             .away
                             .insert(Away::Machine(t.machine.clone()), now + AWAY);
@@ -828,11 +892,28 @@ impl Pulls {
                         }
                         (now + AWAY, None)
                     }
-                    Got::Fetched(Fetched::Failed(why)) => {
+                    Got::Fetched(Fetched::Failed(failed)) => {
+                        why = Some(match &host {
+                            Some(h) => format!("{h} could not be read: {failed}"),
+                            None => gh_failed(&failed),
+                        });
+                        let why = failed;
                         tracing::debug!(machine = %t.machine, branch = %t.branch, "no pull request status: {why}");
                         (now + AWAY, None)
                     }
-                    Got::Refused(refused, why) => {
+                    Got::Refused(refused, told) => {
+                        let line = format!("{refused} refused the token: {told}");
+                        inner
+                            .health
+                            .hosts
+                            .insert(refused.clone(), Some(line.clone()));
+                        why = Some(line.clone());
+                        for e in inner.entries.values_mut() {
+                            if e.host.as_deref() == Some(refused.as_str()) {
+                                e.why = Some(line.clone());
+                            }
+                        }
+                        let why = told;
                         let first = inner
                             .away
                             .insert(Away::Host(refused.clone()), now + AWAY)
@@ -876,7 +957,15 @@ impl Pulls {
                         }));
                     }
                 }
-                inner.entries.insert(t.key(), Entry { next, pull, host });
+                inner.entries.insert(
+                    t.key(),
+                    Entry {
+                        next,
+                        pull,
+                        host,
+                        why,
+                    },
+                );
             }
         }
         if changed {
@@ -941,11 +1030,14 @@ impl Pulls {
         if !cfg.pull_requests.enabled {
             self.forget();
             state.set_pulls(HashMap::new());
+            state.set_pull_status(HashMap::new(), PullHealth::default());
             return;
         }
         let hosts = accesses(&cfg.pull_requests, secrets);
-        let notices = self.poll(cfg, &hosts, &targets(cfg, state), now).await;
+        let targets = targets(cfg, state);
+        let notices = self.poll(cfg, &hosts, &targets, now).await;
         state.set_pulls(self.views());
+        state.set_pull_status(self.whys(&targets), self.health());
         if !cfg.pull_requests.cards {
             return;
         }

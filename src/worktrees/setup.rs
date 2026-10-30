@@ -36,7 +36,11 @@ pub struct WorktreeSetup {
     pub folder: String,
     #[serde(default = "any", skip_serializing_if = "is_any")]
     pub machine: String,
+    #[serde(default)]
     pub command: String,
+    // Runs when a pipeline run that used the worktree ends, such as `docker compose down`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub teardown: String,
     #[serde(
         default = "default_timeout",
         skip_serializing_if = "is_default_timeout"
@@ -71,10 +75,13 @@ pub fn validate(
                 s.machine
             ));
         }
-        if s.command.trim().is_empty() {
-            return Err(format!("worktree setup {n} needs a command"));
+        if s.command.trim().is_empty() && s.teardown.trim().is_empty() {
+            return Err(format!("worktree setup {n} needs a command or a teardown"));
         }
-        if s.command.len() > COMMAND_MAX || s.command.contains('\0') {
+        if [&s.command, &s.teardown]
+            .iter()
+            .any(|c| c.len() > COMMAND_MAX || c.contains('\0'))
+        {
             return Err(format!(
                 "worktree setup {n}: the command must be under {COMMAND_MAX} characters"
             ));
@@ -102,9 +109,11 @@ pub fn pick<'a>(
     setups: &'a [WorktreeSetup],
     machine: &str,
     folders: &[String],
+    command: fn(&WorktreeSetup) -> &String,
 ) -> Option<&'a WorktreeSetup> {
     setups
         .iter()
+        .filter(|s| !command(s).is_empty())
         .filter(|s| is_any(&s.machine) || s.machine == machine)
         .filter(|s| crate::dispatch::folder_matches(&s.folder, folders))
         .max_by_key(|s| {
@@ -225,6 +234,14 @@ pub fn parse(command: &str, path: &str, out: &str) -> SetupRun {
 }
 
 impl Worktrees {
+    pub async fn teardown(&self, m: &Machine, path: &str, setup: &WorktreeSetup) -> SetupRun {
+        let down = WorktreeSetup {
+            command: setup.teardown.clone(),
+            ..setup.clone()
+        };
+        self.setup(m, path, &down).await
+    }
+
     pub async fn setup(&self, m: &Machine, path: &str, setup: &WorktreeSetup) -> SetupRun {
         let secs = setup.timeout_seconds.clamp(1, MAX_TIMEOUT_SECS);
         let script = script(path, &setup.command, secs);
@@ -255,6 +272,7 @@ mod tests {
 
     fn setup(folder: &str, machine: &str, command: &str) -> WorktreeSetup {
         WorktreeSetup {
+            teardown: String::new(),
             folder: folder.into(),
             machine: machine.into(),
             command: command.into(),
@@ -270,6 +288,13 @@ mod tests {
     }
 
     #[test]
+    fn teardown_alone_is_a_valid_setup() {
+        let mut only = setup("web", "any", " ");
+        only.teardown = "docker compose down".into();
+        assert!(validate(&[only], |_| true).is_ok());
+    }
+
+    #[test]
     fn the_most_specific_setup_is_picked() {
         let setups = [
             setup("acme/*", "any", "make"),
@@ -277,11 +302,32 @@ mod tests {
             setup("acme/web", "hp", "bin/setup"),
         ];
         let web = ["acme/web".to_string(), "/home/u/acme/web".to_string()];
-        assert_eq!(pick(&setups, "hp", &web).unwrap().command, "bin/setup");
-        assert_eq!(pick(&setups, "mini", &web).unwrap().command, "npm ci");
+        assert_eq!(
+            pick(&setups, "hp", &web, |s| &s.command).unwrap().command,
+            "bin/setup"
+        );
+        assert_eq!(
+            pick(&setups, "mini", &web, |s| &s.command).unwrap().command,
+            "npm ci"
+        );
         let api = ["acme/api".to_string()];
-        assert_eq!(pick(&setups, "mini", &api).unwrap().command, "make");
-        assert!(pick(&setups, "mini", &["shop".to_string()]).is_none());
+        assert_eq!(
+            pick(&setups, "mini", &api, |s| &s.command).unwrap().command,
+            "make"
+        );
+        assert!(pick(&setups, "mini", &["shop".to_string()], |s| &s.command).is_none());
+    }
+
+    #[test]
+    fn each_command_comes_from_a_setup_that_has_one() {
+        let mut general = setup("acme/*", "any", "");
+        general.teardown = "docker compose down".into();
+        let setups = [general, setup("acme/web", "any", "npm ci")];
+        let web = ["acme/web".to_string()];
+        let down = pick(&setups, "hp", &web, |s| &s.teardown).unwrap();
+        assert_eq!(down.teardown, "docker compose down");
+        let up = pick(&setups, "hp", &web, |s| &s.command).unwrap();
+        assert_eq!(up.command, "npm ci");
     }
 
     #[test]
@@ -300,7 +346,7 @@ mod tests {
                 vec![setup("web", "nope", "x")],
                 "worktree setup 1: machine \"nope\" is not in Yardbell",
             ),
-            (vec![setup("web", "any", " ")], "worktree setup 1 needs a command"),
+            (vec![setup("web", "any", " ")], "worktree setup 1 needs a command or a teardown"),
             (
                 vec![slow],
                 "worktree setup 1: timeout_seconds must be from 1 to 3600",

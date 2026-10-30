@@ -261,6 +261,17 @@ function stateWord(run, d) {
   }
 }
 
+async function removeRun(run) {
+  if (!(await ask("Delete this run?", "Its record and reports go. The branch and any pull request stay.", { confirm: "Delete", danger: true }))) return;
+  doing(async () => {
+    await api("DELETE", `/api/runs/${encodeURIComponent(run.id)}`);
+    const q = params();
+    q.delete("run");
+    history.replaceState(null, "", `${location.pathname}?${q}`);
+    await load();
+  });
+}
+
 function act(run, what, body) {
   doing(async () => {
     await api("POST", `/api/runs/${encodeURIComponent(run.id)}/${what}`, body || {});
@@ -312,7 +323,9 @@ function detail(run, d) {
       </div>
     </div>
     ${run.state === "waiting" ? needBox(run, d) : nothing}
+    ${run.teardown_problem ? html`<p class="pl-teardown-problem" role="alert">${run.teardown_problem}</p>` : nothing}
     ${["queued", "running"].includes(run.state) ? html`<div class="pl-need-actions"><button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Stop this run</button></div>` : nothing}
+    ${["done", "dropped"].includes(run.state) ? html`<div class="pl-need-actions"><button class="btn quiet danger" type="button" id="pl-delete-run" ?disabled=${busy} @click=${() => removeRun(run)}>Delete this run</button></div>` : nothing}
     <ol class="pl-steps">${d.steps.filter((st) => run.steps?.[st.id]).map((st) => {
       const state = run.steps[st.id];
       const n = nodeState(run, st);
@@ -324,6 +337,36 @@ function detail(run, d) {
     })}</ol>
     ${run.report ? html`<div class="pl-final"><p class="pl-field-head">Report</p><pre class="session-screen">${run.report}</pre></div>` : nothing}
   </aside>`;
+}
+
+// Which session's terminal is shown, per run, when the person picked one themselves.
+const shownTerminal = new Map();
+
+async function stopSession(run, t) {
+  const after = t.current ? "The agent in it stops. The step then waits for you." : "The agent in it stops.";
+  if (!(await ask(`Stop ${t.name}?`, after, { confirm: "Stop session", danger: true }))) return;
+  doing(async () => {
+    await api("POST", `/api/runs/${encodeURIComponent(run.id)}/stop-session`, { name: t.name });
+    await load();
+  });
+}
+
+function terminal(run) {
+  const list = run.terminals || [];
+  if (!list.length) return html`<section class="pl-terminal empty"><p class="help">This run has no live session.</p></section>`;
+  const shown = list.find((t) => t.name === shownTerminal.get(run.id)) || list.find((t) => t.current) || list[0];
+  const src = `/term/${encodeURIComponent(shown.machine)}/${encodeURIComponent(shown.name)}`;
+  return html`<section class="pl-terminal">
+    <header class="pl-terminal-head">
+      ${list.length > 1
+        ? html`<div class="segmented pl-terminal-switch" role="group" aria-label="Sessions of this run">${list.map((t) => html`<button type="button" aria-pressed=${t === shown ? "true" : "false"} @click=${() => { shownTerminal.set(run.id, t.name); draw(); }}>${t.label}</button>`)}</div>`
+        : html`<strong>${shown.label}</strong>`}
+      <span class="pl-bar-space"></span>
+      <a class="btn quiet small-link" href=${src} target="_blank" rel="noopener">Open</a>
+      <button class="btn quiet danger small-link" type="button" id="pl-stop-session" ?disabled=${busy} @click=${() => stopSession(run, shown)}>Stop session</button>
+    </header>
+    <iframe class="pl-terminal-frame" title=${`Terminal of ${shown.label}`} src=${`${src}?embed=1`}></iframe>
+  </section>`;
 }
 
 function runsTab(d) {
@@ -342,7 +385,10 @@ function runsTab(d) {
       <span class="pl-run-title"><span class=${`pl-dot ${dot[r.state] || "off"}`}></span>${label(r)}</span>
       <small>${stateWord(r, r.definition || d)}</small>
     </button>`)}</nav>
-    ${canvas({ def: chosen.definition || d, run: chosen, key: `${d.id}:${chosen.version}:${chosen.id}` })}
+    <div class="pl-run-main">
+      ${canvas({ def: chosen.definition || d, run: chosen, key: `${d.id}:${chosen.version}:${chosen.id}` })}
+      ${terminal(chosen)}
+    </div>
     ${detail(chosen, chosen.definition || d)}
   </div>`;
 }
@@ -368,7 +414,6 @@ function agentFields(step, others, redraw) {
   const mode = "name" in m ? "name" : "same_as" in m ? "same_as" : "pick";
   const setMachine = (value) => { step.machine = value; redraw(); };
   const ws = step.workspace || { kind: "new_worktree" };
-  const cont = typeof step.session === "object" ? step.session.continue : "";
   return html`
     ${field("Instructions", html`<textarea name="instructions" rows="5" .value=${step.instructions || ""} @input=${(e) => { step.instructions = e.target.value; redraw(); }}></textarea>`,
       "Fill in {ticket}, {title}, {url}, {description}, {branch}, {pr}, {report} or {report:Step name}.")}
@@ -394,10 +439,8 @@ function agentFields(step, others, redraw) {
       </select>`)}
       ${ws.kind === "same_as" ? field("Folder of", stepSelect(ws.step, others, (v) => { step.workspace = { kind: "same_as", step: v }; redraw(); })) : nothing}
       ${ws.kind === "copy" ? field("Copy of", stepSelect(ws.from, others, (v) => { step.workspace = { kind: "copy", from: v }; redraw(); })) : nothing}
-      ${field("Session", stepSelect(cont ? `continue:${cont}` : "new", others.map((s) => ({ id: `continue:${s.id}`, name: `Continue ${s.name}'s session` })),
-        (v) => { step.session = v === "new" ? "new" : { continue: v.slice("continue:".length) }; redraw(); }, [["new", "A new session"]]))}
     </div>
-    <label class="check"><input type="checkbox" name="read_only" .checked=${!!step.read_only} @change=${(e) => { step.read_only = e.target.checked; redraw(); }}>Read only: the agent may not change files, commit or push</label>
+    <label class="check"><input type="checkbox" name="read_only" .checked=${!!step.read_only} @change=${(e) => { step.read_only = e.target.checked; redraw(); }}>Review: new read-only session. Other steps share the run's one session.</label>
     ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "Saved with the step; agents do not get them yet.") : nothing}`;
 }
 
@@ -901,8 +944,8 @@ function buildTab(d) {
 
 let previewing = null;
 
-function restore(v) {
-  if (unsaved() && !confirm("Leave without saving your changes?")) return;
+async function restore(v) {
+  if (unsaved() && !(await leave())) return;
   doing(async () => {
     def = await api("POST", `/api/pipelines/${encodeURIComponent(def.id)}/restore`, { version: v.version });
     draft = structuredClone(def);
@@ -971,8 +1014,12 @@ function runNowPanel(d) {
   </div>`;
 }
 
-function removePipeline(d) {
-  if (!confirm(`Delete ${d.name} and its runs? Its history goes too.`)) return;
+// The page's own dialog, since the desktop app's webview has no window.confirm.
+const ask = (title, body, options) => window.YardbellNav.confirm(title, body, options);
+const leave = () => ask("Leave without saving your changes?", "Your changes to this pipeline are lost.", { confirm: "Leave", danger: true });
+
+async function removePipeline(d) {
+  if (!(await ask(`Delete ${d.name} and its runs?`, "Its history goes too.", { confirm: "Delete", danger: true }))) return;
   doing(async () => {
     await api("DELETE", `/api/pipelines/${encodeURIComponent(d.id)}`);
     go("");
@@ -1056,8 +1103,8 @@ function proposalView() {
   </div>`;
 }
 
-function askDispatch(d) {
-  if (unsaved() && !confirm("Leave without saving your changes?")) return;
+async function askDispatch(d) {
+  if (unsaved() && !(await leave())) return;
   draft = structuredClone(def);
   location.href = `/dispatch?ask=${encodeURIComponent(`Change the pipeline "${d.name}" (${d.id}): `)}`;
 }
@@ -1087,7 +1134,7 @@ function pipelineView() {
   const tabs = [["build", "Build"], ["runs", runs.length ? `Runs ${runs.length}` : "Runs"], ["history", "History"]];
   return html`<div class=${`pl-builder ${full ? "full" : ""}`}>
     <header class="pl-bar">
-      <button class="btn quiet pl-back" type="button" id="pl-back" title="Back to Pipelines" @click=${() => { if (!unsaved() || confirm("Leave without saving your changes?")) go(""); }}>${chevron("left")}<span>Pipelines</span></button>
+      <button class="btn quiet pl-back" type="button" id="pl-back" title="Back to Pipelines" @click=${async () => { if (!unsaved() || (await leave())) go(""); }}>${chevron("left")}<span>Pipelines</span></button>
       <input class="pl-name pl-title-name" aria-label="Pipeline name" .value=${draft.name} @input=${(e) => { draft.name = e.target.value; draw(); }}>
       ${onOff(d)}
       <span class="pl-version">v${d.version}</span>
@@ -1097,7 +1144,7 @@ function pipelineView() {
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d=${full ? "M6.5 2.5v4h-4 M9.5 2.5v4h4 M6.5 13.5v-4h-4 M9.5 13.5v-4h4" : "M2.5 6.5v-4h4 M13.5 6.5v-4h-4 M2.5 9.5v4h4 M13.5 9.5v4h-4"}></path></svg>
       </button>
       <button class="btn quiet" type="button" id="pl-ask" @click=${() => askDispatch(d)}>Ask Dispatch to change it</button>
-      <button class="btn quiet danger" type="button" @click=${() => removePipeline(d)}>Delete</button>
+      <button class="btn quiet danger" type="button" id="pl-delete" @click=${() => removePipeline(d)}>Delete</button>
       <button class="btn" type="button" id="pl-run-now" ?disabled=${busy} @click=${() => runNow(d)}>Run now</button>
       ${changed
         ? html`<button class="btn primary" type="button" id="pl-save" ?disabled=${busy} @click=${save}>Save</button>`
@@ -1167,10 +1214,20 @@ async function load() {
 
 let here = location.href;
 
-window.addEventListener("popstate", () => {
-  if (unsaved() && params().get("p") !== def.id && !confirm("Leave without saving your changes?")) {
+let askingToLeave = false;
+
+// The address goes back to the draft while the question is open, so a reload behind it keeps the
+// draft, and a second Back only lands here again.
+window.addEventListener("popstate", async () => {
+  if (unsaved() && params().get("p") !== def.id) {
+    const wanted = location.href;
     history.pushState(null, "", here);
-    return;
+    if (askingToLeave) return;
+    askingToLeave = true;
+    const going = await leave();
+    askingToLeave = false;
+    if (!going) return;
+    history.pushState(null, "", wanted);
   }
   load().catch((err) => toast(err.message));
 });

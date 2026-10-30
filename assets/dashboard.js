@@ -245,6 +245,11 @@ function pullBadge(p) {
   return html`<a class="pr-badge ${tone}" href=${p.url} target="_blank" rel="noopener" title=${window.YardbellPull.describe(p)}><span class="pr-num">${window.YardbellPull.ref(p)}</span>${word}</a>`;
 }
 
+function pullWhy(s) {
+  if (s.pull || !s.pull_why) return "";
+  return html`<a class="pr-why" href="/settings#pull-requests" title=${s.pull_why}>No PR info</a>`;
+}
+
 function setupFlag(s) {
   if (!s.setup) return "";
   const word = s.setup.ok ? "Setup ran" : s.setup.timed_out ? "Setup timed out" : "Setup failed";
@@ -256,7 +261,7 @@ function identity(s, extra = "") {
   const branch = s.branch ? html`<span class="branch">${s.branch}</span>` : "";
   const agent = s.agent ? html`<span class="agent">${agentLabel(s.agent)}</span>` : "";
   return html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}${extra}</div>
-    <div class="s-sub">${branch}${pullBadge(s.pull)}${setupFlag(s)}${agent}</div>`;
+    <div class="s-sub">${branch}${pullBadge(s.pull)}${pullWhy(s)}${setupFlag(s)}${agent}</div>`;
 }
 
 function sessionRow(s) {

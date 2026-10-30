@@ -436,3 +436,155 @@ async fn an_empty_pipeline_is_created_and_cannot_run() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn a_run_can_be_deleted_once_it_has_ended() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    let url = format!("/api/runs/{}", run.id);
+    let (status, body) = call(&r, &c, "DELETE", &url, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "stop this run first");
+    let mut dropped = r.app.pipelines.drop_run(&run.id).unwrap();
+    let (status, body) = call(&r, &c, "DELETE", &url, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "still stopping: {body}");
+    assert_eq!(
+        body["error"],
+        "this run is still stopping, try again in a moment"
+    );
+    dropped.pending = None;
+    r.app.pipelines.put(dropped);
+    let (status, body) = call(&r, &c, "DELETE", &url, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(r.app.pipelines.run(&run.id).is_none());
+    let (status, _) = call(&r, &c, "DELETE", &url, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn an_ended_run_lists_no_terminals() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let cfg = r.app.config().unwrap();
+    let live = r
+        .app
+        .state
+        .view(&cfg, r.app.ports.as_ref(), "localhost")
+        .sessions
+        .into_iter()
+        .find_map(|s| s.tmux.map(|t| (s.machine, t)))
+        .expect("the rig has a session");
+    let mut run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.state = RunState::Done;
+    let st = run.state_of("review");
+    st.session = live.1;
+    st.machine = live.0;
+    r.app.pipelines.put(run);
+    let (_, body) = call(&r, &c, "GET", "/api/runs", None).await;
+    assert_eq!(body["runs"][0]["terminals"], json!([]));
+}
+
+#[tokio::test]
+async fn stopping_a_runs_session_makes_its_step_wait() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let cfg = r.app.config().unwrap();
+    let live = r
+        .app
+        .state
+        .view(&cfg, r.app.ports.as_ref(), "localhost")
+        .sessions
+        .into_iter()
+        .find_map(|s| s.tmux.map(|t| (s.machine, t)))
+        .expect("the rig has a session");
+    let mut run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    let rid = run.id.clone();
+    run.step = "review".into();
+    run.state = RunState::Running;
+    run.pending = None;
+    let st = run.state_of("review");
+    st.session = live.1.clone();
+    st.machine = live.0.clone();
+    r.app.pipelines.put(run);
+    let path = format!("/api/runs/{rid}/stop-session");
+    let (status, _) = call(
+        &r,
+        &c,
+        "POST",
+        &path,
+        Some(json!({ "name": "someone-else" })),
+    )
+    .await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "only a session of this run"
+    );
+    r.fake.stub("kill-session", Output::ok_with(""));
+    let (status, body) = call(&r, &c, "POST", &path, Some(json!({ "name": live.1 }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let run = r.app.pipelines.run(&rid).unwrap();
+    assert_eq!(run.state, RunState::Waiting);
+    assert_eq!(run.waiting.unwrap().reason, "You stopped the session");
+    assert!(r
+        .fake
+        .calls()
+        .iter()
+        .any(|c| c.join(" ").contains("kill-session")));
+}
+
+#[tokio::test]
+async fn runs_list_their_live_terminals() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let cfg = r.app.config().unwrap();
+    let live = r
+        .app
+        .state
+        .view(&cfg, r.app.ports.as_ref(), "localhost")
+        .sessions
+        .into_iter()
+        .find_map(|s| s.tmux.map(|t| (s.machine, t)))
+        .expect("the rig has a session");
+    let mut run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.step = "review".into();
+    run.state = RunState::Running;
+    let st = run.state_of("review");
+    st.session = live.1.clone();
+    st.machine = live.0.clone();
+    run.state_of("implement").session = "hp-gone".into();
+    r.app.pipelines.put(run);
+    let (status, body) = call(&r, &c, "GET", "/api/runs", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["runs"][0]["terminals"],
+        json!([{ "step": "review", "name": live.1, "machine": live.0, "label": "Review", "current": true }])
+    );
+    let (_, body) = call(&r, &c, "GET", &format!("/api/pipelines/{id}/runs"), None).await;
+    assert_eq!(body["runs"][0]["terminals"][0]["name"], live.1);
+}

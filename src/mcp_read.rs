@@ -206,7 +206,9 @@ fn walk(value: Value, under_credential: bool, free_keys: bool) -> Value {
                         || k == "headers";
                     let v = match v {
                         Value::String(s)
-                            if !secret && ["url", "command", "resume"].contains(&k.as_str()) =>
+                            if !secret
+                                && ["url", "command", "resume", "teardown"]
+                                    .contains(&k.as_str()) =>
                         {
                             Value::String(mask(&s))
                         }

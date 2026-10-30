@@ -11,10 +11,22 @@ pub struct Store {
 
 impl Store {
     pub fn load(file: PathBuf) -> Store {
-        let runs = std::fs::read(&file)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let runs = match std::fs::read(&file).map(|b| serde_json::from_slice(&b)) {
+            Ok(Ok(runs)) => runs,
+            Ok(Err(e)) => {
+                // The next save would write over it, and with it every run's history.
+                let kept = file.with_extension(format!(
+                    "json.unreadable-{}",
+                    chrono::Local::now().format("%Y%m%d-%H%M%S")
+                ));
+                tracing::error!(error = %e, kept = %kept.display(), "the pipeline runs file could not be read; it was kept and Yardbell starts with no runs");
+                if let Err(e) = std::fs::rename(&file, &kept) {
+                    tracing::error!(error = %e, "could not keep the unreadable runs file");
+                }
+                BTreeMap::new()
+            }
+            Err(_) => BTreeMap::new(),
+        };
         Store {
             file,
             runs: Mutex::new(runs),
@@ -80,6 +92,14 @@ impl Store {
         if removed > 0 {
             self.save();
         }
+    }
+
+    pub fn remove(&self, id: &str) -> bool {
+        let removed = self.lock().remove(id).is_some();
+        if removed {
+            self.save();
+        }
+        removed
     }
 
     pub fn remove_pipeline(&self, pipeline: &str) {

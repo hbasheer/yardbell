@@ -109,6 +109,9 @@ pub struct PhoneNotifications {
     pub session_ended: bool,
     pub machines: bool,
     pub memory: bool,
+    pub pipeline_waiting: bool,
+    pub pipeline_finished: bool,
+    pub proposals: bool,
 }
 
 impl Default for PhoneNotifications {
@@ -119,6 +122,9 @@ impl Default for PhoneNotifications {
             session_ended: true,
             machines: true,
             memory: true,
+            pipeline_waiting: true,
+            pipeline_finished: true,
+            proposals: true,
         }
     }
 }

@@ -23,10 +23,12 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/pipelines/{id}/restore", post(restore))
         .route("/api/pipelines/{id}/runs", get(runs).post(start))
         .route("/api/runs", get(all_runs))
+        .route("/api/runs/{id}", axum::routing::delete(delete_run))
         .route("/api/runs/{id}/answer", post(answer))
         .route("/api/runs/{id}/retry", post(retry))
         .route("/api/runs/{id}/continue", post(continue_on))
         .route("/api/runs/{id}/drop", post(drop_run))
+        .route("/api/runs/{id}/stop-session", post(stop_session))
 }
 
 fn bad(msg: String) -> ApiError {
@@ -221,6 +223,46 @@ async fn restore(
     )
 }
 
+// Each run with its live sessions, newest first, for the terminal on the run page. Steps sharing
+// a session are named by the newest of them.
+fn with_terminals(app: &AppState, runs: Vec<Run>) -> Result<Vec<Value>, ApiError> {
+    let cfg = app.config()?;
+    let view = app.state.view(&cfg, app.ports.as_ref(), "localhost");
+    Ok(runs
+        .into_iter()
+        .map(|run| {
+            let def = run.def();
+            let mut steps: Vec<_> = run.steps.iter().collect();
+            steps.sort_by_key(|(_, st)| std::cmp::Reverse(st.started.clone()));
+            let current = run.steps.get(&run.step).map(|st| st.session.as_str());
+            let mut seen = Vec::new();
+            let mut terminals = Vec::new();
+            for (id, st) in steps.into_iter().filter(|_| run.state.active()) {
+                if st.session.is_empty() || seen.contains(&st.session.as_str()) {
+                    continue;
+                }
+                let live = view
+                    .sessions
+                    .iter()
+                    .find(|s| s.tmux.as_deref() == Some(st.session.as_str()));
+                if let Some(live) = live {
+                    seen.push(st.session.as_str());
+                    terminals.push(json!({
+                        "step": id,
+                        "name": st.session,
+                        "machine": live.machine,
+                        "label": def.step(id).map_or(id.as_str(), |s| s.name.as_str()),
+                        "current": current == Some(st.session.as_str()),
+                    }));
+                }
+            }
+            let mut out = json!(run);
+            out["terminals"] = json!(terminals);
+            out
+        })
+        .collect())
+}
+
 async fn runs(
     AxState(app): AxState<Arc<AppState>>,
     Path(id): Path<String>,
@@ -232,11 +274,12 @@ async fn runs(
         .into_iter()
         .filter(|r| r.pipeline == id)
         .collect();
-    Ok(Json(json!({ "runs": newest_first(runs) })).into_response())
+    Ok(Json(json!({ "runs": with_terminals(&app, newest_first(runs))? })).into_response())
 }
 
 async fn all_runs(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
-    Ok(Json(json!({ "runs": newest_first(app.pipelines.runs()) })).into_response())
+    let runs = newest_first(app.pipelines.runs());
+    Ok(Json(json!({ "runs": with_terminals(&app, runs)? })).into_response())
 }
 
 async fn open(app: &AppState) -> Result<Vec<Ticket>, ApiError> {
@@ -391,11 +434,56 @@ async fn continue_on(
     acted(&app, app.pipelines.continue_on(&id, req.outcome))
 }
 
+async fn delete_run(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    use crate::pipeline::DeleteRun;
+    app.pipelines.delete_run(&id).map_err(|e| match e {
+        DeleteRun::Missing => ApiError(StatusCode::NOT_FOUND, format!("{id} is not a run")),
+        DeleteRun::Active => ApiError(StatusCode::CONFLICT, "stop this run first".into()),
+        DeleteRun::Stopping => ApiError(
+            StatusCode::CONFLICT,
+            "this run is still stopping, try again in a moment".into(),
+        ),
+    })?;
+    app.state.touch();
+    Ok(Json(json!({ "deleted": id })).into_response())
+}
+
 async fn drop_run(
     AxState(app): AxState<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     acted(&app, app.pipelines.drop_run(&id))
+}
+
+#[derive(Deserialize)]
+struct StopSessionReq {
+    name: String,
+}
+
+async fn stop_session(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<StopSessionReq>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let run = app.pipelines.session_stopped(&id, &req.name).map_err(bad)?;
+    let machine = run
+        .steps
+        .values()
+        .find(|s| s.session == req.name)
+        .map(|s| s.machine.clone())
+        .unwrap_or_default();
+    let m = super::find_machine(&cfg, &machine)?;
+    app.sessions
+        .stop(&m, &req.name)
+        .await
+        .map_err(ApiError::gateway)?;
+    app.recheck(&m.name);
+    app.state.touch();
+    Ok(Json(json!({ "ok": true })).into_response())
 }
 
 async fn settings(

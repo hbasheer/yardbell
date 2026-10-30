@@ -1505,6 +1505,8 @@ pub struct NewSession {
     // Answer only once the machine was checked again, so /state already lists the session.
     #[serde(default)]
     wait: bool,
+    #[serde(default)]
+    name_tag: String,
 }
 
 impl NewSession {
@@ -1612,6 +1614,7 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
         None
     };
     let ticket = snapshot::ticket(&branch, cfg.ticket_regex().as_ref());
+    let ticket = crate::sessions::tagged(&ticket, &label_of(&path), &req.name_tag);
     let prompt = match (
         req.prompt.trim(),
         setup.as_ref().and_then(|s| s.note_for_agent()),
@@ -1649,7 +1652,8 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
         app.remember_task(&m.name, &name, req.prompt.trim());
     }
     remember(app, &m.name, &repo);
-    let mut started = json!({ "machine": m.name, "name": name, "path": path });
+    let mut started =
+        json!({ "machine": m.name, "name": name, "path": path, "created": created, "repo": repo });
     if let Some(setup) = setup {
         started["setup"] = json!(setup);
     }

@@ -302,6 +302,7 @@ mod tests {
 
     fn session(id: &str, machine: &str, activity: Activity) -> SessionView {
         SessionView {
+            pull_why: None,
             id: id.into(),
             machine: machine.into(),
             agent: "claude".into(),

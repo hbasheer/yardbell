@@ -21,6 +21,8 @@ struct Inner {
     ended_in: HashMap<String, Place>,
     setups: HashMap<(String, String), SetupRun>,
     pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>,
+    pull_whys: HashMap<crate::pulls::Key, String>,
+    pull_health: crate::pulls::PullHealth,
 }
 
 // The checkout an ended session ran in, as the last check before it ended saw it.
@@ -94,6 +96,9 @@ pub struct SessionView {
     pub ports: Vec<PortView>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pull: Option<crate::pulls::PullView>,
+    // Why there is no badge, when something is wrong rather than there being no pull request.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull_why: Option<String>,
     #[serde(default)]
     pub path: String,
     #[serde(default)]
@@ -236,6 +241,25 @@ impl State {
             .collect();
         all.sort_by(|a, b| a.0.cmp(&b.0));
         all
+    }
+
+    pub fn pull_health(&self) -> crate::pulls::PullHealth {
+        self.inner.read().expect("state lock").pull_health.clone()
+    }
+
+    pub fn set_pull_status(
+        &self,
+        whys: HashMap<crate::pulls::Key, String>,
+        health: crate::pulls::PullHealth,
+    ) {
+        let mut inner = self.inner.write().expect("state lock");
+        if inner.pull_whys == whys && inner.pull_health == health {
+            return;
+        }
+        inner.pull_whys = whys;
+        inner.pull_health = health;
+        drop(inner);
+        self.touch();
     }
 
     pub fn set_pulls(&self, pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>) {
@@ -452,6 +476,12 @@ impl State {
                     pull: snap.folder_paths.get(&s.folder).and_then(|path| {
                         inner
                             .pulls
+                            .get(&(m.name.clone(), path.clone(), s.branch.clone()))
+                            .cloned()
+                    }),
+                    pull_why: snap.folder_paths.get(&s.folder).and_then(|path| {
+                        inner
+                            .pull_whys
                             .get(&(m.name.clone(), path.clone(), s.branch.clone()))
                             .cloned()
                     }),

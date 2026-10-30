@@ -251,6 +251,7 @@ mod tests {
 
     fn session(id: &str, activity: Activity) -> SessionView {
         SessionView {
+            pull_why: None,
             id: id.into(),
             machine: "devbox".into(),
             agent: "codex".into(),

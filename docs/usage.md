@@ -29,8 +29,11 @@ stop leaves the list at once.
   GitLab host you listed, shows its number (`#12` or `!12`) and state next to the branch: CI
   failing, changes requested, CI running, approved, CI passing, merged or closed. Hover it for the
   title and the checks that failed, click it to open it. Yardbell asks `gh` on the session's
-  machine, or GitLab's API, every two minutes or so; without `gh` or a GitLab token, or without a
-  pull request, there is simply no badge. See [`pull_requests`](configuration.md#pull_requests-optional).
+  machine, or GitLab's API, every two minutes or so. A branch with no pull request has no badge. When
+  something stops Yardbell from asking, such as `gh` not being signed in or a GitLab host that is not
+  listed, the session shows **No PR info**: hover it for the reason, click it for **Settings, Pull
+  requests**, where you switch this on or off, add GitLab hosts and see what each check found. See
+  [`pull_requests`](configuration.md#pull_requests-optional).
 
 Sessions started outside tmux, and sessions that ended, fold into the footer of their machine's
 section, since Yardbell can see them but cannot attach to them. Open the list and press **Move to
@@ -156,8 +159,8 @@ including the terminal. Several devices can attach to one session. The one you a
 session's size: opening it, clicking in it or typing takes over, and a tab you cannot see or a
 phone in the background never does.
 
-On a phone the machines stay on top, sessions become cards, and the terminal gets a key row for Esc,
-Tab, Ctrl, the arrows and Ctrl-C. Yardbell follows the system light or dark setting, or the theme
+On a phone the pages sit in a tab bar along the bottom, the machines stay on top, sessions become
+cards, and the terminal gets a key row for Esc, Tab, Ctrl, the arrows and Ctrl-C. Yardbell follows the system light or dark setting, or the theme
 you pick with the button in the sidebar, on each device.
 
 <br clear="right">
@@ -238,6 +241,13 @@ runs are running, waiting and done, and **Needs you** when one waits.
 - **New pipeline** starts an **Empty pipeline** or copies a template, switched off.
 - **Settings** sets the agent steps at once per machine, a step's time limit and QA notes per folder.
 
+A run keeps to one agent session: its steps take turns in it, in one worktree. A step marked
+**Review: new read-only session** gets a reviewer of its own, which stops when nothing needs it, as
+does a step on another machine or with another agent. When a run ends or is dropped, every session
+stops and the worktree stays. Give a folder a teardown command under Settings, Worktree setup (for
+example `docker compose down`) to clear what its worktree started. Settings, Phone notifications
+has switches for **Pipeline needs you**, **Pipeline finished** and **Proposals**.
+
 A pipeline opens full screen (the button beside **Delete** puts it back in the page) with three tabs:
 
 - **Build**: the steps on a canvas. On the left, the library: drag a step onto the canvas, or click
@@ -256,6 +266,10 @@ A pipeline opens full screen (the button beside **Delete** puts it back in the p
   **Continue on fail** and **Drop**; and each step's report.
 - **History**: every saved version. Click one to see it on the canvas, then **Restore** it or go
   **Back to the current version**.
+  Under the canvas is the run's live terminal, which follows the run you pick. During a review it
+  shows the reviewer, with a switch back to the main session; **Stop session** stops the one shown.
+  **Stop this run**, or **Drop** while it waits for you, ends a run and stops its sessions; once it
+  has ended, **Delete this run** removes its record. The branch and any pull request stay.
 
 On every canvas, drag or scroll with two fingers to move around; pinch, Ctrl or Cmd with the wheel,
 or **−**, **+** and **Fit** zoom; the overview at the bottom right moves the view. Leaving with

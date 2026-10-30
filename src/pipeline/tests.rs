@@ -1,8 +1,8 @@
-use super::definition::Outcome;
+use super::definition::{Outcome, SessionChoice, StepKind};
 use super::engine::{self, tests::run_of};
-use super::prompts::TicketText;
+use super::prompts::{marker, TicketText};
 use super::record::{Effect, PrRef, PullRef, Run, RunState, Seen, WaitKind};
-use super::run::{act, World};
+use super::run::{act, needless_sessions, World};
 use super::watch;
 use crate::config::Pipelines;
 use crate::dispatch::ReviewOf;
@@ -26,6 +26,14 @@ pub(crate) struct Fake {
     pub started: Mutex<u32>,
     pub ticket_fails: Mutex<bool>,
     pub on_start: Mutex<Option<Box<dyn Fn() + Send>>>,
+    pub note_kinds: Mutex<Vec<super::run::Note>>,
+    pub teardowns: Mutex<Vec<String>>,
+    pub teardown_fails: Mutex<bool>,
+    pub teardown_repos: Mutex<Vec<String>>,
+    pub others: Mutex<Vec<Run>>,
+    pub stale: Mutex<Vec<String>>,
+    pub stop_fails: Mutex<bool>,
+    pub hold_stops: Mutex<Option<std::sync::Arc<tokio::sync::Semaphore>>>,
 }
 
 impl Fake {
@@ -69,6 +77,7 @@ impl World for Fake {
                 .unwrap()
                 .iter()
                 .map(|(machine, name, branch, activity)| SessionView {
+                    pull_why: None,
                     id: name.clone(),
                     machine: machine.clone(),
                     agent: "claude".into(),
@@ -79,7 +88,7 @@ impl World for Fake {
                     activity: *activity,
                     attachable: true,
                     tmux: Some(name.clone()),
-                    stale: false,
+                    stale: self.stale.lock().unwrap().contains(name),
                     ports: vec![],
                     pull: None,
                     path: format!("/r/{name}"),
@@ -135,6 +144,15 @@ impl World for Fake {
     fn perform<'a>(&'a self, tool: &'a str, input: Value) -> BoxFuture<'a, Result<Value, String>> {
         Box::pin(async move {
             self.call(format!("{tool} {input}"));
+            if tool == "stop_session" {
+                let gate = self.hold_stops.lock().unwrap().clone();
+                if let Some(gate) = gate {
+                    let _ = gate.acquire().await;
+                }
+                if *self.stop_fails.lock().unwrap() {
+                    return Err("ssh: connection timed out".to_string());
+                }
+            }
             match tool {
                 "start_session" | "move_session" => {
                     if let Some(hook) = self.on_start.lock().unwrap().as_ref() {
@@ -151,12 +169,18 @@ impl World for Fake {
                         .unwrap_or("hp")
                         .to_string();
                     let name = format!("{machine}-s{n}");
-                    let path = input["path"]
-                        .as_str()
+                    let given = input["path"].as_str().filter(|_| tool == "start_session");
+                    let path = given
                         .map(str::to_string)
                         .unwrap_or_else(|| format!("/r/{name}"));
                     self.session(&machine, &name, "com-1", Activity::Active);
-                    Ok(json!({ "name": name, "machine": machine, "path": path }))
+                    Ok(json!({
+                        "name": name,
+                        "machine": machine,
+                        "path": path,
+                        "created": given.is_none(),
+                        "repo": "/r/repo",
+                    }))
                 }
                 _ => Ok(json!({ "ok": true })),
             }
@@ -226,16 +250,40 @@ impl World for Fake {
         })
     }
 
-    fn notify(&self, text: &str) {
+    fn notify(&self, kind: super::run::Note, text: &str) {
+        self.note_kinds.lock().unwrap().push(kind);
         self.notes.lock().unwrap().push(text.into());
+    }
+
+    fn teardown<'a>(
+        &'a self,
+        machine: &'a str,
+        repo: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.teardown_repos.lock().unwrap().push(repo.to_string());
+            self.teardowns
+                .lock()
+                .unwrap()
+                .push(format!("{machine}:{path}"));
+            if *self.teardown_fails.lock().unwrap() {
+                return Err("docker compose down exited 1".to_string());
+            }
+            Ok(())
+        })
+    }
+
+    fn other_runs(&self, _id: &str) -> Vec<Run> {
+        self.others.lock().unwrap().clone()
     }
 }
 
 pub(crate) const PLANNED: &str = "TRIAGE\ndecision: start\nmachine: hp\nfolder: acme/app\nbranch: com-1-fix-the-login\nreason: hp has acme/app\nEND TRIAGE";
 pub(crate) const REPORTED: &str = "REPORT\nAll steps passed.\nEND REPORT";
 
-fn result(outcome: &str, summary: &str) -> String {
-    format!("YARDBELL RESULT\nstatus: {outcome}\nsummary: {summary}\n- 12 passed\nEND RESULT")
+fn result(marker: &str, outcome: &str, summary: &str) -> String {
+    format!("YARDBELL RESULT\nstep: {marker}\nstatus: {outcome}\nsummary: {summary}\n- 12 passed\nEND RESULT")
 }
 
 // Plays the tick: carries out effects, feeds what they saw to the engine, admits queued agent
@@ -277,10 +325,10 @@ async fn drive(fake: &Fake, mut run: Run, script: &[(&str, &str)]) -> Run {
                     .find(|(s, _)| *s == step)
                     .map(|(_, o)| (*o, format!("{step} said {o}")))
                     .unwrap_or(("pass", format!("{step} done")));
-                fake.screens
-                    .lock()
-                    .unwrap()
-                    .insert(session.clone(), result(outcome, &summary));
+                fake.screens.lock().unwrap().insert(
+                    session.clone(),
+                    result(&marker(&run, &step), outcome, &summary),
+                );
                 let machine = run
                     .steps
                     .get(&step)
@@ -318,36 +366,547 @@ fn mr(run: &mut Run) {
     });
 }
 
+#[test]
+fn pipeline_notifications_follow_their_switches() {
+    use super::run::Note;
+    let mut phone = crate::config::PhoneNotifications::default();
+    assert!(Note::Waiting.allowed(&phone) && Note::Finished.allowed(&phone));
+    phone.pipeline_waiting = false;
+    assert!(!Note::Waiting.allowed(&phone) && Note::Finished.allowed(&phone));
+    phone.pipeline_waiting = true;
+    phone.pipeline_finished = false;
+    assert!(Note::Waiting.allowed(&phone) && !Note::Finished.allowed(&phone));
+}
+
 #[tokio::test]
-async fn retrying_an_agent_step_stops_its_old_session_first() {
+async fn a_report_notifies_as_finished() {
+    use super::run::Note;
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
-    run.place = crate::pipeline::record::Place {
-        machine: "hp".into(),
-        folder: "acme/app".into(),
-        branch: "com-1-fix".into(),
-        path: String::new(),
-    };
-    run.step = "implement".into();
-    run.state = RunState::Running;
-    let st = run.state_of("implement");
-    st.machine = "hp".into();
-    st.session = "hp-old".into();
-    st.runs = 2;
-    fake.session("hp", "hp-old", "com-1-fix", Activity::Idle);
+    fake.replies.lock().unwrap().push_back(REPORTED.to_string());
+    let run = run_of("Implement my Linear tickets");
     act(
         &fake,
         &Pipelines::default(),
         &run,
-        &Effect::Agent {
-            step: "implement".into(),
+        &Effect::Report {
+            step: "report".into(),
         },
     )
     .await;
+    assert_eq!(*fake.note_kinds.lock().unwrap(), vec![Note::Finished]);
+    act(
+        &fake,
+        &Pipelines::default(),
+        &run,
+        &Effect::Notify {
+            text: "COM-1 needs you".into(),
+        },
+    )
+    .await;
+    assert_eq!(
+        *fake.note_kinds.lock().unwrap(),
+        vec![Note::Finished, Note::Waiting]
+    );
+}
+
+#[test]
+fn a_finished_review_session_is_needless() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    run.step = "qa".into();
+    run.state = RunState::Running;
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Idle);
+    assert_eq!(
+        needless_sessions(&run, &fake.view()),
+        vec![("hp".to_string(), "hp-review".to_string())]
+    );
+}
+
+#[test]
+fn a_waiting_steps_session_stays() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    run.step = "review".into();
+    run.state = RunState::Waiting;
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Idle);
+    assert!(needless_sessions(&run, &fake.view()).is_empty());
+}
+
+#[test]
+fn a_shared_reviewer_stays_while_the_next_read_only_step_uses_it() {
+    let fake = Fake::default();
+    let mut run = run_of("Review my merge requests");
+    set_session(&mut run, "understand", "hp", "hp-reader", "/r/main");
+    set_session(&mut run, "root-cause", "hp", "hp-reader", "/r/main");
+    run.step = "root-cause".into();
+    run.state = RunState::Running;
+    fake.session("hp", "hp-reader", "b", Activity::Active);
+    assert!(needless_sessions(&run, &fake.view()).is_empty());
+}
+
+#[tokio::test]
+async fn a_run_that_ends_stops_every_session_and_keeps_the_worktree() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Idle);
+    run.state = RunState::Done;
+    let seen = act(&fake, &Pipelines::default(), &run, &Effect::StopSessions).await;
     let calls = fake.calls();
+    assert_eq!(count(&calls, "stop_session"), 2, "{calls:?}");
+    assert_eq!(count(&calls, "remove_worktree"), 0, "{calls:?}");
+    assert_eq!(seen, vec![Seen::TornDown(None)]);
+}
+
+#[tokio::test]
+async fn teardown_runs_once_per_folder() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "fix", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "qa", "devbox", "devbox-qa", "/r/copy");
+    made(&mut run, "implement");
+    made(&mut run, "qa");
+    act(&fake, &Pipelines::default(), &run, &Effect::StopSessions).await;
+    assert_eq!(fake.teardown_repos.lock().unwrap()[0], "/r/repo");
+    let mut did = fake.teardowns.lock().unwrap().clone();
+    did.sort();
+    assert_eq!(did, vec!["devbox:/r/copy", "hp:/r/main"]);
+}
+
+#[tokio::test]
+async fn a_failing_teardown_still_ends_the_run() {
+    let fake = Fake::default();
+    *fake.teardown_fails.lock().unwrap() = true;
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    made(&mut run, "implement");
+    run.state = RunState::Done;
+    let seen = act(&fake, &Pipelines::default(), &run, &Effect::StopSessions).await;
+    let (run, _) = engine::step(
+        run,
+        seen.into_iter().next().unwrap(),
+        &Pipelines::default(),
+        chrono::Local::now(),
+    );
+    assert_eq!(run.state, RunState::Done);
+    assert!(
+        run.teardown_problem.contains("exited 1"),
+        "{}",
+        run.teardown_problem
+    );
+}
+
+fn made(run: &mut Run, id: &str) {
+    let st = run.state_of(id);
+    st.made = st.path.clone();
+    st.repo = "/r/repo".into();
+}
+
+async fn stop_all(fake: &Fake, run: &Run) -> Option<String> {
+    match act(fake, &Pipelines::default(), run, &Effect::StopSessions)
+        .await
+        .into_iter()
+        .next()
+    {
+        Some(Seen::TornDown(problem)) => problem,
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn teardown_leaves_a_folder_the_run_did_not_make() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main-checkout");
+    assert_eq!(stop_all(&fake, &run).await, None);
+    assert!(fake.teardowns.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn teardown_leaves_a_folder_another_session_works_in() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/someone");
+    made(&mut run, "implement");
+    fake.session("hp", "someone", "b", Activity::Idle);
+    let problem = stop_all(&fake, &run).await.expect("a note");
+    assert!(fake.teardowns.lock().unwrap().is_empty());
+    assert!(problem.contains("someone"), "{problem}");
+}
+
+#[tokio::test]
+async fn teardown_leaves_a_folder_another_active_run_holds() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    made(&mut run, "implement");
+    let mut other = run_of("Implement my Linear tickets");
+    other.id = "r2".into();
+    other.state = RunState::Done;
+    set_session(&mut other, "implement", "hp", "hp-other", "/r/main");
+    fake.others.lock().unwrap().push(other.clone());
+    assert_eq!(
+        stop_all(&fake, &run).await,
+        None,
+        "an ended run holds nothing"
+    );
+    assert_eq!(fake.teardowns.lock().unwrap().len(), 1);
+
+    fake.teardowns.lock().unwrap().clear();
+    other.state = RunState::Running;
+    *fake.others.lock().unwrap() = vec![other];
+    let problem = stop_all(&fake, &run).await.expect("a note");
+    assert!(fake.teardowns.lock().unwrap().is_empty());
+    assert!(problem.contains("another run"), "{problem}");
+}
+
+#[tokio::test]
+async fn a_failed_stop_at_the_end_of_a_run_is_told() {
+    let fake = Fake::default();
+    *fake.stop_fails.lock().unwrap() = true;
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    let problem = stop_all(&fake, &run).await.expect("a note");
+    assert!(problem.contains("hp-main"), "{problem}");
+}
+
+#[tokio::test]
+async fn a_start_says_which_worktree_it_made() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    run.step = "implement".into();
+    run.place.machine = "hp".into();
+    run.place.folder = "acme/app".into();
+    run.state_of("implement").machine = "hp".into();
+    let effect = Effect::Agent {
+        step: "implement".into(),
+    };
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert_eq!(
+        seen.first(),
+        Some(&Seen::WorktreeMade {
+            step: "implement".into(),
+            path: "/r/hp-s1".into(),
+            repo: "/r/repo".into(),
+        }),
+        "{seen:?}"
+    );
+    let (run, _) = engine::step(
+        run,
+        seen[0].clone(),
+        &Pipelines::default(),
+        chrono::Local::now(),
+    );
+    assert_eq!(run.steps["implement"].made, "/r/hp-s1");
+    assert_eq!(run.steps["implement"].repo, "/r/repo");
+}
+
+#[tokio::test]
+async fn a_run_tags_the_sessions_it_starts() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    let calls = enter_step(&fake, &mut run, "implement").await;
+    assert!(
+        calls[0].starts_with("start_session") && calls[0].contains("\"name_tag\":\"r1\""),
+        "{calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_blocked_shared_session_is_not_typed_into() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    fake.session("hp", "hp-main", "b", Activity::Blocked);
+    run.step = "fix".into();
+    run.state = RunState::Running;
+    run.state_of("fix").machine = "hp".into();
+    let effect = Effect::Agent { step: "fix".into() };
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert_eq!(count(&fake.calls(), "send_to_session"), 0);
+    let (run, _) = engine::step(
+        run,
+        seen[0].clone(),
+        &Pipelines::default(),
+        chrono::Local::now(),
+    );
+    assert_eq!(run.steps["fix"].session, "hp-main");
+    assert!(matches!(
+        watch::seen(&run, &fake.view(), Some("Allow?"), chrono::Local::now()),
+        Some(Seen::Waiting { .. })
+    ));
+}
+
+#[tokio::test]
+async fn a_busy_shared_session_is_typed_into_once_it_is_idle() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    fake.session("hp", "hp-main", "b", Activity::Active);
+    run.step = "fix".into();
+    run.state = RunState::Running;
+    run.state_of("fix").machine = "hp".into();
+    run.step_since = (chrono::Local::now() - chrono::Duration::minutes(5)).to_rfc3339();
+    let effect = Effect::Agent { step: "fix".into() };
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert_eq!(count(&fake.calls(), "send_to_session"), 0);
+    let (run, _) = engine::step(
+        run,
+        seen[0].clone(),
+        &Pipelines::default(),
+        chrono::Local::now(),
+    );
+    assert_eq!(
+        watch::seen(&run, &fake.view(), None, chrono::Local::now()),
+        None
+    );
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    let (run, effects) = engine::step(
+        run.clone(),
+        watch::seen(&run, &fake.view(), Some("no result"), chrono::Local::now()).unwrap(),
+        &Pipelines::default(),
+        chrono::Local::now(),
+    );
+    assert_eq!(effects, vec![effect.clone()]);
+    act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert_eq!(count(&fake.calls(), "send_to_session"), 1);
+}
+
+#[tokio::test]
+async fn a_copy_from_a_stopped_session_names_its_folder() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-gone", "/r/main");
+    run.state_of("qa").machine = "devbox".into();
+    let calls = enter_step(&fake, &mut run, "qa").await;
+    let moved = calls
+        .iter()
+        .find(|c| c.starts_with("move_session"))
+        .expect("a move");
+    assert!(moved.contains("\"path\":\"/r/main\""), "{moved}");
+    assert!(moved.contains("\"name_tag\":\"r1\""), "{moved}");
+}
+
+#[test]
+fn an_older_saved_step_still_loads() {
+    let saved: Effect = serde_json::from_str(r#"{"effect":"stop_read_only"}"#).unwrap();
+    assert_eq!(saved, Effect::StopSessions);
+}
+
+#[test]
+fn a_runs_file_that_cannot_be_read_is_kept() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("runs.json");
+    std::fs::write(&file, "{ not json").unwrap();
+    let store = super::store::Store::load(file);
+    assert!(store.all().is_empty());
+    let kept: Vec<_> = std::fs::read_dir(dir.path())
+        .unwrap()
+        .map(|e| e.unwrap().path())
+        .filter(|p| std::fs::read_to_string(p).is_ok_and(|t| t == "{ not json"))
+        .filter(|p| p.file_name().unwrap() != "runs.json")
+        .collect();
+    assert_eq!(kept.len(), 1, "a copy of the unreadable file stays");
+}
+
+#[test]
+fn a_stale_session_is_left_out_of_the_sweep() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    run.step = "qa".into();
+    run.state = RunState::Running;
+    fake.session("hp", "hp-main", "b", Activity::Idle);
+    fake.session("hp", "hp-review", "b", Activity::Idle);
+    fake.stale.lock().unwrap().push("hp-review".to_string());
+    assert!(needless_sessions(&run, &fake.view()).is_empty());
+}
+
+fn set_session(run: &mut Run, id: &str, machine: &str, session: &str, path: &str) {
+    let st = run.state_of(id);
+    st.machine = machine.into();
+    st.session = session.into();
+    st.path = path.into();
+    st.started = chrono::Local::now().to_rfc3339();
+}
+
+fn edit_agent(run: &mut Run, id: &str, edit: impl FnOnce(&mut String, &mut SessionChoice)) {
+    let def = run.definition.as_mut().unwrap();
+    let step = def.steps.iter_mut().find(|s| s.id == id).unwrap();
+    if let StepKind::Agent { agent, session, .. } = &mut step.kind {
+        edit(agent, session);
+    }
+}
+
+async fn enter_step(fake: &Fake, run: &mut Run, id: &str) -> Vec<String> {
+    run.step = id.into();
+    run.state = RunState::Running;
+    run.place.machine = "hp".into();
+    run.place.folder = "acme/app".into();
+    run.place.branch = "com-1-fix".into();
+    run.state_of(id).machine = run
+        .steps
+        .get(id)
+        .map(|s| s.machine.clone())
+        .filter(|m| !m.is_empty())
+        .unwrap_or_else(|| "hp".into());
+    act(
+        fake,
+        &Pipelines::default(),
+        run,
+        &Effect::Agent { step: id.into() },
+    )
+    .await;
+    fake.calls()
+}
+
+fn count(calls: &[String], tool: &str) -> usize {
+    calls.iter().filter(|c| c.starts_with(tool)).count()
+}
+
+#[tokio::test]
+async fn steps_share_one_session() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
+    edit_agent(&mut run, "fix", |_, session| *session = SessionChoice::New);
+    let calls = enter_step(&fake, &mut run, "fix").await;
+    assert_eq!(count(&calls, "start_session"), 0, "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("send_to_session") && c.contains("hp-main")),
+        "{calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_review_step_gets_its_own_session() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
+    let calls = enter_step(&fake, &mut run, "review").await;
+    assert_eq!(count(&calls, "start_session"), 1, "{calls:?}");
+    assert_eq!(count(&calls, "send_to_session"), 0, "{calls:?}");
+}
+
+#[tokio::test]
+async fn consecutive_read_only_steps_share_a_session() {
+    let fake = Fake::default();
+    let mut run = run_of("Review my merge requests");
+    mr(&mut run);
+    set_session(&mut run, "understand", "hp", "hp-reader", "/r/reader");
+    fake.session("hp", "hp-reader", "com-1", Activity::Idle);
+    let calls = enter_step(&fake, &mut run, "root-cause").await;
+    assert_eq!(count(&calls, "start_session"), 0, "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("send_to_session") && c.contains("hp-reader")),
+        "{calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_step_on_another_machine_gets_its_own_session() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
+    edit_agent(&mut run, "fix", |_, session| *session = SessionChoice::New);
+    run.state_of("fix").machine = "devbox".into();
+    let calls = enter_step(&fake, &mut run, "fix").await;
+    assert_eq!(count(&calls, "send_to_session"), 0, "{calls:?}");
+    assert_eq!(count(&calls, "start_session"), 1, "{calls:?}");
+}
+
+#[tokio::test]
+async fn a_step_naming_another_agent_gets_its_own_session() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
+    edit_agent(&mut run, "fix", |agent, session| {
+        *agent = "codex".into();
+        *session = SessionChoice::New;
+    });
+    let calls = enter_step(&fake, &mut run, "fix").await;
+    assert_eq!(count(&calls, "send_to_session"), 0, "{calls:?}");
+    assert_eq!(count(&calls, "start_session"), 1, "{calls:?}");
+}
+
+#[tokio::test]
+async fn a_dead_shared_session_is_started_again_in_the_same_folder() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-gone", "/r/main");
+    let calls = enter_step(&fake, &mut run, "fix").await;
+    let start = calls
+        .iter()
+        .find(|c| c.starts_with("start_session"))
+        .expect("a new session");
+    assert!(start.contains("\"path\":\"/r/main\""), "{start}");
+    assert!(!start.contains("new_branch"), "{start}");
+
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-gone", "/r/main");
+    run.state_of("implement").runs = 2;
+    let calls = enter_step(&fake, &mut run, "implement").await;
+    let start = calls
+        .iter()
+        .find(|c| c.starts_with("start_session"))
+        .expect("a new session");
+    assert!(
+        start.contains("\"path\":\"/r/main\""),
+        "no second worktree: {start}"
+    );
+}
+
+#[tokio::test]
+async fn a_retried_step_keeps_the_shared_session() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-old", "/r/main");
+    run.state_of("implement").runs = 2;
+    fake.session("hp", "hp-old", "com-1-fix", Activity::Idle);
+    let calls = enter_step(&fake, &mut run, "implement").await;
+    assert_eq!(count(&calls, "stop_session"), 0, "{calls:?}");
+    assert_eq!(count(&calls, "start_session"), 0, "{calls:?}");
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.starts_with("send_to_session") && c.contains("hp-old")),
+        "{calls:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_retried_reviewer_starts_afresh() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
+    set_session(&mut run, "review", "hp", "hp-review", "/r/main");
+    run.state_of("review").runs = 2;
+    fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
+    fake.session("hp", "hp-review", "com-1-fix", Activity::Idle);
+    let calls = enter_step(&fake, &mut run, "review").await;
     let stop = calls
         .iter()
-        .position(|c| c.starts_with("stop_session") && c.contains("hp-old"));
+        .position(|c| c.starts_with("stop_session") && c.contains("hp-review"));
     let start = calls.iter().position(|c| c.starts_with("start_session"));
     assert!(
         stop.is_some() && start.is_some() && stop < start,
@@ -438,7 +997,7 @@ async fn a_pull_request_whose_ticket_cannot_be_read_still_runs() {
 }
 
 #[tokio::test]
-async fn same_as_reuses_the_path() {
+async fn read_only_steps_in_one_folder_share_its_session() {
     let fake = Fake::default();
     fake.replies
         .lock()
@@ -447,17 +1006,9 @@ async fn same_as_reuses_the_path() {
     let mut run = run_of("Review my merge requests");
     mr(&mut run);
     let run = drive(&fake, run, &[]).await;
-    let understand = run.steps["understand"].path.clone();
-    let root = fake
-        .calls()
-        .into_iter()
-        .filter(|c| c.starts_with("start_session"))
-        .nth(1)
-        .unwrap();
-    assert!(
-        root.contains(&format!("\"path\":\"{understand}\"")),
-        "{root}"
-    );
+    let understand = &run.steps["understand"];
+    assert_eq!(run.steps["root-cause"].path, understand.path);
+    assert_eq!(run.steps["root-cause"].session, understand.session);
 }
 
 #[tokio::test]
@@ -503,35 +1054,6 @@ async fn continue_types_into_the_session() {
         "{sent}"
     );
     assert_eq!(run.steps["fix"].session, implement);
-}
-
-#[tokio::test]
-async fn continue_on_an_ended_session_waits() {
-    let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
-    run.place.machine = "hp".into();
-    run.step = "fix".into();
-    run.state = RunState::Running;
-    run.state_of("implement").session = "gone".into();
-    run.state_of("implement").machine = "hp".into();
-    run.state_of("fix").machine = "hp".into();
-    let seen = act(
-        &fake,
-        &Pipelines::default(),
-        &run,
-        &Effect::Agent { step: "fix".into() },
-    )
-    .await;
-    let (run, _) = engine::step(
-        run,
-        seen.into_iter().next().unwrap(),
-        &Pipelines::default(),
-        chrono::Local::now(),
-    );
-    assert_eq!(
-        run.waiting.as_ref().map(|w| (w.kind, w.screen.clone())),
-        Some((WaitKind::NeedsYou, "Implement's session has ended".into()))
-    );
 }
 
 #[tokio::test]
@@ -632,6 +1154,99 @@ mod pipelines {
             }),
             pr: None,
         }
+    }
+
+    #[tokio::test]
+    async fn a_slow_sweep_does_not_hold_up_the_tick() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.step = "qa".into();
+        run.state = RunState::Waiting;
+        run.pending = None;
+        run.state_of("implement").session = "hp-main".into();
+        run.state_of("implement").machine = "hp".into();
+        run.state_of("review").session = "hp-review".into();
+        run.state_of("review").machine = "hp".into();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-main", "b", Activity::Idle);
+        fake.session("hp", "hp-review", "b", Activity::Idle);
+        let gate = Arc::new(tokio::sync::Semaphore::new(0));
+        *fake.hold_stops.lock().unwrap() = Some(gate.clone());
+        let world: Arc<dyn World> = fake.clone();
+        let settings = crate::config::Pipelines::default();
+        let round = p.tick(&world, &settings, None, chrono::Local::now());
+        let handles = tokio::time::timeout(std::time::Duration::from_secs(2), round)
+            .await
+            .expect("the tick did not wait for the stop");
+        gate.add_permits(10);
+        for handle in handles {
+            handle.await.unwrap();
+        }
+        assert!(fake.calls().iter().any(|c| c.contains("hp-review")));
+    }
+
+    #[tokio::test]
+    async fn a_run_with_a_step_left_is_not_deleted() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.state = RunState::Dropped;
+        run.pending = Some(Effect::StopSessions);
+        let id = run.id.clone();
+        p.put(run);
+        assert!(matches!(
+            p.delete_run(&id),
+            Err(super::super::DeleteRun::Stopping)
+        ));
+        p.store.update(&id, |r| r.pending = None);
+        assert!(p.delete_run(&id).is_ok());
+    }
+
+    #[tokio::test]
+    async fn a_tick_stops_a_finished_reviewers_session() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my Linear tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.step = "qa".into();
+        run.state = RunState::Waiting;
+        run.pending = None;
+        run.state_of("implement").session = "hp-main".into();
+        run.state_of("implement").machine = "hp".into();
+        run.state_of("review").session = "hp-review".into();
+        run.state_of("review").machine = "hp".into();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-main", "b", Activity::Idle);
+        fake.session("hp", "hp-review", "b", Activity::Idle);
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let calls = fake.calls();
+        assert!(
+            calls
+                .iter()
+                .any(|c| c.starts_with("stop_session") && c.contains("hp-review")),
+            "{calls:?}"
+        );
+        assert!(!calls.iter().any(|c| c.contains("hp-main")), "{calls:?}");
     }
 
     #[tokio::test]

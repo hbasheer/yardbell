@@ -5,6 +5,35 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.9.0] - 2026-10-30
+
+- **A pipeline run uses one agent session.** Its steps take turns in one session and one worktree,
+  so a run holds far less memory. A review step gets its own read-only session, and a step on
+  another machine or with another agent gets its own; each stops as soon as nothing needs it. When a
+  run ends or is dropped, every session stops and the worktree stays.
+- **Teardown command.** Worktree setup can now run a command when a run ends, such as
+  `docker compose down`, so containers go too. It only runs in a worktree that run made, and is
+  skipped while another session or run uses the folder. Whatever goes wrong, the run still ends and
+  the run page says so.
+- Pipeline sessions now have the run's id at the end of their names. A step saved as continuing a
+  session on another machine now gets its own session there.
+- **Stop session** on the run page makes the step wait for you instead of starting the agent again.
+- Agents now copy a `step:` line into their result block, so a result is matched to the exact run
+  of the step it answers.
+- **Terminal on the run page.** The run's live terminal sits under its steps and follows the run you
+  pick, with **Stop session**. A finished run can be deleted with **Delete this run**.
+- **Pipeline notifications in Settings.** Phone notifications has switches for **Pipeline needs
+  you**, **Pipeline finished** and **Proposals**.
+- **Pull requests in Settings.** A new section switches badges and Dispatch cards on or off, sets how
+  often they are checked, adds GitLab hosts with a token from your saved secrets, and shows whether
+  `gh` and each token work. A session with no badge because of a problem now says **No PR info**, with
+  the reason.
+- **Tab bar on a phone.** The pages sit in a bar along the bottom of the screen, as in a phone's own
+  apps, so the header no longer collides with the menu. It hides while the keyboard is open.
+- Fixed: the run page could not scroll on a phone or tablet.
+- Fixed: Delete on a pipeline did nothing in the desktop app, because the page used a dialog the
+  app's webview does not have.
+
 ## [0.8.0] - 2026-10-30
 
 - **Pipelines** carry tickets and merge requests through steps you define, and stop only when they

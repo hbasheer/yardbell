@@ -92,6 +92,7 @@ async fn no_secret_reaches_read_settings() {
             prompt_arg: None,
         }];
         cfg.worktree_setup = vec![crate::worktrees::setup::WorktreeSetup {
+            teardown: String::new(),
             folder: "app".into(),
             machine: "any".into(),
             command: "echo API_TOKEN=tokplanted > .env".into(),
@@ -579,5 +580,32 @@ async fn a_config_caught_mid_edit_gives_an_error() {
     assert!(
         body["error"].as_str().unwrap().starts_with("cannot parse"),
         "{body}"
+    );
+}
+
+#[tokio::test]
+async fn a_credential_in_a_teardown_command_is_hidden() {
+    let r = rig();
+    mcp_on(&r);
+    edit_config(&r, |cfg| {
+        cfg.worktree_setup = vec![crate::worktrees::setup::WorktreeSetup {
+            teardown:
+                "deploy down --token ghp_plantedplantedplantedplantedplanted12 --password pwplanted"
+                    .into(),
+            folder: "app".into(),
+            machine: "any".into(),
+            command: String::new(),
+            timeout_seconds: 60,
+        }];
+    });
+    let result = tool_call(&r, "read_settings", json!({ "area": "worktree_setup" })).await;
+    let shown = answer(&result)["value"][0]["teardown"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(shown.starts_with("deploy down"), "{shown}");
+    assert!(
+        !shown.contains("ghp_planted") && !shown.contains("pwplanted"),
+        "{shown}"
     );
 }

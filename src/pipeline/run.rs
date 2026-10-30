@@ -1,8 +1,8 @@
-use super::definition::{LinearAction, Outcome, SessionChoice, Step, StepKind, Workspace};
+use super::definition::{LinearAction, Outcome, Step, StepKind, Workspace};
 use super::forge::{Draft, Forge};
 use super::linear::Linear;
 use super::prompts::{self, TicketText};
-use super::record::{Effect, PullRef, Run, Seen};
+use super::record::{Effect, PullRef, Run, Seen, StepState};
 use crate::config::{Approval, Config, Pipelines as Cfg};
 use crate::dispatch::{By, ReviewOf};
 use crate::phone::Push;
@@ -54,8 +54,33 @@ pub trait World: Send + Sync {
         run: &'a Run,
         path: &'a str,
     ) -> BoxFuture<'a, Result<PullRef, String>>;
-    fn notify(&self, text: &str);
+    fn notify(&self, kind: Note, text: &str);
+    fn teardown<'a>(
+        &'a self,
+        machine: &'a str,
+        repo: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>>;
+    fn other_runs(&self, id: &str) -> Vec<Run>;
 }
+
+// What a phone notification from a pipeline is about, for the switches in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Note {
+    Waiting,
+    Finished,
+}
+
+impl Note {
+    pub fn allowed(self, phone: &crate::config::PhoneNotifications) -> bool {
+        match self {
+            Note::Waiting => phone.pipeline_waiting,
+            Note::Finished => phone.pipeline_finished,
+        }
+    }
+}
+
+const NAME_TAG_LEN: usize = 6;
 
 enum Halt {
     Refused(String),
@@ -125,34 +150,123 @@ async fn ticket_text(world: &dyn World, run: &Run) -> Result<TicketText, Seen> {
     }
 }
 
-async fn started(world: &dyn World, run: &Run, step: &str, tool: &str, input: Value) -> Seen {
+async fn started(
+    world: &dyn World,
+    run: &Run,
+    step: &str,
+    tool: &str,
+    mut input: Value,
+) -> Vec<Seen> {
+    input["name_tag"] = json!(run.id[run.id.len().saturating_sub(NAME_TAG_LEN)..]);
     match run_step(world, run, tool, input).await {
         Ok(v) => {
             let field = |k: &str| v[k].as_str().unwrap_or_default().to_string();
-            match field("name") {
-                name if !name.is_empty() => Seen::Started {
-                    step: step.into(),
-                    result: Ok((name, field("machine"), field("path"))),
-                },
-                _ => Seen::Started {
+            let name = field("name");
+            if name.is_empty() {
+                return vec![Seen::Started {
                     step: step.into(),
                     result: Err(format!("{tool} did not say which session it started")),
-                },
+                }];
             }
+            let mut seen = Vec::new();
+            if v["created"] == true {
+                seen.push(Seen::WorktreeMade {
+                    step: step.into(),
+                    path: field("path"),
+                    repo: field("repo"),
+                });
+            }
+            seen.push(Seen::Started {
+                step: step.into(),
+                result: Ok((name, field("machine"), field("path"))),
+            });
+            seen
         }
-        Err(Halt::Refused(reason)) => Seen::Refused(reason),
-        Err(Halt::Failed(e)) => Seen::Started {
+        Err(Halt::Refused(reason)) => vec![Seen::Refused(reason)],
+        Err(Halt::Failed(e)) => vec![Seen::Started {
             step: step.into(),
             result: Err(e),
-        },
+        }],
     }
+}
+
+fn agent_of(step: &Step) -> Option<(&str, bool)> {
+    match &step.kind {
+        StepKind::Agent {
+            agent, read_only, ..
+        } => Some((agent, *read_only)),
+        _ => None,
+    }
+}
+
+// The session this step can type into instead of starting one: the run's newest live session on
+// the same machine, with the same agent and the same read-only setting, which cannot change in a
+// running agent. A reviewer run again never reuses its own.
+fn shared_session(run: &Run, view: &StateView, step: &Step, machine: &str) -> Option<StepState> {
+    let wanted = agent_of(step)?;
+    let def = run.def();
+    run.steps
+        .iter()
+        .filter(|(id, st)| {
+            st.machine == machine
+                && session(view, &st.session).is_some()
+                && !(wanted.1 && **id == step.id)
+                && def.step(id).and_then(agent_of) == Some(wanted)
+        })
+        .map(|(_, st)| st)
+        .max_by_key(|st| st.started.clone())
+        .cloned()
+}
+
+// Sessions of a live run that nothing needs any more: everything but the current step's and the
+// newest writer's, which later steps type into.
+pub fn needless_sessions(run: &Run, view: &StateView) -> Vec<(String, String)> {
+    let def = run.def();
+    let current = run
+        .steps
+        .get(&run.step)
+        .map(|s| s.session.as_str())
+        .unwrap_or_default();
+    let writer = run
+        .steps
+        .iter()
+        .filter(|(id, st)| {
+            !st.session.is_empty()
+                && def
+                    .step(id)
+                    .and_then(agent_of)
+                    .is_some_and(|(_, read_only)| !read_only)
+        })
+        .max_by_key(|(_, st)| st.started.clone())
+        .map(|(_, st)| st.session.as_str())
+        .unwrap_or_default();
+    let mut out: Vec<(String, String)> = run
+        .steps
+        .values()
+        .filter(|st| st.session != current && st.session != writer)
+        .filter_map(|st| {
+            session(view, &st.session)
+                .filter(|s| !s.stale)
+                .map(|s| (s.machine.clone(), st.session.clone()))
+        })
+        .collect();
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn folder_on(run: &Run, machine: &str) -> Option<String> {
+    run.steps
+        .values()
+        .filter(|st| st.machine == machine && !st.path.is_empty())
+        .max_by_key(|st| st.started.clone())
+        .map(|st| st.path.clone())
 }
 
 async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen> {
     let StepKind::Agent {
         agent,
         workspace,
-        session: choice,
         read_only,
         ..
     } = &step.kind
@@ -173,37 +287,41 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
     let prompt = prompts::agent(run, step, &text, answer, &notes);
     let view = world.view();
     let machine = state.machine.clone();
-    if let SessionChoice::Continue(other) = choice {
-        let theirs = run.steps.get(other).cloned().unwrap_or_default();
-        let Some(live) = session(&view, &theirs.session) else {
-            let name = run
-                .def()
-                .step(other)
-                .map_or(other.as_str(), |s| s.name.as_str());
-            return vec![Seen::Ended {
+    if let Some(shared) = shared_session(run, &view, step, &machine) {
+        let live = session(&view, &shared.session);
+        let live_machine = live.map_or_else(|| machine.clone(), |s| s.machine.clone());
+        // Typing into an agent that is asking or working would answer its question or land in
+        // its turn. The step takes the session now: the watcher asks the person, and once the
+        // agent is quiet with no result for this step, the step runs again and types its task.
+        if live.is_some_and(|s| s.activity != crate::snapshot::Activity::Idle) {
+            return vec![Seen::Started {
                 step: step.id.clone(),
-                outcome: Outcome::NeedsYou,
-                report: format!("{name}'s session has ended"),
-                details: vec![],
+                result: Ok((shared.session, live_machine, shared.path)),
             }];
-        };
-        let live_machine = live.machine.clone();
-        let input = json!({ "machine": live_machine, "name": theirs.session, "text": prompt });
+        }
+        let input = json!({ "machine": live_machine, "name": shared.session, "text": prompt });
         return match run_step(world, run, "send_to_session", input).await {
             Ok(_) => vec![Seen::Started {
                 step: step.id.clone(),
-                result: Ok((theirs.session, live_machine, theirs.path)),
+                result: Ok((shared.session, live_machine, shared.path)),
             }],
             Err(Halt::Refused(reason)) => vec![Seen::Refused(reason)],
             Err(Halt::Failed(e)) => vec![Seen::Sent(Err(e))],
         };
     }
-    // A step run again starts afresh; its earlier session would otherwise work in the same folder.
-    if let Some(old) = session(&view, &state.session) {
-        let input = json!({ "machine": old.machine, "name": state.session });
-        let _ = world.perform("stop_session", input).await;
+    // A reviewer run again starts afresh, so it reads the code rather than its earlier opinion.
+    if *read_only {
+        if let Some(old) = session(&view, &state.session) {
+            let input = json!({ "machine": old.machine, "name": state.session });
+            let _ = world.perform("stop_session", input).await;
+        }
     }
     let mut input = match workspace {
+        // The run's folder outlives a session that died, so its work is picked up there.
+        Workspace::NewWorktree if folder_on(run, &machine).is_some() => {
+            let path = folder_on(run, &machine).unwrap_or_default();
+            json!({ "machine": machine, "path": path, "prompt": prompt, "read_only": read_only, "wait": true })
+        }
         Workspace::NewWorktree => {
             let wanted = branch(run);
             json!({
@@ -236,15 +354,17 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
                     "task": prompt,
                     "stop_original": false,
                     "read_only": read_only,
+                    "path": theirs.path,
+                    "agent": agent,
                 });
-                return vec![started(world, run, &step.id, "move_session", input).await];
+                return started(world, run, &step.id, "move_session", input).await;
             }
         }
     };
     if !agent.is_empty() {
         input["agent"] = json!(agent);
     }
-    vec![started(world, run, &step.id, "start_session", input).await]
+    started(world, run, &step.id, "start_session", input).await
 }
 
 async fn closed(world: &dyn World, run: &Run) -> bool {
@@ -339,59 +459,68 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 .ok()
                 .and_then(|t| t.lines().next())
                 .unwrap_or("its report could not be written");
-            world.notify(&format!("{}: {line}", run.subject.label()));
+            world.notify(Note::Finished, &format!("{}: {line}", run.subject.label()));
             vec![Seen::Reported(written)]
         }
         Effect::Notify { text } => {
-            world.notify(text);
-            vec![]
-        }
-        Effect::StopReadOnly => {
-            let view = world.view();
-            let def = run.def();
-            let writes = |name: &str| {
-                run.steps.iter().any(|(id, st)| {
-                    st.session == name
-                        && def.step(id).is_some_and(|s| {
-                            matches!(
-                                s.kind,
-                                StepKind::Agent {
-                                    read_only: false,
-                                    ..
-                                }
-                            )
-                        })
-                })
-            };
-            for (id, st) in &run.steps {
-                let read_only = def.step(id).is_some_and(|s| {
-                    matches!(
-                        s.kind,
-                        StepKind::Agent {
-                            read_only: true,
-                            ..
-                        }
-                    )
-                });
-                if !read_only || writes(&st.session) {
-                    continue;
-                }
-                if let Some(s) = session(&view, &st.session) {
-                    let input = json!({ "machine": s.machine, "name": st.session });
-                    let _ = world.perform("stop_session", input).await;
-                }
-            }
+            world.notify(Note::Waiting, text);
             vec![]
         }
         Effect::StopSessions => {
             let view = world.view();
-            for st in run.steps.values() {
-                if let Some(s) = session(&view, &st.session) {
-                    let input = json!({ "machine": s.machine, "name": st.session });
-                    let _ = world.perform("stop_session", input).await;
+            let mut live: Vec<(&str, &str)> = run
+                .steps
+                .values()
+                .filter_map(|st| {
+                    session(&view, &st.session).map(|s| (s.machine.as_str(), st.session.as_str()))
+                })
+                .collect();
+            live.sort_unstable();
+            live.dedup();
+            let mut problems = Vec::new();
+            for (machine, name) in &live {
+                let input = json!({ "machine": machine, "name": name });
+                if let Err(e) = world.perform("stop_session", input).await {
+                    problems.push(format!("{name} on {machine} did not stop: {e}"));
                 }
             }
-            vec![]
+            let mut places: Vec<(&str, &str, &str)> = run
+                .steps
+                .values()
+                .filter(|st| !st.made.is_empty())
+                .map(|st| (st.machine.as_str(), st.made.as_str(), st.repo.as_str()))
+                .collect();
+            places.sort_unstable();
+            places.dedup();
+            let others = world.other_runs(&run.id);
+            for (machine, path, repo) in places {
+                let inside = format!("{path}/");
+                let someone = view.sessions.iter().find(|s| {
+                    s.machine == machine
+                        && (s.path == path || s.path.starts_with(&inside))
+                        && !live
+                            .iter()
+                            .any(|(_, name)| s.tmux.as_deref() == Some(*name))
+                });
+                if let Some(s) = someone {
+                    let who = s.tmux.as_deref().unwrap_or(&s.agent);
+                    problems.push(format!("Teardown skipped in {path}: {who} works there"));
+                } else if others.iter().any(|r| {
+                    r.state.active()
+                        && r.steps
+                            .values()
+                            .any(|st| st.machine == machine && st.path == path)
+                }) {
+                    problems.push(format!(
+                        "Teardown skipped in {path}: another run still uses it"
+                    ));
+                } else if let Err(e) = world.teardown(machine, repo, path).await {
+                    problems.push(format!("Teardown failed: {e}"));
+                }
+            }
+            vec![Seen::TornDown(
+                (!problems.is_empty()).then(|| problems.join("; ")),
+            )]
         }
     }
 }
@@ -443,6 +572,34 @@ impl Live {
 }
 
 impl World for Live {
+    fn other_runs(&self, id: &str) -> Vec<Run> {
+        self.app
+            .pipelines
+            .runs()
+            .into_iter()
+            .filter(|r| r.id != id)
+            .collect()
+    }
+
+    fn teardown<'a>(
+        &'a self,
+        machine: &'a str,
+        repo: &'a str,
+        path: &'a str,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let m = self
+                .cfg
+                .machine(machine)
+                .ok_or_else(|| format!("{machine} is not a machine"))?;
+            match crate::web::worktrees_api::run_teardown(&self.app, &self.cfg, m, repo, path).await
+            {
+                Some(run) if !run.ok => Err(run.summary()),
+                _ => Ok(()),
+            }
+        })
+    }
+
     fn view(&self) -> StateView {
         self.app
             .state
@@ -608,7 +765,10 @@ impl World for Live {
         })
     }
 
-    fn notify(&self, text: &str) {
+    fn notify(&self, kind: Note, text: &str) {
+        if !kind.allowed(&self.cfg.phone_notifications) {
+            return;
+        }
         let click = crate::phone::base_url(&self.cfg).map(|base| format!("{base}/pipeline"));
         self.app.phone.inbox.add(&[Push {
             title: "Yardbell pipelines".into(),

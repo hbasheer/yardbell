@@ -400,6 +400,12 @@ impl Rig {
             .count()
     }
 
+    fn why(&self, index: usize) -> Option<String> {
+        self.state.view(&self.cfg, &NoPorts, "h").sessions[index]
+            .pull_why
+            .clone()
+    }
+
     fn badge(&self, index: usize) -> Option<PullView> {
         self.state.view(&self.cfg, &NoPorts, "h").sessions[index]
             .pull
@@ -1327,4 +1333,107 @@ async fn the_session_timeline_gets_its_pull_request_once_across_restarts() {
         ],
         "the fixture's pull request is older than the session; nothing twice after a restart"
     );
+}
+
+#[tokio::test]
+async fn a_session_says_why_it_has_no_badge() {
+    let rig = Rig::new("");
+    rig.fake.stub(BRANCH, Output::failed(127, ""));
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    let why = rig.why(0).expect("a reason");
+    assert!(
+        why.contains("gh is not installed or not signed in"),
+        "{why}"
+    );
+    let health = rig.state.pull_health();
+    assert!(health
+        .machines
+        .values()
+        .any(|w| w.as_deref().is_some_and(|w| w.contains("gh"))));
+}
+
+#[tokio::test]
+async fn a_remote_gh_cannot_read_points_at_the_settings() {
+    let rig = Rig::new("");
+    rig.fake.stub(
+        BRANCH,
+        Output::failed(
+            1,
+            "none of the git remotes configured for this repository point to a known GitHub host",
+        ),
+    );
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    let why = rig.why(0).expect("a reason");
+    assert!(
+        why.contains("add its host in Settings, Pull requests"),
+        "{why}"
+    );
+}
+
+#[tokio::test]
+async fn a_branch_without_a_pull_request_needs_no_reason() {
+    let rig = Rig::new("");
+    rig.fake.stub(
+        BRANCH,
+        Output::failed(1, "no pull requests found for branch"),
+    );
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    assert_eq!(rig.why(0), None);
+    assert!(rig
+        .state
+        .pull_health()
+        .machines
+        .values()
+        .all(Option::is_none));
+}
+
+#[tokio::test]
+async fn a_refused_token_is_the_reason_and_the_hosts_status() {
+    let stub = serve(Answers::default()).await;
+    let rig = gitlab_rig(&stub);
+    std::fs::write(rig.root.join("secrets.yml"), "gitlab: glpat-bad\n").unwrap();
+    let (pulls, dispatch) = (rig.pulls(), rig.dispatch());
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            Instant::now(),
+        )
+        .await;
+    let health = rig.state.pull_health();
+    let why = health
+        .hosts
+        .values()
+        .find_map(|w| w.clone())
+        .expect("the host's problem");
+    assert!(!why.contains("glpat-bad"), "{why}");
 }

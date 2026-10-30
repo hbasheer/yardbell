@@ -1278,13 +1278,14 @@ class Suite:
                 """(() => {
                   const last = [...document.querySelectorAll('#dispatch-log .msg')].pop().getBoundingClientRect();
                   const form = document.getElementById('dispatch-form').getBoundingClientRect();
-                  return {last: last.bottom, top: form.top, bottom: form.bottom, height: innerHeight};
+                  const bar = document.querySelector('.side-foot').getBoundingClientRect();
+                  return {last: last.bottom, top: form.top, bottom: form.bottom, bar: bar.top};
                 })()"""
             )
             if box["last"] > box["top"] + 1:
                 raise Failure(f"the composer (top {box['top']}px) covers the last message (bottom {box['last']}px)")
-            if abs(box["bottom"] - box["height"]) > 1:
-                raise Failure(f"the composer ends at {box['bottom']}px, not at the bottom of the {box['height']}px screen")
+            if abs(box["bottom"] - box["bar"]) > 1:
+                raise Failure(f"the composer ends at {box['bottom']}px, not on the tab bar at {box['bar']}px")
         finally:
             b.viewport(1280, 800)
 
@@ -1917,8 +1918,8 @@ class Suite:
         b.wait("document.querySelector('.pl-builder:not(.full)') && document.querySelector('.side').getBoundingClientRect().width > 0", "the builder back in the page")
         b.goto(self.url("/pipeline?p=review&run=run-a"))
         b.wait("document.querySelector('.pl-builder:not(.full) .pl-run-view')", "the Runs tab remembering the choice")
-        if b.js("document.querySelector('.pl-canvas').getBoundingClientRect().bottom") < b.js("innerHeight") - 40:
-            raise Failure("the Runs canvas does not reach the bottom of the window")
+        if b.js("document.querySelector('.pl-run-main').getBoundingClientRect().bottom") < b.js("innerHeight") - 40:
+            raise Failure("the Runs view does not reach the bottom of the window")
         b.click("#pl-full")
         b.wait("document.querySelector('.pl-builder.full .pl-run-view')", "the Runs tab full screen")
         self.check_errors("the builder shell")
@@ -2095,14 +2096,40 @@ class Suite:
         self.open_builder()
         b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
         b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
-        b.js("window.__asked = ''; window.confirm = (m) => { window.__asked = m; return false; }")
         b.click("#pl-back")
-        if b.js("window.__asked") != "Leave without saving your changes?":
-            raise Failure("leaving with unsaved changes did not ask")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Leave without saving your changes?')", "the question")
+        b.click("dialog.confirm[open] [data-answer=no]")
+        b.wait("!document.querySelector('dialog.confirm[open]')", "the dialog closed")
         if not b.js("!!document.querySelector('.pl-node.kind-wait')"):
             raise Failure("saying no still threw the change away")
-        b.js("window.confirm = () => true")
         b.click("#pl-back")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question again")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("!new URLSearchParams(location.search).get('p')", "leaving once confirmed")
+
+    def test_back_while_editing_asks_once_and_keeps_the_draft(self):
+        b = self.b
+        self.open_builder()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
+        builder = b.js("location.href")
+        b.js("history.replaceState(null, '', '/pipeline'); history.pushState(null, '', " + repr(builder) + ")")
+        b.js("history.back()")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+        b.wait("new URLSearchParams(location.search).get('p')", "the address still on the pipeline while it asks")
+        b.js("history.back()")
+        b.pump(6)
+        if b.js("document.querySelectorAll('dialog.confirm[open]').length") != 1:
+            raise Failure("a second Back stacked another question")
+        if not b.js("!!document.querySelector('.pl-node.kind-wait')"):
+            raise Failure("the page reloaded behind the question and lost the change")
+        b.click("dialog.confirm[open] [data-answer=no]")
+        b.wait("!document.querySelector('dialog.confirm[open]')", "the dialog closed")
+        if not b.js("!!document.querySelector('.pl-node.kind-wait')"):
+            raise Failure("saying no still threw the change away")
+        b.js("history.back()")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question again")
+        b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("!new URLSearchParams(location.search).get('p')", "leaving once confirmed")
 
     def test_history_preview_then_restore(self):
@@ -2186,9 +2213,9 @@ class Suite:
         b.wait("document.querySelector('.pl-canvas.editable')", "Build")
         b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
         b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
-        b.js("window.__asked = ''; window.confirm = (m) => { window.__asked = m; return false; }")
         b.js("history.back()")
-        b.wait("window.__asked === 'Leave without saving your changes?'", "the question")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Leave without saving your changes?')", "the question")
+        b.click("dialog.confirm[open] [data-answer=no]")
         b.wait("new URLSearchParams(location.search).get('p') === 'review' && document.querySelector('.pl-node.kind-wait')", "the change kept")
 
     def test_run_now_on_a_manual_pipeline_takes_a_ticket(self):
@@ -2484,6 +2511,254 @@ class Suite:
         b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("![...document.querySelectorAll('.pr-head')].some((h) => h.textContent === 'Decided')", "the decided proposals cleared")
         self.check_errors("deleting proposals")
+
+    def test_settings_saves_a_teardown_command(self):
+        b = self.b
+        b.goto(self.url("/settings#worktree-setup"))
+        b.wait("document.getElementById('setup-add')", "Worktree setup")
+        b.click("#setup-add")
+        b.wait("document.querySelector('.setup-row [data-key=teardown]')", "the teardown field")
+        self.set_field(".setup-row:last-child [data-key=folder]", "demo-app")
+        self.set_field(".setup-row:last-child [data-key=teardown]", "docker compose down")
+        b.click("#setup-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the setup saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        if "teardown: docker compose down" not in config:
+            raise Failure(f"yardbell.yml does not hold the teardown:\n{config}")
+
+    def test_settings_saves_pipeline_notifications(self):
+        b = self.b
+        b.goto(self.url("/settings#phone"))
+        b.wait("document.querySelector('#phone-form [name=pipeline_waiting]')?.checked === true", "the pipeline switches, on")
+        b.click("#phone-form [name=pipeline_finished]")
+        b.click("#phone-form [name=proposals]")
+        b.click("#phone-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the switches saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        for want in ("pipeline_finished: false", "proposals: false"):
+            if want not in config:
+                raise Failure(f"yardbell.yml does not hold {want}:\n{config}")
+        b.click("#phone-form [name=pipeline_finished]")
+        b.click("#phone-form [name=proposals]")
+        b.click("#phone-form button[type=submit]")
+
+    # The page's own /api/runs is answered with terminals, since which runs have a live session
+    # depends on what earlier tests did to the seeded runs.
+    def with_terminals(self):
+        self.b.js("""(() => {
+          const real = window.fetch;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (!String(url).startsWith('/api/runs')) return res;
+            const body = await res.json();
+            for (const r of body.runs) {
+              r.terminals = r.id === 'run-a'
+                ? [{ step: 'root-cause', name: 'hp-term-a', machine: 'hp', label: 'Root cause', current: true }, { step: 'understand', name: 'hp-term-main', machine: 'hp', label: 'Understand', current: false }]
+                : r.id === 'run-b' ? [{ step: 'test', name: 'hp-term-b', machine: 'hp', label: 'Test', current: true }] : [];
+            }
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          };
+        })()""")
+
+    def test_run_page_terminal_follows_the_run(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-terminal')", "the terminal area")
+        self.with_terminals()
+        frame = "document.querySelector('.pl-terminal iframe')"
+        b.wait(f"{frame}?.getAttribute('src') === '/term/hp/hp-term-a?embed=1'", "the current step's terminal")
+        b.wait(f"{frame}.contentWindow.document.readyState === 'complete'", "the terminal loaded")
+        b.js(f"{frame}.contentWindow.__kept = true")
+        b.pump(6)
+        if not b.js(f"{frame}.contentWindow.__kept === true"):
+            raise Failure("a redraw reloaded the terminal")
+        b.js("[...document.querySelectorAll('.pl-terminal-switch button')].find((x) => x.textContent.trim() === 'Understand').click()")
+        b.wait(f"{frame}.getAttribute('src') === '/term/hp/hp-term-main?embed=1'", "the switch to the main session")
+        b.click('.pl-run-item[data-id="run-b"]')
+        b.wait(f"{frame}?.getAttribute('src') === '/term/hp/hp-term-b?embed=1'", "the terminal following the run")
+        if b.js("document.querySelector('.pl-terminal-switch')"):
+            raise Failure("one session needs no switch")
+        b.wait("document.getElementById('pl-stop-session')", "Stop session")
+        b.js("""window.__posted = []; const real = window.fetch; window.fetch = (u, o) => {
+          if (String(u).includes('stop')) { window.__posted.push(String(u) + ' ' + (o && o.body)); return Promise.resolve(new Response('{"ok":true}', {headers: {'content-type': 'application/json'}})); }
+          return real(u, o);
+        }""")
+        b.click("#pl-stop-session")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('The step then waits for you')", "the question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("window.__posted.length === 1", "the stop")
+        said = b.js("window.__posted[0]")
+        if "/api/runs/run-b/stop-session" not in said or "hp-term-b" not in said:
+            raise Failure(f"the page posted {said}")
+
+    def test_run_without_a_session_says_so(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-c"))
+        b.wait("document.querySelector('.pl-terminal')?.textContent.includes('This run has no live session.')", "the note")
+        if b.js("document.querySelector('.pl-terminal iframe')"):
+            raise Failure("a terminal with no session")
+
+    def test_builder_review_switch(self):
+        b = self.b
+        self.open_builder()
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        b.click('.pl-node[data-step="test"]')
+        b.wait("document.querySelector('#pl-inspector input[name=read_only]')", "the step in the inspector")
+        said = b.js("document.querySelector('#pl-inspector input[name=read_only]').closest('label').textContent")
+        if "Review: new read-only session" not in said:
+            raise Failure(f"the switch says {said!r}")
+        if "A new session" in b.js("document.querySelector('#pl-inspector').textContent"):
+            raise Failure("the Session choice is still there")
+
+    def test_settings_pull_requests_section(self):
+        b = self.b
+        self.api("POST", "/api/settings/secrets", {"name": "gitlab", "value": "glpat-browser-test"})
+        b.goto(self.url("/settings#pull-requests"))
+        b.wait("document.querySelector('#pr-form [name=enabled]')?.checked === true", "the Pull requests section")
+        b.click("#pr-add-host")
+        b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
+        self.set_field("#pr-hosts .row:last-child [data-key=host]", "git.example.com")
+        self.set_field("#pr-hosts .row:last-child [data-key=token]", "${secret:gitlab}")
+        self.set_field("#pr-form [name=poll_seconds]", "300")
+        b.click("#pr-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the section saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        for want in ("host: git.example.com", "poll_seconds: 300"):
+            if want not in config:
+                raise Failure(f"yardbell.yml does not hold {want}:\n{config}")
+        if "glpat-browser-test" in config:
+            raise Failure("the token's value reached yardbell.yml")
+        self.check_errors("the Pull requests section")
+
+    def test_a_session_says_why_it_has_no_badge(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait("document.querySelector('.side-link[href=\"/proposals\"]')", "the dashboard")
+        b.js("""(() => {
+          const real = window.fetch;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (!String(url).startsWith('/state')) return res;
+            const body = await res.json();
+            for (const s of body.sessions) { delete s.pull; s.pull_why = 'gh is not installed or not signed in on hp'; }
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json', 'x-yardbell-build': res.headers.get('x-yardbell-build') || '' } });
+          };
+        })()""")
+        self.y.tmux("new", "-d", "-s", "hp-why-test", "-c", os.path.join(self.y.root, "demo-app"), self.y.shell)
+        try:
+            b.wait("document.querySelector('.pr-why[href=\"/settings#pull-requests\"]')?.title.includes('gh is not installed')", "the reason on the session")
+        finally:
+            self.y.tmux("kill-session", "-t", "=hp-why-test")
+
+    def test_phone_menu_is_a_bottom_tab_bar(self):
+        b = self.b
+        b.viewport(390, 844, 3)
+        probe = """(() => {
+          const rect = (el) => el.getBoundingClientRect();
+          const bar = document.querySelector('.side-foot, .ws-nav');
+          const tabs = [...bar.querySelectorAll('.side-link:not(.theme-toggle):not(#logout):not(.desk-only)')].filter((el) => el.getClientRects().length);
+          const main = document.querySelector('.main, .ws-side');
+          return {
+            bottom: Math.round(rect(bar).bottom), height: innerHeight, wide: Math.round(rect(bar).width), page: innerWidth,
+            tabs: tabs.map((t) => t.textContent.trim().replace(/[0-9]+$/, '')),
+            row: new Set(tabs.map((t) => Math.round(rect(t).top))).size,
+            inside: tabs.every((t) => rect(t).left >= 0 && rect(t).right <= innerWidth),
+            hit: tabs.every((t) => { const r = rect(t); return t.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }),
+            mainEnd: Math.round(rect(main).bottom), barTop: Math.round(rect(bar).top),
+            sideways: document.documentElement.scrollWidth > innerWidth,
+          };
+        })()"""
+        want = ["Dashboard", "Workspace", "Pipelines", "Dispatch", "Proposals", "Settings"]
+        try:
+            for path in ("/", "/pipeline", "/settings", "/dispatch", "/proposals", "/workspace"):
+                b.goto(self.url(path))
+                b.wait("document.querySelector('.side-foot .side-link, .ws-nav .side-link')", f"the menu on {path}")
+                b.pump(0.4)
+                seen = b.js(probe)
+                problems = []
+                if seen["tabs"] != want:
+                    problems.append("tabs")
+                if abs(seen["bottom"] - seen["height"]) > 1 or seen["wide"] != seen["page"]:
+                    problems.append("not along the bottom")
+                if seen["row"] != 1 or not seen["inside"] or not seen["hit"]:
+                    problems.append("tabs not in one tappable row")
+                if seen["sideways"]:
+                    problems.append("sideways scroll")
+                if seen["mainEnd"] > seen["barTop"] + 1 and path != "/workspace":
+                    problems.append("the page runs under the bar")
+                if problems:
+                    raise Failure(f"{path}: {problems}: {seen}")
+            b.goto(self.url("/dispatch"))
+            b.wait("document.querySelector('.side-foot .side-link[aria-current=page]')", "the current tab")
+            b.js("document.documentElement.classList.add('keyboard')")
+            if b.js("document.querySelector('.side-foot').getClientRects().length"):
+                raise Failure("the tab bar stays up over the keyboard")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_run_page_scrolls_on_a_phone(self):
+        b = self.b
+        try:
+            for width, height, ratio in ((390, 844, 3), (900, 600, 1)):
+                b.viewport(width, height, ratio)
+                b.goto(self.url("/pipeline?p=review&run=run-a"))
+                b.wait("document.querySelector('.pl-detail')", "the run's details")
+                moved = b.js("""(() => {
+                  const body = document.querySelector('.pl-body');
+                  body.scrollTop = 100000;
+                  const d = document.querySelector('.pl-detail').getBoundingClientRect();
+                  return { top: body.scrollTop, bottom: d.bottom, height: innerHeight };
+                })()""")
+                if moved["top"] <= 0 or moved["bottom"] > moved["height"] + 1:
+                    raise Failure(f"the run page does not scroll to its end at {width}px: {moved}")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_pipeline_list_scrolls_on_a_phone(self):
+        b = self.b
+        made = [self.api("POST", "/api/pipelines", {"empty": True})["id"] for _ in range(8)]
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/pipeline"))
+            b.wait("document.querySelectorAll('.pl-card[data-id]').length >= 8", "a long list")
+            moved = b.js("""(() => {
+              const main = document.querySelector('.main');
+              main.scrollTop = 100000;
+              return main.scrollTop;
+            })()""")
+            if moved <= 0:
+                raise Failure("the list of pipelines does not scroll")
+        finally:
+            b.viewport(1280, 800)
+            for id in made:
+                self.api("DELETE", f"/api/pipelines/{id}")
+
+    def test_delete_pipeline_uses_the_page_dialog(self):
+        b = self.b
+        made = self.api("POST", "/api/pipelines", {"empty": True})["id"]
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url(f"/pipeline?p={made}&tab=build"))
+        b.wait("document.getElementById('pl-delete')", "Delete in the builder")
+        b.js("window.confirm = () => false")
+        b.click("#pl-delete")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the page's own dialog")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("!new URLSearchParams(location.search).get('p')", "back on the list")
+        if b.js(f"(async () => (await fetch('/api/pipelines/{made}')).status)()") != 404:
+            raise Failure("the pipeline was not deleted")
+
+    def test_delete_a_finished_run(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-c"))
+        b.wait("document.getElementById('pl-delete-run')", "Delete this run on a finished run")
+        b.click("#pl-delete-run")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("(async () => !(await (await fetch('/api/runs')).json()).runs.some((r) => r.id === 'run-c'))()", "the run gone")
+        self.check_errors("deleting a run")
 
     def check_errors(self, where):
         if self.b.errors:

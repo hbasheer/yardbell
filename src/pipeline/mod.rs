@@ -40,6 +40,12 @@ pub struct Pipelines {
     orphans: Mutex<Vec<(String, String)>>,
 }
 
+pub enum DeleteRun {
+    Missing,
+    Active,
+    Stopping,
+}
+
 fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
     let mut step = None;
     let mut notes = Vec::new();
@@ -180,7 +186,7 @@ impl Pipelines {
             notes
         });
         for note in notes.unwrap_or_default() {
-            world.notify(&note);
+            world.notify(run::Note::Waiting, &note);
         }
     }
 
@@ -233,6 +239,30 @@ impl Pipelines {
         self.person(id, Seen::Continue(outcome), Self::waiting)
     }
 
+    // Only a run with nothing left to do: one still active has sessions, and one just ended may
+    // still be stopping them and tearing down.
+    pub fn delete_run(&self, id: &str) -> Result<(), DeleteRun> {
+        match self.store.get(id) {
+            None => Err(DeleteRun::Missing),
+            Some(run) if run.state.active() => Err(DeleteRun::Active),
+            Some(run) if run.pending.is_some() || self.busy(id) => Err(DeleteRun::Stopping),
+            Some(_) => {
+                self.store.remove(id);
+                Ok(())
+            }
+        }
+    }
+
+    // Told before the session goes, so the watcher never sees it missing and starts it again.
+    pub fn session_stopped(&self, id: &str, name: &str) -> Result<Run, String> {
+        self.person(id, Seen::PersonStopped(name.to_string()), |r| {
+            match r.steps.values().any(|s| s.session == name) {
+                true => Ok(()),
+                false => Err(format!("{name} is not a session of this run")),
+            }
+        })
+    }
+
     pub fn drop_run(&self, id: &str) -> Result<Run, String> {
         self.person(id, Seen::Drop, |r| match r.state.active() {
             true => Ok(()),
@@ -280,7 +310,31 @@ impl Pipelines {
                 self.apply(world.as_ref(), &id, Seen::Admitted, now);
             }
         }
+        let mut handles = Vec::new();
         for run in self.store.all() {
+            if matches!(run.state, RunState::Running | RunState::Waiting)
+                && !self.busy(&run.id)
+                && run.pending.is_none()
+            {
+                let needless = run::needless_sessions(&run, &view);
+                // A machine that stopped answering takes seconds per stop, so each sweep is a
+                // task of its own and holds up only its run.
+                if !needless.is_empty() {
+                    self.busy
+                        .lock()
+                        .expect("pipelines busy")
+                        .insert(run.id.clone());
+                    let (me, world) = (self.clone(), world.clone());
+                    handles.push(tokio::spawn(async move {
+                        for (machine, name) in needless {
+                            let input = serde_json::json!({ "machine": machine, "name": name });
+                            let _ = world.perform("stop_session", input).await;
+                        }
+                        me.busy.lock().expect("pipelines busy").remove(&run.id);
+                    }));
+                    continue;
+                }
+            }
             let watched = matches!(run.state, RunState::Running | RunState::Queued);
             if !watched || self.busy(&run.id) || run.pending.is_some() {
                 continue;
@@ -307,7 +361,6 @@ impl Pipelines {
                 self.apply(world.as_ref(), &run.id, Seen::Tick, now);
             }
         }
-        let mut handles = Vec::new();
         for run in self.store.all() {
             let claimed = run.pending.is_some()
                 && self

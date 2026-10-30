@@ -109,14 +109,19 @@ fn one_line(text: &str) -> String {
     line.chars().take(200).collect()
 }
 
-fn result_block() -> String {
+fn result_block(marker: &str) -> String {
     format!(
         "When you are done, end your reply with this block and nothing after it, so Yardbell can \
-read your result:\n\n{RESULT}\nstatus: pass, fail, or needs you\nsummary: one to three sentences \
+read your result. Copy the step line as it is:\n\n{RESULT}\nstep: {marker}\nstatus: pass, fail, or needs you\nsummary: one to three sentences \
 on what you did and what you found\n- one line for each detail worth knowing, such as a test \
 result or a risk\n{RESULT_END}\n\nSay needs you, with your question in the summary, when you need \
 an answer from the person to go on."
     )
+}
+
+// Names one run of one step, so a result on a shared session's screen is known to be this one's.
+pub fn marker(run: &Run, step: &str) -> String {
+    format!("{step}-{}", run.steps.get(step).map_or(0, |s| s.runs))
 }
 
 pub fn agent(run: &Run, step: &Step, t: &TicketText, answer: Option<&str>, notes: &str) -> String {
@@ -138,7 +143,7 @@ pub fn agent(run: &Run, step: &Step, t: &TicketText, answer: Option<&str>, notes
         text.push_str(&format!("\n\nThe person answered:\n\n{}", answer.trim()));
     }
     text.push_str("\n\n");
-    text.push_str(&result_block());
+    text.push_str(&result_block(&marker(run, &step.id)));
     text
 }
 
@@ -287,11 +292,16 @@ pub fn branch_for(id: &str, title: &str) -> String {
     branch
 }
 
-// The outcome, report and detail lines in the last result block on a screen. The block the
-// prompt shows ("pass, fail, or needs you") is no outcome.
-pub fn outcome(screen: &str) -> Option<(Outcome, String, Vec<String>)> {
+// The outcome, report and detail lines in the last result block on a screen, when it is the one
+// this run of the step was asked for. The block the prompt shows ("pass, fail, or needs you") is
+// no outcome.
+pub fn outcome(screen: &str, marker: &str) -> Option<(Outcome, String, Vec<String>)> {
     let lines: Vec<&str> = screen.lines().map(unframed).collect();
     let inside = block(&lines, RESULT, RESULT_END)?;
+    let at = inside.iter().find_map(|l| value_of(l, "step"))?;
+    if word(at) != word(marker) {
+        return None;
+    }
     let status = inside.iter().find_map(|l| value_of(l, "status"))?;
     let outcome = match word(status).as_str() {
         "pass" | "passed" | "done" | "success" => Outcome::Pass,
@@ -440,13 +450,32 @@ mod tests {
     #[test]
     fn the_template_is_not_an_outcome() {
         let (run, step) = with("Do it.");
-        assert_eq!(outcome(&agent(&run, &step, &ticket(), None, "")), None);
+        let m = marker(&run, &step.id);
+        assert_eq!(outcome(&agent(&run, &step, &ticket(), None, ""), &m), None);
+    }
+
+    #[test]
+    fn a_result_names_the_run_of_the_step_it_belongs_to() {
+        let (mut run, step) = with("Do it.");
+        run.state_of(&step.id).runs = 2;
+        let m = format!("{}-2", step.id);
+        assert_eq!(marker(&run, &step.id), m);
+        let text = agent(&run, &step, &ticket(), None, "");
+        assert!(text.contains(&format!("step: {m}\n")), "{text}");
+        let block = |at: &str| format!("YARDBELL RESULT\nstep: {at}\nstatus: pass\nEND RESULT");
+        assert!(outcome(&block(&m), &m).is_some());
+        assert!(outcome(&format!("⏺ **{}**", block(&m)), &m).is_some());
+        assert_eq!(outcome(&block("other-1"), &m), None);
+        assert_eq!(
+            outcome("YARDBELL RESULT\nstatus: pass\nEND RESULT", &m),
+            None
+        );
     }
 
     #[test]
     fn status_words_map_to_outcomes() {
         let block = |status: &str| {
-            format!("YARDBELL RESULT\nstatus: {status}\nsummary: Checked it.\n- rspec: 12 passed\nEND RESULT")
+            format!("YARDBELL RESULT\nstep: s-1\nstatus: {status}\nsummary: Checked it.\n- rspec: 12 passed\nEND RESULT")
         };
         for (word, want) in [
             ("pass", Outcome::Pass),
@@ -456,12 +485,12 @@ mod tests {
             ("needs you", Outcome::NeedsYou),
             ("needs_you", Outcome::NeedsYou),
         ] {
-            let (o, report, details) = outcome(&block(word)).unwrap();
+            let (o, report, details) = outcome(&block(word), "s-1").unwrap();
             assert_eq!(o, want, "{word}");
             assert_eq!(report, "Checked it.");
             assert_eq!(details, vec!["rspec: 12 passed"]);
         }
-        assert_eq!(outcome(&block("maybe")), None);
+        assert_eq!(outcome(&block("maybe"), "s-1"), None);
     }
 
     const START: &str = "TRIAGE\ndecision: start\nmachine: hp\nfolder: acme/app\nbranch: com-1-fix-login\nreason: has the repo\nEND TRIAGE";

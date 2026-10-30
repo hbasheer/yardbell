@@ -5,6 +5,7 @@ const HEAD: &str = "0123456789abcdef0123456789abcdef01234567";
 fn with_setup(r: &Rig, command: &str) {
     let mut cfg = r.app.config().unwrap();
     cfg.worktree_setup = vec![crate::worktrees::setup::WorktreeSetup {
+        teardown: String::new(),
         folder: "slot2".into(),
         machine: "any".into(),
         command: command.into(),
@@ -191,6 +192,62 @@ async fn dispatch_cannot_force_a_removal() {
         "{result}"
     );
     assert!(!ran(&r, "worktree remove"));
+}
+
+#[tokio::test]
+async fn a_stopped_session_moves_from_the_folder_it_left() {
+    let r = rig();
+    pro_is_up(&r);
+    r.fake.stub(
+        "CHANGES",
+        Output::ok_with(&format!(
+            "TOP\t/r/slots/slot2\nMAIN\t/r/slots/slot2\nBRANCH\teng-1301-inbox\nHEAD\t{HEAD}\nORIGIN\tgit@github.com:acme/app.git\nCHANGES\t3\n"
+        )),
+    );
+    r.fake.stub(
+        "HAVE%09",
+        Output::ok_with(
+            "REPO\t/p/slots/slot2\nORIGIN\thttps://github.com/acme/app\nHAVE\taaaaaaa1111111\n",
+        ),
+    );
+    r.fake.stub(
+        "git bundle create",
+        Output::ok_with(&format!(
+            "BRANCH\teng-1301-inbox\nHEAD\t{HEAD}\nBUNDLE\tQlVORExF\nPATCH\tUEFUQ0g=\n"
+        )),
+    );
+    r.fake.stub(
+        "git bundle verify",
+        Output::ok_with("PATH\t/p/slots/slot2-worktrees/eng-1301-inbox\nCREATED\nAPPLIED\n"),
+    );
+    r.fake
+        .stub("tmux new", Output::ok_with("pro-eng-1301-ab12\n"));
+    let moved = crate::mcp::perform(
+        &r.app,
+        "move_session",
+        json!({
+            "machine": "hp",
+            "name": "hp-long-gone",
+            "path": "/r/slots/slot2",
+            "to": "pro",
+            "folder": "slot2",
+            "task": "check the inbox",
+            "name_tag": "ab12",
+        }),
+    )
+    .await
+    .map_err(|e| e.1)
+    .unwrap();
+    assert_eq!(moved["machine"], "pro");
+    assert_eq!(moved["created"], true, "{moved}");
+    assert_eq!(moved["repo"], "/p/slots/slot2", "{moved}");
+    assert!(
+        r.fake.calls().iter().any(|c| {
+            let text = c.join(" ");
+            text.contains("tmux new") && text.contains("-ab12")
+        }),
+        "the session carries the run's tag"
+    );
 }
 
 #[tokio::test]

@@ -1396,7 +1396,7 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .rule-row { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(0, 1fr) minmax(0, 1.25fr) minmax(0, 0.8fr) 32px; align-items: center; gap: 8px; padding: 8px 10px; }
 .rule-row select, .rule-row input[type=text] { height: 32px; }
 .rule-row .btn { width: 32px; padding: 0; }
-.setup-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.6fr) 76px 32px; align-items: center; gap: 8px; padding: 8px 10px; }
+.setup-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 0.8fr) minmax(0, 1.4fr) minmax(0, 1.4fr) 76px 32px; align-items: center; gap: 8px; padding: 8px 10px; }
 .setup-row select, .setup-row input { height: 32px; min-width: 0; }
 .setup-row input.mono { font-family: var(--mono); font-size: 12.5px; }
 .setup-row .btn { width: 32px; padding: 0; }
@@ -1717,20 +1717,26 @@ html.embedded .dispatch-tabs { top: -10px; }
   .nav-item.selected { border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: none; }
   body:not([data-page="dashboard"]) .machine-nav { display: none; }
   .vpn { display: none; }
-  .side-foot { margin: 0; padding: 0; border: 0; position: absolute; top: max(8px, env(safe-area-inset-top)); right: 8px; display: flex; gap: 2px; }
-  .side-foot .side-link { padding: 4px 6px; font-size: 12px; }
-  .side-foot .side-link .icon { display: none; }
-  /* The wordmark and the back links lead home on a phone, and the header has no room for one more. */
-  .side-foot .side-link[href="/"] { display: none; }
-  .side-foot .theme-toggle .icon { display: inline-block; width: 18px; height: 18px; }
+  /* The pages sit in a tab bar along the bottom, as a phone's own apps do. */
+  :root { --tabbar: calc(54px + env(safe-area-inset-bottom)); }
+  html.keyboard { --tabbar: 0px; }
+  html:not(.embedded) .app { box-sizing: border-box; padding-bottom: var(--tabbar); }
+  .side-foot, .ws-nav { position: fixed; left: 0; right: 0; bottom: 0; z-index: 12; display: flex; gap: 0; margin: 0; padding: 0 0 env(safe-area-inset-bottom); border: 0; border-top: 1px solid var(--line); background: var(--surface); }
+  html.keyboard .side-foot { display: none; }
+  .side-foot .side-link, .ws-nav .side-link { position: relative; flex: 1 1 0; flex-direction: column; justify-content: center; gap: 3px; min-width: 0; height: 54px; padding: 0; border-radius: 0; background: none; font-size: 10.5px; line-height: 1; white-space: nowrap; }
+  .side-foot .side-link .icon, .ws-nav .side-link .icon { display: inline-block; width: 20px; height: 20px; }
+  .side-foot [aria-current="page"].side-link, .ws-nav [aria-current="page"].side-link { background: none; box-shadow: none; color: var(--accent); font-weight: 600; }
+  .side-foot [aria-current="page"].side-link .icon, .ws-nav [aria-current="page"].side-link .icon { color: var(--accent); }
+  .side-foot .side-link[href="/proposals"] .side-count, .ws-nav .side-link[href="/proposals"] .side-count { position: absolute; top: 4px; left: calc(50% + 4px); min-width: 15px; margin: 0; padding: 0 3px; font-size: 10px; font-weight: 600; line-height: 15px; }
+  /* Theme and Log out stay in the top corner: they are not pages. The Workspace's corner is its own,
+     and Settings has both. */
+  .side-foot .theme-toggle, .side-foot #logout { position: fixed; top: max(8px, env(safe-area-inset-top)); flex: none; width: 34px; height: 34px; font-size: 0; }
+  .side-foot .theme-toggle { right: 44px; }
+  .side-foot #logout { right: 8px; }
   .side-foot .theme-toggle .theme-word { display: none; }
-  /* Four pages and two buttons share the header, so Proposals, Settings and Log out show as their icons. */
-  .side-foot { gap: 0; }
-  .side-foot .side-link { padding: 4px 3px; }
-  .side-foot :is(#logout, .side-link[href="/settings"], .side-link[href="/proposals"]) { font-size: 0; }
-  .side-foot :is(#logout, .side-link[href="/settings"], .side-link[href="/proposals"]) .icon { display: inline-block; width: 18px; height: 18px; }
-  .side-foot .side-link[href="/proposals"] { position: relative; }
-  .side-foot .side-count { position: absolute; top: -2px; right: -4px; min-width: 15px; padding: 0 3px; font-size: 10px; line-height: 15px; }
+  .ws-nav .theme-toggle, .ws-nav #logout, .ws-nav .vpn { display: none; }
+  .ws-side { padding-bottom: var(--tabbar); }
+  #toast { bottom: calc(var(--tabbar) + 12px); }
   .banner { flex-direction: column; align-items: stretch; }
 
   .main { padding: 14px 16px calc(48px + env(safe-area-inset-bottom)); }
@@ -1921,6 +1927,13 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .side-rail .side-link[href="/proposals"] { position: relative; }
 .side-rail .side-count { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; line-height: 14px; font-size: 10px; }
 .proposals-main .pr-intro { margin: -4px 0 16px; }
+.pr-host { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 32px; align-items: center; gap: 8px; padding: 8px 10px; }
+.pr-host input, .pr-host select { height: 32px; min-width: 0; }
+.pr-host .btn { width: 32px; padding: 0; }
+.pr-status { margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; }
+.pr-status li { padding: 2px 0; color: var(--ok-text); }
+.pr-status li.pr-bad { color: var(--bad-text); }
+.pr-why { margin-left: 6px; font-size: 12px; color: var(--warn-text); }
 .pr-section + .pr-section { margin-top: 24px; }
 .pr-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; max-width: 820px; margin-bottom: 10px; }
 .pr-item { display: grid; justify-items: end; gap: 2px; }
@@ -1930,6 +1943,7 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .pr-list { display: grid; gap: 12px; max-width: 820px; }
 .pr-empty { max-width: 820px; padding: 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--ink-2); text-align: center; }
 .pl-proposal { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--info-bg, var(--side)); font-size: 13px; }
+.pl-teardown-problem { margin: 0; color: var(--bad-text); font-size: 13px; }
 .run-waiting { padding: 10px 12px; border-radius: 8px; background: var(--side); }
 .step-card-form textarea.step-card-json { font: 12.5px/1.6 var(--mono); tab-size: 2; }
 .th-diff { max-height: 240px; overflow: auto; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--side); font: 12.5px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; color: var(--ink-2); }
@@ -2074,7 +2088,6 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
   .pl-inspector.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 17; max-height: 70dvh; border: 0; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 24px -8px rgb(26 26 26 / 0.3); padding-bottom: env(safe-area-inset-bottom); }
   .pl-inspector.sheet #pl-sheet-done { display: inline-flex; }
   .pl-body { overflow: auto; }
-  .pl-body .pl-run-view { height: auto; }
   .pl-history-view { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 320px; }
   .pl-history-view .pl-history { border-right: 0; border-bottom: 1px solid var(--line); }
 }
@@ -2096,6 +2109,13 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
 .pl-canvas { position: relative; min-width: 0; min-height: 260px; overflow: clip; cursor: grab; touch-action: pan-y; user-select: none; background-color: var(--bg); background-image: radial-gradient(var(--line-strong) 1px, transparent 1px); background-size: 24px 24px; }
 .pl-canvas.editable { touch-action: none; }
 .pl-run-view .pl-canvas { border: 0; }
+.pl-run-main { display: grid; grid-template-rows: minmax(0, 1fr) minmax(0, 1fr); min-width: 0; min-height: 0; }
+.pl-run-main .pl-canvas { min-height: 0; }
+.pl-terminal { display: flex; flex-direction: column; min-height: 0; border-top: 1px solid var(--line); background: var(--surface); }
+.pl-terminal.empty { align-items: center; justify-content: center; padding: 16px; }
+.pl-terminal-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
+.pl-terminal-switch button { white-space: nowrap; }
+.pl-terminal-frame { flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg); }
 .pl-empty + .pl-canvas { height: 300px; border: 1px solid var(--line); border-radius: var(--radius); }
 .pl-canvas.grabbing { cursor: grabbing; }
 .pl-pan { position: absolute; top: 0; left: 0; transform-origin: 0 0; }
@@ -2216,8 +2236,11 @@ details.pl-report summary { cursor: pointer; }
 .pl-current { justify-self: center; color: var(--muted); font-size: 12.5px; }
 
 @media (max-width: 1100px) {
-  .pl-run-view { grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: 420px auto; height: auto; overflow: clip; }
-  .pl-run-view .pl-canvas { height: 420px; }
+  .pl-body:has(> .pl-run-view) { overflow: auto; }
+  .pl-body .pl-run-view { height: auto; align-self: flex-start; }
+  .pl-run-view { grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: auto auto; height: auto; overflow: clip; }
+  .pl-run-main { grid-template-rows: 360px 360px; }
+  .pl-run-view .pl-canvas { height: 100%; }
   .pl-detail { grid-column: 1 / -1; overflow: visible; border-left: 0; border-top: 1px solid var(--line); }
 }
 
@@ -2227,14 +2250,14 @@ details.pl-report summary { cursor: pointer; }
   .pl-run-view { display: flex; flex-direction: column; min-height: auto; }
   .pl-run-view > * { flex: none; }
   .pl-run-list { max-height: 220px; border-right: 0; border-bottom: 1px solid var(--line); }
-  .pl-run-view .pl-canvas { height: 320px; }
+  .pl-run-main { grid-template-rows: 320px 340px; }
+  .pl-bar #pl-ask { display: none; }
   .pl-note { grid-template-columns: minmax(0, 1fr) auto; }
   .pl-note input[name=note] { grid-column: 1 / -1; grid-row: 2; }
   .pl-history-row { grid-template-columns: 40px minmax(0, 1fr) auto; }
   .pl-history-row time { display: none; }
 }
 
-@media (max-width: 380px) {
-  .side-foot .side-link { font-size: 0; }
-  .side-foot .side-link .icon { display: inline-block; width: 18px; height: 18px; }
+@media (max-width: 340px) {
+  .side-foot .side-link, .ws-nav .side-link { font-size: 0; }
 }

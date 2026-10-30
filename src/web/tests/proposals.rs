@@ -545,3 +545,28 @@ async fn instructions_say_changes_wait_in_the_inbox() {
         "{change}"
     );
 }
+
+#[tokio::test]
+async fn a_proposal_push_follows_its_switch() {
+    let r = rig();
+    mcp_on(&r);
+    let mut phone = saved(&r).phone_notifications;
+    phone.proposals = false;
+    r.app
+        .settings
+        .change(|cfg| {
+            cfg.phone_notifications = phone;
+            Ok(())
+        })
+        .unwrap();
+    proposed_phone(&r, 7).await;
+    assert!(pushes(&r).is_empty());
+    assert_eq!(r.app.proposals.waiting(), 1);
+}
+
+#[tokio::test]
+async fn old_config_keeps_every_notification_on() {
+    let phone: crate::config::PhoneNotifications =
+        serde_json::from_value(json!({ "wait_minutes": 5 })).unwrap();
+    assert!(phone.pipeline_waiting && phone.pipeline_finished && phone.proposals);
+}

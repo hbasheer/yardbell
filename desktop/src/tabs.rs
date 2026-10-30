@@ -230,6 +230,7 @@ mod tests {
 
     fn session(machine: &str, tmux: Option<&str>, folder: &str) -> SessionView {
         SessionView {
+            pull_why: None,
             id: "s1".into(),
             machine: machine.into(),
             agent: "claude".into(),

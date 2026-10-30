@@ -86,6 +86,16 @@ pub struct PhoneEdit {
     pub session_ended: bool,
     pub machines: bool,
     pub memory: bool,
+    #[serde(default = "on")]
+    pub pipeline_waiting: bool,
+    #[serde(default = "on")]
+    pub pipeline_finished: bool,
+    #[serde(default = "on")]
+    pub proposals: bool,
+}
+
+fn on() -> bool {
+    true
 }
 
 #[derive(Debug, Serialize)]
@@ -552,6 +562,9 @@ impl Settings {
         phone.session_ended = edit.session_ended;
         phone.machines = edit.machines;
         phone.memory = edit.memory;
+        phone.pipeline_waiting = edit.pipeline_waiting;
+        phone.pipeline_finished = edit.pipeline_finished;
+        phone.proposals = edit.proposals;
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
         self.save(&cfg, backup, None)
