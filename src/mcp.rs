@@ -70,7 +70,9 @@ fn client_name(headers: &HeaderMap) -> String {
         .filter(|c| c.is_ascii_alphanumeric() || "-_.".contains(*c))
         .take(40)
         .collect();
-    if name.is_empty() {
+    // A client may not borrow the name of Dispatch, Yardbell or the person on a card or a push.
+    let reserved = ["dispatch", "yardbell", "you"].contains(&name.to_ascii_lowercase().as_str());
+    if name.is_empty() || reserved {
         "an MCP client".into()
     } else {
         name
@@ -442,6 +444,9 @@ async fn call(app: &AppState, params: &Value, caller: &Caller) -> Value {
     json!({ "content": [{ "type": "text", "text": text }], "isError": is_error })
 }
 
+const MAX_WAITING: usize = 100;
+const MAX_PROPOSAL_BYTES: usize = 256 * 1024;
+
 // An outside client's change is checked as Dispatch's is, then kept for the person to decide on;
 // the approval setting and allow rules never let it run alone, and a refusing rule still refuses.
 async fn client_proposal(
@@ -451,6 +456,23 @@ async fn client_proposal(
     args: Value,
 ) -> Result<String, ApiError> {
     let cfg = app.config()?;
+    if app.proposals.waiting() >= MAX_WAITING {
+        return Err(ApiError(
+            StatusCode::TOO_MANY_REQUESTS,
+            format!(
+                "{MAX_WAITING} proposals already wait for the user; wait until they are decided"
+            ),
+        ));
+    }
+    if serde_json::to_vec(&args).map_or(0, |b| b.len()) > MAX_PROPOSAL_BYTES {
+        return Err(ApiError(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            format!(
+                "this change is too large to propose (over {} KB)",
+                MAX_PROPOSAL_BYTES / 1024
+            ),
+        ));
+    }
     let (tool, input, _) = plan(app, &cfg, name, args)?;
     let step = step_of(app, name, &input);
     let verdict = crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);

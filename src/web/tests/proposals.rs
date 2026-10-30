@@ -361,11 +361,82 @@ async fn one_phone_push_for_a_burst_of_proposals() {
         vec!["A proposal from claude-code waits for you".to_string()]
     );
     assert_eq!(r.app.proposals.waiting(), 20);
-    let (status, listed) = step_get(&r, &c, "/api/proposals").await;
+    let (status, listed) = step_get(&r, &c, "/api/proposals?opened=1").await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(listed["waiting"], 20);
     proposed_phone(&r, 21).await;
     assert_eq!(pushes(&r).len(), 2);
+}
+
+#[tokio::test]
+async fn an_open_page_polling_does_not_undo_the_push_limit() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    for wait in 0..5 {
+        proposed_phone(&r, wait).await;
+        step_get(&r, &c, "/api/proposals").await;
+    }
+    assert_eq!(pushes(&r).len(), 1);
+}
+
+#[tokio::test]
+async fn too_many_waiting_proposals_are_refused() {
+    let r = rig();
+    mcp_on(&r);
+    for _ in 0..100 {
+        r.app
+            .proposals
+            .add("save_task", json!({}), "x", chrono::Local::now());
+    }
+    let result = propose(
+        &r,
+        "save_task",
+        json!({ "name": "Notes", "text": "Sum up my day" }),
+    )
+    .await;
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(
+        text(&result).contains("100 proposals already wait for the user"),
+        "{result}"
+    );
+    assert_eq!(r.app.proposals.waiting(), 100);
+}
+
+#[tokio::test]
+async fn a_huge_proposal_is_refused() {
+    let r = rig();
+    mcp_on(&r);
+    let text_300k = "word ".repeat(60_000);
+    let result = propose(
+        &r,
+        "save_task",
+        json!({ "name": "Huge", "text": text_300k }),
+    )
+    .await;
+    assert_eq!(result["isError"], true);
+    assert!(text(&result).contains("too large to propose"), "{result}");
+    assert!(r.app.proposals.list().is_empty());
+}
+
+#[tokio::test]
+async fn a_client_cannot_call_itself_dispatch() {
+    let r = rig();
+    mcp_on(&r);
+    for agent in ["Dispatch/1.0", "yardbell", "YOU"] {
+        client(
+            &r,
+            Some(agent),
+            rpc(
+                "tools/call",
+                json!({ "name": "save_task", "arguments": { "name": agent, "text": "x" } }),
+            ),
+        )
+        .await;
+    }
+    for p in r.app.proposals.list() {
+        assert_eq!(p["from"], "an MCP client", "{p}");
+    }
 }
 
 #[tokio::test]

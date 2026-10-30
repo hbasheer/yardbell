@@ -1,5 +1,5 @@
 use super::{detached, refused, ApiError, AppState, Decision};
-use axum::extract::{Path, State as AxState};
+use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
@@ -18,9 +18,18 @@ fn missing() -> ApiError {
     ApiError(StatusCode::NOT_FOUND, "there is no such proposal".into())
 }
 
-// Opening the list counts as seeing what waits, so the next proposal tells the phone at once.
-async fn list(AxState(app): AxState<Arc<AppState>>) -> Response {
-    app.proposals.seen();
+#[derive(serde::Deserialize)]
+struct ListQuery {
+    #[serde(default)]
+    opened: Option<String>,
+}
+
+// Opening the page counts as seeing what waits, so the next proposal tells the phone at once; the
+// page's own refreshes do not, or an open page would undo the limit on pushes.
+async fn list(AxState(app): AxState<Arc<AppState>>, Query(q): Query<ListQuery>) -> Response {
+    if q.opened.is_some() {
+        app.proposals.seen();
+    }
     Json(json!({ "proposals": app.proposals.list(), "waiting": app.proposals.waiting() }))
         .into_response()
 }

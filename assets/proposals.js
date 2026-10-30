@@ -70,8 +70,9 @@ function draw() {
   steps.afterDraw();
 }
 
-async function load() {
-  proposals = (await api("GET", "/api/proposals")).proposals;
+// Opening the page, or coming back to it, tells the server the person has seen what waits.
+async function load(opened = false) {
+  proposals = (await api("GET", `/api/proposals${opened ? "?opened=1" : ""}`)).proposals;
   draw();
 }
 
@@ -99,4 +100,5 @@ steps.setup({
 
 // A card being edited keeps its draft; the list refreshes around it.
 window.YardbellLive.follow(() => { if (!proposals?.some((p) => steps.isEditing(p.id))) load().catch(() => {}); }, 5000);
-load().catch((err) => toast(err.message));
+document.addEventListener("visibilitychange", () => { if (!document.hidden) load(true).catch(() => {}); });
+load(true).catch((err) => toast(err.message));

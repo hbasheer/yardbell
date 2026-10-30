@@ -36,10 +36,17 @@ fn missing() -> Refusal {
 
 impl Proposals {
     pub fn load(file: PathBuf) -> Proposals {
-        let all = std::fs::read(&file)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice(&bytes).ok())
-            .unwrap_or_default();
+        let all = match std::fs::read(&file).map(|bytes| serde_json::from_slice(&bytes)) {
+            Ok(Ok(all)) => all,
+            Ok(Err(e)) => {
+                // Starting empty would overwrite every waiting proposal at the next save.
+                let aside = file.with_extension("json.bad");
+                tracing::warn!(error = %e, "{} cannot be read; moved to {}", file.display(), aside.display());
+                let _ = std::fs::rename(&file, &aside);
+                Vec::new()
+            }
+            Err(_) => Vec::new(),
+        };
         let proposals = Proposals {
             file,
             all: Mutex::new(all),
@@ -208,9 +215,9 @@ impl Proposals {
     fn save(&self) {
         use std::io::Write;
         use std::os::unix::fs::OpenOptionsExt;
+        // The lock is held until the file is renamed, so a later save can never land first.
         let all = self.lock();
         let bytes = serde_json::to_vec_pretty(&*all).unwrap_or_default();
-        drop(all);
         let tmp = self.file.with_extension("tmp");
         let written = self
             .file
@@ -226,6 +233,7 @@ impl Proposals {
             })
             .and_then(|mut f| f.write_all(&bytes))
             .and_then(|_| std::fs::rename(&tmp, &self.file));
+        drop(all);
         if let Err(e) = written {
             tracing::warn!(error = %e, "could not save {}", self.file.display());
         }
@@ -254,6 +262,19 @@ mod tests {
         let again = Proposals::load(file);
         let ids: Vec<Value> = again.list().iter().map(|p| p["id"].clone()).collect();
         assert_eq!(ids, vec![waiting["id"].clone()]);
+    }
+
+    #[test]
+    fn a_file_that_cannot_be_read_is_set_aside() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("proposals.json");
+        std::fs::write(&file, "{ not json").unwrap();
+        let proposals = Proposals::load(file.clone());
+        assert!(proposals.list().is_empty());
+        assert_eq!(
+            std::fs::read_to_string(dir.path().join("proposals.json.bad")).unwrap(),
+            "{ not json"
+        );
     }
 
     #[test]

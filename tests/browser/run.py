@@ -928,6 +928,17 @@ class Suite:
                 )
                 if drawn:
                     raise Failure(f"the collapsed sidebar on {path} still draws words: {drawn}")
+                b.wait("document.getElementById('nav-proposals-count') && !document.getElementById('nav-proposals-count').hidden", f"the proposals count on {path}")
+                on_icon = b.js(
+                    """(() => {
+                      const c = document.getElementById('nav-proposals-count').getBoundingClientRect();
+                      const l = document.querySelector('.side-link[href="/proposals"]').getBoundingClientRect();
+                      const x = c.left + c.width / 2, y = c.top + c.height / 2;
+                      return x >= l.left && x <= l.right && y >= l.top && y <= l.bottom;
+                    })()"""
+                )
+                if not on_icon:
+                    raise Failure(f"the collapsed sidebar on {path} draws the proposals count away from its icon")
         finally:
             b.js("localStorage.removeItem('yardbell.side')")
 

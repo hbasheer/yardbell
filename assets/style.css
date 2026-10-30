@@ -1918,6 +1918,7 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .step-card-pipeline .pl-canvas { height: 220px; min-height: 0; border: 1px solid var(--line); border-radius: 8px; }
 .side-count { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--warn-text); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
 .side-count[hidden] { display: none; }
+.side-rail .side-link[href="/proposals"] { position: relative; }
 .side-rail .side-count { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; line-height: 14px; font-size: 10px; }
 .proposals-main .pr-intro { margin: -4px 0 16px; }
 .pr-section + .pr-section { margin-top: 24px; }
