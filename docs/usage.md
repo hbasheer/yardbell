@@ -238,6 +238,13 @@ runs are running, waiting and done, and **Needs you** when one waits.
 - **New pipeline** starts an **Empty pipeline** or copies a template, switched off.
 - **Settings** sets the agent steps at once per machine, a step's time limit and QA notes per folder.
 
+A run keeps to one agent session: its steps take turns in it, in one worktree. A step marked
+**Review: new read-only session** gets a reviewer of its own, which stops when nothing needs it, as
+does a step on another machine or with another agent. When a run ends or is dropped, every session
+stops and the worktree stays. Give a folder a teardown command under Settings, Worktree setup (for
+example `docker compose down`) to clear what its worktree started. Settings, Phone notifications
+has switches for **Pipeline needs you**, **Pipeline finished** and **Proposals**.
+
 A pipeline opens full screen (the button beside **Delete** puts it back in the page) with three tabs:
 
 - **Build**: the steps on a canvas. On the left, the library: drag a step onto the canvas, or click
@@ -256,6 +263,10 @@ A pipeline opens full screen (the button beside **Delete** puts it back in the p
   **Continue on fail** and **Drop**; and each step's report.
 - **History**: every saved version. Click one to see it on the canvas, then **Restore** it or go
   **Back to the current version**.
+  Under the canvas is the run's live terminal, which follows the run you pick. During a review it
+  shows the reviewer, with a switch back to the main session; **Stop session** stops the one shown.
+  **Stop this run**, or **Drop** while it waits for you, ends a run and stops its sessions; once it
+  has ended, **Delete this run** removes its record. The branch and any pull request stay.
 
 On every canvas, drag or scroll with two fingers to move around; pinch, Ctrl or Cmd with the wheel,
 or **−**, **+** and **Fit** zoom; the overview at the bottom right moves the view. Leaving with

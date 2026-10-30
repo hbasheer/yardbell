@@ -413,7 +413,6 @@ function agentFields(step, others, redraw) {
   const mode = "name" in m ? "name" : "same_as" in m ? "same_as" : "pick";
   const setMachine = (value) => { step.machine = value; redraw(); };
   const ws = step.workspace || { kind: "new_worktree" };
-  const cont = typeof step.session === "object" ? step.session.continue : "";
   return html`
     ${field("Instructions", html`<textarea name="instructions" rows="5" .value=${step.instructions || ""} @input=${(e) => { step.instructions = e.target.value; redraw(); }}></textarea>`,
       "Fill in {ticket}, {title}, {url}, {description}, {branch}, {pr}, {report} or {report:Step name}.")}
@@ -439,10 +438,8 @@ function agentFields(step, others, redraw) {
       </select>`)}
       ${ws.kind === "same_as" ? field("Folder of", stepSelect(ws.step, others, (v) => { step.workspace = { kind: "same_as", step: v }; redraw(); })) : nothing}
       ${ws.kind === "copy" ? field("Copy of", stepSelect(ws.from, others, (v) => { step.workspace = { kind: "copy", from: v }; redraw(); })) : nothing}
-      ${field("Session", stepSelect(cont ? `continue:${cont}` : "new", others.map((s) => ({ id: `continue:${s.id}`, name: `Continue ${s.name}'s session` })),
-        (v) => { step.session = v === "new" ? "new" : { continue: v.slice("continue:".length) }; redraw(); }, [["new", "A new session"]]))}
     </div>
-    <label class="check"><input type="checkbox" name="read_only" .checked=${!!step.read_only} @change=${(e) => { step.read_only = e.target.checked; redraw(); }}>Read only: the agent may not change files, commit or push</label>
+    <label class="check"><input type="checkbox" name="read_only" .checked=${!!step.read_only} @change=${(e) => { step.read_only = e.target.checked; redraw(); }}>Review: new read-only session. Other steps share the run's one session.</label>
     ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "Saved with the step; agents do not get them yet.") : nothing}`;
 }
 

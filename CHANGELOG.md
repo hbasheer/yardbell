@@ -5,6 +5,20 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **A pipeline run uses one agent session.** Its steps take turns in one session and one worktree,
+  so a run holds far less memory. A review step gets its own read-only session, and a step on
+  another machine or with another agent gets its own; each stops as soon as nothing needs it. When a
+  run ends or is dropped, every session stops and the worktree stays.
+- **Teardown command.** Worktree setup can now run a command when a run ends, such as
+  `docker compose down`, so containers go too. If it fails the run still ends, and the run page says so.
+- **Terminal on the run page.** The run's live terminal sits under its steps and follows the run you
+  pick, with **Stop session**. A finished run can be deleted with **Delete this run**.
+- **Pipeline notifications in Settings.** Phone notifications has switches for **Pipeline needs
+  you**, **Pipeline finished** and **Proposals**.
+- Fixed: the run page could not scroll on a phone or tablet.
+- Fixed: Delete on a pipeline did nothing in the desktop app, because the page used a dialog the
+  app's webview does not have.
+
 ## [0.8.0] - 2026-10-30
 
 - **Pipelines** carry tickets and merge requests through steps you define, and stop only when they

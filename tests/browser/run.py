@@ -1917,8 +1917,8 @@ class Suite:
         b.wait("document.querySelector('.pl-builder:not(.full)') && document.querySelector('.side').getBoundingClientRect().width > 0", "the builder back in the page")
         b.goto(self.url("/pipeline?p=review&run=run-a"))
         b.wait("document.querySelector('.pl-builder:not(.full) .pl-run-view')", "the Runs tab remembering the choice")
-        if b.js("document.querySelector('.pl-canvas').getBoundingClientRect().bottom") < b.js("innerHeight") - 40:
-            raise Failure("the Runs canvas does not reach the bottom of the window")
+        if b.js("document.querySelector('.pl-run-main').getBoundingClientRect().bottom") < b.js("innerHeight") - 40:
+            raise Failure("the Runs view does not reach the bottom of the window")
         b.click("#pl-full")
         b.wait("document.querySelector('.pl-builder.full .pl-run-view')", "the Runs tab full screen")
         self.check_errors("the builder shell")
@@ -2562,6 +2562,18 @@ class Suite:
         b.wait("document.querySelector('.pl-terminal')?.textContent.includes('This run has no live session.')", "the note")
         if b.js("document.querySelector('.pl-terminal iframe')"):
             raise Failure("a terminal with no session")
+
+    def test_builder_review_switch(self):
+        b = self.b
+        self.open_builder()
+        b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        b.click('.pl-node[data-step="test"]')
+        b.wait("document.querySelector('#pl-inspector input[name=read_only]')", "the step in the inspector")
+        said = b.js("document.querySelector('#pl-inspector input[name=read_only]').closest('label').textContent")
+        if "Review: new read-only session" not in said:
+            raise Failure(f"the switch says {said!r}")
+        if "A new session" in b.js("document.querySelector('#pl-inspector').textContent"):
+            raise Failure("the Session choice is still there")
 
     def test_run_page_scrolls_on_a_phone(self):
         b = self.b
