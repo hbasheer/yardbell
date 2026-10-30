@@ -184,3 +184,210 @@ async fn outside_clients_see_the_change_tools_but_not_remember() {
     assert_eq!(result["isError"], true, "{result}");
     assert!(r.app.proposals.list().is_empty());
 }
+
+async fn decide(
+    r: &Rig,
+    c: &str,
+    id: &str,
+    body: serde_json::Value,
+) -> (StatusCode, serde_json::Value) {
+    step_post(r, c, &format!("/api/proposals/{id}"), body).await
+}
+
+async fn proposed_phone(r: &Rig, wait: u64) -> String {
+    propose(
+        r,
+        "change_settings",
+        json!({ "area": "phone", "value": phone(wait) }),
+    )
+    .await;
+    r.app.proposals.list()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+fn pushes(r: &Rig) -> Vec<String> {
+    r.app
+        .phone
+        .inbox
+        .page(Some("another boot"), 0, std::time::Instant::now())
+        .notes
+        .iter()
+        .map(|n| n.message.clone())
+        .collect()
+}
+
+#[tokio::test]
+async fn approving_a_proposal_runs_it() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    let id = proposed_phone(&r, 7).await;
+    let (status, done) = decide(&r, &c, &id, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(
+        (&done["status"], &done["result"]["ok"]),
+        (&json!("approved"), &json!(true))
+    );
+    assert_eq!(saved(&r).phone_notifications.wait_minutes, 7);
+}
+
+#[tokio::test]
+async fn an_edited_proposal_is_checked_first() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    let id = proposed_phone(&r, 7).await;
+    let (status, body) = decide(
+        &r,
+        &c,
+        &id,
+        json!({ "decision": "approve", "input": { "area": "phone", "value": phone(500) } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("from 0 to 60"),
+        "{body}"
+    );
+    assert_eq!(r.app.proposals.get(&id).unwrap()["status"], "pending");
+    let (status, done) = decide(
+        &r,
+        &c,
+        &id,
+        json!({ "decision": "approve", "input": { "area": "phone", "value": phone(9) } }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "edited");
+    assert_eq!(saved(&r).phone_notifications.wait_minutes, 9);
+}
+
+#[tokio::test]
+async fn rejecting_a_proposal_changes_nothing() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    let id = proposed_phone(&r, 7).await;
+    let (status, done) = decide(&r, &c, &id, json!({ "decision": "reject" })).await;
+    assert_eq!(
+        (status, &done["status"]),
+        (StatusCode::OK, &json!("rejected"))
+    );
+    assert_eq!(saved(&r).phone_notifications.wait_minutes, 2);
+    let (status, _) = decide(&r, &c, "nosuchid", json!({ "decision": "reject" })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_proposal_is_decided_once() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    let id = proposed_phone(&r, 7).await;
+    decide(&r, &c, &id, json!({ "decision": "approve" })).await;
+    let (status, body) = decide(&r, &c, &id, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"], "this proposal was already approved");
+}
+
+#[tokio::test]
+async fn a_proposal_that_no_longer_passes_fails_on_its_card() {
+    use crate::pipeline::record::{RunState, Subject, WaitKind, Waiting};
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    let cfg = r.app.config().unwrap();
+    let library = r.app.pipelines.library();
+    let mut def = library
+        .copy_template("Implement my Linear tickets", &cfg)
+        .unwrap();
+    def.trigger = crate::pipeline::definition::Trigger::Manual;
+    let def = library.save(def, &cfg).unwrap();
+    let mut run = r
+        .app
+        .pipelines
+        .start(&def.id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.state = RunState::Waiting;
+    run.step = "implement".into();
+    run.waiting = Some(Waiting {
+        kind: WaitKind::Stopped,
+        step: "implement".into(),
+        reason: "Implement failed".into(),
+        screen: String::new(),
+    });
+    let run_id = run.id.clone();
+    r.app.pipelines.put(run);
+    propose(
+        &r,
+        "answer_run",
+        json!({ "id": run_id, "action": "continue_pass" }),
+    )
+    .await;
+    let id = r.app.proposals.list()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    r.app.pipelines.drop_run(&run_id).unwrap();
+    let (status, done) = decide(&r, &c, &id, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["result"]["ok"], false, "{done}");
+    assert!(
+        done["result"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("is not waiting for you"),
+        "{done}"
+    );
+    assert_eq!(
+        r.app.pipelines.run(&run_id).unwrap().state,
+        RunState::Dropped
+    );
+}
+
+#[tokio::test]
+async fn one_phone_push_for_a_burst_of_proposals() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    for wait in 0..20 {
+        proposed_phone(&r, wait).await;
+    }
+    assert_eq!(
+        pushes(&r),
+        vec!["A proposal from claude-code waits for you".to_string()]
+    );
+    assert_eq!(r.app.proposals.waiting(), 20);
+    let (status, listed) = step_get(&r, &c, "/api/proposals").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(listed["waiting"], 20);
+    proposed_phone(&r, 21).await;
+    assert_eq!(pushes(&r).len(), 2);
+}
+
+#[tokio::test]
+async fn state_counts_waiting_proposals() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    proposed_phone(&r, 3).await;
+    proposed_phone(&r, 4).await;
+    let (_, state) = step_get(&r, &c, "/state").await;
+    assert_eq!(state["proposals"], 2);
+}
+
+async fn step_get(r: &Rig, cookie: &str, url: &str) -> (StatusCode, serde_json::Value) {
+    let req = Request::get(url)
+        .header(header::COOKIE, cookie)
+        .header(header::ACCEPT, "application/json")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, text) = send(&r.app, req).await;
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null),
+    )
+}

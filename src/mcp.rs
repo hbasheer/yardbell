@@ -461,6 +461,15 @@ async fn client_proposal(
         ));
     }
     let proposal = app.proposals.add(&tool, input, from, chrono::Local::now());
+    if app.proposals.should_push(std::time::Instant::now()) {
+        app.phone.inbox.add(&[crate::phone::Push {
+            title: "Yardbell proposals".into(),
+            message: format!("A proposal from {from} waits for you"),
+            tags: vec![],
+            priority: 3,
+            click: crate::phone::base_url(&cfg).map(|base| format!("{base}/proposals")),
+        }]);
+    }
     Ok(format!(
         "Not run yet. This is proposal {}, waiting in Yardbell's Proposals inbox for the user, who \
 can approve it, edit it first, or reject it. Do not call it again.",

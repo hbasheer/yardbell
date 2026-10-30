@@ -138,6 +138,9 @@ pub struct StateView {
     pub mesh: Option<crate::mesh::MeshView>,
     #[serde(default)]
     pub server: Option<ServerView>,
+    // Proposals from MCP clients waiting for the person, for the sidebar's badge.
+    #[serde(default)]
+    pub proposals: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -376,6 +379,7 @@ impl State {
             host_terminal: cfg.host_terminal,
             mesh: None,
             server: None,
+            proposals: 0,
         };
         for m in &cfg.machines {
             let status = inner.statuses.get(&m.name);

@@ -91,6 +91,7 @@ impl World for Fake {
             host_terminal: crate::config::HostTerminal::None,
             mesh: None,
             server: None,
+            proposals: 0,
         }
     }
 

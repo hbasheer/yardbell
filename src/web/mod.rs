@@ -527,6 +527,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(worktrees_api::routes())
         .merge(insights_api::routes())
         .merge(pipeline_api::routes())
+        .merge(proposals_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -669,6 +670,7 @@ async fn state_json(
         .view(&cfg, app.ports.as_ref(), &page_host(&headers));
     view.mesh = Some(app.host_mesh.check(&cfg).await);
     view.server = Some(server_view(&cfg));
+    view.proposals = app.proposals.waiting();
     Ok(([(BUILD_HEADER, page_build())], Json(view)).into_response())
 }
 
@@ -1125,7 +1127,7 @@ async fn dispatch_clear(AxState(app): AxState<Arc<AppState>>) -> Result<Response
     Ok(Json(json!({ "kept": kept })).into_response())
 }
 
-fn refused(r: crate::dispatch::Refusal) -> ApiError {
+pub(super) fn refused(r: crate::dispatch::Refusal) -> ApiError {
     match r {
         crate::dispatch::Refusal::Missing(m) => ApiError(StatusCode::NOT_FOUND, m),
         crate::dispatch::Refusal::Taken(m) => ApiError(StatusCode::CONFLICT, m),
@@ -1140,15 +1142,15 @@ fn step_id(id: &str) -> Result<&str, ApiError> {
 }
 
 #[derive(Deserialize)]
-struct Decision {
-    decision: String,
+pub(super) struct Decision {
+    pub(super) decision: String,
     #[serde(default)]
-    input: Option<Value>,
+    pub(super) input: Option<Value>,
 }
 
 // Work that must finish and be recorded even when the page that asked for it goes away, like a
 // phone losing its connection while a session starts.
-async fn detached<T: Send + 'static>(
+pub(super) async fn detached<T: Send + 'static>(
     work: impl std::future::Future<Output = Result<T, ApiError>> + Send + 'static,
 ) -> Result<T, ApiError> {
     tokio::spawn(work)
@@ -2141,6 +2143,7 @@ async fn remove_machine(
 
 mod insights_api;
 pub(crate) mod pipeline_api;
+mod proposals_api;
 mod pulls_api;
 mod review_api;
 mod scan_api;

@@ -13,7 +13,10 @@ const KEEP_DAYS: i64 = 30;
 pub struct Proposals {
     file: PathBuf,
     all: Mutex<Vec<Value>>,
+    pushed: Mutex<Option<std::time::Instant>>,
 }
+
+const PUSH_EVERY: std::time::Duration = std::time::Duration::from_secs(5 * 60);
 
 fn new_id() -> String {
     rand::thread_rng()
@@ -40,6 +43,7 @@ impl Proposals {
         let proposals = Proposals {
             file,
             all: Mutex::new(all),
+            pushed: Mutex::new(None),
         };
         proposals.prune(Local::now());
         proposals
@@ -74,6 +78,20 @@ impl Proposals {
 
     pub fn get(&self, id: &str) -> Option<Value> {
         self.lock().iter().find(|p| p["id"] == id).cloned()
+    }
+
+    // A burst of proposals tells the phone once; after the person looks, the next one tells it again.
+    pub fn should_push(&self, now: std::time::Instant) -> bool {
+        let mut pushed = self.pushed.lock().expect("proposals push lock");
+        if pushed.is_some_and(|at| now.duration_since(at) < PUSH_EVERY) {
+            return false;
+        }
+        *pushed = Some(now);
+        true
+    }
+
+    pub fn seen(&self) {
+        *self.pushed.lock().expect("proposals push lock") = None;
     }
 
     pub fn waiting(&self) -> usize {
