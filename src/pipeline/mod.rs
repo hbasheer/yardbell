@@ -185,7 +185,7 @@ impl Pipelines {
             notes
         });
         for note in notes.unwrap_or_default() {
-            world.notify(&note);
+            world.notify(run::Note::Waiting, &note);
         }
     }
 

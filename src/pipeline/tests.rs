@@ -26,6 +26,7 @@ pub(crate) struct Fake {
     pub started: Mutex<u32>,
     pub ticket_fails: Mutex<bool>,
     pub on_start: Mutex<Option<Box<dyn Fn() + Send>>>,
+    pub note_kinds: Mutex<Vec<super::run::Note>>,
     pub teardowns: Mutex<Vec<String>>,
     pub teardown_fails: Mutex<bool>,
 }
@@ -228,7 +229,8 @@ impl World for Fake {
         })
     }
 
-    fn notify(&self, text: &str) {
+    fn notify(&self, kind: super::run::Note, text: &str) {
+        self.note_kinds.lock().unwrap().push(kind);
         self.notes.lock().unwrap().push(text.into());
     }
 
@@ -336,6 +338,49 @@ fn mr(run: &mut Run) {
         project: "commslayer/app".into(),
         forge: "gitlab".into(),
     });
+}
+
+#[test]
+fn pipeline_notifications_follow_their_switches() {
+    use super::run::Note;
+    let mut phone = crate::config::PhoneNotifications::default();
+    assert!(Note::Waiting.allowed(&phone) && Note::Finished.allowed(&phone));
+    phone.pipeline_waiting = false;
+    assert!(!Note::Waiting.allowed(&phone) && Note::Finished.allowed(&phone));
+    phone.pipeline_waiting = true;
+    phone.pipeline_finished = false;
+    assert!(Note::Waiting.allowed(&phone) && !Note::Finished.allowed(&phone));
+}
+
+#[tokio::test]
+async fn a_report_notifies_as_finished() {
+    use super::run::Note;
+    let fake = Fake::default();
+    fake.replies.lock().unwrap().push_back(REPORTED.to_string());
+    let run = run_of("Implement my Linear tickets");
+    act(
+        &fake,
+        &Pipelines::default(),
+        &run,
+        &Effect::Report {
+            step: "report".into(),
+        },
+    )
+    .await;
+    assert_eq!(*fake.note_kinds.lock().unwrap(), vec![Note::Finished]);
+    act(
+        &fake,
+        &Pipelines::default(),
+        &run,
+        &Effect::Notify {
+            text: "COM-1 needs you".into(),
+        },
+    )
+    .await;
+    assert_eq!(
+        *fake.note_kinds.lock().unwrap(),
+        vec![Note::Finished, Note::Waiting]
+    );
 }
 
 #[test]

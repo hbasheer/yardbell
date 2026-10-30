@@ -54,13 +54,29 @@ pub trait World: Send + Sync {
         run: &'a Run,
         path: &'a str,
     ) -> BoxFuture<'a, Result<PullRef, String>>;
-    fn notify(&self, text: &str);
+    fn notify(&self, kind: Note, text: &str);
     fn teardown<'a>(
         &'a self,
         machine: &'a str,
         folder: &'a str,
         path: &'a str,
     ) -> BoxFuture<'a, Result<(), String>>;
+}
+
+// What a phone notification from a pipeline is about, for the switches in Settings.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Note {
+    Waiting,
+    Finished,
+}
+
+impl Note {
+    pub fn allowed(self, phone: &crate::config::PhoneNotifications) -> bool {
+        match self {
+            Note::Waiting => phone.pipeline_waiting,
+            Note::Finished => phone.pipeline_finished,
+        }
+    }
 }
 
 enum Halt {
@@ -410,11 +426,11 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 .ok()
                 .and_then(|t| t.lines().next())
                 .unwrap_or("its report could not be written");
-            world.notify(&format!("{}: {line}", run.subject.label()));
+            world.notify(Note::Finished, &format!("{}: {line}", run.subject.label()));
             vec![Seen::Reported(written)]
         }
         Effect::Notify { text } => {
-            world.notify(text);
+            world.notify(Note::Waiting, text);
             vec![]
         }
         Effect::StopSessions => {
@@ -686,7 +702,10 @@ impl World for Live {
         })
     }
 
-    fn notify(&self, text: &str) {
+    fn notify(&self, kind: Note, text: &str) {
+        if !kind.allowed(&self.cfg.phone_notifications) {
+            return;
+        }
         let click = crate::phone::base_url(&self.cfg).map(|base| format!("{base}/pipeline"));
         self.app.phone.inbox.add(&[Push {
             title: "Yardbell pipelines".into(),

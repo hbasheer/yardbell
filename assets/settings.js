@@ -80,7 +80,7 @@ function clock(stamp) {
 
 function renderPhone(p) {
   const f = $("phone-form");
-  for (const name of ["agent_waiting", "session_ended", "machines", "memory"]) f.elements[name].checked = p[name];
+  for (const name of ["agent_waiting", "session_ended", "machines", "memory", "pipeline_waiting", "pipeline_finished", "proposals"]) f.elements[name].checked = p[name];
   f.elements.wait_minutes.value = p.wait_minutes;
   const status = $("phone-status");
   status.textContent = p.app_connected
@@ -502,6 +502,9 @@ $("phone-form").addEventListener("submit", async (e) => {
     session_ended: f.elements.session_ended.checked,
     machines: f.elements.machines.checked,
     memory: f.elements.memory.checked,
+    pipeline_waiting: f.elements.pipeline_waiting.checked,
+    pipeline_finished: f.elements.pipeline_finished.checked,
+    proposals: f.elements.proposals.checked,
   };
   phoneBusy(true);
   try {

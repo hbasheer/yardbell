@@ -1322,6 +1322,9 @@ async fn phone_settings_are_saved_and_validated() {
             "session_ended": true,
             "machines": true,
             "memory": true,
+            "pipeline_waiting": true,
+            "pipeline_finished": true,
+            "proposals": true,
         })
     );
     let (status, body) = save_phone(
@@ -1347,6 +1350,9 @@ async fn phone_settings_are_saved_and_validated() {
             "session_ended": false,
             "machines": false,
             "memory": false,
+            "pipeline_waiting": true,
+            "pipeline_finished": true,
+            "proposals": true,
         })
     );
 

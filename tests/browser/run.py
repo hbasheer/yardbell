@@ -2501,6 +2501,23 @@ class Suite:
         if "teardown: docker compose down" not in config:
             raise Failure(f"yardbell.yml does not hold the teardown:\n{config}")
 
+    def test_settings_saves_pipeline_notifications(self):
+        b = self.b
+        b.goto(self.url("/settings#phone"))
+        b.wait("document.querySelector('#phone-form [name=pipeline_waiting]')?.checked === true", "the pipeline switches, on")
+        b.click("#phone-form [name=pipeline_finished]")
+        b.click("#phone-form [name=proposals]")
+        b.click("#phone-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the switches saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        for want in ("pipeline_finished: false", "proposals: false"):
+            if want not in config:
+                raise Failure(f"yardbell.yml does not hold {want}:\n{config}")
+        b.click("#phone-form [name=pipeline_finished]")
+        b.click("#phone-form [name=proposals]")
+        b.click("#phone-form button[type=submit]")
+
     def test_run_page_scrolls_on_a_phone(self):
         b = self.b
         try:
