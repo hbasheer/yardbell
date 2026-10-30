@@ -2074,7 +2074,6 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
   .pl-inspector.sheet { position: fixed; left: 0; right: 0; bottom: 0; z-index: 17; max-height: 70dvh; border: 0; border-radius: 16px 16px 0 0; box-shadow: 0 -8px 24px -8px rgb(26 26 26 / 0.3); padding-bottom: env(safe-area-inset-bottom); }
   .pl-inspector.sheet #pl-sheet-done { display: inline-flex; }
   .pl-body { overflow: auto; }
-  .pl-body .pl-run-view { height: auto; }
   .pl-history-view { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto 320px; }
   .pl-history-view .pl-history { border-right: 0; border-bottom: 1px solid var(--line); }
 }
@@ -2216,6 +2215,8 @@ details.pl-report summary { cursor: pointer; }
 .pl-current { justify-self: center; color: var(--muted); font-size: 12.5px; }
 
 @media (max-width: 1100px) {
+  .pl-body:has(> .pl-run-view) { overflow: auto; }
+  .pl-body .pl-run-view { height: auto; align-self: flex-start; }
   .pl-run-view { grid-template-columns: 220px minmax(0, 1fr); grid-template-rows: 420px auto; height: auto; overflow: clip; }
   .pl-run-view .pl-canvas { height: 420px; }
   .pl-detail { grid-column: 1 / -1; overflow: visible; border-left: 0; border-top: 1px solid var(--line); }

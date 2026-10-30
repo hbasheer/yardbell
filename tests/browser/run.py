@@ -2095,14 +2095,15 @@ class Suite:
         self.open_builder()
         b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
         b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
-        b.js("window.__asked = ''; window.confirm = (m) => { window.__asked = m; return false; }")
         b.click("#pl-back")
-        if b.js("window.__asked") != "Leave without saving your changes?":
-            raise Failure("leaving with unsaved changes did not ask")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Leave without saving your changes?')", "the question")
+        b.click("dialog.confirm[open] [data-answer=no]")
+        b.wait("!document.querySelector('dialog.confirm[open]')", "the dialog closed")
         if not b.js("!!document.querySelector('.pl-node.kind-wait')"):
             raise Failure("saying no still threw the change away")
-        b.js("window.confirm = () => true")
         b.click("#pl-back")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question again")
+        b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("!new URLSearchParams(location.search).get('p')", "leaving once confirmed")
 
     def test_history_preview_then_restore(self):
@@ -2186,9 +2187,9 @@ class Suite:
         b.wait("document.querySelector('.pl-canvas.editable')", "Build")
         b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').click()")
         b.wait("document.querySelector('.pl-node.kind-wait')", "an unsaved change")
-        b.js("window.__asked = ''; window.confirm = (m) => { window.__asked = m; return false; }")
         b.js("history.back()")
-        b.wait("window.__asked === 'Leave without saving your changes?'", "the question")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Leave without saving your changes?')", "the question")
+        b.click("dialog.confirm[open] [data-answer=no]")
         b.wait("new URLSearchParams(location.search).get('p') === 'review' && document.querySelector('.pl-node.kind-wait')", "the change kept")
 
     def test_run_now_on_a_manual_pipeline_takes_a_ticket(self):
@@ -2484,6 +2485,67 @@ class Suite:
         b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("![...document.querySelectorAll('.pr-head')].some((h) => h.textContent === 'Decided')", "the decided proposals cleared")
         self.check_errors("deleting proposals")
+
+    def test_run_page_scrolls_on_a_phone(self):
+        b = self.b
+        try:
+            for width, height, ratio in ((390, 844, 3), (900, 600, 1)):
+                b.viewport(width, height, ratio)
+                b.goto(self.url("/pipeline?p=review&run=run-a"))
+                b.wait("document.querySelector('.pl-detail')", "the run's details")
+                moved = b.js("""(() => {
+                  const body = document.querySelector('.pl-body');
+                  body.scrollTop = 100000;
+                  const d = document.querySelector('.pl-detail').getBoundingClientRect();
+                  return { top: body.scrollTop, bottom: d.bottom, height: innerHeight };
+                })()""")
+                if moved["top"] <= 0 or moved["bottom"] > moved["height"] + 1:
+                    raise Failure(f"the run page does not scroll to its end at {width}px: {moved}")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_pipeline_list_scrolls_on_a_phone(self):
+        b = self.b
+        made = [self.api("POST", "/api/pipelines", {"empty": True})["id"] for _ in range(8)]
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/pipeline"))
+            b.wait("document.querySelectorAll('.pl-card[data-id]').length >= 8", "a long list")
+            moved = b.js("""(() => {
+              const main = document.querySelector('.main');
+              main.scrollTop = 100000;
+              return main.scrollTop;
+            })()""")
+            if moved <= 0:
+                raise Failure("the list of pipelines does not scroll")
+        finally:
+            b.viewport(1280, 800)
+            for id in made:
+                self.api("DELETE", f"/api/pipelines/{id}")
+
+    def test_delete_pipeline_uses_the_page_dialog(self):
+        b = self.b
+        made = self.api("POST", "/api/pipelines", {"empty": True})["id"]
+        b.js("localStorage.setItem('yb-pipeline-full', '1')")
+        b.goto(self.url(f"/pipeline?p={made}&tab=build"))
+        b.wait("document.getElementById('pl-delete')", "Delete in the builder")
+        b.js("window.confirm = () => false")
+        b.click("#pl-delete")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the page's own dialog")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("!new URLSearchParams(location.search).get('p')", "back on the list")
+        if b.js(f"(async () => (await fetch('/api/pipelines/{made}')).status)()") != 404:
+            raise Failure("the pipeline was not deleted")
+
+    def test_delete_a_finished_run(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-c"))
+        b.wait("document.getElementById('pl-delete-run')", "Delete this run on a finished run")
+        b.click("#pl-delete-run")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("(async () => !(await (await fetch('/api/runs')).json()).runs.some((r) => r.id === 'run-c'))()", "the run gone")
+        self.check_errors("deleting a run")
 
     def check_errors(self, where):
         if self.b.errors:

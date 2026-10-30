@@ -23,6 +23,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/pipelines/{id}/restore", post(restore))
         .route("/api/pipelines/{id}/runs", get(runs).post(start))
         .route("/api/runs", get(all_runs))
+        .route("/api/runs/{id}", axum::routing::delete(delete_run))
         .route("/api/runs/{id}/answer", post(answer))
         .route("/api/runs/{id}/retry", post(retry))
         .route("/api/runs/{id}/continue", post(continue_on))
@@ -389,6 +390,19 @@ async fn continue_on(
     Json(req): Json<ContinueReq>,
 ) -> Result<Response, ApiError> {
     acted(&app, app.pipelines.continue_on(&id, req.outcome))
+}
+
+async fn delete_run(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    use crate::pipeline::DeleteRun;
+    app.pipelines.delete_run(&id).map_err(|e| match e {
+        DeleteRun::Missing => ApiError(StatusCode::NOT_FOUND, format!("{id} is not a run")),
+        DeleteRun::Active => ApiError(StatusCode::CONFLICT, "stop this run first".into()),
+    })?;
+    app.state.touch();
+    Ok(Json(json!({ "deleted": id })).into_response())
 }
 
 async fn drop_run(

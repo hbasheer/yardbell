@@ -436,3 +436,26 @@ async fn an_empty_pipeline_is_created_and_cannot_run() {
         "{body}"
     );
 }
+
+#[tokio::test]
+async fn a_run_can_be_deleted_once_it_has_ended() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    let url = format!("/api/runs/{}", run.id);
+    let (status, body) = call(&r, &c, "DELETE", &url, None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "stop this run first");
+    r.app.pipelines.drop_run(&run.id).unwrap();
+    let (status, body) = call(&r, &c, "DELETE", &url, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(r.app.pipelines.run(&run.id).is_none());
+    let (status, _) = call(&r, &c, "DELETE", &url, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}

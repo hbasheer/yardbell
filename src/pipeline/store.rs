@@ -82,6 +82,14 @@ impl Store {
         }
     }
 
+    pub fn remove(&self, id: &str) -> bool {
+        let removed = self.lock().remove(id).is_some();
+        if removed {
+            self.save();
+        }
+        removed
+    }
+
     pub fn remove_pipeline(&self, pipeline: &str) {
         self.lock().retain(|_, r| r.pipeline != pipeline);
         self.save();

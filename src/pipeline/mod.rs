@@ -40,6 +40,11 @@ pub struct Pipelines {
     orphans: Mutex<Vec<(String, String)>>,
 }
 
+pub enum DeleteRun {
+    Missing,
+    Active,
+}
+
 fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
     let mut step = None;
     let mut notes = Vec::new();
@@ -231,6 +236,18 @@ impl Pipelines {
 
     pub fn continue_on(&self, id: &str, outcome: Outcome) -> Result<Run, String> {
         self.person(id, Seen::Continue(outcome), Self::waiting)
+    }
+
+    // Only an ended run: one still active has sessions, which must be stopped first.
+    pub fn delete_run(&self, id: &str) -> Result<(), DeleteRun> {
+        match self.store.get(id) {
+            None => Err(DeleteRun::Missing),
+            Some(run) if run.state.active() => Err(DeleteRun::Active),
+            Some(_) => {
+                self.store.remove(id);
+                Ok(())
+            }
+        }
     }
 
     pub fn drop_run(&self, id: &str) -> Result<Run, String> {
