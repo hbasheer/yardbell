@@ -34,6 +34,18 @@ pub fn tagged(ticket: &str, folder_label: &str, tag: &str) -> String {
     }
 }
 
+// Claude Code keeps each session's transcript under a folder named after its working directory.
+pub fn transcript_lines_command(path: &str, needle: &str) -> String {
+    format!(
+        "d=\"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/projects/$(printf %s {} | sed 's/[^a-zA-Z0-9]/-/g')\"; \
+         cd \"$d\" 2>/dev/null || exit 0; \
+         ls -t -- *.jsonl 2>/dev/null | head -n 8 | sed '1!G;h;$!d' | while IFS= read -r f; do \
+         grep -F -h -e {} -- \"$f\" | tail -n 3; done; true",
+        quote(path),
+        quote(needle)
+    )
+}
+
 #[derive(Clone, Copy)]
 pub enum Start<'a> {
     New,
@@ -280,6 +292,12 @@ impl Sessions {
         .await
     }
 
+    pub async fn transcript_lines(&self, m: &Machine, path: &str, needle: &str) -> Option<String> {
+        self.output(m, &transcript_lines_command(path, needle))
+            .await
+            .ok()
+    }
+
     pub async fn send(&self, m: &Machine, name: &str, text: &str) -> Result<(), String> {
         self.output_with_input(m, &send_script(name), Some(text.to_string()))
             .await
@@ -441,6 +459,56 @@ mod tests {
 
     fn sessions(fake: Arc<FakeRunner>) -> Sessions {
         Sessions::new(fake, Ssh::new(tempfile::tempdir().unwrap().keep()))
+    }
+
+    #[test]
+    fn a_transcript_is_found_by_the_folder_it_ran_in() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home
+            .path()
+            .join(".claude/projects/-r-acme-com-app-wt-com-1");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.jsonl"), "other\nstep: review-1-ab12 one\n").unwrap();
+        let script = transcript_lines_command("/r/acme.com/app_wt/com-1", "step: review-1-ab12");
+        let out = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .env("HOME", home.path())
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "step: review-1-ab12 one\n"
+        );
+        assert!(out.status.success());
+
+        // A step started again has two transcripts with its marker: the newest must come last.
+        std::fs::write(dir.join("b.jsonl"), "step: review-1-ab12 two\n").unwrap();
+        for (file, when) in [("a.jsonl", "202601010000"), ("b.jsonl", "202601020000")] {
+            std::process::Command::new("touch")
+                .args(["-t", when])
+                .arg(dir.join(file))
+                .status()
+                .unwrap();
+        }
+        let out = std::process::Command::new("sh")
+            .args(["-c", &script])
+            .env("HOME", home.path())
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .output()
+            .unwrap();
+        assert_eq!(
+            String::from_utf8_lossy(&out.stdout),
+            "step: review-1-ab12 one\nstep: review-1-ab12 two\n"
+        );
+
+        let nothing = transcript_lines_command("/no/such/folder", "step: x");
+        let out = std::process::Command::new("sh")
+            .args(["-c", &nothing])
+            .env("HOME", home.path())
+            .output()
+            .unwrap();
+        assert!(out.status.success() && out.stdout.is_empty());
     }
 
     #[test]

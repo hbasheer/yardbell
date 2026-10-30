@@ -291,6 +291,7 @@ function needBox(run, d) {
   return html`<div class="pl-need" id="pl-need">
     <p>${(w.reason || "").startsWith(nameOf(d, w.step)) ? html`<b>${w.reason}</b>` : html`<b>${nameOf(d, w.step)}</b> · ${w.reason}`}</p>
     ${w.kind === "questions" && open.length ? html`<ol class="pl-questions">${open.map((q) => html`<li>${q.asked}</li>`)}</ol>` : nothing}
+    ${w.kind === "no_result" ? html`<p class="help">The agent went quiet and Yardbell could not read a result from it. Show the terminal to see what it did, then retry the step, continue on pass or fail, or answer it.</p>` : nothing}
     ${w.screen ? html`<pre class="session-screen">${w.screen}</pre>` : nothing}
     ${answerable ? html`<label class="visually-hidden" for="pl-answer">Your answer</label>
       <textarea id="pl-answer" rows="3" placeholder="Your answer" .value=${text} @input=${(e) => { answers.set(run.id, e.target.value); draw(); }}></textarea>` : nothing}

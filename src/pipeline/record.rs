@@ -232,6 +232,11 @@ impl Run {
             .expect("a run carries its definition")
     }
 
+    // The end of the run's id, which its session names and result markers carry.
+    pub fn tag(&self) -> &str {
+        &self.id[self.id.len().saturating_sub(6)..]
+    }
+
     pub fn state_of(&mut self, step: &str) -> &mut StepState {
         self.steps.entry(step.to_string()).or_default()
     }

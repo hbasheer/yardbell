@@ -271,7 +271,10 @@ A pipeline opens full screen (the button beside **Delete** puts it back in the p
   shows the reviewer, with a switch back to the main session; **Stop session** stops the one shown.
   **Stop this run**, or **Drop** while it waits for you, ends a run and stops its sessions. **Delete
   this run** works in any state: it stops the run and its sessions first, then removes its record.
-  The worktree, the branch and any pull request stay. **Show terminal** opens the terminal under the
+  The worktree, the branch and any pull request stay. Yardbell reads a Claude Code step's result from
+  its transcript, so it arrives whatever the terminal's size or scroll position. If a step goes quiet
+  with no result, its agent is asked to print it again; if that fails, the run waits and says so.
+  **Show terminal** opens the terminal under the
   canvas, and it stays closed until you do.
 
 On every canvas, drag or scroll with two fingers to move around; pinch, Ctrl or Cmd with the wheel,

@@ -119,9 +119,38 @@ an answer from the person to go on."
     )
 }
 
-// Names one run of one step, so a result on a shared session's screen is known to be this one's.
+// Names one run of one step of one run, so a result on a shared session's screen, or in a
+// transcript of the same folder, is known to be this one's.
 pub fn marker(run: &Run, step: &str) -> String {
-    format!("{step}-{}", run.steps.get(step).map_or(0, |s| s.runs))
+    format!(
+        "{step}-{}-{}",
+        run.steps.get(step).map_or(0, |s| s.runs),
+        run.tag()
+    )
+}
+
+// What an agent wrote, as lines of its transcript, when one of them holds this step's result.
+pub fn written_result(lines: &str, marker: &str) -> Option<String> {
+    lines.lines().rev().find_map(|line| {
+        let entry: serde_json::Value = serde_json::from_str(line).ok()?;
+        if entry["type"] != "assistant" {
+            return None;
+        }
+        let text = entry["message"]["content"]
+            .as_array()?
+            .iter()
+            .filter_map(|part| part["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("\n");
+        outcome(&text, marker).map(|_| text)
+    })
+}
+
+pub fn result_reminder(marker: &str) -> String {
+    format!(
+        "Your result for this step did not reach Yardbell. Do no new work.\n\n{}",
+        result_block(marker)
+    )
 }
 
 pub fn agent(run: &Run, step: &Step, t: &TicketText, answer: Option<&str>, notes: &str) -> String {
@@ -309,12 +338,27 @@ pub fn outcome(screen: &str, marker: &str) -> Option<(Outcome, String, Vec<Strin
         "needs you" => Outcome::NeedsYou,
         _ => return None,
     };
-    let summary = inside
-        .iter()
-        .find_map(|l| value_of(l, "summary"))
-        .map(clip)
-        .unwrap_or_default();
-    let details = inside.iter().filter_map(|l| bullet(l)).map(clip).collect();
+    // A long line comes off the screen wrapped, so what follows a line belongs to it.
+    let mut summary = String::new();
+    let mut details: Vec<String> = Vec::new();
+    let mut in_summary = false;
+    for line in inside.iter().filter(|l| !l.is_empty()) {
+        if let Some(text) = value_of(line, "summary") {
+            summary = text.to_string();
+            in_summary = true;
+        } else if value_of(line, "status").is_some() || value_of(line, "step").is_some() {
+            in_summary = false;
+        } else if let Some(item) = bullet(line) {
+            in_summary = false;
+            details.push(item.to_string());
+        } else if in_summary {
+            summary = format!("{summary} {line}");
+        } else if let Some(last) = details.last_mut() {
+            *last = format!("{last} {line}");
+        }
+    }
+    let summary = clip(summary.trim());
+    let details = details.iter().map(|d| clip(d)).collect();
     Some((outcome, summary, details))
 }
 
@@ -458,7 +502,7 @@ mod tests {
     fn a_result_names_the_run_of_the_step_it_belongs_to() {
         let (mut run, step) = with("Do it.");
         run.state_of(&step.id).runs = 2;
-        let m = format!("{}-2", step.id);
+        let m = format!("{}-2-{}", step.id, run.tag());
         assert_eq!(marker(&run, &step.id), m);
         let text = agent(&run, &step, &ticket(), None, "");
         assert!(text.contains(&format!("step: {m}\n")), "{text}");
@@ -470,6 +514,40 @@ mod tests {
             outcome("YARDBELL RESULT\nstatus: pass\nEND RESULT", &m),
             None
         );
+    }
+
+    #[test]
+    fn a_summary_over_several_lines_is_read_whole() {
+        let block = "YARDBELL RESULT\nstep: s-1\nstatus: needs you\nsummary: The branch is clean. Should\n  I add MCP tools?\n- 13 specs fail\n  on the key\nEND RESULT";
+        let (_, report, details) = outcome(block, "s-1").unwrap();
+        assert_eq!(report, "The branch is clean. Should I add MCP tools?");
+        assert_eq!(details, vec!["13 specs fail on the key"]);
+    }
+
+    #[test]
+    fn a_result_in_a_transcript_is_only_what_the_agent_wrote() {
+        let asked = serde_json::json!({ "type": "user", "message": { "content": "YARDBELL RESULT\nstep: s-1\nstatus: pass\nEND RESULT" } });
+        let tool = serde_json::json!({ "type": "user", "message": { "content": [{ "type": "tool_result", "content": "YARDBELL RESULT\nstep: s-1\nstatus: pass\nEND RESULT" }] } });
+        let said = |status: &str| {
+            serde_json::json!({ "type": "assistant", "message": { "content": [
+            { "type": "text", "text": format!("Done.\n\nYARDBELL RESULT\nstep: s-1\nstatus: {status}\nsummary: Read it.\nEND RESULT") }
+        ] } })
+        };
+        assert_eq!(
+            written_result(&format!("{asked}\n{tool}\nnot json\n"), "s-1"),
+            None
+        );
+        let lines = format!("{asked}\n{}\n{}\n", said("fail"), said("pass"));
+        let text = written_result(&lines, "s-1").expect("the newest result");
+        assert_eq!(outcome(&text, "s-1").unwrap().0, Outcome::Pass);
+        assert_eq!(written_result(&lines, "s-2"), None);
+    }
+
+    #[test]
+    fn a_reminder_asks_for_this_steps_result() {
+        let text = result_reminder("review-1-ab12");
+        assert!(text.contains("step: review-1-ab12"), "{text}");
+        assert!(text.contains(RESULT) && text.contains(RESULT_END), "{text}");
     }
 
     #[test]
