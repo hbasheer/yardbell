@@ -104,9 +104,12 @@ Dispatch also has tools that change things, each a step its approval setting and
 | `run_pipeline` | starts runs of a pipeline on Linear tickets or pull and merge request links |
 | `answer_run` | answers a waiting run, retries its step, continues it as passed or failed, or drops it |
 
-Other clients do not see these, and calling one from them is refused until changes from outside
-clients can wait in a Proposals inbox. A pipeline run's own Dispatch turn cannot call any of them,
-whatever the rules say, so text in a ticket cannot answer the run it belongs to.
+Other clients, such as Claude Code with Yardbell added, can call every one of these except
+`remember`. Each call is checked as it is for Dispatch, and a problem goes back to the client; a
+change that passes waits in the **Proposals** inbox, and nothing changes until you approve it
+there, whatever your approval setting or allow rules say (a rule that refuses the action still
+refuses it). The client's answer names the proposal. A pipeline run's own Dispatch turn cannot call
+any of them, whatever the rules say, so text in a ticket cannot answer the run it belongs to.
 
 **MCP servers for sessions** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code

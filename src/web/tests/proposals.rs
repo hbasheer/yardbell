@@ -391,3 +391,86 @@ async fn step_get(r: &Rig, cookie: &str, url: &str) -> (StatusCode, serde_json::
         serde_json::from_str(&text).unwrap_or(serde_json::Value::Null),
     )
 }
+
+async fn step_delete(r: &Rig, cookie: &str, url: &str) -> (StatusCode, serde_json::Value) {
+    let req = Request::delete(url)
+        .header(header::COOKIE, cookie)
+        .header(header::ACCEPT, "application/json")
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, text) = send(&r.app, req).await;
+    (
+        status,
+        serde_json::from_str(&text).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+#[tokio::test]
+async fn a_proposal_can_be_deleted_without_running() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    let id = proposed_phone(&r, 7).await;
+    let (status, body) = step_delete(&r, &c, &format!("/api/proposals/{id}")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(r.app.proposals.get(&id).is_none());
+    assert_eq!(saved(&r).phone_notifications.wait_minutes, 2);
+    let (status, _) = step_delete(&r, &c, &format!("/api/proposals/{id}")).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn clearing_keeps_what_still_waits() {
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    let decided = proposed_phone(&r, 7).await;
+    decide(&r, &c, &decided, json!({ "decision": "reject" })).await;
+    let waiting = proposed_phone(&r, 8).await;
+    let (status, body) = step_post(&r, &c, "/api/proposals/clear", json!({})).await;
+    assert_eq!(
+        (status, &body["cleared"]),
+        (StatusCode::OK, &json!(1)),
+        "{body}"
+    );
+    let ids: Vec<serde_json::Value> = r
+        .app
+        .proposals
+        .list()
+        .iter()
+        .map(|p| p["id"].clone())
+        .collect();
+    assert_eq!(ids, vec![json!(waiting)]);
+}
+
+#[tokio::test]
+async fn instructions_say_changes_wait_in_the_inbox() {
+    let r = rig();
+    mcp_on(&r);
+    let init = client(
+        &r,
+        None,
+        rpc("initialize", json!({ "protocolVersion": "2025-03-26" })),
+    )
+    .await;
+    let words = init["instructions"].as_str().unwrap();
+    assert!(words.contains("Proposals inbox"), "{words}");
+    assert!(
+        words.contains("never runs before the user approves it"),
+        "{words}"
+    );
+    let listed = client(&r, None, rpc("tools/list", json!({}))).await;
+    let change = listed["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "change_settings")
+        .unwrap();
+    assert!(
+        change["description"]
+            .as_str()
+            .unwrap()
+            .contains("Proposals inbox"),
+        "{change}"
+    );
+}

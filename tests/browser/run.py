@@ -2453,6 +2453,27 @@ class Suite:
         b.goto(self.url("/proposals"))
         b.wait(f"document.querySelector('{card}') && !document.querySelector('{card}.pending')", "the proposal among the decided")
 
+    def test_proposals_can_be_deleted_and_cleared(self):
+        b = self.b
+        b.goto(self.url("/proposals"))
+        card = '[aria-label="Save the task Inbox task"]'
+        b.wait(f"document.querySelector('{card}')", "the task proposal")
+        b.click(f"{card} + .pr-delete")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the delete confirmation")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait(f"!document.querySelector('{card}')", "the proposal gone")
+        if b.js("(async () => (await (await fetch('/api/proposals/inbxtsk1')).status))()") != 404:
+            raise Failure("the deleted proposal is still kept")
+        phone = '[aria-label="Change Settings: Phone notifications"]'
+        if b.js(f"!!document.querySelector('{phone}.pending')"):
+            b.click(f"{phone} .step-card-actions .btn.danger")
+            b.wait(f"document.querySelector('{phone}.rejected')", "the phone change rejected")
+        b.click("#pr-clear")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the clear confirmation")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("![...document.querySelectorAll('.pr-head')].some((h) => h.textContent === 'Decided')", "the decided proposals cleared")
+        self.check_errors("deleting proposals")
+
     def check_errors(self, where):
         if self.b.errors:
             errors, self.b.errors = self.b.errors, []

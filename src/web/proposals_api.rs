@@ -2,7 +2,7 @@ use super::{detached, refused, ApiError, AppState, Decision};
 use axum::extract::{Path, State as AxState};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
-use axum::routing::get;
+use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde_json::json;
 use std::sync::Arc;
@@ -10,7 +10,8 @@ use std::sync::Arc;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/proposals", get(list))
-        .route("/api/proposals/{id}", get(show).post(decide))
+        .route("/api/proposals/clear", post(clear))
+        .route("/api/proposals/{id}", get(show).post(decide).delete(delete))
 }
 
 fn missing() -> ApiError {
@@ -29,6 +30,22 @@ async fn show(
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
     Ok(Json(app.proposals.get(&id).ok_or_else(missing)?).into_response())
+}
+
+// Deleting a proposal that still waits discards it; nothing it asked for runs.
+async fn delete(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    app.proposals.delete(&id).map_err(refused)?;
+    app.state.touch();
+    Ok(Json(json!({ "deleted": id })).into_response())
+}
+
+async fn clear(AxState(app): AxState<Arc<AppState>>) -> Response {
+    let cleared = app.proposals.clear_decided();
+    app.state.touch();
+    Json(json!({ "cleared": cleared })).into_response()
 }
 
 async fn decide(

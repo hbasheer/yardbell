@@ -38,6 +38,11 @@ and the project uses [Semantic Versioning](https://semver.org).
   or drop a waiting run, each as a card your rules decide. The builder's **Ask Dispatch to change
   it** starts that conversation for you. A run's own Dispatch turn can never change settings,
   pipelines or runs, so a ticket's text cannot approve its own run.
+- **Proposals inbox.** MCP clients other than Dispatch, such as Claude Code with Yardbell added,
+  can now ask for the same changes. Each one is checked, then waits on the new **Proposals** page
+  (in the sidebar, with a count) until you approve, edit or reject it; your phone says one waits.
+  Your rules can refuse them, but never let them run alone. Delete a proposal, or clear the decided
+  ones; they are kept in `proposals.json` in the state folder for 30 days after a decision.
 - On a phone, Settings and Log out in the header show as their icons, to make room for Pipelines.
 
 ## [0.7.10] - 2026-10-29

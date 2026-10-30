@@ -303,6 +303,16 @@ agent's wording as a diff, and always waits for you. **Edit in the builder** ope
 builder, where **Approve and save** saves it; a new pipeline starts switched off. In the builder,
 **Ask Dispatch to change it** starts a message to Dispatch about that pipeline.
 
+### Proposals
+
+Other MCP clients, such as Claude Code with Yardbell added, can ask for the same changes. They wait
+on the **Proposals** page, linked from the sidebar with a count while any wait, and your phone says
+"A proposal from claude-code waits for you" (once, however many arrive together). Each proposal is
+the same card Dispatch's steps use: **Approve**, **Edit**, **Reject**, and **Edit in the builder**
+for a pipeline. Nothing changes until you approve it, whatever your Dispatch rules allow; a rule
+that refuses an action refuses proposals for it too. **Delete** discards a proposal, and **Clear
+decided** removes the ones already decided; decided proposals are also dropped after 30 days.
+
 Dispatch asks before it acts. Each step that starts, stops or types into a session appears as a
 card with the machine, folder, branch, agent and task (or the text to type), and waits for you:
 

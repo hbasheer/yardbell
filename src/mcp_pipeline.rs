@@ -25,13 +25,13 @@ pub fn tools() -> Vec<Value> {
     vec![
         tool(
             "save_pipeline",
-            "Propose a new pipeline, or a change to one. For a change, read it first with read_pipeline and send the whole definition back with your edits, keeping its id; for a new one leave id empty. The pipeline is checked as the builder checks it, and any problem comes back to you to correct. It always waits for the user, who can approve it, finish it in the builder, or reject it. A new pipeline is saved switched off.",
+            "Propose a new pipeline, or a change to one. For a change, read it first with read_pipeline and send the whole definition back with your edits, keeping its id; for a new one leave id empty. The pipeline is checked as the builder checks it, and any problem comes back to you to correct. It always waits for the user, who can approve it, finish it in the builder, or reject it; from a client other than Dispatch it waits in the user's Proposals inbox. A new pipeline is saved switched off.",
             json!({ "definition": { "type": "object", "description": "The whole pipeline definition, as read_pipeline returns it" } }),
             &["definition"],
         ),
         tool(
             "set_pipeline_enabled",
-            "Propose switching a pipeline on or off. Switching on checks that its trigger can run, and a problem comes back to you.",
+            "Propose switching a pipeline on or off. Switching on checks that its trigger can run, and a problem comes back to you. From a client other than Dispatch it waits in the user's Proposals inbox.",
             json!({
                 "id": { "type": "string", "description": "The pipeline's id, from list_pipelines" },
                 "on": { "type": "boolean" },
@@ -40,7 +40,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "run_pipeline",
-            "Propose starting a pipeline: one run per ticket or pull request, or one run with no subject when neither is given. tickets are Linear identifiers such as COM-12, from the user's open tickets; prs are GitHub pull request or GitLab merge request links.",
+            "Propose starting a pipeline: one run per ticket or pull request, or one run with no subject when neither is given. tickets are Linear identifiers such as COM-12, from the user's open tickets; prs are GitHub pull request or GitLab merge request links. From a client other than Dispatch it waits in the user's Proposals inbox.",
             json!({
                 "id": { "type": "string", "description": "The pipeline's id, from list_pipelines" },
                 "tickets": { "type": "array", "items": { "type": "string" } },
@@ -50,7 +50,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "answer_run",
-            "Propose acting on a pipeline run that waits for the user (read_run shows what it waits for): answer its question with text, retry the step, continue as if the step passed or failed, or drop the run.",
+            "Propose acting on a pipeline run that waits for the user (read_run shows what it waits for): answer its question with text, retry the step, continue as if the step passed or failed, or drop the run. From a client other than Dispatch it waits in the user's Proposals inbox.",
             json!({
                 "id": { "type": "string", "description": "The run's id, from list_runs" },
                 "action": { "type": "string", "enum": ACTIONS },

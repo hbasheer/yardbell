@@ -1921,7 +1921,11 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .side-rail .side-count { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; line-height: 14px; font-size: 10px; }
 .proposals-main .pr-intro { margin: -4px 0 16px; }
 .pr-section + .pr-section { margin-top: 24px; }
-.pr-head { margin: 0 0 10px; font-size: 13px; font-weight: 600; color: var(--ink-2); }
+.pr-section-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; max-width: 820px; margin-bottom: 10px; }
+.pr-item { display: grid; justify-items: end; gap: 2px; }
+.pr-item > .step-card { justify-self: stretch; }
+.pr-delete { font-size: 12px; padding: 2px 8px; }
+.pr-head { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink-2); }
 .pr-list { display: grid; gap: 12px; max-width: 820px; }
 .pr-empty { max-width: 820px; padding: 24px; border: 1px dashed var(--line-strong); border-radius: var(--radius); color: var(--ink-2); text-align: center; }
 .pl-proposal { margin: 0; padding: 8px 16px; border-bottom: 1px solid var(--line); background: var(--info-bg, var(--side)); font-size: 13px; }

@@ -163,6 +163,30 @@ impl Proposals {
         })
     }
 
+    pub fn delete(&self, id: &str) -> Result<(), Refusal> {
+        let mut all = self.lock();
+        let before = all.len();
+        all.retain(|p| p["id"] != id);
+        if all.len() == before {
+            return Err(missing());
+        }
+        drop(all);
+        self.save();
+        Ok(())
+    }
+
+    pub fn clear_decided(&self) -> usize {
+        let mut all = self.lock();
+        let before = all.len();
+        all.retain(|p| p["status"] == "pending");
+        let cleared = before - all.len();
+        drop(all);
+        if cleared > 0 {
+            self.save();
+        }
+        cleared
+    }
+
     // Decided proposals go a month after their decision; one still waiting stays until decided.
     pub fn prune(&self, now: DateTime<Local>) {
         let cutoff = now - Duration::days(KEEP_DAYS);
