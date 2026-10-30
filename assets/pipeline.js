@@ -339,6 +339,35 @@ function detail(run, d) {
   </aside>`;
 }
 
+// Which session's terminal is shown, per run, when the person picked one themselves.
+const shownTerminal = new Map();
+
+async function stopSession(t) {
+  if (!(await ask(`Stop ${t.name}?`, "The agent in it stops. The step then waits for you.", { confirm: "Stop session", danger: true }))) return;
+  doing(async () => {
+    await api("POST", `/sessions/${encodeURIComponent(t.machine)}/${encodeURIComponent(t.name)}/stop`, {});
+    await load();
+  });
+}
+
+function terminal(run) {
+  const list = run.terminals || [];
+  if (!list.length) return html`<section class="pl-terminal empty"><p class="help">This run has no live session.</p></section>`;
+  const shown = list.find((t) => t.name === shownTerminal.get(run.id)) || list.find((t) => t.current) || list[0];
+  const src = `/term/${encodeURIComponent(shown.machine)}/${encodeURIComponent(shown.name)}`;
+  return html`<section class="pl-terminal">
+    <header class="pl-terminal-head">
+      ${list.length > 1
+        ? html`<div class="segmented pl-terminal-switch" role="group" aria-label="Sessions of this run">${list.map((t) => html`<button type="button" aria-pressed=${t === shown ? "true" : "false"} @click=${() => { shownTerminal.set(run.id, t.name); draw(); }}>${t.label}</button>`)}</div>`
+        : html`<strong>${shown.label}</strong>`}
+      <span class="pl-bar-space"></span>
+      <a class="btn quiet small-link" href=${src} target="_blank" rel="noopener">Open</a>
+      <button class="btn quiet danger small-link" type="button" id="pl-stop-session" ?disabled=${busy} @click=${() => stopSession(shown)}>Stop session</button>
+    </header>
+    <iframe class="pl-terminal-frame" title=${`Terminal of ${shown.label}`} src=${`${src}?embed=1`}></iframe>
+  </section>`;
+}
+
 function runsTab(d) {
   const runs = runsOf(d.id);
   const chosen = runs.find((r) => r.id === params().get("run")) || runs[0];
@@ -355,7 +384,10 @@ function runsTab(d) {
       <span class="pl-run-title"><span class=${`pl-dot ${dot[r.state] || "off"}`}></span>${label(r)}</span>
       <small>${stateWord(r, r.definition || d)}</small>
     </button>`)}</nav>
-    ${canvas({ def: chosen.definition || d, run: chosen, key: `${d.id}:${chosen.version}:${chosen.id}` })}
+    <div class="pl-run-main">
+      ${canvas({ def: chosen.definition || d, run: chosen, key: `${d.id}:${chosen.version}:${chosen.id}` })}
+      ${terminal(chosen)}
+    </div>
     ${detail(chosen, chosen.definition || d)}
   </div>`;
 }

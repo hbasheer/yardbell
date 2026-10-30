@@ -459,3 +459,40 @@ async fn a_run_can_be_deleted_once_it_has_ended() {
     let (status, _) = call(&r, &c, "DELETE", &url, None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn runs_list_their_live_terminals() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let cfg = r.app.config().unwrap();
+    let live = r
+        .app
+        .state
+        .view(&cfg, r.app.ports.as_ref(), "localhost")
+        .sessions
+        .into_iter()
+        .find_map(|s| s.tmux.map(|t| (s.machine, t)))
+        .expect("the rig has a session");
+    let mut run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.step = "review".into();
+    run.state = RunState::Running;
+    let st = run.state_of("review");
+    st.session = live.1.clone();
+    st.machine = live.0.clone();
+    run.state_of("implement").session = "hp-gone".into();
+    r.app.pipelines.put(run);
+    let (status, body) = call(&r, &c, "GET", "/api/runs", None).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        body["runs"][0]["terminals"],
+        json!([{ "step": "review", "name": live.1, "machine": live.0, "label": "Review", "current": true }])
+    );
+    let (_, body) = call(&r, &c, "GET", &format!("/api/pipelines/{id}/runs"), None).await;
+    assert_eq!(body["runs"][0]["terminals"][0]["name"], live.1);
+}

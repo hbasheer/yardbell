@@ -2518,6 +2518,51 @@ class Suite:
         b.click("#phone-form [name=proposals]")
         b.click("#phone-form button[type=submit]")
 
+    # The page's own /api/runs is answered with terminals, since which runs have a live session
+    # depends on what earlier tests did to the seeded runs.
+    def with_terminals(self):
+        self.b.js("""(() => {
+          const real = window.fetch;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (!String(url).startsWith('/api/runs')) return res;
+            const body = await res.json();
+            for (const r of body.runs) {
+              r.terminals = r.id === 'run-a'
+                ? [{ step: 'root-cause', name: 'hp-term-a', machine: 'hp', label: 'Root cause', current: true }, { step: 'understand', name: 'hp-term-main', machine: 'hp', label: 'Understand', current: false }]
+                : r.id === 'run-b' ? [{ step: 'test', name: 'hp-term-b', machine: 'hp', label: 'Test', current: true }] : [];
+            }
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          };
+        })()""")
+
+    def test_run_page_terminal_follows_the_run(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-terminal')", "the terminal area")
+        self.with_terminals()
+        frame = "document.querySelector('.pl-terminal iframe')"
+        b.wait(f"{frame}?.getAttribute('src') === '/term/hp/hp-term-a?embed=1'", "the current step's terminal")
+        b.wait(f"{frame}.contentWindow.document.readyState === 'complete'", "the terminal loaded")
+        b.js(f"{frame}.contentWindow.__kept = true")
+        b.pump(6)
+        if not b.js(f"{frame}.contentWindow.__kept === true"):
+            raise Failure("a redraw reloaded the terminal")
+        b.js("[...document.querySelectorAll('.pl-terminal-switch button')].find((x) => x.textContent.trim() === 'Understand').click()")
+        b.wait(f"{frame}.getAttribute('src') === '/term/hp/hp-term-main?embed=1'", "the switch to the main session")
+        b.click('.pl-run-item[data-id="run-b"]')
+        b.wait(f"{frame}?.getAttribute('src') === '/term/hp/hp-term-b?embed=1'", "the terminal following the run")
+        if b.js("document.querySelector('.pl-terminal-switch')"):
+            raise Failure("one session needs no switch")
+        b.wait("document.getElementById('pl-stop-session')", "Stop session")
+
+    def test_run_without_a_session_says_so(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-c"))
+        b.wait("document.querySelector('.pl-terminal')?.textContent.includes('This run has no live session.')", "the note")
+        if b.js("document.querySelector('.pl-terminal iframe')"):
+            raise Failure("a terminal with no session")
+
     def test_run_page_scrolls_on_a_phone(self):
         b = self.b
         try:
