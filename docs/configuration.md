@@ -194,6 +194,9 @@ phone_notifications:
   session_ended: true
   machines: true            # down and back
   memory: true
+  pipeline_waiting: true
+  pipeline_finished: true
+  proposals: true
 ```
 
 Every key is optional. The values above are the defaults. Older configs may still have `server`,
@@ -206,6 +209,9 @@ Every key is optional. The values above are the defaults. Older configs may stil
 | `session_ended` | `true` | Notify when a session ends. |
 | `machines` | `true` | Notify when a machine has been down for a minute and when it comes back. |
 | `memory` | `true` | Notify when a machine's memory reaches 95%. |
+| `pipeline_waiting` | `true` | Notify when a pipeline run waits for you. |
+| `pipeline_finished` | `true` | Notify with the first line of a pipeline run's report. |
+| `proposals` | `true` | Notify when a proposal waits in the Proposals inbox. |
 
 ### `mcp_servers` (optional)
 
@@ -373,7 +379,13 @@ worktree_setup:
     machine: devbox                # optional, default any
     command: bin/setup
     timeout_seconds: 900           # optional, default 300, at most 3600
+  - folder: acme/shop
+    command: docker compose up -d
+    teardown: docker compose down  # optional: when a pipeline run that made the worktree ends
 ```
+
+An entry needs a `command`, a `teardown` or both. See [Teardown](automation.md#teardown) for where it
+runs and where it is skipped.
 
 `folder` is matched like a Dispatch rule's folder, against the main checkout the worktree was made
 from. When several entries match, the one that names the machine wins, then the one with the

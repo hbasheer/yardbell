@@ -6,8 +6,10 @@ Yardbell runs on one machine and watches the others over ssh. It shows which mac
 much memory and disk they have left, which agent session (Claude Code, Codex, Gemini CLI, opencode,
 Aider and more) runs where and for which ticket, and which local port opens the app each session is
 working on. It opens a full terminal into any session from your desktop or your phone, and puts
-several side by side in a Workspace. Nothing is installed on the machines it manages: it is one
-Rust binary with a plain HTML UI, plus apps for macOS, Linux and Android.
+several side by side in a Workspace. It can also do the work for you: Dispatch starts agents from a
+sentence, and pipelines carry a ticket or a merge request through steps you define and stop only
+when they need you. Nothing is installed on the machines it manages: it is one Rust binary with a
+plain HTML UI, plus apps for macOS, Linux and Android.
 
 ![Yardbell dashboard](docs/screenshots/dashboard.png)
 
@@ -25,22 +27,53 @@ Rust binary with a plain HTML UI, plus apps for macOS, Linux and Android.
   branch; other branches get their own git worktree.
 - **Ports, already tunnelled.** Docker Compose ports from each session's folder, forwarded to the
   host with live status.
-- **Phone notifications.** The Android app says when an agent waits for you, a session ends, a
-  machine goes down or memory runs low, with no other app to install.
+- **Pipelines.** Steps you draw on a canvas, from a trigger (by hand, a schedule, a Linear ticket, or
+  a review request on GitHub or GitLab) to a report. A run uses one agent session, plus a read-only
+  one for reviews, shows its live terminal, and waits for you only when it must.
 - **Dispatch.** Describe a task and Yardbell picks the machine with the repository and the most room,
-  then starts an agent there. It sits beside your terminals in the Workspace, and hides with one
-  click.
+  then starts an agent there. It can also read and change Yardbell itself, and build and run
+  pipelines, with your rules deciding what waits for you. It sits beside your terminals in the
+  Workspace, and hides with one click.
+- **Proposals.** Changes asked for by other MCP clients, such as Claude Code with Yardbell added, wait
+  in one inbox until you approve, edit or reject them.
+- **GitHub and GitLab.** Each session shows its branch's pull or merge request with its state and CI.
+  Settings says which service each of your folders uses and whether `gh` and each GitLab token work.
+- **Phone notifications.** The Android app says when an agent waits for you, a session ends, a
+  machine goes down, memory runs low, a pipeline needs you or finishes, or a proposal waits, with no
+  other app to install.
 - **Add machines from the UI.** Mesh peers, ssh key setup, `~/.ssh/config`, tool checks and a folder
   picker, without editing a file.
 - **Mesh VPN aware.** NordVPN Meshnet, Tailscale, Headscale, NetBird and ZeroTier, and the apps
   find the servers on it so signing in takes only the passcode.
-- **An MCP server for agents.** Agents can list machines and sessions, start, read and answer them.
-- **One menu on every page.** Dashboard, Workspace, Dispatch and Settings in the same place
-  everywhere, with Dashboard always first.
+- **An MCP server for agents.** Agents can list machines and sessions, start, read and answer them,
+  and read every part of Yardbell. Secrets are never shown.
+- **One menu on every page.** Dashboard, Workspace, Pipelines, Dispatch, Proposals and Settings in
+  the same place everywhere, as a tab bar along the bottom on a phone.
 - **Light or dark, and small to run.** A theme button in every sidebar; about 9 MB of memory, a
   service in one command and a `doctor` that checks everything.
 
 ![Workspace with Dispatch beside two terminals](docs/screenshots/workspace.png)
+
+## How a pipeline works
+
+![A pipeline run waiting for an answer at its Root cause step](docs/screenshots/pipeline.png)
+
+1. **Something starts a run:** **Run now**, a schedule, a Linear ticket assigned to you, or a review
+   request. **Plan** can pick the machine, folder and branch for it.
+2. **The steps share one session.** An agent works in one worktree, and each step's task is typed into
+   the same session when the agent is idle, so a run holds far less memory than one session per step.
+3. **A review gets its own session.** A step marked as a review starts a read-only agent that cannot
+   edit files and did not write the code. A step on another machine or with another agent gets its
+   own session too.
+4. **Each step ends with a result:** pass, fail or needs you. You draw where each one goes, so a failed
+   review can loop back to a fix.
+5. **The run waits only when it must,** such as when an agent asks something, a rule refuses a step or
+   a step hits its limit. Your phone says so and the run page shows what to do.
+6. **When the run ends,** every session stops and the worktree and branch stay. A teardown command,
+   such as `docker compose down`, can clear what the worktree started.
+
+Two templates are ready to copy: **Implement my Linear tickets** and **Review my merge requests**.
+[Pipelines](docs/automation.md#pipelines) explains every step and setting.
 
 ## Download
 
@@ -84,13 +117,14 @@ Then add the other machines from **Add machine** in the UI, or list them in `yar
 
 - [The apps](docs/apps.md): the desktop app, the Android app and phone notifications.
 - [Using Yardbell](docs/usage.md): dashboard, new sessions, Workspace, the terminal, adding
-  machines, Settings and Dispatch.
+  machines, Settings, Pipelines, Dispatch and Proposals.
 - [AI agents and MCP](docs/agents.md): the agents Yardbell knows, adding your own, and its MCP
   server.
 - [Running Yardbell](docs/running.md): how it works, requirements, mesh VPNs, ports, commands,
   Docker and security.
-- [Triggers, worktree setup and rules](docs/automation.md): start Dispatch tasks on a schedule or
-  for new tickets, prepare each new worktree, and decide what Dispatch may do, with examples.
+- [Triggers, worktree setup, rules and pipelines](docs/automation.md): start Dispatch tasks on a
+  schedule or for new tickets, prepare and clear each worktree, decide what Dispatch may do, and
+  build pipelines, with examples.
 - [Configuration](docs/configuration.md): every setting in `yardbell.yml`.
 - [Troubleshooting](docs/troubleshooting.md) and [Development](docs/development.md).
 
