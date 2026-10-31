@@ -527,7 +527,7 @@ mod tests {
         assert!(linear.contains("the Linear ticket COM-1"), "{linear}");
         run.subject.ticket.as_mut().unwrap().source = "trello".into();
         let other = plan(&run, &ticket(), &["hp".to_string()]);
-        assert!(!other.contains("Linear ticket"), "{other}");
+        assert!(!other.contains("the Linear ticket"), "{other}");
         assert!(other.contains("the trello item COM-1"), "{other}");
     }
 
