@@ -370,11 +370,11 @@
         <p class="help">Pipelines use a connection in a trigger or a step. Agent sessions get every MCP connection too, and sign in to it themselves on their own machine. Use a token only for a tool with no MCP server.</p>
       </details>
       <div class="conn-all" id="conn-all">
+        <div class="conn-head" aria-hidden="true"><span>Connection</span><span>Type</span><span>Status</span><span></span></div>
         <ul class="rows" id="server-rows"></ul>
         <ul class="rows conn-rows" id="conn-rows"></ul>
       </div>
-      <p class="conn-none" id="conn-none">No connections yet. Press New connection to add your first.</p>
-      <div class="panel conn-output" id="conn-output" hidden></div>
+      <div class="conn-none" id="conn-none"><h3>No connections yet</h3><p class="help">Connect the tools your pipelines and agent sessions use.</p></div>
 
     <div id="servers">
     <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
@@ -495,6 +495,7 @@
     </form>
       <div class="conn-step" id="mcp-sign-in" hidden></div>
       <div class="conn-step" id="mcp-tools" hidden></div>
+      <div class="conn-step conn-output" id="conn-output" hidden></div>
       <p class="help conn-error" id="conn-flow-error" role="alert"></p>
       </div>
     </dialog>

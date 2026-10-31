@@ -214,18 +214,77 @@ function serverTarget(srv) {
   return srv.url || srv.command;
 }
 
-const AUTH_LABELS = { signed_in: "Signed in", sign_in_again: "Sign in again", not_signed_in: "Not signed in" };
+const MORE_ICON = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="0.6"/><circle cx="8" cy="8" r="0.6"/><circle cx="12.5" cy="8" r="0.6"/></svg>`;
 
-function serverAuth(srv) {
-  return srv.url ? AUTH_LABELS[data.mcp_auth?.[srv.name]] || "" : "";
+function rowMenu(name, items) {
+  return `<span class="conn-menu"><button class="conn-more-btn" type="button" data-row-menu aria-haspopup="menu" aria-expanded="false" aria-label="More for ${esc(name)}">${MORE_ICON}</button>
+    <span class="menu" role="menu" hidden>${items}</span></span>`;
 }
 
-function serverActions(srv) {
+function menuItem(attrs, label, danger) {
+  return `<button type="button" role="menuitem" ${danger ? 'class="danger" ' : ""}${attrs}>${esc(label)}</button>`;
+}
+
+function badge(kind, text) {
+  return `<span class="conn-badge ${kind}">${esc(text)}</span>`;
+}
+
+function closeRowMenus(except) {
+  document.querySelectorAll(".conn-menu .menu:not([hidden])").forEach((m) => {
+    if (m === except) return;
+    m.hidden = true;
+    m.previousElementSibling.setAttribute("aria-expanded", "false");
+  });
+}
+
+document.addEventListener("click", (e) => {
+  const opener = e.target.closest("[data-row-menu]");
+  if (!opener) { closeRowMenus(); return; }
+  const menu = opener.nextElementSibling;
+  closeRowMenus(menu);
+  menu.hidden = !menu.hidden;
+  opener.setAttribute("aria-expanded", String(!menu.hidden));
+  if (!menu.hidden) menu.querySelector("button").focus();
+});
+
+document.addEventListener("keydown", (e) => {
+  const menu = e.target.closest?.(".conn-menu")?.querySelector(".menu:not([hidden])");
+  if (!menu) return;
+  if (e.key === "Escape") {
+    closeRowMenus();
+    menu.previousElementSibling.focus();
+  } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+    e.preventDefault();
+    const items = [...menu.querySelectorAll("button")];
+    const step = e.key === "ArrowDown" ? 1 : items.length - 1;
+    items[(items.indexOf(document.activeElement) + step) % items.length].focus();
+  }
+});
+
+function serverType(srv) {
+  if (!srv.url) return "Command";
+  return Object.keys(srv.headers || {}).length ? "Headers" : "Sign-in";
+}
+
+function serverStatus(srv) {
   const status = data.mcp_auth?.[srv.name];
-  const act = (name, label) => `<button class="btn small-link" type="button" data-mcp-act="${name}" data-name="${esc(srv.name)}">${label}</button>`;
-  const signIn = status === "not_signed_in" ? act("sign-in", "Sign in") : status === "sign_in_again" ? act("sign-in", "Sign in again") : "";
-  const signOut = status === "signed_in" || status === "sign_in_again" ? act("sign-out", "Sign out") : "";
-  return `${signIn}${signOut}${act("test", "Test")}`;
+  if (status === "signed_in") return badge("ok", "Signed in");
+  if (status === "sign_in_again") return badge("bad", "Sign in again");
+  if (status === "not_signed_in") return badge("idle", "Not signed in");
+  return badge("idle", "Not checked");
+}
+
+function serverNeeds(srv) {
+  const status = data.mcp_auth?.[srv.name];
+  if (status !== "not_signed_in" && status !== "sign_in_again") return "";
+  return `<button class="btn small-link" type="button" data-mcp-act="sign-in" data-name="${esc(srv.name)}">${status === "sign_in_again" ? "Sign in again" : "Sign in"}</button>`;
+}
+
+function serverMenu(srv, i) {
+  const status = data.mcp_auth?.[srv.name];
+  const name = `data-name="${esc(srv.name)}"`;
+  const signOut = status === "signed_in" || status === "sign_in_again" ? menuItem(`data-mcp-act="sign-out" ${name}`, "Sign out") : "";
+  return rowMenu(srv.name, `${menuItem(`data-mcp-act="test" ${name}`, "Test")}${menuItem(`data-edit="${i}"`, "Edit")}${signOut}${menuItem(`data-remove="${i}"`, "Remove", true)}`);
 }
 
 function showConnectionsEmpty() {
@@ -234,8 +293,6 @@ function showConnectionsEmpty() {
   $("conn-all").hidden = none;
   $("conn-guide").open = none;
 }
-
-const AUTH_CLASS = { signed_in: "pr-ok", sign_in_again: "pr-bad", not_signed_in: "pr-wait" };
 
 function serverWhere(srv) {
   if (!srv.url) return srv.command;
@@ -247,13 +304,12 @@ function renderServers() {
   $("server-rows").hidden = !servers.length;
   showConnectionsEmpty();
   $("server-rows").innerHTML = servers.map((srv, i) => {
-    const status = data.mcp_auth?.[srv.name];
-    const state = !srv.url ? "Runs as a command" : serverAuth(srv) || "Uses saved headers";
     const limited = srv.machines?.length ? ` · ${srv.machines.join(", ")}` : "";
-    return `<li class="row conn-row">
-      <span class="conn-name"><strong>${esc(srv.name)}</strong> <small>${esc(serverWhere(srv))}${esc(limited)}</small>
-        <span class="conn-state ${AUTH_CLASS[status] || "pr-wait"}">${esc(state)}</span></span>
-      <span class="conn-actions">${serverActions(srv)}<button class="btn small-link" type="button" data-edit="${i}">Edit</button><button class="btn quiet danger small-link" type="button" data-remove="${i}">Remove</button></span></li>`;
+    return `<li class="row conn-row" data-server="${i}">
+      <span class="conn-name"><strong>${esc(srv.name)}</strong><small>${esc(serverWhere(srv))}${esc(limited)}</small></span>
+      <span class="conn-type">${serverType(srv)}</span>
+      <span class="conn-status">${serverStatus(srv)}</span>
+      <span class="conn-actions">${serverNeeds(srv)}${serverMenu(srv, i)}</span></li>`;
   }).join("");
 }
 
@@ -267,7 +323,7 @@ function signsInHere() {
   return ["127.0.0.1", "localhost"].includes(location.hostname);
 }
 
-const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools"];
+const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools", "conn-output"];
 const FLOW_TABS = ["conn-new-panel", "server-form", "conn-tab-token"];
 let flowStep = null;
 let flowAdding = false;
@@ -852,22 +908,20 @@ function renderConnections() {
   $("conn-rows").hidden = !connections.list.length;
   $("conn-rows").innerHTML = connections.list.map((c) => {
     const status = connections.status[c.id];
-    const line = c.missing.length
-      ? { cls: "pr-bad", text: `Save the secret ${c.missing.join(", ")}` }
-      : !c.enabled
-        ? { cls: "pr-wait", text: "Switched off" }
-        : status
-          ? { cls: status.ok ? "pr-ok" : "pr-bad", text: status.message }
-          : { cls: "pr-wait", text: "Not checked yet" };
+    const state = c.missing.length
+      ? badge("warn", "Needs a secret")
+      : !c.enabled ? badge("idle", "Switched off")
+      : !status ? badge("idle", "Not checked")
+      : status.ok ? badge("ok", "Working") : badge("bad", "Failing");
+    const detail = c.missing.length
+      ? `Save the secret ${c.missing.join(", ")}`
+      : c.enabled && status && !status.ok ? status.message : "";
+    const items = `${menuItem('data-conn-act="test"', "Test")}${menuItem('data-conn-act="edit"', "Edit")}${menuItem('data-conn-act="share"', "Share")}${menuItem('data-conn-act="delete"', "Delete", true)}`;
     return `<li class="row conn-row" data-conn="${esc(c.id)}">
-      <span class="conn-name"><strong>${esc(c.name)}</strong> <small>${esc(c.host || "")}</small>
-        <span class="conn-state ${line.cls}">${esc(line.text)}</span></span>
-      <span class="conn-actions">
-        <button class="btn small-link" type="button" data-conn-act="test">Test</button>
-        <button class="btn small-link" type="button" data-conn-act="share">Share</button>
-        <button class="btn small-link" type="button" data-conn-act="edit">Edit</button>
-        <button class="btn quiet danger small-link" type="button" data-conn-act="delete">Delete</button>
-      </span>
+      <span class="conn-name"><strong>${esc(c.name)}</strong><small>${esc(c.host || "")}</small>${detail ? `<small class="conn-detail">${esc(detail)}</small>` : ""}</span>
+      <span class="conn-type">Token</span>
+      <span class="conn-status">${state}</span>
+      <span class="conn-actions">${rowMenu(c.name, items)}</span>
     </li>`;
   }).join("");
 }
@@ -888,7 +942,7 @@ function secretLabel(name) {
 function renderConnSecrets(c) {
   const missing = c.missing || [];
   $("conn-secrets").innerHTML = missing.map((name) => `<label>${esc(secretLabel(name))}
-    <input type="password" data-secret="${esc(name)}" autocomplete="new-password" autocapitalize="off" spellcheck="false"></label>`).join("");
+    <input type="password" placeholder="Paste it here" data-secret="${esc(name)}" autocomplete="new-password" autocapitalize="off" spellcheck="false"></label>`).join("");
   $("conn-secrets").hidden = !missing.length;
 }
 
@@ -913,32 +967,33 @@ function openConnection(c, was) {
   focusIfActive(c.missing?.length ? $("conn-secrets").querySelector("input") : f.elements.name);
 }
 
-function showConnOutput(html) {
-  const out = $("conn-output");
-  out.hidden = false;
-  out.innerHTML = html;
+function showConnOutput(html, title) {
+  showStep("conn-output", title);
+  $("conn-output").innerHTML = `${html}<div class="form-foot"><button class="btn primary" type="button" data-close-output>Done</button></div>`;
 }
 
-const CHEVRON = `<svg class="conn-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+$("conn-output").addEventListener("click", (e) => {
+  if (e.target.closest("[data-close-output]")) closeFlow();
+});
 
-function pickRow(attrs, title, about, state) {
-  return `<li class="row"><button class="conn-starter" type="button" ${attrs}><span class="conn-starter-text"><strong>${esc(title)}</strong><small>${esc(about)}</small></span>${state ? `<span class="conn-state pr-ok">${esc(state)}</span>` : ""}${CHEVRON}</button></li>`;
+function pickRow(attrs, title, about, action, connected) {
+  return `<li class="row conn-card" ${attrs}><span class="conn-starter-text"><strong>${esc(title)}</strong><small>${esc(about)}</small></span>${connected ? badge("ok", "Connected") : `<button class="btn small-link" type="button">${esc(action)}</button>`}</li>`;
 }
 
 function openPicker(step = "conn-new-panel") {
   const signedIn = (t) => {
     const have = (data.mcp_servers || []).find((s) => s.url === t.url);
-    return have && data.mcp_auth?.[have.name] === "signed_in" ? "Signed in" : "";
+    return have && data.mcp_auth?.[have.name] === "signed_in";
   };
   $("conn-sign-in-list").innerHTML = [
-    ...(connections.sign_in || []).map((t) => pickRow(`data-sign-in="${esc(t.id)}"`, t.name, t.about, signedIn(t))),
+    ...(connections.sign_in || []).map((t) => pickRow(signedIn(t) ? "" : `data-sign-in="${esc(t.id)}"`, t.name, t.about, "Connect", signedIn(t))),
   ].join("");
   $("conn-new-list").innerHTML = [
     ...connections.templates.map((name) => {
       const c = connections.starters[name];
-      return pickRow(`data-starter="${esc(name)}"`, c.name, c.about);
+      return pickRow(`data-starter="${esc(name)}"`, c.name, c.about, "Set up");
     }),
-    pickRow('data-starter=""', "Start blank", "Any tool with a web API."),
+    pickRow('data-starter=""', "Start blank", "Any tool with a web API.", "Set up"),
   ].join("");
   flowAdding = true;
   if (step === "server-form") openServerForm(null);
@@ -1023,7 +1078,7 @@ $("conn-form").addEventListener("submit", async (e) => {
     await load();
     const left = connections.list.find((c) => c.id === body.id);
     if (typed.length && left && !left.missing.length && left.enabled) {
-      document.querySelector(`[data-conn="${CSS.escape(body.id)}"] [data-conn-act=test]`)?.click();
+      api("POST", `/api/settings/connectors/${encodeURIComponent(body.id)}/test`, {}).catch(() => {}).then(loadConnections).catch(() => {});
     }
   } catch (err) {
     $("conn-note").textContent = err.message;
@@ -1045,12 +1100,17 @@ $("conn-import").addEventListener("submit", async (e) => {
     closeFlow();
     await load();
     const needs = out.secrets.length ? ` It needs the secret ${out.secrets.join(", ")}.` : "";
-    showConnOutput(`<p>${esc(out.id)} can reach <strong>${esc(out.host || "")}</strong>.${esc(needs)} Read its calls, then switch it on with <strong>Edit</strong>.</p>`);
+    showConnOutput(`<p>${esc(out.id)} can reach <strong>${esc(out.host || "")}</strong>.${esc(needs)} Read its calls, then switch it on with <strong>Edit</strong>.</p>`, `${out.id} imported`);
   } catch (err) {
     toast(err.message);
   }
 });
 $("conn-rows").addEventListener("click", async (e) => {
+  if (!e.target.closest("button")) {
+    const row = e.target.closest("[data-conn]");
+    if (row) openConnection(connections.list.find((x) => x.id === row.dataset.conn), row.dataset.conn);
+    return;
+  }
   const button = e.target.closest("[data-conn-act]");
   if (!button) return;
   const id = button.closest("[data-conn]").dataset.conn;
@@ -1066,21 +1126,21 @@ $("conn-rows").addEventListener("click", async (e) => {
     }
     if (button.dataset.connAct === "share") {
       const { text } = await api("GET", `${at}/share`);
-      showConnOutput(`<p class="help">This holds no secret values, only their names.</p><textarea id="conn-share-text" rows="12" readonly spellcheck="false">${esc(text)}</textarea>`);
+      showConnOutput(`<p class="help">This holds no secret values, only their names.</p><textarea id="conn-share-text" rows="12" readonly spellcheck="false">${esc(text)}</textarea>`, `Share ${c.name}`);
     }
     if (button.dataset.connAct === "test") {
-      showConnOutput(`<p class="help">Reading ${esc(c.name)}...</p>`);
+      showConnOutput(`<p class="help" role="status">Reading ${esc(c.name)}...</p>`, `Test ${c.name}`);
       const out = await api("POST", `${at}/test`, {});
       const items = out.items.map((i) => `<li><strong>${esc(i.id)}</strong> ${esc(i.title)} <small>${esc(i.state)}</small></li>`).join("");
       const skipped = out.skipped.map((s) => `<li class="pr-bad">Skipped: ${esc(s)}</li>`).join("");
       showConnOutput(`<p><strong>${out.count} items.</strong>${out.cut_off ? ` <span class="pr-bad">${esc(out.cut_off)}</span>` : ""}</p>
         <ul class="conn-items">${skipped}${items}</ul>
         <p class="pl-field-head">Fields you can map</p>
-        <p class="conn-paths">${out.paths.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>`);
+        <p class="conn-paths">${out.paths.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>`, `Test ${c.name}`);
       await loadConnections();
     }
   } catch (err) {
-    showConnOutput(`<p class="pr-bad">${esc(err.message)}</p>`);
+    showConnOutput(`<p class="pr-bad">${esc(err.message)}</p>`, c.name);
     await loadConnections().catch(() => {});
   }
 });
@@ -1496,6 +1556,11 @@ window.addEventListener("focus", () => {
 });
 
 $("server-rows").addEventListener("click", async (e) => {
+  if (!e.target.closest("button")) {
+    const row = e.target.closest("[data-server]");
+    if (row) openServerForm(Number(row.dataset.server));
+    return;
+  }
   const act = e.target.closest("[data-mcp-act]");
   if (act) {
     const name = act.dataset.name;

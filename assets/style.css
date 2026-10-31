@@ -1339,7 +1339,10 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-all[hidden], .conn-step[hidden], #conn-secrets[hidden], #conn-about[hidden] { display: none; }
 .conn-all .rows { border: 0; border-radius: 0; margin: 0; }
 .conn-all .rows:not([hidden]) + .rows:not([hidden]) { border-top: 1px solid var(--line); }
-.conn-none { margin: 14px 0 0; color: var(--muted); font-size: 13px; }
+.conn-none { margin-top: 12px; padding: 32px 20px; border: 1px solid var(--line); border-radius: var(--radius); text-align: center; }
+.conn-none[hidden] { display: none; }
+.conn-none h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
+.conn-none .help { margin: 0; }
 .conn-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 0; border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px rgb(0 0 0 / 0.06), 0 8px 16px -4px rgb(26 26 26 / 0.22); overflow: hidden; }
 .conn-dialog[open] { display: flex; flex-direction: column; }
 .conn-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px 12px; }
@@ -1366,9 +1369,35 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-more-body .help { margin: 0; }
 .conn-secrets { display: grid; gap: 14px; }
 .conn-error { color: var(--bad-text, var(--bad)); flex: 1; margin: 0; min-height: 1.5em; }
-.conn-starter { display: flex; align-items: center; gap: 12px; }
+.conn-card { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.conn-card:hover { background: var(--hover); }
+.conn-starter-text small { color: var(--muted); }
+.conn-head, .conn-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 124px 118px; align-items: center; gap: 12px; }
+.conn-head { padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--side, var(--hover)); border-radius: var(--radius) var(--radius) 0 0; color: var(--muted); font-size: 12px; font-weight: 500; }
+.conn-row { cursor: pointer; flex-wrap: nowrap; }
+.conn-row:hover { background: var(--hover); }
+.conn-type { color: var(--muted); font-size: 13px; }
+.conn-detail { color: var(--bad-text) !important; overflow-wrap: anywhere; }
+.conn-actions { display: flex; align-items: center; justify-content: flex-end; gap: 6px; }
+.conn-menu { position: relative; display: inline-flex; }
+.conn-menu .menu { position: absolute; top: calc(100% + 4px); right: 0; left: auto; z-index: 5; }
+.conn-menu .menu[hidden] { display: none; }
+.conn-menu .menu button { width: 100%; border: 0; background: none; font: inherit; text-align: left; cursor: pointer; color: var(--ink); }
+.conn-menu .menu button.danger { color: var(--bad-text); }
+.conn-more-btn { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 8px; background: none; color: var(--muted); cursor: pointer; }
+.conn-more-btn:hover, .conn-more-btn[aria-expanded="true"] { background: var(--hover); color: var(--ink); }
+.conn-badge { display: inline-flex; align-items: center; gap: 6px; width: fit-content; padding: 2px 8px; border-radius: 999px; background: var(--hover); color: var(--muted); font-size: 12px; font-weight: 500; white-space: nowrap; }
+.conn-badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.conn-badge.ok { background: color-mix(in srgb, var(--ok) 13%, transparent); color: var(--ok-text); }
+.conn-badge.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn-text); }
+.conn-badge.bad { background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--bad-text); }
+@media (max-width: 760px) {
+  .conn-head, .conn-type { display: none; }
+  .conn-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .conn-status { grid-column: 1; grid-row: 2; }
+  .conn-actions { grid-column: 2; grid-row: 1 / span 2; }
+}
 .conn-starter-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
-.conn-chevron { color: var(--muted); flex: none; }
 .mcp-panel h3 { margin: 0 0 8px; }
 .mcp-panel code { overflow-wrap: anywhere; }
 .mcp-panel label { display: block; margin-top: 12px; }
@@ -1982,18 +2011,14 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .conn-form input:not([type="checkbox"]) { height: 32px; box-sizing: border-box; padding: 0 10px; min-width: 0; width: 100%; }
 #conn-header-add { justify-self: start; }
 #conn-none { color: var(--muted); }
-.conn-rows { margin-top: 12px; }
 #conn-new-list { margin-top: 10px; }
 #conn-new-list .row, #conn-sign-in-list .row { padding: 0; }
 .conn-starter { width: 100%; padding: 10px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .conn-starter:hover { background: var(--hover); }
 .conn-starter small { color: var(--muted); }
 .conn-rows[hidden], .conn-form[hidden], .conn-output[hidden], #conn-none[hidden] { display: none; }
-.conn-row { flex-wrap: wrap; justify-content: space-between; }
 .conn-name { display: grid; gap: 2px; min-width: 0; }
 .conn-name small { color: var(--muted); }
-.conn-state { font-size: 12.5px; overflow-wrap: anywhere; }
-.conn-actions { display: flex; flex-wrap: wrap; gap: 4px; }
 .conn-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .conn-fields label, .conn-yaml { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 12.5px; }
 .conn-wide { grid-column: 1 / -1; }

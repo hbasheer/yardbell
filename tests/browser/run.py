@@ -2747,6 +2747,38 @@ class Suite:
         self.b.goto(self.url("/settings#connections"))
         self.b.wait("document.querySelector('[data-mcp-act=sign-in]')", "the Sign in button")
 
+    def row_action(self, row, action):
+        self.b.click(f"{row} [data-row-menu]")
+        self.b.wait(f"!document.querySelector('{row} .menu').hidden", "the row's menu")
+        self.b.click(f"{row} {action}")
+
+    def test_connection_rows_follow_one_shape(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            head = b.js("[...document.querySelectorAll('.conn-head span')].map((x) => x.textContent).filter(Boolean).join(' ')")
+            if head != "Connection Type Status":
+                raise Failure(f"the columns are {head!r}")
+            row = "#server-rows .conn-row"
+            if "Not signed in" not in b.js(f"document.querySelector('{row} .conn-badge').textContent"):
+                raise Failure("the status is not a badge")
+            if b.js(f"document.querySelector('{row} [data-mcp-act=test]').offsetParent !== null"):
+                raise Failure("Test should sit in the row's menu")
+            b.click(f"{row} [data-row-menu]")
+            b.wait(f"!document.querySelector('{row} .menu').hidden", "the menu")
+            last = b.js(f"[...document.querySelectorAll('{row} .menu button')].pop().textContent")
+            if last != "Remove" or not b.js(f"[...document.querySelectorAll('{row} .menu button')].pop().classList.contains('danger')"):
+                raise Failure(f"the last item is {last}")
+            b.js("document.body.click()")
+            b.wait(f"document.querySelector('{row} .menu').hidden", "the menu to close")
+            b.click(f"{row} .conn-name")
+            b.wait("document.getElementById('conn-flow').open && !document.getElementById('server-form').hidden", "the row to open its edit form")
+            if b.js("document.getElementById('conn-dialog-title').textContent") != "Edit tool":
+                raise Failure("the row did not open its own edit")
+            self.check_errors("connection rows")
+        finally:
+            self.remove_mcp_servers()
+
     def remove_mcp_servers(self):
         self.b.js("document.getElementById('conn-flow')?.close()")
         self.api("POST", "/api/settings/mcp/servers", {"servers": []})
@@ -2899,7 +2931,7 @@ class Suite:
             raise Failure("the secret typed in the form was not saved")
         if "asana-value-BROWSER" in b.js("document.documentElement.outerHTML"):
             raise Failure("the secret stayed on the page")
-        b.click("[data-conn=asana] [data-conn-act=delete]")
+        self.row_action("[data-conn=asana]", "[data-conn-act=delete]")
         b.wait("document.querySelector('dialog.confirm[open]')", "the question")
         b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("!document.querySelector('[data-conn=asana]')", "the connection gone")
@@ -2979,11 +3011,12 @@ class Suite:
         for want in ("api.trello.com", "Save the secret", "trello_token"):
             if want not in row:
                 raise Failure(f"the row does not say {want!r}: {row}")
-        b.click("[data-conn=trello] [data-conn-act=share]")
+        self.row_action("[data-conn=trello]", "[data-conn-act=share]")
         b.wait("document.getElementById('conn-share-text')", "the shared text")
         text = b.js("document.getElementById('conn-share-text').value")
         if "${secret:trello_token}" not in text:
             raise Failure(f"share lost its reference: {text}")
+        b.click("[data-close-output]")
         b.click("#conn-new")
         b.click("#conn-tabs [data-tab=conn-tab-token]")
         b.click("#conn-import-open")
@@ -2994,8 +3027,9 @@ class Suite:
             raise Failure("an import did not arrive switched off")
         if "api.trello.com" not in b.js("document.getElementById('conn-output').textContent"):
             raise Failure("the import does not name its host")
+        b.click("[data-close-output]")
         for name in ("copy", "trello"):
-            b.click(f"[data-conn={name}] [data-conn-act=delete]")
+            self.row_action(f"[data-conn={name}]", "[data-conn-act=delete]")
             b.wait("document.querySelector('dialog.confirm[open]')", "the question")
             b.click("dialog.confirm[open] [data-answer=yes]")
             b.wait(f"!document.querySelector('[data-conn={name}]')", "the connection gone")
