@@ -2653,6 +2653,37 @@ class Suite:
             self.remove_connector()
         self.check_errors("the connector trigger")
 
+    def test_builder_tool_step(self):
+        b = self.b
+        self.api("POST", "/api/settings/mcp/servers", {"servers": [{"name": "tools", "url": "https://mcp.example.com/mcp"}]})
+        try:
+            self.open_builder()
+            b.js("""window.__tools_real = window.fetch; window.fetch = (u, o) => String(u).includes('/mcp/servers/tools/tools')
+              ? Promise.resolve(new Response(JSON.stringify({ tools: [
+                  { name: 'readCard', description: 'Reads a card', read_only_hint: true, schema_hash: 'hash-read', input_schema: { type: 'object', required: ['card'], properties: { card: { type: 'string', description: 'The card id' }, deep: { type: 'object' } } } },
+                  { name: 'moveCard', description: 'Moves a card', read_only_hint: false, schema_hash: 'hash-move', input_schema: { type: 'object', properties: { list: { type: 'string' } } } },
+                ] }), { headers: { 'content-type': 'application/json' } }))
+              : window.__tools_real(u, o)""")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"tool\"]').click()")
+            b.wait("document.querySelector('.pl-node.kind-tool')", "the step")
+            b.wait("document.querySelector('#pl-inspector select[name=tool]')", "the tool picker")
+            b.wait("document.querySelector('#pl-inspector select[name=tool] option[value=moveCard]')", "the tools listed")
+            self.set_field("#pl-inspector select[name=tool]", "moveCard")
+            b.wait("document.querySelector('#pl-inspector input[name=\"arg-list\"]')", "a field from the schema")
+            if b.js("document.querySelector('#pl-inspector input[name=only_reads]').checked"):
+                raise Failure("a tool should default to changing things")
+            b.wait("document.querySelector('.pl-node.kind-tool')?.textContent.includes('Changes')", "the card saying it changes")
+            self.set_field("#pl-inspector select[name=tool]", "readCard")
+            b.wait("document.querySelector('#pl-inspector input[name=\"arg-card\"]')", "the string field")
+            if not b.js("document.querySelector('#pl-inspector textarea[name=\"arg-deep\"]')"):
+                raise Failure("a nested argument should fall back to JSON")
+            if not b.js("document.querySelector('#pl-inspector input[name=only_reads]').checked"):
+                raise Failure("a read-only hint should pre-tick Only reads")
+            self.check_errors("a Call MCP tool step")
+        finally:
+            b.js("if (window.__tools_real) window.fetch = window.__tools_real")
+            self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+
     def test_builder_call_step_shows_its_kind(self):
         b = self.b
         self.add_connector()

@@ -316,6 +316,7 @@ async fn runs_are_summaries_and_one_run_is_whole() {
         step: "plan".into(),
         reason: "Plan needs you".into(),
         screen: String::new(),
+        tool_hash: String::new(),
     });
     run.state_of("plan").report = "y".repeat(9_000);
     let id = run.id.clone();

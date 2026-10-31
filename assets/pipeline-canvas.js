@@ -18,6 +18,7 @@ export const KINDS = {
   push: "Push and draft PR",
   linear: "Linear",
   call: "Call API",
+  tool: "Call MCP tool",
   report: "Report to me",
   wait: "Wait for me",
 };
@@ -33,6 +34,7 @@ const ICONS = {
   push: "M8 13V3.5 M4.5 7 8 3.5 11.5 7",
   linear: "M3 3.5h10v9H3z M5.5 8l1.75 1.75L10.5 6.5",
   call: "M2.5 8h8 M8 5l3 3-3 3 M13.5 3v10",
+  tool: "M9.5 3.5a3 3 0 0 0-3.8 3.8L2.5 10.5l3 3 3.2-3.2a3 3 0 0 0 3.8-3.8l-2 2-2-2z",
   report: "M2.5 4h11v8h-11z M2.5 4 8 8.5 13.5 4",
   wait: "M6 4v8 M10 4v8",
 };
@@ -377,6 +379,7 @@ export function describe(s) {
       const call = connectorOf(s.connector)?.calls?.find((c) => c.name === s.call);
       return { who: `Yardbell · ${connectorName(s.connector)}`, does: s.call ? `Calls ${s.call}` : "Pick a call", tags: [call?.kind === "lookup" ? "Reads" : "Changes"] };
     }
+    case "tool": return { who: `Yardbell · ${s.server || "MCP"}`, does: s.tool ? `Calls ${s.tool}` : "Pick a tool", tags: [s.call_kind === "lookup" ? "Reads" : "Changes"] };
     case "report": return { who: "Yardbell · Dispatch", does: "Writes what the run found and tells you", tags: ["phone notification"] };
     case "wait": return { who: "You", does: s.message || "Waits until you continue it", tags: ["needs you"] };
     default: return { who: "", does: "", tags: [] };

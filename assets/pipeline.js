@@ -297,7 +297,7 @@ function needBox(run, d) {
       <textarea id="pl-answer" rows="3" placeholder="Your answer" .value=${text} @input=${(e) => { answers.set(run.id, e.target.value); draw(); }}></textarea>` : nothing}
     <div class="pl-need-actions">
       <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Drop</button>
-      <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>Retry step</button>
+      ${w.kind === "tool_changed" ? html`<button class="btn primary" type="button" ?disabled=${busy} @click=${() => act(run, "accept-tool")}>Accept and run</button>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>Retry step</button>`}
       <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "fail" })}>Continue on fail</button>
       <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "pass" })}>Continue on pass</button>
       ${answerable ? html`<button class="btn primary" type="button" ?disabled=${busy || !text.trim()} @click=${() => act(run, "answer", { text })}>Send answer</button>` : nothing}
@@ -454,7 +454,7 @@ function agentFields(step, others, redraw) {
       ${ws.kind === "copy" ? field("Copy of", stepSelect(ws.from, others, (v) => { step.workspace = { kind: "copy", from: v }; redraw(); })) : nothing}
     </div>
     <label class="check"><input type="checkbox" name="read_only" .checked=${!!step.read_only} @change=${(e) => { step.read_only = e.target.checked; redraw(); }}>Review: new read-only session. Other steps share the run's one session.</label>
-    ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "Saved with the step; agents do not get them yet.") : nothing}`;
+    ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "An agent signs in to a server itself, on its own machine. Signing in here is for Yardbell's own steps. Saved with the step; agents do not get them yet.") : nothing}`;
 }
 
 // What a connection's lists hold, kept per address so a redraw does not ask again.
@@ -559,9 +559,78 @@ function callFields(step, redraw) {
   </div>`;
 }
 
+// What each server offers, kept per name so a redraw does not ask again.
+const serverTools = new Map();
+
+function toolsOf(server, redraw) {
+  if (!server) return { tools: [] };
+  if (!serverTools.has(server)) {
+    serverTools.set(server, { loading: true, tools: [] });
+    api("GET", `/api/settings/mcp/servers/${encodeURIComponent(server)}/tools`)
+      .then((out) => serverTools.set(server, { tools: out.tools }))
+      .catch((err) => serverTools.set(server, { error: err.message, tools: [] }))
+      .finally(redraw);
+  }
+  return serverTools.get(server);
+}
+
+function argumentField(step, name, schema, required, redraw) {
+  const args = step.arguments || (step.arguments = {});
+  const hint = [required ? "Required." : "", schema.description || ""].filter(Boolean).join(" ");
+  if (schema.type === "string" && !schema.enum) {
+    return field(name, html`<input name=${`arg-${name}`} .value=${args[name] ?? ""} placeholder="{{ticket}} fills in from the run" @input=${(e) => {
+      if (e.target.value) args[name] = e.target.value;
+      else delete args[name];
+    }}>`, hint);
+  }
+  const shown = args[name] === undefined ? "" : JSON.stringify(args[name], null, 2);
+  return field(`${name} (JSON)`, html`<textarea name=${`arg-${name}`} rows="3" spellcheck="false" .value=${shown} @change=${(e) => {
+    const text = e.target.value.trim();
+    if (!text) { delete args[name]; return; }
+    try {
+      args[name] = JSON.parse(text);
+      e.target.setCustomValidity("");
+    } catch {
+      e.target.setCustomValidity("This is not valid JSON");
+      e.target.reportValidity();
+    }
+  }}></textarea>`, hint);
+}
+
+function toolFields(step, redraw) {
+  if (!data.mcp_servers.length) {
+    return html`<p class="help">No MCP servers yet. Add one under <a href="/settings#connections">Settings, Connections</a>.</p>`;
+  }
+  const listed = toolsOf(step.server, redraw);
+  const tool = listed.tools.find((t) => t.name === step.tool);
+  const properties = tool?.input_schema?.properties || {};
+  const required = tool?.input_schema?.required || [];
+  const choose = (name) => {
+    const picked = listed.tools.find((t) => t.name === name);
+    step.tool = name;
+    step.arguments = {};
+    step.schema_hash = picked?.schema_hash || "";
+    step.call_kind = picked?.read_only_hint ? "lookup" : "change";
+    redraw();
+  };
+  return html`<div class="pl-fields">
+    ${field("Server", html`<select name="server" @change=${(e) => { step.server = e.target.value; step.tool = ""; step.arguments = {}; step.schema_hash = ""; redraw(); }}>
+      ${data.mcp_servers.map((m) => html`<option value=${m} ?selected=${m === step.server}>${m}</option>`)}
+    </select>`, listed.error || (listed.loading ? "Asking the server for its tools." : ""))}
+    ${field("Tool", html`<select name="tool" @change=${(e) => choose(e.target.value)}>
+      <option value="" ?selected=${!step.tool}>Pick a tool</option>
+      ${listed.tools.map((t) => html`<option value=${t.name} ?selected=${t.name === step.tool}>${t.name}</option>`)}
+    </select>`, tool?.description || "")}
+    ${tool ? Object.entries(properties).map(([name, schema]) => argumentField(step, name, schema, required.includes(name), redraw)) : nothing}
+    ${tool ? html`<label class="check"><input type="checkbox" name="only_reads" .checked=${step.call_kind === "lookup"} @change=${(e) => { step.call_kind = e.target.checked ? "lookup" : "change"; redraw(); }}>Only reads</label>
+      <small class="help">A tool's own label is only a hint, so check it. A step that changes things can be refused by your Dispatch rules.</small>` : nothing}
+  </div>`;
+}
+
 function kindFields(step, others, redraw) {
   switch (step.kind) {
     case "call": return callFields(step, redraw);
+    case "tool": return toolFields(step, redraw);
     case "agent": return agentFields(step, others, redraw);
     case "plan": return field("Dispatch may pick from", picks(data.machines, step.machines || [], (list) => { step.machines = list; redraw(); }, "plan"), "None ticked means any machine.");
     case "linear": return html`<div class="pl-fields">
@@ -656,7 +725,7 @@ function save() {
 const LIBRARY = [
   ["Start when", [["manual", "manual", "By hand", "From Run now"], ["schedule", "schedule", "Schedule", "Weekdays, every day, a time"], ["linear", "ticket", "Linear ticket", "Assigned to me, or a state"], ["connector", "ticket", "A connected tool", "A new item, or one in a state"], ["webhook", "call", "A webhook", "Another system calls an address"], ["github_review", "pull", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "pull", "GitLab reviewer", "An MR adds me as reviewer"]]],
   ["Agent", [["agent", "agent", "Agent step", "Your instructions, on a machine"], ["plan", "plan", "Plan", "Picks machine, folder and branch"]]],
-  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["linear", "linear", "Linear", "Move the ticket, or draft a comment"], ["call", "call", "Call API", "Read from or change a connected tool"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
+  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["linear", "linear", "Linear", "Move the ticket, or draft a comment"], ["call", "call", "Call API", "Read from or change a connected tool"], ["tool", "tool", "Call MCP tool", "A tool on a connected server"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
   ["You", [["wait", "wait", "Wait for me", "Continues when you say"]]],
 ];
 
@@ -794,6 +863,7 @@ function blank(kind) {
     plan: { machines: [] },
     linear: { action: "move", state: "In Review" },
     call: { connector: data.connectors[0]?.id || "", call: "", params: {} },
+    tool: { server: data.mcp_servers[0] || "", tool: "", arguments: {}, call_kind: "change", schema_hash: "" },
     wait: { message: "" },
   }[kind] || {};
   return { id: slug(name, draft.steps.map((s) => s.id)), name, kind, ...fields, max_runs: 2, minutes: null, next: { pass: "end", fail: "wait", needs_you: "wait" }, x: 0, y: 0 };

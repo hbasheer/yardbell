@@ -327,6 +327,7 @@ async fn run_actions() {
         step: "implement".into(),
         reason: "Implement failed".into(),
         screen: String::new(),
+        tool_hash: String::new(),
     });
     let run_id = run.id.clone();
     r.app.pipelines.put(run);

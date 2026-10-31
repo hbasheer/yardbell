@@ -279,6 +279,19 @@ impl Pipelines {
         self.person(id, Seen::Retry, Self::waiting)
     }
 
+    pub fn accept_tool(&self, id: &str) -> Result<Run, String> {
+        let at_tool = |r: &Run| match &r.waiting {
+            Some(w) if r.state == RunState::Waiting && w.kind == record::WaitKind::ToolChanged => {
+                Ok(())
+            }
+            _ => Err(format!(
+                "{} is not waiting on a changed tool",
+                r.subject.label()
+            )),
+        };
+        self.person(id, Seen::AcceptTool, at_tool)
+    }
+
     pub fn continue_on(&self, id: &str, outcome: Outcome) -> Result<Run, String> {
         self.person(id, Seen::Continue(outcome), Self::waiting)
     }

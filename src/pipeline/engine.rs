@@ -58,6 +58,7 @@ fn wait(
         step: step.to_string(),
         reason,
         screen: tail(screen, SCREEN_LINES),
+        tool_hash: String::new(),
     });
     (run, vec![Effect::Notify { text }])
 }
@@ -119,6 +120,7 @@ fn enter(mut run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Ru
         StepKind::Linear { .. } => Effect::Linear { step: id.into() },
         StepKind::Report => Effect::Report { step: id.into() },
         StepKind::Call { .. } => Effect::Call { step: id.into() },
+        StepKind::Tool { .. } => Effect::Tool { step: id.into() },
     };
     let st = run.state_of(id);
     st.runs += 1;
@@ -289,6 +291,22 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.slot = None;
             (run, vec![Effect::StopSessions])
         }
+        Seen::AcceptTool if waiting => {
+            let Some(w) = run.waiting.take() else {
+                return (run, vec![]);
+            };
+            if let Some(def) = run.definition.as_mut() {
+                let saved = def.steps.iter_mut().find(|s| s.id == w.step);
+                if let Some(Step {
+                    kind: StepKind::Tool { schema_hash, .. },
+                    ..
+                }) = saved
+                {
+                    schema_hash.clone_from(&w.tool_hash);
+                }
+            }
+            enter(run, &w.step, now, true)
+        }
         Seen::Retry if waiting => {
             let at = run.waiting.take().map_or(id, |w| w.step);
             enter(run, &at, now, true)
@@ -322,6 +340,17 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             wait(run, WaitKind::Closed, &id, reason, "")
         }
         Seen::Refused(reason) => wait(run, WaitKind::Refused, &id, reason, ""),
+        Seen::ToolChanged {
+            hash,
+            reason,
+            shown,
+        } => {
+            let (mut run, effects) = wait(run, WaitKind::ToolChanged, &id, reason, &shown);
+            if let Some(w) = run.waiting.as_mut() {
+                w.tool_hash = hash;
+            }
+            (run, effects)
+        }
         Seen::Planned(Ok(plan)) if !plan.questions.is_empty() => {
             let at = now.to_rfc3339();
             run.questions
@@ -403,7 +432,7 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.notes.push(format!("Linear: {e}"));
             follow(run, Outcome::Fail, now)
         }
-        Seen::Called(result) => {
+        Seen::Called(result) | Seen::ToolDone(result) => {
             let (outcome, report) = match result {
                 Ok(report) => (Outcome::Pass, report),
                 Err(e) => (Outcome::Fail, e),
@@ -660,6 +689,39 @@ pub(crate) mod tests {
         assert_eq!(run.state, RunState::Waiting);
         let w = run.waiting.as_ref().unwrap();
         (w.kind, w.step.clone(), w.reason.clone())
+    }
+
+    #[test]
+    fn accepting_a_changed_tool_saves_the_new_hash_and_runs_it_again() {
+        let mut run = run_of("Implement my Linear tickets");
+        run.definition.as_mut().unwrap().steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "tool", "name": "T", "kind": "tool", "server": "s", "tool": "x", "schema_hash": "h1",
+                "next": { "pass": "qa", "fail": "report", "needs_you": "wait" },
+            }))
+            .unwrap(),
+        );
+        run.step = "tool".into();
+        let seen = Seen::ToolChanged {
+            hash: "h2".into(),
+            reason: "x changed".into(),
+            shown: "now".into(),
+        };
+        let (run, effects) = step(run, seen, &cfg(), at(5));
+        let (kind, at_step, reason) = waiting(&run);
+        assert_eq!(kind, WaitKind::ToolChanged);
+        assert_eq!(at_step, "tool");
+        assert!(reason.contains("x changed"));
+        assert_eq!(effects.len(), 1, "one notification");
+        let (run, effects) = step(run, Seen::AcceptTool, &cfg(), at(6));
+        assert_eq!(
+            effects,
+            vec![Effect::Tool {
+                step: "tool".into()
+            }]
+        );
+        let saved = run.def().step("tool").unwrap().kind.clone();
+        assert!(matches!(saved, StepKind::Tool { schema_hash, .. } if schema_hash == "h2"));
     }
 
     fn with_call(run: &mut Run) {
@@ -960,6 +1022,7 @@ pub(crate) mod tests {
             step: "implement".into(),
             reason: "The agent is asking something".into(),
             screen: String::new(),
+            tool_hash: String::new(),
         });
         let next_day = later + chrono::Duration::hours(20);
         let (run, _) = step(run, Seen::Answer("yes".into()), &cfg(), next_day);

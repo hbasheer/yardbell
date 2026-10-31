@@ -408,7 +408,7 @@ impl Auth {
                 return Err(SignIn::NotNeeded);
             }
             Err(Failure::NeedsSignIn(c)) | Err(Failure::NeedsScope(c)) => c,
-            Err(Failure::Other(_)) => Challenge::default(),
+            Err(Failure::NotAllowed(_) | Failure::Other(_)) => Challenge::default(),
         };
         let found = discover(&server.url, &challenge, server.allow_private)
             .await

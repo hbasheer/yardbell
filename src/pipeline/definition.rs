@@ -1,6 +1,7 @@
 use crate::config::Config;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub const END: &str = "end";
@@ -122,10 +123,24 @@ pub enum StepKind {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
         params: BTreeMap<String, String>,
     },
+    Tool {
+        server: String,
+        tool: String,
+        #[serde(default)]
+        arguments: Value,
+        #[serde(default = "changes")]
+        call_kind: crate::connectors::CallKind,
+        #[serde(default)]
+        schema_hash: String,
+    },
     Wait {
         #[serde(default)]
         message: String,
     },
+}
+
+fn changes() -> crate::connectors::CallKind {
+    crate::connectors::CallKind::Change
 }
 
 fn two() -> u32 {
@@ -304,6 +319,22 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
             out.push(format!(
                 "A Linear step needs a Linear ticket, and this trigger gives a {id} item"
             ));
+        }
+    }
+    for s in &def.steps {
+        let StepKind::Tool { server, .. } = &s.kind else {
+            continue;
+        };
+        match cfg.mcp_servers.iter().find(|m| &m.name == server) {
+            Some(m) if crate::mcp_client::is_own_server(&m.url, cfg) => out.push(format!(
+                "{} calls {server}, which is Yardbell itself, and a pipeline must not call it",
+                s.name
+            )),
+            None if def.enabled => out.push(format!(
+                "{} names the server {server}, which is not in Settings, Connections",
+                s.name
+            )),
+            _ => {}
         }
     }
     if def.enabled {

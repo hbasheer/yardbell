@@ -44,6 +44,7 @@ pub struct Challenge {
 pub enum Failure {
     NeedsSignIn(Challenge),
     NeedsScope(Challenge),
+    NotAllowed(String),
     Other(String),
 }
 
@@ -75,6 +76,29 @@ pub(crate) fn holds_own_token(
             .resolve(value)
             .is_ok_and(|resolved| resolved.contains(&token))
     })
+}
+
+fn canonical(value: &Value) -> Value {
+    match value {
+        Value::Object(map) => {
+            let sorted: std::collections::BTreeMap<&String, Value> =
+                map.iter().map(|(k, v)| (k, canonical(v))).collect();
+            serde_json::to_value(sorted).unwrap_or(Value::Null)
+        }
+        Value::Array(list) => Value::Array(list.iter().map(canonical).collect()),
+        other => other.clone(),
+    }
+}
+
+pub fn schema_hash(tool: &Tool) -> String {
+    use sha2::{Digest, Sha256};
+    let text = format!(
+        "{}\0{}\0{}",
+        tool.name,
+        tool.description,
+        canonical(&tool.input_schema)
+    );
+    format!("{:x}", Sha256::digest(text.as_bytes()))
 }
 
 pub enum Client {
@@ -145,7 +169,7 @@ pub async fn client_for(
         if !server.machines.is_empty()
             && !here.is_some_and(|h| server.machines.iter().any(|m| m == h))
         {
-            return Err(Failure::Other(format!(
+            return Err(Failure::NotAllowed(format!(
                 "{} only runs on {}, so a step cannot call it here",
                 server.name,
                 server.machines.join(", ")
@@ -162,7 +186,7 @@ pub async fn client_for(
         .resolve(&server.url)
         .map_err(|e| Failure::Other(e.to_string()))?;
     if is_own_server(&url, cfg) || holds_own_token(server, cfg, secrets) {
-        return Err(Failure::Other(format!(
+        return Err(Failure::NotAllowed(format!(
             "{} is Yardbell itself, which a pipeline must not call",
             server.name
         )));

@@ -21,6 +21,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/mcp/servers/{name}/finish", post(finish))
         .route("/api/settings/mcp/servers/{name}/sign-out", post(sign_out))
         .route("/api/settings/mcp/servers/{name}/test", post(test))
+        .route("/api/settings/mcp/servers/{name}/tools", get(tools))
 }
 
 fn bad(msg: String) -> ApiError {
@@ -192,7 +193,7 @@ fn said(name: &str, failure: Failure) -> ApiError {
     bad(match failure {
         Failure::NeedsSignIn(_) => format!("Sign in to {name} first."),
         Failure::NeedsScope(_) => format!("{name} wants more access. Sign in again."),
-        Failure::Other(e) => e,
+        Failure::NotAllowed(e) | Failure::Other(e) => e,
     })
 }
 
@@ -228,4 +229,46 @@ async fn test(
         .map(|t| json!({ "name": t.name, "description": t.description }))
         .collect();
     Ok(Json(json!({ "version": version, "tools": tools })).into_response())
+}
+
+async fn tools(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(name): Path<String>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let server = cfg
+        .mcp_servers
+        .iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no server named {name}")))?;
+    let secrets = app.secrets()?;
+    let saved = secrets.values().map(|(_, v)| v.to_string()).collect();
+    let auth = app.pipelines.mcp_auth();
+    let mut client = client_for(
+        server,
+        &cfg,
+        &secrets,
+        auth,
+        &app.settings,
+        saved,
+        TEST_TIMEOUT,
+    )
+    .await
+    .map_err(|f| said(&name, f))?;
+    client.connect().await.map_err(|f| said(&name, f))?;
+    let listed = client.list_tools().await.map_err(|f| said(&name, f));
+    client.close().await;
+    let tools: Vec<_> = listed?
+        .iter()
+        .map(|t| {
+            json!({
+                "name": t.name,
+                "description": t.description,
+                "input_schema": t.input_schema,
+                "read_only_hint": t.read_only_hint,
+                "schema_hash": crate::mcp_client::schema_hash(t),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "tools": tools })).into_response())
 }

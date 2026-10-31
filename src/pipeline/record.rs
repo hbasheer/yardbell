@@ -168,6 +168,7 @@ pub enum WaitKind {
     WaitStep,
     Questions,
     Push,
+    ToolChanged,
 }
 
 impl WaitKind {
@@ -186,6 +187,8 @@ pub struct Waiting {
     pub reason: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub screen: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -300,6 +303,9 @@ pub enum Effect {
     Call {
         step: String,
     },
+    Tool {
+        step: String,
+    },
     Notify {
         text: String,
     },
@@ -347,6 +353,13 @@ pub enum Seen {
     Linear(Result<(), String>),
     Reported(Result<String, String>),
     Called(Result<String, String>),
+    ToolDone(Result<String, String>),
+    ToolChanged {
+        hash: String,
+        reason: String,
+        shown: String,
+    },
+    AcceptTool,
     Answer(String),
     Retry,
     Continue(Outcome),

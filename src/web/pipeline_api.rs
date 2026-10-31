@@ -29,6 +29,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/runs/{id}", axum::routing::delete(delete_run))
         .route("/api/runs/{id}/answer", post(answer))
         .route("/api/runs/{id}/retry", post(retry))
+        .route("/api/runs/{id}/accept-tool", post(accept_tool))
         .route("/api/runs/{id}/continue", post(continue_on))
         .route("/api/runs/{id}/drop", post(drop_run))
         .route("/api/runs/{id}/stop-session", post(stop_session))
@@ -483,6 +484,56 @@ async fn answer(
     Json(req): Json<AnswerReq>,
 ) -> Result<Response, ApiError> {
     acted(&app, app.pipelines.answer(&id, &req.text))
+}
+
+async fn accept_tool(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let waiting = app.pipelines.run(&id).and_then(|r| r.waiting);
+    let result = app.pipelines.accept_tool(&id);
+    if let (Ok(run), Some(w)) = (&result, waiting) {
+        keep_accepted_hash(&app, run, &w)?;
+    }
+    acted(&app, result)
+}
+
+fn keep_accepted_hash(
+    app: &AppState,
+    run: &crate::pipeline::record::Run,
+    w: &crate::pipeline::record::Waiting,
+) -> Result<(), ApiError> {
+    use crate::pipeline::definition::StepKind;
+    let Some(mut def) = app.pipelines.library().get(&run.def().id) else {
+        return Ok(());
+    };
+    let ran = run.def().step(&w.step).map(|s| s.kind.clone());
+    let saved = def.steps.iter_mut().find(|s| s.id == w.step);
+    if let (
+        Some(StepKind::Tool {
+            server: s, tool: t, ..
+        }),
+        Some(step),
+    ) = (ran, saved)
+    {
+        if let StepKind::Tool {
+            server,
+            tool,
+            schema_hash,
+            ..
+        } = &mut step.kind
+        {
+            if *server == s && *tool == t {
+                schema_hash.clone_from(&w.tool_hash);
+                let cfg = app.config()?;
+                app.pipelines
+                    .library()
+                    .save(def, &cfg)
+                    .map_err(|e| bad(e.join("; ")))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn retry(

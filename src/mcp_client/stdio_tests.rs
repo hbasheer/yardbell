@@ -269,7 +269,7 @@ async fn client_for_refuses_a_command_listed_for_another_machine() {
     .err()
     .unwrap();
     assert!(
-        matches!(&e, Failure::Other(t) if t.contains("far only runs on other, so a step cannot call it here")),
+        matches!(&e, Failure::NotAllowed(t) if t.contains("far only runs on other, so a step cannot call it here")),
         "{e:?}"
     );
 }
@@ -297,7 +297,7 @@ async fn client_for_refuses_yardbell_itself() {
     .err()
     .unwrap();
     assert!(
-        matches!(&e, Failure::Other(t) if t.contains("Yardbell itself")),
+        matches!(&e, Failure::NotAllowed(t) if t.contains("Yardbell itself")),
         "{e:?}"
     );
 }

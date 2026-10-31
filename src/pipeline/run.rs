@@ -66,6 +66,17 @@ pub trait World: Send + Sync {
         call: &'a str,
         vars: crate::connectors::client::Vars,
     ) -> BoxFuture<'a, Result<Value, String>>;
+    fn tool_schema_hash<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+    ) -> BoxFuture<'a, Result<(String, String), crate::mcp_client::Failure>>;
+    fn call_tool<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+        arguments: Value,
+    ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>>;
     fn written_result<'a>(
         &'a self,
         machine: &'a str,
@@ -410,6 +421,8 @@ async fn closed(world: &dyn World, run: &Run) -> bool {
 
 pub const WEBHOOK_SOURCE: &str = "webhook";
 const CALL_REPORT_MAX: usize = 4000;
+const TOOL_REPORT_MAX: usize = 20_000;
+const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
 fn call_vars(
     run: &Run,
@@ -476,6 +489,109 @@ async fn call_step(
                 .collect(),
         }
     }))
+}
+
+fn filled(value: &Value, vars: &crate::connectors::client::Vars) -> Result<Value, String> {
+    Ok(match value {
+        Value::String(text) => Value::String(crate::connectors::client::render_text(text, vars)?),
+        Value::Array(list) => Value::Array(
+            list.iter()
+                .map(|v| filled(v, vars))
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| filled(v, vars).map(|v| (k.clone(), v)))
+                .collect::<Result<_, String>>()?,
+        ),
+        other => other.clone(),
+    })
+}
+
+fn capped(text: &str) -> String {
+    text.chars().take(TOOL_REPORT_MAX).collect()
+}
+
+fn tool_failure(server: &str, failure: crate::mcp_client::Failure) -> Seen {
+    use crate::mcp_client::Failure;
+    match failure {
+        Failure::NeedsSignIn(_) => Seen::Refused(format!(
+            "{server}: sign in again under Settings, Connections"
+        )),
+        Failure::NeedsScope(challenge) => Seen::Refused(format!(
+            "{server} wants more access ({}). Sign in again under Settings, Connections",
+            challenge.scope.as_deref().unwrap_or("no scope named")
+        )),
+        Failure::NotAllowed(reason) => Seen::Refused(reason),
+        Failure::Other(reason) => Seen::ToolDone(Err(capped(&reason))),
+    }
+}
+
+struct ToolCall<'a> {
+    server: &'a str,
+    tool: &'a str,
+    arguments: &'a Value,
+    call_kind: crate::connectors::CallKind,
+    schema_hash: &'a str,
+}
+
+async fn tool_step(world: &dyn World, run: &Run, call: ToolCall<'_>) -> Seen {
+    let ToolCall {
+        server,
+        tool,
+        arguments,
+        call_kind,
+        schema_hash,
+    } = call;
+    let input = json!({ "server": server, "tool": tool, "arguments": arguments });
+    if call_kind == crate::connectors::CallKind::Change {
+        if let Some(reason) = world.refused("call_tool", &input) {
+            return Seen::Refused(reason);
+        }
+    }
+    let (hash, shown) = match world.tool_schema_hash(server, tool).await {
+        Ok(now) => now,
+        Err(failure) => return tool_failure(server, failure),
+    };
+    if hash != schema_hash {
+        let reason = if schema_hash.is_empty() {
+            format!("{server} {tool} has not been accepted yet. Read what it does, then accept it")
+        } else {
+            format!("{server} changed {tool} since this step was saved. Read it, then accept it")
+        };
+        return Seen::ToolChanged {
+            hash,
+            reason,
+            shown,
+        };
+    }
+    let vars = match call_vars(run, &Default::default()) {
+        Ok(vars) => vars,
+        Err(e) => return Seen::ToolDone(Err(e)),
+    };
+    let arguments = match filled(arguments, &vars) {
+        Ok(arguments) => arguments,
+        Err(e) => return Seen::ToolDone(Err(e)),
+    };
+    let out = world.call_tool(server, tool, arguments).await;
+    let recorded = match &out {
+        Ok(reply) if reply.is_error => Err(capped(&reply.text)),
+        Ok(reply) => Ok(json!(capped(&reply.text))),
+        Err(_) => Err("the call did not finish".to_string()),
+    };
+    world.record(
+        &run.conversation,
+        "call_tool",
+        input,
+        None,
+        &recorded,
+        &run.started,
+    );
+    match out {
+        Ok(reply) if reply.is_error => Seen::ToolDone(Err(capped(&reply.text))),
+        Ok(reply) => Seen::ToolDone(Ok(capped(&reply.text))),
+        Err(failure) => tool_failure(server, failure),
+    }
 }
 
 pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Vec<Seen> {
@@ -565,6 +681,25 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 call,
                 params,
             }) => vec![call_step(world, run, &connector, &call, &params).await],
+            _ => vec![],
+        },
+        Effect::Tool { step } => match step_of(step).map(|s| s.kind) {
+            Some(StepKind::Tool {
+                server,
+                tool,
+                arguments,
+                call_kind,
+                schema_hash,
+            }) => {
+                let call = ToolCall {
+                    server: &server,
+                    tool: &tool,
+                    arguments: &arguments,
+                    call_kind,
+                    schema_hash: &schema_hash,
+                };
+                vec![tool_step(world, run, call).await]
+            }
             _ => vec![],
         },
         Effect::Report { .. } => {
@@ -747,6 +882,37 @@ impl Live {
                 "Linear: the secret {LINEAR_SECRET} is not set. Add your Linear API key under Settings, MCP servers, Secrets"
             )
         })
+    }
+}
+
+impl Live {
+    async fn tool_client(
+        &self,
+        server: &str,
+    ) -> Result<crate::mcp_client::Client, crate::mcp_client::Failure> {
+        use crate::mcp_client::Failure;
+        let found = self
+            .cfg
+            .mcp_servers
+            .iter()
+            .find(|s| s.name == server)
+            .ok_or_else(|| {
+                Failure::NotAllowed(format!("{server} is not in Settings, Connections"))
+            })?;
+        let secrets = self
+            .secrets
+            .as_ref()
+            .map_err(|e| Failure::Other(e.clone()))?;
+        crate::mcp_client::client_for(
+            found,
+            &self.cfg,
+            secrets,
+            self.app.pipelines.mcp_auth(),
+            &self.app.settings,
+            crate::mcp_read::saved_values(&self.app),
+            TOOL_TIMEOUT,
+        )
+        .await
     }
 }
 
@@ -1008,6 +1174,43 @@ impl World for Live {
             .get(call)
             .map(crate::connectors::Call::kind)
             .ok_or_else(|| format!("{} has no call {call}", c.name))
+    }
+
+    fn tool_schema_hash<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+    ) -> BoxFuture<'a, Result<(String, String), crate::mcp_client::Failure>> {
+        Box::pin(async move {
+            let mut client = self.tool_client(server).await?;
+            client.connect().await?;
+            let tools = client.list_tools().await;
+            client.close().await;
+            let found = tools?.into_iter().find(|t| t.name == tool).ok_or_else(|| {
+                crate::mcp_client::Failure::Other(format!("{server} has no tool {tool}"))
+            })?;
+            let shown = format!(
+                "{}\n{}",
+                found.description,
+                serde_json::to_string_pretty(&found.input_schema).unwrap_or_default()
+            );
+            Ok((crate::mcp_client::schema_hash(&found), shown))
+        })
+    }
+
+    fn call_tool<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+        arguments: Value,
+    ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>> {
+        Box::pin(async move {
+            let mut client = self.tool_client(server).await?;
+            client.connect().await?;
+            let reply = client.call_tool(tool, arguments).await;
+            client.close().await;
+            reply
+        })
     }
 
     fn call_connector<'a>(

@@ -334,6 +334,7 @@ async fn a_proposal_that_no_longer_passes_fails_on_its_card() {
         step: "implement".into(),
         reason: "Implement failed".into(),
         screen: String::new(),
+        tool_hash: String::new(),
     });
     let run_id = run.id.clone();
     r.app.pipelines.put(run);

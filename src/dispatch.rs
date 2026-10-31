@@ -9,7 +9,7 @@ mod prompt;
 mod pull;
 mod read_only;
 mod review;
-mod rules;
+pub(crate) mod rules;
 mod store;
 mod tasks;
 mod turn;

@@ -19,6 +19,33 @@ pub const TOOLS: [&str; 5] = [
     "answer_run",
 ];
 
+// The hash records what a person accepted, so what an agent sends for it never counts.
+pub(crate) fn keep_tool_hashes(def: &mut Definition, before: Option<&Definition>) {
+    for step in &mut def.steps {
+        let StepKind::Tool {
+            server,
+            tool,
+            schema_hash,
+            ..
+        } = &mut step.kind
+        else {
+            continue;
+        };
+        let kept = before
+            .and_then(|b| b.step(&step.id))
+            .and_then(|old| match &old.kind {
+                StepKind::Tool {
+                    server: s,
+                    tool: t,
+                    schema_hash: h,
+                    ..
+                } if s == server && t == tool => Some(h.clone()),
+                _ => None,
+            });
+        *schema_hash = kept.unwrap_or_default();
+    }
+}
+
 pub fn owns(tool: &str) -> bool {
     TOOLS.contains(&tool)
 }
@@ -280,6 +307,7 @@ pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Val
             let SavePipeline { mut definition, .. } = arg(args)?;
             let before = existing(app, &definition.id);
             definition.enabled = before.as_ref().is_some_and(|b| b.enabled);
+            keep_tool_hashes(&mut definition, before.as_ref());
             check_definition(&definition, cfg).map_err(problems)?;
             let changes = changes(before.as_ref(), &definition);
             Ok(json!({ "definition": definition, "before": before, "changes": changes }))
@@ -347,6 +375,7 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
                 mut definition,
                 before,
             } = s;
+            keep_tool_hashes(&mut definition, current.as_ref());
             match current {
                 Some(current) => {
                     let saved = library.save(definition, &cfg).map_err(not_saved)?;

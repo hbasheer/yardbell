@@ -38,6 +38,9 @@ pub(crate) struct Fake {
     pub recorded_inputs: Mutex<Vec<Value>>,
     pub call_kind: Mutex<Option<Result<crate::connectors::CallKind, String>>>,
     pub call_vars: Mutex<Vec<crate::connectors::client::Vars>>,
+    pub tool_now: Mutex<Option<Result<(String, String), crate::mcp_client::Failure>>>,
+    pub tool_reply: Mutex<Option<Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>>>,
+    pub tool_args: Mutex<Vec<Value>>,
 }
 
 impl Fake {
@@ -275,6 +278,39 @@ impl World for Fake {
             .unwrap()
             .clone()
             .unwrap_or(Ok(crate::connectors::CallKind::Change))
+    }
+
+    fn tool_schema_hash<'a>(
+        &'a self,
+        _server: &'a str,
+        _tool: &'a str,
+    ) -> BoxFuture<'a, Result<(String, String), crate::mcp_client::Failure>> {
+        Box::pin(async move {
+            self.tool_now
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| Ok(("h1".into(), "the tool now".into())))
+        })
+    }
+
+    fn call_tool<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+        arguments: Value,
+    ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>> {
+        Box::pin(async move {
+            self.call(format!("tool {server} {tool}"));
+            self.tool_args.lock().unwrap().push(arguments);
+            self.tool_reply.lock().unwrap().clone().unwrap_or_else(|| {
+                Ok(crate::mcp_client::ToolReply {
+                    text: "tool said this".into(),
+                    structured: None,
+                    is_error: false,
+                })
+            })
+        })
     }
 
     fn call_connector<'a>(
@@ -1883,6 +1919,7 @@ mod pipelines {
             step: "implement".into(),
             reason: "Implement failed".into(),
             screen: String::new(),
+            tool_hash: String::new(),
         });
         let id = run.id.clone();
         p.put(run);
@@ -1898,4 +1935,252 @@ mod pipelines {
         assert!(p.retry(&id).is_err());
         assert!(p.answer("nope", "x").unwrap_err().contains("is not a run"));
     }
+}
+
+fn tool_run(call_kind: &str, hash: &str) -> (Run, Effect) {
+    let mut run = run_of("Review my merge requests");
+    run.definition.as_mut().unwrap().steps.push(
+        serde_json::from_value(json!({
+            "id": "tool", "name": "Move card", "kind": "tool",
+            "server": "trello", "tool": "trelloWriteCard",
+            "arguments": { "action": "move", "note": "for {{ticket}}", "deep": [{ "a": "{{ticket}}" }], "n": 3 },
+            "call_kind": call_kind, "schema_hash": hash,
+        }))
+        .unwrap(),
+    );
+    (
+        run,
+        Effect::Tool {
+            step: "tool".into(),
+        },
+    )
+}
+
+fn reply(
+    text: &str,
+    is_error: bool,
+) -> Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure> {
+    Ok(crate::mcp_client::ToolReply {
+        text: text.into(),
+        structured: None,
+        is_error,
+    })
+}
+
+#[tokio::test]
+async fn a_tool_step_passes_with_its_report() {
+    let fake = Fake::default();
+    let (run, effect) = tool_run("change", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(
+        matches!(&seen[..], [Seen::ToolDone(Ok(r))] if r == "tool said this"),
+        "{seen:?}"
+    );
+    let args = fake.tool_args.lock().unwrap()[0].clone();
+    assert_eq!(args["note"], "for COM-1");
+    assert_eq!(args["deep"][0]["a"], "COM-1");
+    assert_eq!(args["n"], 3);
+    assert_eq!(fake.recorded.lock().unwrap().clone(), ["call_tool"]);
+}
+
+#[tokio::test]
+async fn is_error_goes_down_the_fail_line() {
+    let fake = Fake::default();
+    *fake.tool_reply.lock().unwrap() = Some(reply("no such card", true));
+    let (run, effect) = tool_run("change", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(
+        matches!(&seen[..], [Seen::ToolDone(Err(e))] if e.contains("no such card")),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_time_limit_goes_down_the_fail_line() {
+    let fake = Fake::default();
+    *fake.tool_reply.lock().unwrap() = Some(Err(crate::mcp_client::Failure::Other(
+        "the server did not answer in time".into(),
+    )));
+    let (run, effect) = tool_run("change", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(
+        matches!(&seen[..], [Seen::ToolDone(Err(e))] if e.contains("in time")),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn the_report_is_capped() {
+    let fake = Fake::default();
+    *fake.tool_reply.lock().unwrap() = Some(reply(&"x".repeat(30_000), false));
+    let (run, effect) = tool_run("lookup", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    match &seen[..] {
+        [Seen::ToolDone(Ok(r))] => assert_eq!(r.chars().count(), 20_000),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_refused_tool_change_waits() {
+    let fake = Fake::default();
+    fake.refuse
+        .lock()
+        .unwrap()
+        .insert("call_tool".into(), "Your rule".into());
+    let (run, effect) = tool_run("change", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(
+        matches!(&seen[..], [Seen::Refused(r)] if r == "Your rule"),
+        "{seen:?}"
+    );
+    assert!(fake.calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_tool_lookup_is_not_put_to_the_rules() {
+    let fake = Fake::default();
+    fake.refuse
+        .lock()
+        .unwrap()
+        .insert("call_tool".into(), "Your rule".into());
+    let (run, effect) = tool_run("lookup", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(matches!(&seen[..], [Seen::ToolDone(Ok(_))]), "{seen:?}");
+}
+
+#[test]
+fn kind_defaults_to_change() {
+    let step: super::definition::Step = serde_json::from_value(json!({
+        "id": "t", "name": "T", "kind": "tool", "server": "s", "tool": "t",
+    }))
+    .unwrap();
+    match step.kind {
+        StepKind::Tool {
+            call_kind,
+            schema_hash,
+            ..
+        } => {
+            assert_eq!(call_kind, crate::connectors::CallKind::Change);
+            assert_eq!(schema_hash, "");
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_changed_tool_waits_with_what_changed() {
+    let fake = Fake::default();
+    *fake.tool_now.lock().unwrap() = Some(Ok(("h2".into(), "it now deletes cards".into())));
+    let (run, effect) = tool_run("change", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(fake.calls().is_empty(), "a changed tool must not be called");
+    match &seen[..] {
+        [Seen::ToolChanged { hash, shown, .. }] => {
+            assert_eq!(hash, "h2");
+            assert!(shown.contains("deletes cards"));
+        }
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn a_tool_with_no_saved_hash_waits() {
+    let fake = Fake::default();
+    let (run, effect) = tool_run("change", "");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(matches!(&seen[..], [Seen::ToolChanged { .. }]), "{seen:?}");
+    assert!(fake.calls().is_empty());
+}
+
+#[tokio::test]
+async fn a_revoked_token_waits_once() {
+    let fake = Fake::default();
+    *fake.tool_now.lock().unwrap() = Some(Err(crate::mcp_client::Failure::NeedsSignIn(
+        Default::default(),
+    )));
+    let (run, effect) = tool_run("change", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(fake.calls().is_empty());
+    match &seen[..] {
+        [Seen::Refused(r)] => assert_eq!(r, "trello: sign in again under Settings, Connections"),
+        other => panic!("{other:?}"),
+    }
+}
+
+#[tokio::test]
+async fn more_access_names_the_scopes() {
+    let fake = Fake::default();
+    let challenge = crate::mcp_client::Challenge {
+        resource_metadata: None,
+        scope: Some("write:cards".into()),
+    };
+    *fake.tool_reply.lock().unwrap() = Some(Err(crate::mcp_client::Failure::NeedsScope(challenge)));
+    let (run, effect) = tool_run("change", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(
+        matches!(&seen[..], [Seen::Refused(r)] if r.contains("write:cards") && r.contains("Sign in again")),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn own_server_waits_at_run_time() {
+    let fake = Fake::default();
+    *fake.tool_now.lock().unwrap() = Some(Err(crate::mcp_client::Failure::NotAllowed(
+        "x is Yardbell itself".into(),
+    )));
+    let (run, effect) = tool_run("change", "h1");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(
+        matches!(&seen[..], [Seen::Refused(r)] if r.contains("Yardbell itself")),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn own_server_is_refused_on_save() {
+    let mut cfg = super::definition::tests::cfg();
+    cfg.mcp_servers = vec![serde_json::from_value(
+        json!({ "name": "own", "url": format!("http://127.0.0.1:{}/mcp", cfg.port) }),
+    )
+    .unwrap()];
+    let mut def = run_of("Review my merge requests").definition.unwrap();
+    def.steps.push(
+        serde_json::from_value(
+            json!({ "id": "t", "name": "T", "kind": "tool", "server": "own", "tool": "x" }),
+        )
+        .unwrap(),
+    );
+    let problems = super::definition::check(&def, &cfg).unwrap_err();
+    assert!(
+        problems.iter().any(|p| p.contains("Yardbell itself")),
+        "{problems:?}"
+    );
+}
+
+#[test]
+fn a_pipeline_turn_cannot_reach_this() {
+    assert!(!crate::mcp_pipeline::owns("call_tool"));
+    assert!(!crate::mcp_pipeline::owns("accept_tool"));
+    assert!(crate::dispatch::rules::ACTIONS.contains(&"call_tool"));
+}
+
+#[test]
+fn save_pipeline_keeps_the_hash_from_the_server() {
+    let mut before = run_of("Review my merge requests").definition.unwrap();
+    before.steps.push(serde_json::from_value(json!({ "id": "t", "name": "T", "kind": "tool", "server": "s", "tool": "x", "schema_hash": "real" })).unwrap());
+    let mut sent = before.clone();
+    sent.steps.last_mut().unwrap().kind = serde_json::from_value(
+        json!({ "kind": "tool", "server": "s", "tool": "x", "schema_hash": "forged" }),
+    )
+    .unwrap();
+    sent.steps.push(serde_json::from_value(json!({ "id": "n", "name": "N", "kind": "tool", "server": "s", "tool": "y", "schema_hash": "forged" })).unwrap());
+    crate::mcp_pipeline::keep_tool_hashes(&mut sent, Some(&before));
+    let hash = |id: &str| match &sent.steps.iter().find(|s| s.id == id).unwrap().kind {
+        StepKind::Tool { schema_hash, .. } => schema_hash.clone(),
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(hash("t"), "real");
+    assert_eq!(hash("n"), "");
 }
