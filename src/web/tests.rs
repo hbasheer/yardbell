@@ -1625,6 +1625,7 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "change_settings",
             "save_task",
             "run_trigger",
+            "save_connector",
             "save_pipeline",
             "set_pipeline_enabled",
             "run_pipeline",

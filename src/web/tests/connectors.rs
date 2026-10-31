@@ -282,3 +282,125 @@ async fn pipelines_list_names_connectors() {
         "{out}"
     );
 }
+
+async fn approve_last(r: &Rig, c: &str, id: &str) -> (StatusCode, serde_json::Value) {
+    let step = r.app.dispatch.pending(id)[0].clone();
+    let url = format!("/dispatch/conversations/{id}/actions/{step}");
+    call(r, c, "POST", &url, Some(json!({ "decision": "approve" }))).await
+}
+
+fn proposed(id: &str) -> serde_json::Value {
+    json!({ "connector": {
+        "id": id,
+        "name": "Jira",
+        "base_url": "https://jira.example.com",
+        "headers": { "Authorization": "Bearer ${secret:jira}" },
+        "calls": { "list": { "request": { "method": "GET", "path": "/l" }, "map": { "item_id": "id", "title": "name" } } },
+    } })
+}
+
+fn result_text(result: &serde_json::Value) -> String {
+    result["content"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string()
+}
+
+#[tokio::test]
+async fn save_connector_always_waits() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "allow", json!([]));
+    let result = dispatch_tool(&r, Some(&id), "save_connector", proposed("jira")).await;
+    assert_eq!(result["isError"], false, "{result}");
+    assert!(
+        r.app.config().unwrap().connectors.is_empty(),
+        "nothing saved yet"
+    );
+    let (status, body) = approve_last(&r, &c, &id).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = r.app.config().unwrap().connectors;
+    assert_eq!(saved[0].id, "jira");
+    assert!(!saved[0].enabled, "a new one arrives switched off");
+}
+
+#[tokio::test]
+async fn save_connector_refuses_a_credential_and_allow_private() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let mut literal = proposed("jira");
+    literal["connector"]["headers"]["Authorization"] = json!("Bearer abc123");
+    let result = dispatch_tool(&r, Some(&id), "save_connector", literal).await;
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(result_text(&result).contains("Authorization"), "{result}");
+    assert!(!result.to_string().contains("abc123"), "{result}");
+    let mut private = proposed("jira");
+    private["connector"]["allow_private"] = json!(true);
+    let result = dispatch_tool(&r, Some(&id), "save_connector", private).await;
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(
+        result_text(&result).contains("allow_private can only be set in Settings"),
+        "{result}"
+    );
+}
+
+#[tokio::test]
+async fn a_saved_connector_loses_private_reach_when_its_host_changes() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let mut e = entry("https://mesh.example");
+    e["id"] = json!("jira");
+    call(&r, &c, "POST", ROOT, Some(e)).await;
+    let id = dispatch_conversation(&r).await;
+    set_rules(&r, "allow", json!([]));
+    let mut same = proposed("jira");
+    same["connector"]["base_url"] = json!("https://mesh.example/2");
+    dispatch_tool(&r, Some(&id), "save_connector", same).await;
+    approve_last(&r, &c, &id).await;
+    let kept = r.app.config().unwrap().connectors;
+    assert!(
+        kept[0].allow_private && kept[0].enabled,
+        "the person's choices stay"
+    );
+    dispatch_tool(&r, Some(&id), "save_connector", proposed("jira")).await;
+    approve_last(&r, &c, &id).await;
+    assert!(
+        !r.app.config().unwrap().connectors[0].allow_private,
+        "a new host loses it"
+    );
+}
+
+#[tokio::test]
+async fn change_settings_cannot_reach_connectors() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let args = json!({ "area": "connectors", "value": [] });
+    let result = dispatch_tool(&r, Some(&id), "change_settings", args).await;
+    assert_eq!(result["isError"], true, "{result}");
+}
+
+#[tokio::test]
+async fn a_pipeline_run_turn_cannot_save_a_connector() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let def = {
+        let cfg = r.app.config().unwrap();
+        r.app
+            .pipelines
+            .library()
+            .copy_template("Review my merge requests", &cfg)
+            .unwrap()
+    };
+    let mut run = r
+        .app
+        .pipelines
+        .start(&def.id, vec![Default::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.conversation = id.clone();
+    r.app.pipelines.put(run);
+    let result = dispatch_tool(&r, Some(&id), "save_connector", proposed("jira")).await;
+    assert_eq!(result["isError"], true, "{result}");
+    assert!(result_text(&result).contains("cannot change"), "{result}");
+}

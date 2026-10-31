@@ -68,6 +68,10 @@ user's approval setting and rules decide, as other steps are; your own settings 
 the user, whatever the rules say. When a change comes back with problems, correct it and send it \
 again instead of asking the user to.
 
+To connect an outside tool such as Trello or Jira, read the connectors area with read_settings and \
+send the whole connection with save_connector. Name tokens only as ${secret:name}; the user saves \
+them and switches the connection on. It always waits for the user.
+
 To build or change a pipeline, read it with read_pipeline first, edit the definition, and send the \
 whole definition with save_pipeline; leave id empty for a new one. It is checked as the builder \
 checks it, and it always waits for the user, who can also finish it in the builder; a new pipeline \

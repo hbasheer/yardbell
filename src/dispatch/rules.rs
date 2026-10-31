@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
 pub const REMEMBER: &str = "remember";
-const ACTIONS: [&str; 18] = [
+const ACTIONS: [&str; 19] = [
     "start_session",
     "stop_session",
     "send_to_session",
@@ -22,11 +22,13 @@ const ACTIONS: [&str; 18] = [
     "run_pipeline",
     "answer_run",
     "call_connector",
+    "save_connector",
     REMEMBER,
 ];
 
 // Steps that change Yardbell itself rather than a machine, so a rule for them names neither.
-const UNPLACED: [&str; 7] = [
+const UNPLACED: [&str; 8] = [
+    "save_connector",
     "change_settings",
     "save_task",
     "run_trigger",
@@ -494,7 +496,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, save_pipeline, set_pipeline_enabled, run_pipeline, answer_run, call_connector, remember, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, save_pipeline, set_pipeline_enabled, run_pipeline, answer_run, call_connector, save_connector, remember, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],

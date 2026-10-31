@@ -86,6 +86,22 @@ async fn an_outside_change_becomes_a_proposal() {
 }
 
 #[tokio::test]
+async fn save_connector_from_a_client_is_a_proposal() {
+    let r = rig();
+    mcp_on(&r);
+    let args = json!({ "connector": {
+        "id": "jira",
+        "name": "Jira",
+        "base_url": "https://jira.example.com",
+        "calls": {},
+    } });
+    let result = propose(&r, "save_connector", args).await;
+    assert_ne!(result["isError"], true, "{result}");
+    assert_eq!(r.app.proposals.list().len(), 1, "{result}");
+    assert!(saved(&r).connectors.is_empty(), "it waits for a person");
+}
+
+#[tokio::test]
 async fn a_client_without_a_name_is_an_mcp_client() {
     let r = rig();
     mcp_on(&r);
