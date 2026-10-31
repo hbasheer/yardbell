@@ -72,13 +72,12 @@ impl Rig {
 }
 
 fn alive(pid: i64) -> bool {
-    match std::fs::read_to_string(format!("/proc/{pid}/stat")) {
-        Ok(stat) => stat
-            .rsplit(')')
-            .next()
-            .is_some_and(|rest| !rest.trim_start().starts_with('Z')),
-        Err(_) => false,
-    }
+    let out = std::process::Command::new("ps")
+        .args(["-o", "stat=", "-p", &pid.to_string()])
+        .output()
+        .unwrap();
+    let stat = String::from_utf8_lossy(&out.stdout);
+    !stat.trim().is_empty() && !stat.trim().starts_with('Z')
 }
 
 async fn gone(pid: i64) -> bool {

@@ -235,6 +235,7 @@ function closeRowMenus(except) {
     m.hidden = true;
     m.previousElementSibling.setAttribute("aria-expanded", "false");
   });
+  if (!except) showHeldRows();
 }
 
 document.addEventListener("click", (e) => {
@@ -292,10 +293,22 @@ function serverMenu(srv, i) {
 // Only when something changed, so a load does not lose a click on a row or close its menu.
 const shownRows = new Map();
 
+const heldRows = new Map();
+
 function setRows(id, html) {
   if (shownRows.get(id) === html) return;
+  if ($(id).querySelector(".menu:not([hidden])")) {
+    heldRows.set(id, html);
+    return;
+  }
   shownRows.set(id, html);
   $(id).innerHTML = html;
+}
+
+function showHeldRows() {
+  const held = [...heldRows];
+  heldRows.clear();
+  held.forEach(([id, html]) => setRows(id, html));
 }
 
 function showConnectionsEmpty() {

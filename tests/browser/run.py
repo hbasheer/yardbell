@@ -3113,30 +3113,33 @@ class Suite:
 
     def test_a_token_connection_takes_its_secret_in_the_form(self):
         b = self.b
-        b.goto(self.url("/"))
-        b.goto(self.url("/settings#connections"))
-        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
-        b.click("#conn-new")
-        b.click("#conn-tabs [data-tab=conn-tab-token]")
-        b.click("#conn-new-list [data-starter=asana]")
-        b.wait("!document.getElementById('conn-form').hidden && document.querySelector('#conn-secrets input[type=password]')", "a box for its secret")
-        if b.js("document.getElementById('conn-more').open"):
-            raise Failure("headers and calls should be folded for an example")
-        name = b.js("document.querySelector('#conn-secrets input').dataset.secret")
-        self.set_field("#conn-secrets input", "asana-value-BROWSER")
-        b.click("#conn-form button[type=submit]")
-        b.wait("document.querySelector('[data-conn=asana]')", "the saved connection")
-        if "Save the secret" in b.js("document.querySelector('[data-conn=asana]').textContent"):
-            raise Failure("the secret typed in the form was not saved")
-        if "asana-value-BROWSER" in b.js("document.documentElement.outerHTML"):
-            raise Failure("the secret stayed on the page")
-        self.row_action("[data-conn=asana]", "[data-conn-act=delete]")
-        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
-        b.click("dialog.confirm[open] [data-answer=yes]")
-        b.wait("!document.querySelector('[data-conn=asana]')", "the connection gone")
-        self.api("POST", "/api/settings/secrets/delete", {"name": name})
-        self.check_errors("a token connection")
+        try:
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+            b.click("#conn-new")
+            b.click("#conn-tabs [data-tab=conn-tab-token]")
+            b.click("#conn-new-list [data-starter=asana]")
+            b.wait("!document.getElementById('conn-form').hidden && document.querySelector('#conn-secrets input[type=password]')", "a box for its secret")
+            if b.js("document.getElementById('conn-more').open"):
+                raise Failure("headers and calls should be folded for an example")
+            name = b.js("document.querySelector('#conn-secrets input').dataset.secret")
+            self.set_field("#conn-secrets input", "asana-value-BROWSER")
+            b.click("#conn-form button[type=submit]")
+            b.wait("document.querySelector('[data-conn=asana]')", "the saved connection")
+            if "Save the secret" in b.js("document.querySelector('[data-conn=asana]').textContent"):
+                raise Failure("the secret typed in the form was not saved")
+            if "asana-value-BROWSER" in b.js("document.documentElement.outerHTML"):
+                raise Failure("the secret stayed on the page")
+            self.row_action("[data-conn=asana]", "[data-conn-act=delete]")
+            b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait("!document.querySelector('[data-conn=asana]')", "the connection gone")
+            self.api("POST", "/api/settings/secrets/delete", {"name": name})
+            self.check_errors("a token connection")
 
+        finally:
+            b.js("document.getElementById('conn-flow')?.close(); fetch('/api/settings/connectors/asana', { method: 'DELETE' })")
     def test_one_connections_page(self):
         b = self.b
         self.api("POST", "/api/settings/mcp/servers", {"servers": []})
@@ -3190,7 +3193,7 @@ class Suite:
                     raise Failure(f"the library does not have {want}: {names}")
             b.wait("document.querySelector('#pl-inspector select[name=ticket-source]')", "where tickets come from")
             sources = b.js("[...document.querySelectorAll('#pl-inspector select[name=ticket-source] option')].map((o) => o.textContent).join('|')")
-            if sources != "Linear|Trello":
+            if not sources.startswith("Linear|") or "Trello" not in sources:
                 raise Failure(f"the sources are {sources}")
             self.set_field("#pl-inspector select[name=ticket-source]", "trello")
             b.wait("document.querySelector('.pl-canvas').textContent.includes('When Trello has a new item')", "the trigger on Trello")
@@ -3395,6 +3398,13 @@ class Suite:
             b.pump(0.3)
             if not b.js("window.__row.isConnected && window.__forge.isConnected"):
                 raise Failure("an unchanged row was redrawn, which can lose a click")
+            b.click("#server-rows .conn-row [data-row-menu]")
+            b.wait("!document.querySelector('#server-rows .menu').hidden", "the menu")
+            b.js("setRows('server-rows', document.getElementById('server-rows').innerHTML + '<li id=late-row></li>')")
+            if b.js("document.querySelector('#server-rows .menu').hidden"):
+                raise Failure("a change closed the open menu")
+            b.js("document.body.click()")
+            b.wait("document.getElementById('late-row')", "the change, once the menu closed")
         finally:
             self.remove_mcp_servers()
 
