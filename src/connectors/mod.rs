@@ -1,8 +1,11 @@
 pub mod client;
 pub mod map;
 pub mod net;
+pub mod page;
 #[cfg(test)]
 pub(crate) mod tests;
+
+pub use page::{Health, Listed, Status};
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

@@ -38,6 +38,7 @@ pub struct Pipelines {
     linear: Mutex<Arc<linear::Linear>>,
     // Sessions of runs that went with a deleted pipeline, stopped on the next round.
     orphans: Mutex<Vec<(String, String)>>,
+    connector_health: crate::connectors::Health,
 }
 
 fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
@@ -64,11 +65,16 @@ impl Pipelines {
             ticking: tokio::sync::Mutex::new(()),
             linear: Mutex::new(Arc::new(linear::Linear::new())),
             orphans: Mutex::new(Vec::new()),
+            connector_health: Default::default(),
         }
     }
 
     pub fn library(&self) -> &Library {
         &self.library
+    }
+
+    pub fn connector_health(&self) -> &crate::connectors::Health {
+        &self.connector_health
     }
 
     pub fn watch(&self) -> &triggers::Watch {

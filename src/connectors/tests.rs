@@ -502,3 +502,258 @@ fn the_trello_template_is_valid() {
     assert_eq!(c.calls["list"].map["id"], "idShort");
     assert!(c.enabled);
 }
+
+const LIST: &str = "    map: { item_id: id, title: name }\n";
+
+fn rows(from: u32, n: u32) -> String {
+    let list: Vec<_> = (from..from + n)
+        .map(|i| serde_json::json!({ "id": i.to_string(), "name": format!("Item {i}") }))
+        .collect();
+    serde_json::Value::Array(list).to_string()
+}
+
+fn list_call(yaml: &str) -> String {
+    format!("  list:\n    request: {{ method: GET, path: /l }}\n{LIST}{yaml}")
+}
+
+#[tokio::test]
+async fn a_list_with_no_page_setting_reads_once() {
+    let s = stub().await;
+    s.answer("/l", 200, &rows(1, 2));
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(&s.base, &list_call(""));
+    let out = client(&c, &dir).list(&vars(&[])).await.unwrap();
+    assert_eq!(out.items.len(), 2);
+    assert_eq!(out.cut_off, None);
+    assert_eq!(s.urls(), ["/l"]);
+}
+
+#[tokio::test]
+async fn items_can_sit_inside_the_reply() {
+    let s = stub().await;
+    s.answer(
+        "/l",
+        200,
+        &format!("{{\"data\":{{\"rows\":{}}}}}", rows(1, 1)),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(&s.base, &list_call("    items: data.rows\n"));
+    assert_eq!(
+        client(&c, &dir).list(&vars(&[])).await.unwrap().items.len(),
+        1
+    );
+}
+
+#[tokio::test]
+async fn a_cursor_list_follows_next() {
+    let s = stub().await;
+    let page = |r: String, next: &str| format!("{{\"rows\":{r},\"next\":\"{next}\"}}");
+    s.answer("/l", 200, &page(rows(1, 1), "b"));
+    s.answer("/l?after=b", 200, &page(rows(2, 1), "c"));
+    s.answer("/l?after=c", 200, &page(rows(3, 1), ""));
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        &list_call("    items: rows\n    page: { style: cursor, param: after, next: next }\n"),
+    );
+    assert_eq!(
+        client(&c, &dir).list(&vars(&[])).await.unwrap().items.len(),
+        3
+    );
+}
+
+#[tokio::test]
+async fn a_cursor_in_a_graphql_body() {
+    let s = stub().await;
+    s.answer("/g", 200, &format!("{{\"data\":{{\"rows\":{},\"pageInfo\":{{\"hasNextPage\":false,\"endCursor\":\"z\"}}}}}}", rows(1, 2)));
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        "  list:\n    request: { method: POST, path: /g, body: { query: q, variables: { after: '{{cursor}}' } } }\n    items: data.rows\n    map: { item_id: id, title: name }\n    page: { style: cursor, next: data.pageInfo.endCursor, has_more: data.pageInfo.hasNextPage }\n",
+    );
+    assert_eq!(
+        client(&c, &dir).list(&vars(&[])).await.unwrap().items.len(),
+        2
+    );
+    let asked = s.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 1);
+    assert!(asked[0].3.contains("\"after\":\"\""), "{}", asked[0].3);
+}
+
+#[tokio::test]
+async fn a_number_list_stops_on_a_short_page() {
+    let s = stub().await;
+    s.answer("/l?page=1", 200, &rows(1, 2));
+    s.answer("/l?page=2", 200, &rows(3, 2));
+    s.answer("/l?page=3", 200, &rows(5, 1));
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        &list_call("    page: { style: number, param: page, size: 2 }\n"),
+    );
+    assert_eq!(
+        client(&c, &dir).list(&vars(&[])).await.unwrap().items.len(),
+        5
+    );
+    assert_eq!(s.urls().len(), 3);
+}
+
+#[tokio::test]
+async fn an_offset_list_sends_items_read() {
+    let s = stub().await;
+    s.answer("/l?start=0", 200, &rows(1, 2));
+    s.answer("/l?start=2", 200, &rows(3, 2));
+    s.answer("/l?start=4", 200, "[]");
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        &list_call("    page: { style: offset, param: start, size: 2 }\n"),
+    );
+    assert_eq!(
+        client(&c, &dir).list(&vars(&[])).await.unwrap().items.len(),
+        4
+    );
+    assert_eq!(s.urls(), ["/l?start=0", "/l?start=2", "/l?start=4"]);
+}
+
+#[tokio::test]
+async fn a_link_list_follows_the_header() {
+    let s = stub().await;
+    s.answer_with(
+        "/l",
+        200,
+        vec![(
+            "link",
+            format!(
+                "<{}/l?p=2>; rel=\"next\", <{}/l?p=9>; rel=\"last\"",
+                s.base, s.base
+            ),
+        )],
+        &rows(1, 1),
+    );
+    s.answer("/l?p=2", 200, &rows(2, 1));
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(&s.base, &list_call("    page: { style: link }\n"));
+    assert_eq!(
+        client(&c, &dir).list(&vars(&[])).await.unwrap().items.len(),
+        2
+    );
+}
+
+#[tokio::test]
+async fn a_link_to_another_host_is_refused() {
+    let s = stub().await;
+    s.answer_with(
+        "/l",
+        200,
+        vec![("link", "<https://evil.example/x>; rel=\"next\"".to_string())],
+        &rows(1, 1),
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(&s.base, &list_call("    page: { style: link }\n"));
+    let e = client(&c, &dir).list(&vars(&[])).await.err().unwrap();
+    assert!(e.contains("another host"), "{e}");
+    assert_eq!(s.urls(), ["/l"]);
+}
+
+#[tokio::test]
+async fn a_repeated_cursor_stops_and_says_so() {
+    let s = stub().await;
+    let page = format!("{{\"rows\":{},\"next\":\"same\"}}", rows(1, 1));
+    s.answer("/l", 200, &page);
+    s.answer("/l?after=same", 200, &page);
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        &list_call("    items: rows\n    page: { style: cursor, param: after, next: next }\n"),
+    );
+    let out = client(&c, &dir).list(&vars(&[])).await.unwrap();
+    assert!(out.cut_off.unwrap().contains("repeated"));
+    assert_eq!(s.urls().len(), 2);
+}
+
+#[tokio::test]
+async fn the_page_limit_stops_and_says_so() {
+    let s = stub().await;
+    *s.fallback.lock().unwrap() = Some(|_| rows(1, 2));
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        &list_call("    page: { style: number, param: page, size: 2 }\n"),
+    );
+    let out = client(&c, &dir).list(&vars(&[])).await.unwrap();
+    assert!(out.cut_off.unwrap().contains("20 pages"));
+    assert_eq!(s.urls().len(), 20);
+    let s = stub().await;
+    *s.fallback.lock().unwrap() = Some(|_| rows(1, 2));
+    let c = connector(
+        &s.base,
+        &list_call("    page: { style: number, param: page, size: 2, max_pages: 3 }\n"),
+    );
+    let out = client(&c, &dir).list(&vars(&[])).await.unwrap();
+    assert!(out.cut_off.unwrap().contains("3 pages"));
+    assert_eq!(s.urls().len(), 3);
+}
+
+#[tokio::test]
+async fn the_item_limit_stops_and_says_so() {
+    let s = stub().await;
+    *s.fallback.lock().unwrap() = Some(|_| rows(1, 400));
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        &list_call("    page: { style: number, param: page, size: 400, max_pages: 100 }\n"),
+    );
+    let out = client(&c, &dir).list(&vars(&[])).await.unwrap();
+    assert_eq!(out.items.len(), 5000);
+    assert!(out.cut_off.unwrap().contains("5000 items"));
+}
+
+#[tokio::test]
+async fn a_failed_page_fails_the_list() {
+    let s = stub().await;
+    s.answer("/l?page=1", 200, &rows(1, 2));
+    s.answer("/l?page=2", 500, "boom");
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        &list_call("    page: { style: number, param: page, size: 2 }\n"),
+    );
+    assert!(client(&c, &dir).list(&vars(&[])).await.is_err());
+}
+
+#[tokio::test]
+async fn a_bad_row_is_skipped_and_named() {
+    let s = stub().await;
+    s.answer("/l", 200, r#"[{"id":"1","name":"Good"},{"id":"2"},"junk"]"#);
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(&s.base, &list_call(""));
+    let out = client(&c, &dir).list(&vars(&[])).await.unwrap();
+    assert_eq!(out.items.len(), 1);
+    assert_eq!(out.skipped.len(), 2);
+    assert!(out.skipped[0].contains("name"), "{:?}", out.skipped);
+}
+
+#[tokio::test]
+async fn a_reply_that_is_no_list_fails() {
+    let s = stub().await;
+    s.answer("/l", 200, r#"{"rows":"nope"}"#);
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(&s.base, &list_call("    items: rows\n"));
+    let e = client(&c, &dir).list(&vars(&[])).await.err().unwrap();
+    assert!(e.contains("no list"), "{e}");
+}
+
+#[test]
+fn health_keeps_the_last_status() {
+    let h = Health::default();
+    h.set(
+        "t",
+        Status {
+            ok: false,
+            at: "now".into(),
+            message: "bad".into(),
+        },
+    );
+    assert_eq!(h.all()["t"].message, "bad");
+}
