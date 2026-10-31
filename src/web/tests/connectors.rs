@@ -214,3 +214,71 @@ async fn read_settings_shows_connectors_without_secrets() {
     );
     assert!(!shown.to_string().contains("sekret-value"));
 }
+
+fn tool(base: &str) -> serde_json::Value {
+    let mut e = entry(base);
+    e["params_yaml"] = json!("- { name: board, label: Board, options: boards }\n");
+    e["calls_yaml"] = json!("boards:\n  request: { method: GET, path: /boards }\n  map: { id: id, name: title }\nstates:\n  request: { method: GET, path: '/boards/{{board}}/lists' }\n  items: rows\n  map: { id: id, name: name }\nlist:\n  request: { method: GET, path: /l }\n  map: { item_id: id, title: name }\nmove:\n  kind: change\n  request: { method: PUT, path: '/c/{{item_id}}', query: { to: '{{value}}' } }\n");
+    e
+}
+
+#[tokio::test]
+async fn options_refuse_a_change_call() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let s = stub().await;
+    s.answer(
+        "/boards/B/lists",
+        200,
+        r#"{"rows":[{"id":"L1","name":"Todo","extra":1}]}"#,
+    );
+    s.answer("/boards", 200, r#"[{"id":"B","title":"Main"}]"#);
+    call(&r, &c, "POST", ROOT, Some(tool(&s.base))).await;
+    let (status, out) = call(&r, &c, "GET", &format!("{ROOT}/t/options/move"), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+    let (status, out) = call(&r, &c, "GET", &format!("{ROOT}/t/options/list"), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "only option calls: {out}");
+    assert!(!s.urls().iter().any(|u| u.starts_with("/c/")));
+    let (status, out) = call(
+        &r,
+        &c,
+        "GET",
+        &format!("{ROOT}/t/options/states?board=B"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out, json!([{ "id": "L1", "name": "Todo" }]));
+    let (_, out) = call(&r, &c, "GET", &format!("{ROOT}/t/options/boards"), None).await;
+    assert_eq!(out, json!([{ "id": "B", "name": "Main" }]));
+    let (status, _) = call(&r, &c, "GET", &format!("{ROOT}/t/options/states"), None).await;
+    assert_eq!(
+        status,
+        StatusCode::BAD_REQUEST,
+        "a value the path needs is missing"
+    );
+}
+
+#[tokio::test]
+async fn pipelines_list_names_connectors() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let mut e = tool("https://x.example");
+    e["headers"] = json!({ "Authorization": "Bearer ${secret:tool_token}" });
+    call(&r, &c, "POST", ROOT, Some(e)).await;
+    let (_, out) = call(&r, &c, "GET", "/api/pipelines", None).await;
+    let tool = &out["connectors"][0];
+    assert_eq!(
+        (tool["id"].as_str(), tool["name"].as_str()),
+        (Some("t"), Some("Tool"))
+    );
+    assert_eq!(tool["params"][0]["options"], "boards");
+    let calls = tool["calls"].as_array().unwrap();
+    let moved = calls.iter().find(|c| c["name"] == "move").unwrap();
+    assert_eq!(moved["kind"], "change");
+    assert_eq!(moved["needs"], json!(["value"]));
+    assert!(
+        !out["connectors"].to_string().contains("tool_token"),
+        "{out}"
+    );
+}

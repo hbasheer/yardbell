@@ -185,8 +185,8 @@ function renderDispatch() {
   loadInstalled();
 }
 
-const RULE_STEPS = { any: "Any step", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
-const UNPLACED = new Set(["remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
+const RULE_STEPS = { any: "Any step", call_connector: "Call a connected tool", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
+const UNPLACED = new Set(["call_connector", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 const RULE_APPROVALS = { allow: "Allow", prompt: "Ask me", deny: "Deny" };
 let rules = [];
 const CROSS = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg>`;

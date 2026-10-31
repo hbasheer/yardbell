@@ -5,7 +5,7 @@ import { canvas, fitAll, settle as fitCanvases, triggerWords } from "/pipeline-c
 // Dispatch's steps that change something (start, stop or type into a session) and the results of
 // reviews, drawn as cards the person approves, edits, rejects or acts on.
 
-export const CHANGING = new Set(["start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
+export const CHANGING = new Set(["call_connector", "start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 const ICONS = {
   start_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
@@ -22,6 +22,7 @@ const ICONS = {
   save_pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="4" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/><path d="M5 8h2.5c1.5 0 1.5-4 3.5-4M7.5 8c1.5 0 1.5 4 3.5 4"/></svg>`,
   set_pipeline_enabled: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="5" width="11" height="6" rx="3"/><circle cx="10.5" cy="8" r="1.5"/></svg>`,
   run_pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
+  call_connector: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8h8 M8 5l3 3-3 3 M13.5 3v10"/></svg>`,
   answer_run: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/></svg>`,
   review: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4"/><path d="m10 10 3.5 3.5"/></svg>`,
   scan: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3M2.5 8h11"/></svg>`,
@@ -39,6 +40,7 @@ const TITLES = {
   integrate_branches: "Integrate branches",
   push_branch: "Push a branch",
   move_session: "Move a session",
+  call_connector: "Call a connected tool",
 };
 
 const MEMORY_TITLES = { add: "Remember this", replace: "Change a memory", forget: "Forget a memory" };
@@ -192,6 +194,7 @@ function where(e) {
   if (e.tool === "save_pipeline") return i.before ? `Pipelines, version ${i.before.version} to the next` : "Pipelines, a new pipeline, saved switched off";
   if (e.tool === "set_pipeline_enabled" || e.tool === "run_pipeline") return html`Pipelines, <code>${i.id}</code>`;
   if (e.tool === "answer_run") return `A run of ${i.pipeline}`;
+  if (e.tool === "call_connector") return html`<strong>${i.connector}</strong> · <code>${i.call}</code>`;
   if (e.tool === "start_session") {
     const folder = i.folder || ctx.short(i.path);
     const branch = i.branch ? html` · <code>${i.branch}</code>${i.new_branch ? ` new${i.base ? ` from ${i.base}` : ""}` : ""}` : nothing;
@@ -553,8 +556,8 @@ function worktreeOutcome(tool, text) {
   }
 }
 
-const RULE_STEPS = { start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
-const UNPLACED = new Set(["remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
+const RULE_STEPS = { call_connector: "call connected tools", start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
+const UNPLACED = new Set(["call_connector", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 export function ruleText(r) {
   if (UNPLACED.has(r.action)) return RULE_STEPS[r.action];

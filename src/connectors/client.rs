@@ -56,6 +56,23 @@ fn lookup(name: &str, vars: &Vars, steps: &Steps) -> Option<String> {
     vars.0.get(name).cloned()
 }
 
+const GIVEN: [&str; 7] = [
+    "item_id", "ticket", "title", "url", "branch", "report", "cursor",
+];
+
+// The values a call needs someone to supply: its slots, less what a run always knows.
+pub fn needs_of(call: &Call) -> Vec<String> {
+    let text = serde_json::to_string(&(&call.request, &call.before)).unwrap_or_default();
+    let mut names: Vec<String> = slots()
+        .captures_iter(&text)
+        .map(|s| s[1].to_string())
+        .filter(|n| !n.starts_with("steps.") && !GIVEN.contains(&n.as_str()))
+        .collect();
+    names.sort();
+    names.dedup();
+    names
+}
+
 fn fill(
     text: &str,
     vars: &Vars,

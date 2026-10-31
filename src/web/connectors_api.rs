@@ -1,7 +1,7 @@
 use super::{ApiError, AppState};
 use crate::connectors::client::{Client, Vars};
 use crate::connectors::{client_for, host_of, map, template, templates, Connector};
-use axum::extract::{Path, State as AxState};
+use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{delete, get, post};
@@ -18,6 +18,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/connectors/{id}", delete(remove))
         .route("/api/settings/connectors/{id}/test", post(test))
         .route("/api/settings/connectors/{id}/share", get(share))
+        .route("/api/settings/connectors/{id}/options/{call}", get(options))
 }
 
 fn bad(msg: String) -> ApiError {
@@ -200,6 +201,44 @@ async fn test(
         "cut_off": listed.cut_off,
     }))
     .into_response())
+}
+
+// Fills the builder's pickers. Only a call that reads and is named as a source of choices runs.
+async fn options(
+    AxState(app): AxState<Arc<AppState>>,
+    Path((id, call)): Path<(String, String)>,
+    Query(params): Query<BTreeMap<String, String>>,
+) -> Result<Response, ApiError> {
+    let connector = found(&app, &id)?;
+    let named = call == "states" || connector.params.iter().any(|p| p.options == call);
+    if !named {
+        return Err(bad(format!("{call} is not a list of choices")));
+    }
+    let client = client(&app, &id)?;
+    let spec = client.call_named(&call).map_err(bad)?;
+    if spec.kind() == crate::connectors::CallKind::Change {
+        return Err(bad(format!(
+            "{call} changes something, so it cannot fill a list"
+        )));
+    }
+    let value = client.call(&call, &Vars(params)).await.map_err(bad)?;
+    let rows = map::path(&value, &spec.items).unwrap_or(Value::Null);
+    let field = |row: &Value, name: &str| {
+        spec.map
+            .get(name)
+            .and_then(|at| map::path(row, at))
+            .map(|v| map::text_of(&v))
+            .unwrap_or_default()
+    };
+    let list: Vec<Value> = rows
+        .as_array()
+        .map(|rows| {
+            rows.iter()
+                .map(|row| json!({ "id": field(row, "id"), "name": field(row, "name") }))
+                .collect()
+        })
+        .unwrap_or_default();
+    Ok(Json(json!(list)).into_response())
 }
 
 fn found(app: &AppState, id: &str) -> Result<Connector, ApiError> {

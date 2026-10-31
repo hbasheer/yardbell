@@ -1978,6 +1978,7 @@ class Suite:
         b = self.b
         self.open_builder()
         spot = self.empty_spot()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').scrollIntoView({ block: 'center' })")
         b.drag('.pl-lib-item[data-kind="wait"]', tuple(spot), steps=10)
         b.wait("document.querySelector('.pl-node.kind-wait')", "a Wait for me card where it was dropped")
         if not b.js("document.querySelector('.pl-node.kind-wait').classList.contains('selected')"):
@@ -2613,6 +2614,89 @@ class Suite:
         b.wait("document.querySelector('.pl-terminal')?.textContent.includes('This run has no live session.')", "the note")
         if b.js("document.querySelector('.pl-terminal iframe')"):
             raise Failure("a terminal with no session")
+
+    def add_connector(self):
+        template = self.api("GET", "/api/settings/connectors")["starters"]["trello"]
+        self.api("POST", "/api/settings/connectors", {**template, "was": ""})
+
+    def remove_connector(self):
+        self.api("DELETE", "/api/settings/connectors/trello")
+
+    def test_builder_connector_trigger_shows_names(self):
+        b = self.b
+        self.add_connector()
+        try:
+            self.open_builder()
+            b.js("""(() => {
+              const real = window.fetch;
+              window.fetch = (u, o) => {
+                const url = String(u);
+                const json = (v) => Promise.resolve(new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } }));
+                if (url.includes('/options/boards')) return json([{ id: 'B1', name: 'Main board' }]);
+                if (url.includes('/options/states')) return json([{ id: 'L1', name: 'Todo' }, { id: 'L2', name: 'Done' }]);
+                return real(u, o);
+              };
+            })()""")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"connector\"][data-group=\"Start when\"]').click()")
+            b.wait("document.querySelector('#pl-inspector select[name=connector]')", "the tool picker")
+            b.wait("document.querySelector('#pl-inspector select[name=param-board]')?.textContent.includes('Main board')", "the board by name")
+            self.set_field("#pl-inspector select[name=param-board]", "B1")
+            b.wait("[...document.querySelectorAll('#pl-inspector .pl-state-pick')].some((x) => x.textContent.includes('Todo'))", "the list by name")
+            b.js("[...document.querySelectorAll('#pl-inspector .pl-state-pick')].find((x) => x.textContent.includes('Todo')).querySelector('input').click()")
+            b.wait("[...document.querySelectorAll('#pl-inspector .pl-state-pick input')].find((x) => x.value === 'L1')?.checked", "the list ticked, stored by id")
+            if b.js("document.querySelector('#pl-inspector select[name=param-board]').value") != "B1":
+                raise Failure("the board is not stored by id")
+            if "Trello" not in b.js("document.querySelector('.pl-canvas').textContent"):
+                raise Failure("the Start when card does not name the tool")
+        finally:
+            self.remove_connector()
+        self.check_errors("the connector trigger")
+
+    def test_builder_call_step_shows_its_kind(self):
+        b = self.b
+        self.add_connector()
+        try:
+            self.open_builder()
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"call\"]').click()")
+            b.wait("document.querySelector('.pl-node.kind-call')", "the step")
+            b.wait("document.querySelector('#pl-inspector select[name=call]')", "the call picker")
+            self.set_field("#pl-inspector select[name=call]", "move")
+            b.wait("document.querySelector('.pl-node.kind-call')?.textContent.includes('Changes')", "the card saying it changes")
+            b.wait("document.querySelector('#pl-inspector input[name=param-value]')", "the value the call needs")
+            self.set_field("#pl-inspector select[name=call]", "read")
+            b.wait("document.querySelector('.pl-node.kind-call')?.textContent.includes('Reads')", "the card saying it reads")
+        finally:
+            self.remove_connector()
+        self.check_errors("a Call API step")
+
+    def test_builder_webhook_says_who_can_reach_it(self):
+        b = self.b
+        self.open_builder()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"webhook\"]').click()")
+        b.wait("document.querySelector('#pl-inspector #pl-hook-new')", "the address button")
+        said = b.js("document.querySelector('#pl-inspector').textContent")
+        if "cannot reach this address without a tunnel" not in said:
+            raise Failure(f"the trigger does not say who can reach it: {said}")
+        self.check_errors("the webhook trigger")
+
+    def test_a_hostile_item_title_is_escaped(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-detail')", "the run")
+        b.js("""(() => {
+          const real = window.fetch;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (!String(url).startsWith('/api/runs')) return res;
+            const body = await res.json();
+            for (const r of body.runs) if (r.id === 'run-a') r.subject.ticket.title = '<img src=x onerror="window.__hit=1">';
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          };
+        })()""")
+        b.wait("document.querySelector('.pl-detail')?.textContent.includes('<img src=x')", "the title shown as text")
+        if b.js("!!document.querySelector('.pl-detail img, .pl-run-list img') || !!window.__hit"):
+            raise Failure("a title ran as HTML")
+        self.check_errors("a hostile title")
 
     def test_builder_review_switch(self):
         b = self.b

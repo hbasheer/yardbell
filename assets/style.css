@@ -1927,6 +1927,8 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .side-rail .side-link[href="/proposals"] { position: relative; }
 .side-rail .side-count { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; line-height: 14px; font-size: 10px; }
 .proposals-main .pr-intro { margin: -4px 0 16px; }
+.pl-state-list { display: grid; gap: 2px; }
+.pl-hook-address code { overflow-wrap: anywhere; }
 .conn-add { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 .conn-form input:not([type="checkbox"]) { height: 32px; box-sizing: border-box; padding: 0 10px; min-width: 0; width: 100%; }
 #conn-header-add { justify-self: start; }

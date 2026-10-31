@@ -112,6 +112,17 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "agents": agents,
         "mcp_servers": mcp_servers,
         "gitlab_hosts": gitlab_hosts,
+        "connectors": cfg.connectors.iter().map(|c| json!({
+            "id": c.id,
+            "name": c.name,
+            "enabled": c.enabled,
+            "params": c.params,
+            "calls": c.calls.iter().map(|(name, call)| json!({
+                "name": name,
+                "kind": call.kind(),
+                "needs": crate::connectors::client::needs_of(call),
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
     }))
     .into_response())
 }
