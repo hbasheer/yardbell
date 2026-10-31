@@ -564,3 +564,28 @@ async fn the_list_offers_every_example() {
         assert!(list["starters"][want]["about"].is_string(), "{want}");
     }
 }
+
+#[tokio::test]
+async fn a_secret_says_every_connection_that_uses_it() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    r.app.settings.set_secret("shared", "shh-secret-1").unwrap();
+    let mut cfg = r.app.config().unwrap();
+    let connector: crate::connectors::Connector = serde_json::from_value(json!({
+        "id": "tool", "name": "My tool", "enabled": false, "base_url": "https://x.example",
+        "headers": { "Authorization": "Bearer ${secret:shared}" }, "calls": {},
+    }))
+    .unwrap();
+    r.app.settings.set_connectors(vec![connector]).unwrap();
+    cfg.pull_requests.gitlab = vec![];
+    let req = Request::get("/api/settings")
+        .header(header::COOKIE, c.as_str())
+        .header(header::ACCEPT, "application/json")
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, body) = send(&r.app, req).await;
+    let body: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let list = body["secrets"]["list"].as_array().unwrap();
+    let shared = list.iter().find(|s| s["name"] == "shared").unwrap();
+    assert_eq!(shared["used_by"], json!(["My tool"]));
+}

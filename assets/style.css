@@ -1366,7 +1366,6 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-secrets { display: grid; gap: 14px; }
 .conn-error { color: var(--bad-text, var(--bad)); flex: 1; margin: 0; min-height: 1.5em; }
 .conn-card[hidden], #conn-sign-in-none[hidden], #github-token-fields[hidden], #pr-github[hidden] { display: none; }
-.conn-call-body select, .conn-choice select { height: 32px; box-sizing: border-box; }
 .conn-more-tabs { display: grid; grid-template-columns: repeat(4, 1fr); }
 .conn-more-tabs button { justify-content: center; text-align: center; }
 .conn-more-tab { display: grid; gap: 12px; }
@@ -1414,7 +1413,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-via-option span { display: grid; gap: 2px; }
 .conn-via-option small { color: var(--muted); font-size: 12.5px; font-weight: 400; }
 #github-token-fields { display: grid; gap: 14px; }
-.pr-hosts.no-tokens label:has([data-key=token]) { display: none; }
+.pr-hosts.no-tokens label:has([data-key=token]), .pr-hosts.no-tokens .pr-host-paste { display: none; }
 .conn-empty { margin: 0; color: var(--muted); font-size: 13px; }
 #conn-sign-in-search { width: 100%; box-sizing: border-box; }
 .conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
@@ -2065,7 +2064,6 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .pl-state-list { display: grid; gap: 2px; }
 .pl-hook-address code { overflow-wrap: anywhere; }
 .conn-add { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
-.conn-form input:not([type="checkbox"]) { height: 32px; box-sizing: border-box; padding: 0 10px; min-width: 0; width: 100%; }
 #conn-header-add { justify-self: start; }
 #conn-none { color: var(--muted); }
 .conn-rows[hidden], .conn-form[hidden], .conn-output[hidden], #conn-none[hidden] { display: none; }
@@ -2095,7 +2093,6 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .pr-hosts[hidden], .pr-none[hidden] { display: none; }
 .pr-host { position: relative; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); align-items: end; gap: 8px; padding: 10px 42px 10px 10px; }
 .pr-host label { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 12.5px; }
-.pr-host input, .pr-host select { height: 32px; min-width: 0; }
 .pr-host-state { grid-column: 1 / -1; margin: 0; font-size: 12.5px; }
 .pr-folders { display: grid; gap: 0; margin: 10px 0 0; padding: 0; list-style: none; font-size: 13px; }
 .pr-folder { display: grid; grid-template-columns: minmax(0, 1.2fr) 76px minmax(0, 1.4fr) auto; align-items: center; gap: 10px; min-height: 36px; padding: 6px 0; }
@@ -2443,4 +2440,59 @@ details.pl-report summary { cursor: pointer; }
 
 @media (max-width: 340px) {
   .side-foot .side-link, .ws-nav .side-link { font-size: 0; }
+}
+
+/* Every field in the Connections modal, whichever form drew it, is the one field of DESIGN.md. */
+#conn-flow input:not([type=checkbox]):not([type=radio]), #conn-flow select {
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 36px;
+  padding: 0 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: 14px var(--sans);
+}
+#conn-flow textarea {
+  box-sizing: border-box;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--line-strong);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
+  font: 13px/1.5 var(--mono);
+}
+#conn-flow label { margin: 0; color: var(--ink); font-size: 13px; font-weight: 500; }
+#conn-flow label.choice, #conn-flow label.check { font-weight: 400; }
+.pr-host { padding-top: 12px; }
+.conn-settings { margin-top: 10px; border: 1px solid var(--line); border-radius: var(--radius); }
+label.conn-setting { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin: 0; padding: 12px 14px; font-weight: 400; cursor: pointer; }
+label.conn-setting + label.conn-setting { border-top: 1px solid var(--line); }
+.conn-setting > span:first-child { display: grid; gap: 2px; min-width: 0; }
+.conn-setting strong { font-size: 13px; font-weight: 550; color: var(--ink); }
+.conn-setting small { color: var(--muted); font-size: 12.5px; }
+.conn-seconds { display: inline-flex; align-items: center; gap: 8px; flex: none; color: var(--ink-2); font-size: 13px; }
+.conn-seconds input { width: 84px; }
+.conn-settings-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); }
+.conn-settings-foot[hidden], .secret-all[hidden] { display: none; }
+.conn-settings-foot .help { flex: 1; margin: 0; }
+.pr-folder-head, .pr-folders .pr-folder { grid-template-columns: minmax(0, 1.2fr) 76px minmax(0, 1.4fr) auto; }
+.pr-folders { margin: 0; }
+.pr-folders .pr-folder { padding: 10px 14px; }
+.pr-folder-note { padding: 10px 14px; list-style: none; }
+.pr-folder + .pr-folder-note { border-top: 1px solid var(--line); }
+.secret-head, .rows .secret-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 110px 40px; }
+.secret-row { cursor: default; }
+.rows .secret-row:hover { background: none; }
+.secret-row code { font: 500 13px var(--mono); overflow-wrap: anywhere; }
+@media (max-width: 760px) {
+  .pr-folder-head, .secret-head { display: none; }
+  .pr-folders .pr-folder { grid-template-columns: minmax(0, 1fr) auto; }
+  .rows .secret-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .secret-row .conn-type { display: block; grid-column: 1; }
+  .secret-row .conn-actions { grid-column: 2; grid-row: 1 / span 3; }
+  label.conn-setting { align-items: flex-start; }
 }

@@ -348,6 +348,7 @@ function serverWhere(srv) {
 }
 
 function renderServers() {
+  renderForges();
   const servers = data.mcp_servers || [];
   $("server-rows").hidden = !servers.length;
   showConnectionsEmpty();
@@ -371,10 +372,11 @@ function signsInHere() {
   return ["127.0.0.1", "localhost"].includes(location.hostname);
 }
 
-const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools", "conn-output", "forge-github", "forge-gitlab"];
+const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools", "conn-output", "forge-github", "forge-gitlab", "secret-form"];
 const FLOW_TABS = ["conn-new-panel", "server-form", "conn-tab-token"];
 let flowStep = null;
 let flowAdding = false;
+let flowRun = 0;
 
 function showStep(step, title) {
   const dialog = $("conn-flow");
@@ -391,11 +393,13 @@ function showStep(step, title) {
 }
 
 function closeFlow() {
+  flowRun += 1;
   stopWaiting();
   signingIn = null;
   flowStep = null;
   flowAdding = false;
   $("mcp-sign-in").innerHTML = "";
+  FLOW_STEPS.forEach((id) => { $(id).hidden = true; });
   if ($("conn-flow").open) $("conn-flow").close();
 }
 
@@ -433,12 +437,16 @@ function waitForSignIn() {
 async function showConnected(name) {
   signingIn = null;
   stopWaiting();
+  flowRun += 1;
+  const run = flowRun;
   showStep("mcp-tools", `Connected to ${name}`);
   $("mcp-tools").innerHTML = `<p class="help" role="status">Checking what it can do.</p>`;
   await refreshServerAuth();
   try {
-    showTools(name, await api("POST", serverPath(name, "test")), `Connected to ${name}`);
+    const out = await api("POST", serverPath(name, "test"));
+    if (run === flowRun) showTools(name, out, `Connected to ${name}`);
   } catch (err) {
+    if (run !== flowRun) return;
     $("mcp-tools").innerHTML = `<p class="help conn-error">It did not answer the check: ${esc(err.message)}</p>
       <div class="form-foot"><button class="btn primary" type="button" data-close-tools>Done</button></div>`;
   }
@@ -508,10 +516,13 @@ function renderSecrets() {
   $("secrets-file").textContent = s.file || "secrets.yml";
   $("secret-rows").hidden = !s.list.length;
   $("secrets-empty").hidden = Boolean(s.list.length);
-  $("secret-rows").innerHTML = s.list.map((x) => `<li class="row">
-    <div class="row-main"><div class="row-title"><span class="folder secret-name">${esc(x.name)}</span><span class="note">${x.updated ? `set ${esc(day(x.updated))}` : "set"}</span></div>
-      <p class="help">${x.used_by.length ? `Used by ${esc(x.used_by.join(", "))}` : "Not used by any server"}</p></div>
-    <div class="row-actions"><button class="btn" type="button" data-replace="${esc(x.name)}">Replace</button><button class="btn quiet danger" type="button" data-delete="${esc(x.name)}">Delete</button></div></li>`).join("");
+  $("secret-all").hidden = !s.list.length;
+  $("secret-rows").innerHTML = s.list.map((x) => `<li class="row conn-row secret-row" data-secret-row="${esc(x.name)}">
+    <span class="conn-name"><code>${esc(x.name)}</code></span>
+    <span class="conn-type">${x.used_by.length ? esc(x.used_by.join(", ")) : "Not used"}</span>
+    <span class="conn-type">${x.updated ? esc(day(x.updated)) : ""}</span>
+    <span class="conn-actions">${rowMenu(x.name, `${menuItem(`data-replace="${esc(x.name)}"`, "Replace")}${menuItem(`data-delete="${esc(x.name)}"`, "Delete", true)}`)}</span>
+  </li>`).join("");
   $("secrets-missing").hidden = !s.missing.length;
   $("secrets-missing-text").textContent = `${s.missing.map((x) => `${x.server} uses \${secret:${x.name}}, which is not set.`).join(" ")} New Claude Code sessions that get it do not start until it is. Add it below.`;
   $("secrets-inline").hidden = !s.inline.some((x) => x.secret);
@@ -580,9 +591,10 @@ function openSecretForm(name) {
   f.elements.name.readOnly = Boolean(name);
   $("secret-form-help").textContent = name
     ? `The new value replaces the one saved for ${name}. New sessions get it; running ones keep the one they started with.`
-    : "Letters, digits, - and _ in the name. New sessions get the value; running ones keep the one they started with.";
-  f.hidden = false;
-  (name ? f.elements.value : f.elements.name).focus();
+    : "Use it as ${secret:NAME} in a connection. Letters, digits, - and _ in the name.";
+  flowAdding = false;
+  showStep("secret-form", name ? `Replace ${name}` : "Add a secret");
+  focusIfActive(name ? f.elements.value : f.elements.name);
 }
 
 function showKind(kind) {
@@ -601,6 +613,7 @@ function openServerForm(index, kind) {
   f.elements.command.value = srv.command || "";
   f.elements.url.value = srv.url || "";
   f.elements.allow_private.checked = !!srv.allow_private;
+  f.elements.token.value = "";
   f.elements.pairs.value = Object.entries((shown === "url" ? srv.headers : srv.env) || {}).map(([k, v]) => `${k}=${v}`).join("\n");
   $("server-machines").innerHTML = data.machines.map((m) => `<label class="choice"><input type="checkbox" value="${esc(m.name)}"${srv.machines?.includes(m.name) ? " checked" : ""}>${esc(m.name)}</label>`).join("");
   $("server-save").textContent = index === null ? "Continue" : "Save";
@@ -618,6 +631,29 @@ function nameFromAddress(address) {
   let name = base;
   for (let n = 2; taken.has(name); n += 1) name = `${base}-${n}`;
   return name;
+}
+
+const SECRET_NAME = /authori[sz]ation|token|secret|api[-_]?key|password|private/i;
+
+async function keptAsSecret(name, value) {
+  const clean = name.toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 64);
+  await api("POST", "/api/settings/secrets", { name: clean, value });
+  return `\${secret:${clean}}`;
+}
+
+async function tokensKept(pairs, prefix) {
+  const out = {};
+  for (const [key, raw] of Object.entries(pairs)) {
+    const value = String(raw).trim();
+    if (!value || value.includes("${secret:") || !SECRET_NAME.test(key)) {
+      out[key] = raw;
+      continue;
+    }
+    const scheme = value.match(/^(Bearer|Basic|token)\s+(.+)$/i);
+    const ref = await keptAsSecret(`${prefix}_${key}`, scheme ? scheme[2] : value);
+    out[key] = scheme ? `${scheme[1]} ${ref}` : ref;
+  }
+  return out;
 }
 
 function serverOf(f) {
@@ -829,6 +865,7 @@ function renderPullRequests() {
   f.elements.github_token.innerHTML = `<option value="">${names.length ? "Pick a saved secret" : "No saved secrets yet"}</option>${names.map((t) => `<option value="${esc(t)}"${t === value.github_token ? " selected" : ""}>${esc(t)}</option>`).join("")}`;
   renderForges();
   showForgeFields();
+  $("pr-save").hidden = true;
   gitlabHosts = (value.gitlab || []).map((g) => ({ host: g.host, url: g.url || "", token: g.token }));
   renderHosts();
   $("pr-github").hidden = value.github_via === "token";
@@ -857,7 +894,8 @@ function renderHosts() {
     return `<li class="row pr-host" data-host="${i}">
     <label>Host, as in the remote address<input type="text" data-key="host" value="${esc(g.host)}" placeholder="git.example.com" autocapitalize="off" spellcheck="false"></label>
     <label>Address, only if it differs<input type="text" data-key="url" value="${esc(g.url)}" placeholder="https://git.example.com:8443" autocapitalize="off" spellcheck="false"></label>
-    <label>Token<select data-key="token">${tokenOptions(g)}</select></label>
+    <label>Saved token<select data-key="token">${tokenOptions(g)}</select></label>
+    <label class="pr-host-paste">Or paste a token<input type="password" data-key="paste" value="${esc(g.paste || "")}" autocomplete="new-password" placeholder="Saved as a secret" autocapitalize="off" spellcheck="false"></label>
     <button class="btn quiet danger" type="button" data-remove-host="${i}" aria-label="Remove host" title="Remove host">${CROSS}</button>
     <p class="pr-host-state ${line.cls}">${esc(line.text)}</p>
   </li>`;
@@ -904,7 +942,7 @@ function folderState(f) {
 function renderFolders() {
   const list = $("pr-folders");
   if (!pullFolders) {
-    list.innerHTML = `<li class="pr-wait">Checking your folders...</li>`;
+    list.innerHTML = `<li class="pr-wait pr-folder-note">Checking your folders...</li>`;
     return;
   }
   const rows = pullFolders.folders.map((f) => {
@@ -917,8 +955,8 @@ function renderFolders() {
       ${state.add ? `<button class="btn small-link" type="button" data-add-host="${esc(f.host)}">${esc(state.add)}</button>` : ""}
     </li>`;
   });
-  const away = pullFolders.unreachable.map((u) => `<li class="pr-bad"><strong>${esc(u.machine)}</strong> could not be asked: ${esc(u.why)}</li>`);
-  list.innerHTML = [...rows, ...away].join("") || `<li class="pr-wait">No folders yet.</li>`;
+  const away = pullFolders.unreachable.map((u) => `<li class="pr-bad pr-folder-note"><strong>${esc(u.machine)}</strong> could not be asked: ${esc(u.why)}</li>`);
+  list.innerHTML = [...rows, ...away].join("") || `<li class="pr-wait pr-folder-note">No folders yet.</li>`;
 }
 
 async function loadPullFolders() {
@@ -935,7 +973,7 @@ async function loadPullFolders() {
 let pullFoldersAsked = false;
 
 function pullFoldersWanted() {
-  if (pullFoldersAsked || location.hash !== "#pull-requests") return;
+  if (pullFoldersAsked || !["#pull-requests", "#connections", "#servers"].includes(location.hash)) return;
   pullFoldersAsked = true;
   loadPullFolders();
 }
@@ -943,6 +981,10 @@ function pullFoldersWanted() {
 window.addEventListener("hashchange", pullFoldersWanted);
 
 $("pr-folders-refresh").addEventListener("click", loadPullFolders);
+
+for (const type of ["input", "change"]) {
+  $("pr-form").addEventListener(type, () => { $("pr-save").hidden = false; });
+}
 
 $("pr-folders").addEventListener("click", (e) => {
   const button = e.target.closest("[data-add-host]");
@@ -1297,12 +1339,14 @@ $("conn-sign-in-search").addEventListener("input", (e) => {
 });
 
 async function connectByTool(tool) {
+  const run = flowRun;
   const servers = data.mcp_servers || [];
   const have = servers.find((s) => s.url === tool.url);
   if (have && data.mcp_auth?.[have.name] === "signed_in") { await showConnected(have.name); return; }
   if (!have) {
     if (servers.some((s) => s.name === tool.id)) { tellFlow(`Another connection is already called ${tool.id}. Rename it first.`); return; }
     await saveServers([...servers, { name: tool.id, url: tool.url }], `${tool.name} added.`);
+    if (run !== flowRun) return;
     if (data.mcp_auth?.[tool.id] === "signed_in") { await showConnected(tool.id); return; }
   }
   await startSignIn(have ? have.name : tool.id);
@@ -1374,6 +1418,9 @@ $("conn-form").addEventListener("submit", async (e) => {
   };
   try {
     if (!body.base_url) throw new Error("Type the tool's address, starting with https://");
+    body.headers = await tokensKept(body.headers, body.id);
+    connHeaders = toPairs(body.headers).map(({ key, value }) => ({ name: key, value }));
+    renderConnHeaders();
     await api("POST", "/api/settings/connectors", body);
     const typed = [...$("conn-secrets").querySelectorAll("input")].filter((i) => i.value);
     for (const input of typed) await api("POST", "/api/settings/secrets", { name: input.dataset.secret, value: input.value });
@@ -1486,6 +1533,11 @@ $("pr-form").addEventListener("submit", async (e) => {
   };
   const paste = $("forge-github").querySelector("[name=github_paste]");
   try {
+    for (const [i, g] of gitlabHosts.entries()) {
+      if (!g.paste?.trim()) continue;
+      body.gitlab[i].token = await keptAsSecret(`gitlab_${g.host.trim()}`, g.paste.trim());
+      g.paste = "";
+    }
     if (paste.value.trim()) {
       await api("POST", "/api/settings/secrets", { name: "github_pr", value: paste.value.trim() });
       body.github_token = "${secret:github_pr}";
@@ -1928,11 +1980,19 @@ $("server-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
   const adding = editing === null;
+  const run = flowRun;
   try {
     const srv = serverOf(f);
+    srv.headers = await tokensKept(srv.headers, srv.name);
+    srv.env = await tokensKept(srv.env, srv.name);
+    const token = f.elements.token.value.trim();
+    if (srv.url && token) srv.headers.Authorization = `Bearer ${await keptAsSecret(`${srv.name}_token`, token)}`;
+    f.elements.token.value = "";
+    f.elements.pairs.value = "";
     const servers = [...(data.mcp_servers || [])];
     if (adding) servers.push(srv); else servers[editing] = srv;
     await saveServers(servers, `${srv.name} saved.`);
+    if (run !== flowRun) return;
     if (!adding) { closeFlow(); return; }
     if (srv.url && !Object.keys(srv.headers).length) await startSignIn(srv.name);
     else await showConnected(srv.name);
@@ -1994,7 +2054,7 @@ $("memory-rows").addEventListener("click", async (e) => {
 });
 
 $("secret-add").addEventListener("click", () => openSecretForm(null));
-$("secret-cancel").addEventListener("click", () => { $("secret-form").reset(); $("secret-form").hidden = true; });
+$("secret-cancel").addEventListener("click", () => { $("secret-form").reset(); closeFlow(); });
 
 $("secret-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -2005,7 +2065,7 @@ $("secret-form").addEventListener("submit", async (e) => {
   try {
     await api("POST", "/api/settings/secrets", { name, value: f.elements.value.value });
     f.reset();
-    f.hidden = true;
+    closeFlow();
     toast(`${name} saved. New sessions get it.`, "ok");
     await load();
   } catch (err) {
@@ -2022,14 +2082,9 @@ $("secret-rows").addEventListener("click", async (e) => {
   if (!del) return;
   const name = del.dataset.delete;
   const users = (data.secrets.list.find((x) => x.name === name) || {}).used_by || [];
-  const servers = users.filter((u) => u !== "Linear triggers");
   const text = users.length
-    ? [
-      `${users.join(", ")} ${users.length === 1 ? "uses" : "use"} it.`,
-      servers.length ? `New Claude Code sessions that get ${servers.length === 1 ? "that server" : "those servers"} do not start until you set it again.` : "",
-      servers.length < users.length ? "Linear triggers stop until you set it again." : "",
-    ].filter(Boolean).join(" ")
-    : "No server uses it. The value cannot be brought back.";
+    ? `${users.join(", ")} ${users.length === 1 ? "uses" : "use"} it, and will stop working until you set it again.`
+    : "Nothing uses it. The value cannot be brought back.";
   if (!(await Nav.confirm(`Delete the secret ${name}?`, text, { confirm: "Delete", danger: true }))) return;
   try {
     await api("POST", "/api/settings/secrets/delete", { name });

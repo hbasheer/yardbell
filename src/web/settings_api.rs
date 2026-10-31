@@ -143,6 +143,21 @@ fn secrets_view(cfg: &crate::config::Config, store: &Secrets) -> serde_json::Val
         {
             users.push("Linear triggers");
         }
+        let holds = |text: &str| {
+            crate::secrets::references(text).is_ok_and(|r| r.iter().any(|n| *n == name))
+        };
+        users.extend(
+            cfg.connectors
+                .iter()
+                .filter(|c| c.headers.values().any(|v| holds(v)))
+                .map(|c| c.name.as_str()),
+        );
+        if holds(&cfg.pull_requests.github_token) {
+            users.push("GitHub");
+        }
+        if cfg.pull_requests.gitlab.iter().any(|g| holds(&g.token)) {
+            users.push("GitLab");
+        }
         users
     };
     let list: Vec<_> = store

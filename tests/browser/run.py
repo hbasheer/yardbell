@@ -1434,7 +1434,7 @@ class Suite:
         b.click("#secret-form button[type=submit]")
         b.wait("document.querySelector('#secret-rows [data-replace=github]') && document.getElementById('secrets-missing').hidden", "github set and the warning gone")
 
-        b.click("#secret-rows [data-replace=github]")
+        self.row_action("[data-secret-row=github]", "[data-replace=github]")
         b.wait("document.querySelector('#secret-form input[name=name]').readOnly && !document.querySelector('#secret-form input[name=value]').value", "the replace form, with the name fixed and no value")
         b.click("#secret-form input[name=value]")
         b.type(values[2])
@@ -1458,7 +1458,7 @@ class Suite:
         if values[0] not in stored or values[2] not in stored or values[1] in stored:
             raise Failure("secrets.yml does not hold the moved and the replaced values")
 
-        b.click("#secret-rows [data-delete=github]")
+        self.row_action("[data-secret-row=github]", "[data-delete=github]")
         b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('github uses it')", "the delete confirmation naming its server")
         b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("!document.querySelector('#secret-rows [data-replace=github]') && !document.getElementById('secrets-missing').hidden", "github deleted and missing again")
@@ -2843,11 +2843,11 @@ class Suite:
         b = self.b
         self.add_mcp_server()
         try:
-            head = b.js("[...document.querySelectorAll('.conn-head span')].map((x) => x.textContent).filter(Boolean).join(' ')")
+            head = b.js("[...document.querySelectorAll('#conn-all .conn-head span')].map((x) => x.textContent).filter(Boolean).join(' ')")
             if head != "Connection Type Status":
                 raise Failure(f"the columns are {head!r}")
             row = "#server-rows .conn-row"
-            drift = b.js(f"""Math.abs(document.querySelector('{row} .conn-status').getBoundingClientRect().left - document.querySelectorAll('.conn-head span')[2].getBoundingClientRect().left)""")
+            drift = b.js(f"""Math.abs(document.querySelector('{row} .conn-status').getBoundingClientRect().left - document.querySelectorAll('#conn-all .conn-head span')[2].getBoundingClientRect().left)""")
             if drift > 1:
                 raise Failure(f"the status sits {drift}px off its column")
             pad = b.js("(() => { document.getElementById('conn-new').click(); const v = getComputedStyle(document.querySelector('#conn-sign-in-list .conn-card')).paddingLeft; document.getElementById('conn-flow').close(); return v; })()")
@@ -3231,6 +3231,148 @@ class Suite:
         b.wait("!document.querySelector('[data-conn=trello]')", "the connection gone")
         self.check_errors("actions as fields")
 
+    def test_every_connection_input_looks_the_same(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        measure = """(() => {
+          const out = new Set();
+          for (const el of document.querySelectorAll('#conn-flow input:not([type=checkbox]):not([type=radio]), #conn-flow select')) {
+            if (!el.offsetParent) continue;
+            const c = getComputedStyle(el);
+            out.add([c.height, c.borderTopColor, c.borderRadius, c.fontSize, c.backgroundColor, c.paddingLeft].join(' '));
+          }
+          return [...out];
+        })()"""
+        seen = set()
+        b.click("#conn-new")
+        b.wait("document.getElementById('conn-flow').open", "the modal")
+        seen.update(b.js(measure))
+        b.click("#conn-tabs [data-tab=server-form]")
+        b.js("document.getElementById('server-more').open = true")
+        seen.update(b.js(measure))
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.click("#conn-new-list [data-starter=trello]")
+        b.js("document.getElementById('conn-more').open = true")
+        b.js("document.querySelector('[data-call-name=list]').open = true")
+        seen.update(b.js(measure))
+        b.click("#conn-more-tabs [data-more=conn-login]")
+        seen.update(b.js(measure))
+        b.click("#conn-more-tabs [data-more=conn-choices]")
+        seen.update(b.js(measure))
+        b.js("document.getElementById('conn-flow').close()")
+        b.click("#secret-add")
+        b.wait("document.getElementById('conn-flow').open && !document.getElementById('secret-form').hidden", "adding a secret in the modal")
+        seen.update(b.js(measure))
+        b.js("document.getElementById('conn-flow').close()")
+        if len(seen) != 1:
+            raise Failure(f"the inputs have {len(seen)} styles: {sorted(seen)}")
+
+    def test_closing_the_modal_during_a_check_keeps_it_closed(self):
+        b = self.b
+        self.add_mcp_server()
+        b.js("""window.__real = window.__real || window.fetch;
+          window.__held = new Promise((go) => { window.__release = go; });
+          window.fetch = (u, o) => String(u).endsWith('/test')
+            ? window.__held.then(() => new Response(JSON.stringify({ version: '1', tools: [] }), { headers: { 'content-type': 'application/json' } }))
+            : window.__real(u, o)""")
+        try:
+            b.js("void showConnected('tool')")
+            b.wait("document.getElementById('conn-flow').open && document.getElementById('mcp-tools').textContent.includes('Checking')", "the check")
+            b.click("#conn-close")
+            b.wait("!document.getElementById('conn-flow').open", "the modal closed")
+            b.js("window.__release()")
+            b.pump(0.3)
+            if b.js("document.getElementById('conn-flow').open"):
+                raise Failure("the finished check opened the modal again")
+            self.check_errors("closing during a check")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_tokens_become_secrets_by_themselves(self):
+        b = self.b
+        before = self.api("GET", "/api/settings/pull-requests") if False else self.api("GET", "/api/settings")["pull_requests"]["value"]
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        b.js("""window.__real = window.__real || window.fetch; window.fetch = (u, o) => String(u).endsWith('/test')
+          ? Promise.resolve(new Response(JSON.stringify({ version: '1', tools: [] }), { headers: { 'content-type': 'application/json' } }))
+          : window.__real(u, o)""")
+        try:
+            b.click("#conn-new")
+            b.click("#conn-tabs [data-tab=server-form]")
+            self.set_field("#server-form [name=url]", "https://mcp.example.net/mcp")
+            b.js("document.getElementById('server-more').open = true")
+            self.set_field("#server-form [name=token]", "tok-BROWSER-ONE")
+            self.set_field("#server-form [name=pairs]", "X-Api-Key=tok-BROWSER-TWO")
+            b.click("#server-form button[type=submit]")
+            b.wait("data.mcp_servers.some((s) => s.name === 'example')", "the server saved")
+            b.js("document.getElementById('conn-flow').close()")
+            b.pump(0.3)
+            if b.js("document.getElementById('conn-flow').open"):
+                raise Failure("closing the modal during a save did not hold")
+            with open(self.y.config) as f:
+                config = f.read()
+            for value in ("tok-BROWSER-ONE", "tok-BROWSER-TWO"):
+                if value in config:
+                    raise Failure(f"{value} reached yardbell.yml")
+            if "Bearer ${secret:example_token}" not in config or "${secret:example_x-api-key}" not in config:
+                raise Failure(f"the headers do not name secrets:\n{config}")
+
+            b.click("#conn-new")
+            b.click("#conn-tabs [data-tab=conn-tab-token]")
+            b.click("#conn-new-list [data-starter=asana]")
+            b.wait("!document.getElementById('conn-form').hidden", "the form")
+            b.js("""connHeaders = [{ name: 'Authorization', value: 'Bearer tok-BROWSER-THREE' }]; renderConnHeaders()""")
+            b.click("#conn-form button[type=submit]")
+            b.wait("document.querySelector('[data-conn=asana]') && !document.getElementById('conn-flow').open", "the connection saved")
+            with open(self.y.config) as f:
+                config = f.read()
+            if "tok-BROWSER-THREE" in config or "Bearer ${secret:asana_authorization}" not in config:
+                raise Failure(f"the login header was not kept as a secret:\n{config}")
+
+            b.click("#forge-rows [data-forge=gitlab]")
+            b.click("#pr-add-host")
+            self.set_field("#pr-hosts .row:last-child [data-key=host]", "git-auto.example.com")
+            self.set_field("#pr-hosts .row:last-child [data-key=paste]", "glpat-BROWSER-FOUR")
+            b.click("#forge-gitlab button[type=submit]")
+            b.wait("!document.getElementById('conn-flow').open", "GitLab saved")
+            b.wait("document.querySelector('#forge-rows [data-forge=gitlab]').textContent.includes('git-auto.example.com')", "the host listed")
+            with open(self.y.config) as f:
+                config = f.read()
+            if "glpat-BROWSER-FOUR" in config or "${secret:gitlab_git-auto_example_com}" not in config:
+                raise Failure(f"the host's token was not kept as a secret:\n{config}")
+            page = b.js("document.documentElement.outerHTML")
+            for value in ("tok-BROWSER-ONE", "tok-BROWSER-TWO", "tok-BROWSER-THREE", "glpat-BROWSER-FOUR"):
+                if value in page:
+                    raise Failure(f"{value} is still on the page")
+            b.wait("document.querySelector('[data-secret-row=asana_authorization]')?.textContent.includes('Asana')", "the secret saying what uses it")
+            self.check_errors("tokens as secrets")
+        finally:
+            b.js("document.getElementById('conn-flow')?.close(); if (window.__real) { window.fetch = window.__real; delete window.__real; }")
+            self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+            self.api("POST", "/api/settings/pull-requests", before)
+            b.js("fetch('/api/settings/connectors/asana', { method: 'DELETE' })")
+            for name in ("example_token", "example_x-api-key", "asana_authorization", "gitlab_git-auto_example_com"):
+                try:
+                    self.api("POST", "/api/settings/secrets/delete", {"name": name})
+                except Exception:
+                    pass
+
+    def test_folders_load_on_the_connections_page(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('pr-folders') && !document.getElementById('pr-folders').textContent.includes('Checking your folders')", "the folders to load")
+        head = b.js("[...document.querySelectorAll('#pull-requests .conn-head span')].map((x) => x.textContent).filter(Boolean).join(' ')")
+        if head != "Folder Service Status":
+            raise Failure(f"the folders' columns are {head!r}")
+        if not b.js("document.getElementById('pr-save').hidden"):
+            raise Failure("Save should wait for a change")
+        self.set_field("#pr-form [name=poll_seconds]", "180")
+        b.wait("!document.getElementById('pr-save').hidden", "Save after a change")
+
     def test_connections_section(self):
         b = self.b
         b.goto(self.url("/settings#connections"))
@@ -3322,13 +3464,11 @@ class Suite:
                     raise Failure(f"the host's fields are not stacked on a phone: {lefts}")
         b.viewport(1280, 800)
         row = b.js("document.querySelector('#pr-hosts .row').textContent")
-        for want in ("Host", "Address", "Token", "Not checked yet"):
+        for want in ("Host", "Address", "Saved token", "Or paste a token", "Not checked yet"):
             if want not in row:
                 raise Failure(f"the host row does not say {want!r}: {row}")
         if "No GitLab hosts yet" in b.js("document.getElementById('forge-gitlab').innerText"):
             raise Failure("the empty note stayed after adding a host")
-        if not b.js("document.querySelector('#forge-gitlab a[href=\"#servers\"]')"):
-            raise Failure("no way to the saved secrets")
         b.js("document.getElementById('conn-flow').close()")
         b.js("""window.__real = window.fetch; window.fetch = (u, o) => String(u).includes('/pull-requests/folders')
           ? Promise.resolve(new Response(JSON.stringify({ unreachable: [], folders: [

@@ -253,7 +253,7 @@
     <p class="help" id="triggers-empty">No triggers yet.</p>
     <form class="panel" id="trigger-form" hidden>
       <div class="grid2">
-        <label>Name <input type="text" name="name" maxlength="60" placeholder="Morning summary" autocomplete="off" required></label>
+        <label>Name<input type="text" name="name" maxlength="60" placeholder="Morning summary" autocomplete="off" required></label>
         <label>Task <select name="task" required></select></label>
       </div>
       <label>Start it
@@ -339,35 +339,29 @@
 
       <div id="pull-requests">
         <div class="section-head sub-head"><h3>Pull and merge requests</h3></div>
-        <p class="help">A session shows its branch's pull or merge request next to the branch, with its state and CI.</p>
-        <form class="panel pr-panel" id="pr-form">
-      <div class="phone-switches">
-        <label class="choice"><input type="checkbox" name="enabled">Show pull and merge requests</label>
-        <label class="choice"><input type="checkbox" name="cards">Post a card in Dispatch when CI fails or a reviewer comments</label>
-        <label class="choice phone-wait">Check every <input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required> seconds</label>
-      </div>
-
-      <div class="pr-part">
-        <div class="pr-part-head">
-          <strong>Your folders</strong>
-          <button class="btn small-link" type="button" id="pr-folders-refresh">Check again</button>
-        </div>
-        <p class="help">Read from each folder's <code>origin</code> remote.</p>
-        <ul class="pr-folders" id="pr-folders"></ul>
-      </div>
-      <div class="form-foot">
-        <p class="help" id="pr-note" role="status"></p>
-        <button class="btn primary" type="submit">Save</button>
-      </div>
+        <form class="conn-settings" id="pr-form">
+          <label class="conn-setting"><span><strong>Show them on sessions</strong><small>A session shows its branch's pull or merge request, with its state and CI.</small></span><input type="checkbox" class="switch" name="enabled"></label>
+          <label class="conn-setting"><span><strong>Post a card in Dispatch</strong><small>When CI fails or a reviewer comments.</small></span><input type="checkbox" class="switch" name="cards"></label>
+          <label class="conn-setting"><span><strong>Check every</strong><small>How often Yardbell asks about each branch.</small></span><span class="conn-seconds"><input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required>seconds</span></label>
+          <div class="conn-settings-foot" id="pr-save" hidden>
+            <p class="help" id="pr-note" role="status"></p>
+            <button class="btn primary" type="submit">Save</button>
+          </div>
         </form>
+        <div class="section-head sub-head"><h3>Your folders</h3><button class="btn small-link" type="button" id="pr-folders-refresh">Check again</button></div>
+        <p class="help">Which service each folder's <code>origin</code> remote is on.</p>
+        <div class="conn-all">
+          <div class="conn-head pr-folder-head" aria-hidden="true"><span>Folder</span><span>Service</span><span>Status</span><span></span></div>
+          <ul class="pr-folders" id="pr-folders"></ul>
+        </div>
       </div>
     <div id="servers">
-    <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
-    <p class="help">Tokens for connections that need one, kept in <code id="secrets-file">secrets.yml</code>, which only your account can read. A value is never shown again once it is saved. Refer to one as <code>${secret:NAME}</code> in a header, an environment variable or a URL, for example <code>Authorization=Bearer ${secret:linear}</code>.</p>
-    <div class="banner" id="secrets-missing" hidden>
+      <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
+      <p class="help">Tokens are saved here by themselves when you paste one into a connection. A value is never shown again, and only your account can read <code id="secrets-file">secrets.yml</code>.</p>
+      <div class="banner" id="secrets-missing" hidden>
       <div class="banner-text"><strong>A secret is not set</strong><span id="secrets-missing-text"></span></div>
     </div>
-    <div class="banner warn" id="secrets-inline" hidden>
+      <div class="banner warn" id="secrets-inline" hidden>
       <div class="banner-text">
         <strong>Some values are written in yardbell.yml itself</strong>
         <span>Move them into secrets so yardbell.yml holds none. Tick the ones that are secret. Each is read back from secrets before it leaves yardbell.yml. Older <code>yardbell.yml.bak-</code> copies still hold them, so delete those afterwards.</span>
@@ -375,22 +369,13 @@
       </div>
       <button class="btn primary" type="button" id="secrets-move">Move to secrets</button>
     </div>
-    <ul class="rows" id="secret-rows" hidden></ul>
-    <p class="help" id="secrets-empty">No secrets yet.</p>
-    <form class="panel" id="secret-form" hidden>
-      <div class="grid2">
-        <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" maxlength="64" placeholder="linear" autocapitalize="off" spellcheck="false" required></label>
-        <label>Value <input type="password" name="value" autocomplete="new-password" autocapitalize="off" spellcheck="false" required></label>
+      <div class="conn-all secret-all" id="secret-all">
+        <div class="conn-head secret-head" aria-hidden="true"><span>Name</span><span>Used by</span><span>Saved</span><span></span></div>
+        <ul class="rows" id="secret-rows" hidden></ul>
       </div>
-      <div class="form-foot">
-        <p class="help" id="secret-form-help">Letters, digits, - and _ in the name. New sessions get the value; running ones keep the one they started with.</p>
-        <button class="btn quiet" type="button" id="secret-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Save secret</button>
-      </div>
-    </form>
+      <p class="help" id="secrets-empty">No secrets yet.</p>
     </div>
-    </div>
-    <dialog class="conn-dialog" id="conn-flow" aria-labelledby="conn-dialog-title">
+  <dialog class="conn-dialog" id="conn-flow" aria-labelledby="conn-dialog-title">
       <div class="conn-dialog-head">
         <h3 id="conn-dialog-title">New connection</h3>
         <button class="conn-close" type="button" id="conn-close" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
@@ -424,15 +409,19 @@
         <summary>More options</summary>
         <div class="conn-more-body">
           <div class="grid2">
-            <label>Name <input type="text" name="name" placeholder="Taken from the address" autocapitalize="off" spellcheck="false"></label>
+            <label>Name<input type="text" name="name" placeholder="Taken from the address" autocapitalize="off" spellcheck="false"></label>
             <label>How it runs
               <select name="kind"><option value="url">At a web address</option><option value="command">As a command on the machine</option></select>
             </label>
           </div>
+          <div data-kind="url">
+            <label>Token<input type="password" name="token" autocomplete="new-password" placeholder="Only if the tool gave you one" autocapitalize="off" spellcheck="false"></label>
+            <p class="help">Leave this empty to sign in through your browser. A token is saved as a secret, and sent as <code>Authorization: Bearer</code>.</p>
+          </div>
           <label><span id="server-pairs-label">Environment variables</span>
-            <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=${secret:github}" autocapitalize="off" spellcheck="false"></textarea>
+            <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=paste it here" autocapitalize="off" spellcheck="false"></textarea>
           </label>
-          <p class="help" data-kind="url">Leave this empty to sign in through your browser. Add a header only if the tool gave you a token.</p>
+          <p class="help">One per line, as <code>NAME=value</code>. A token here is saved as a secret by itself.</p>
           <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">Agent sessions on these machines get this connection. None picked means every machine.</p></fieldset>
           <div data-kind="url">
             <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
@@ -448,8 +437,8 @@
     </form>
     <form class="conn-step conn-form" id="conn-form" hidden novalidate>
       <p class="help" id="conn-about"></p>
-      <label>Name <input name="name" autocomplete="off"></label>
-      <label>Address, with its API path <input name="base_url" placeholder="https://api.example.com/1" autocapitalize="off" spellcheck="false"></label>
+      <label>Name<input type="text" name="name" autocomplete="off"></label>
+      <label>Address, with its API path <input type="text" name="base_url" placeholder="https://api.example.com/1" autocapitalize="off" spellcheck="false"></label>
       <div class="conn-secrets" id="conn-secrets"></div>
       <details class="conn-more" id="conn-more">
         <summary>More options</summary>
@@ -466,7 +455,7 @@
             <button class="btn small-link" type="button" id="conn-action-add">Add action</button>
           </div>
           <div class="conn-more-tab" id="conn-login" role="tabpanel" hidden>
-            <p class="help">Sent with every request. A login header must use a saved secret, like <code>Bearer ${secret:my_token}</code>.</p>
+            <p class="help">Sent with every request. Paste a token in a value and it is saved as a secret by itself.</p>
             <div class="conn-pair-head" aria-hidden="true"><span>Header</span><span>Value</span></div>
             <ul class="conn-headers" id="conn-headers"></ul>
             <button class="btn small-link" type="button" id="conn-header-add">Add header</button>
@@ -478,7 +467,7 @@
             <button class="btn small-link" type="button" id="conn-choice-add">Add choice</button>
           </div>
           <div class="conn-more-tab" id="conn-settings" role="tabpanel" hidden>
-            <label>Id, used in pipelines<input name="id" placeholder="Taken from the name" autocapitalize="off" spellcheck="false"></label>
+            <label>Id, used in pipelines<input type="text" name="id" placeholder="Taken from the name" autocapitalize="off" spellcheck="false"></label>
             <label class="choice"><input type="checkbox" name="enabled">Switched on</label>
             <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
             <p class="help">Only for a tool on your own network or mesh. Public tools never need this.</p>
@@ -516,7 +505,7 @@
       <div class="conn-step" id="forge-gitlab" hidden>
         <label class="choice"><input type="checkbox" name="use_gitlab" form="pr-form">Show GitLab merge requests on sessions</label>
         <fieldset class="conn-via"><legend>How it connects</legend>
-          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="token" form="pr-form"><span><strong>A token for each host</strong><small>Yardbell asks GitLab's API from here. The token needs the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Save the token as a secret first, under <a href="#servers">Connections, Secrets</a>.</small></span></label>
+          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="token" form="pr-form"><span><strong>A token for each host</strong><small>Yardbell asks GitLab's API from here. The token needs the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Paste it on the host below, and it is saved as a secret.</small></span></label>
           <label class="conn-via-option"><input type="radio" name="gitlab_via" value="glab" form="pr-form"><span><strong>Local glab</strong><small>Yardbell asks <code>glab</code> on each session's machine. Each machine needs it installed and signed in with <code>glab auth login</code>.</small></span></label>
         </fieldset>
         <div class="pr-part-head"><strong>Hosts</strong><button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button></div>
@@ -525,6 +514,15 @@
         <ul class="rows pr-hosts" id="pr-hosts"></ul>
         <div class="form-foot"><button class="btn quiet" type="button" data-cancel-forge>Cancel</button><button class="btn primary" type="submit" form="pr-form">Save</button></div>
       </div>
+      <form class="conn-step" id="secret-form" hidden>
+        <label>Name<input type="text" name="name" pattern="[A-Za-z0-9_\-]+" maxlength="64" placeholder="linear" autocapitalize="off" spellcheck="false" required></label>
+        <label>Value<input type="password" name="value" autocomplete="new-password" autocapitalize="off" spellcheck="false" required></label>
+        <p class="help" id="secret-form-help"></p>
+        <div class="form-foot">
+          <button class="btn quiet" type="button" id="secret-cancel">Cancel</button>
+          <button class="btn primary" type="submit">Save secret</button>
+        </div>
+      </form>
       <div class="conn-step" id="mcp-sign-in" hidden></div>
       <div class="conn-step" id="mcp-tools" hidden></div>
       <div class="conn-step conn-output" id="conn-output" hidden></div>
