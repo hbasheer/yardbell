@@ -85,6 +85,7 @@ async fn sign_in(
             "redirect": redirect,
             "needs_client": true,
         }),
+        Err(SignIn::NotNeeded) => json!({ "needs_sign_in": false }),
         Err(SignIn::Failed(e)) => return Err(bad(e)),
     };
     Ok(Json(reply).into_response())

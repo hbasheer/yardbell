@@ -357,94 +357,25 @@
   </section>
 
   <section id="connections">
-    <div class="section-head"><h2>Connections</h2>
-      <div class="conn-add">
-        <button class="btn small-link" type="button" id="conn-import-open">Import</button>
-        <button class="btn primary small-link" type="button" id="conn-new" aria-expanded="false">New connection</button>
-      </div>
-    </div>
-    <div class="panel conn-guide">
-      <h3>How to connect a tool</h3>
-      <ol>
-        <li><strong>Press New connection and pick your tool.</strong> If it is not listed, add it with the address of its MCP server. The tool's docs give the address.</li>
-        <li><strong>Sign in with your account.</strong> Your browser opens the tool's own page, where you approve what Yardbell may do. There is no token to create or paste.</li>
-        <li><strong>Press Test.</strong> It lists what the connection can do, and changes nothing.</li>
-      </ol>
-      <p class="help">Pipelines use a connection in a trigger or a step. Agent sessions get every MCP connection too, and sign in to it themselves on their own machine. Use a token only for a tool with no MCP server.</p>
-    </div>
-    <div class="panel conn-new-panel" id="conn-new-panel" hidden>
-      <h3>Sign in with your account</h3>
-      <p class="help">The simplest way, with no token to create.</p>
-      <ul class="rows" id="conn-sign-in-list"></ul>
-      <details class="conn-tokens" id="conn-tokens">
-        <summary>Use a token instead</summary>
-        <p class="help">For a tool with no MCP server. Create a token in the tool, save it under Secrets below, then start from an example and press <strong>Test</strong>.</p>
-        <ul class="rows" id="conn-new-list"></ul>
+    <div class="section-head"><h2>Connections</h2><button class="btn primary small-link" type="button" id="conn-new">New connection</button></div>
+    <div id="conn-home">
+      <p class="help">The tools your pipelines and agent sessions can reach.</p>
+      <details class="conn-guide" id="conn-guide">
+        <summary>How connecting works</summary>
+        <ol>
+          <li><strong>Press New connection and pick your tool.</strong> If it is not listed, add it with the address of its MCP server. The tool's docs give the address.</li>
+          <li><strong>Sign in with your account.</strong> Your browser opens the tool's own page, where you approve what Yardbell may do. There is no token to create or paste.</li>
+          <li><strong>That is it.</strong> Yardbell checks the connection and lists what it can do. Press <strong>Test</strong> to check again at any time. It changes nothing.</li>
+        </ol>
+        <p class="help">Pipelines use a connection in a trigger or a step. Agent sessions get every MCP connection too, and sign in to it themselves on their own machine. Use a token only for a tool with no MCP server.</p>
       </details>
-    </div>
-    <div class="conn-all" id="conn-all">
-      <ul class="rows" id="server-rows"></ul>
-      <ul class="rows conn-rows" id="conn-rows"></ul>
-    </div>
-    <p class="pr-none" id="conn-none">No connections yet. Press New connection to add your first.</p>
-    <div class="panel mcp-panel" id="mcp-sign-in" hidden></div>
-    <div class="panel mcp-panel" id="mcp-tools" hidden></div>
-    <form class="panel" id="server-form" hidden>
-      <div class="grid2">
-        <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" placeholder="github" autocapitalize="off" spellcheck="false" required></label>
-        <label>Kind
-          <select name="kind"><option value="command">Command (runs on the machine)</option><option value="url">URL (HTTP server)</option></select>
-        </label>
+      <div class="conn-all" id="conn-all">
+        <ul class="rows" id="server-rows"></ul>
+        <ul class="rows conn-rows" id="conn-rows"></ul>
       </div>
-      <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
-      <label data-kind="url">Address of its MCP server <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
-      <div data-kind="url">
-        <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
-        <p class="help">Only for a server you run yourself on this machine or your mesh. Sign-in stops being limited to HTTPS for this server.</p>
-      </div>
-      <label><span id="server-pairs-label">Environment variables</span>
-        <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=${secret:github}" autocapitalize="off" spellcheck="false"></textarea>
-      </label>
-      <p class="help" data-kind="url">Leave this empty to sign in through your browser. Add a header only if the tool gave you a token.</p>
-      <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">Agent sessions on these machines get this connection. None picked means every machine.</p></fieldset>
-      <div class="form-foot">
-        <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Save</button>
-      </div>
-    </form>
+      <p class="conn-none" id="conn-none">No connections yet. Press New connection to add your first.</p>
+      <div class="panel conn-output" id="conn-output" hidden></div>
 
-    <form class="panel conn-form" id="conn-form" hidden>
-      <div class="conn-fields">
-        <label>Name<input name="name" autocomplete="off"></label>
-        <label>Id, used in pipelines<input name="id" autocapitalize="off" spellcheck="false" required></label>
-        <label class="conn-wide">Address, with its API path<input name="base_url" placeholder="https://api.example.com/1" autocapitalize="off" spellcheck="false" required></label>
-      </div>
-      <label class="choice"><input type="checkbox" name="enabled">Switched on</label>
-      <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
-      <p class="help">Only for a tool on your own network or mesh. It lets this connection reach addresses that public tools should never need.</p>
-      <p class="pl-field-head">Headers</p>
-      <ul class="conn-headers" id="conn-headers"></ul>
-      <button class="btn small-link" type="button" id="conn-header-add">Add header</button>
-      <p class="help">A login header must use a saved secret, like <code>Bearer ${secret:my_token}</code>.</p>
-      <label class="conn-yaml">Choices a pipeline can make (optional)<textarea name="params_yaml" rows="3" spellcheck="false"></textarea></label>
-      <label class="conn-yaml">Calls<textarea name="calls_yaml" rows="14" spellcheck="false"></textarea></label>
-      <p class="help">Name a <code>list</code> call to start runs from this tool, and a <code>read</code> call to read one item. Each call has a <code>request</code>, and a <code>map</code> saying which reply field is the <code>item_id</code>, <code>title</code>, <code>url</code>, <code>description</code> and <code>state</code>. See the guide for paging.</p>
-      <div class="form-foot">
-        <p class="help" id="conn-note" role="status"></p>
-        <button class="btn quiet" type="button" id="conn-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Save</button>
-      </div>
-    </form>
-    <form class="panel conn-form" id="conn-import" hidden>
-      <label class="conn-yaml">Paste a shared connection<textarea name="text" rows="10" spellcheck="false"></textarea></label>
-      <p class="help">It arrives switched off. Nothing runs until you have read it and switched it on.</p>
-      <div class="form-foot">
-        <button class="btn quiet" type="button" id="conn-import-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Import</button>
-      </div>
-    </form>
-    <div class="panel conn-output" id="conn-output" hidden></div>
-  
     <div id="servers">
     <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
     <p class="help">Tokens for connections that need one, kept in <code id="secrets-file">secrets.yml</code>, which only your account can read. A value is never shown again once it is saved. Refer to one as <code>${secret:NAME}</code> in a header, an environment variable or a URL, for example <code>Authorization=Bearer ${secret:linear}</code>.</p>
@@ -473,6 +404,100 @@
       </div>
     </form>
     </div>
+    </div>
+    <dialog class="conn-dialog" id="conn-flow" aria-labelledby="conn-dialog-title">
+      <div class="conn-dialog-head">
+        <h3 id="conn-dialog-title">New connection</h3>
+        <button class="conn-close" type="button" id="conn-close" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="segmented conn-tabs" id="conn-tabs" role="tablist" aria-label="How to connect">
+        <button type="button" role="tab" data-tab="conn-new-panel" aria-selected="true">Sign in</button>
+        <button type="button" role="tab" data-tab="server-form" aria-selected="false">MCP server</button>
+        <button type="button" role="tab" data-tab="conn-tab-token" aria-selected="false">Token</button>
+      </div>
+      <div class="conn-dialog-body">
+      <button class="conn-back" type="button" id="conn-back" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span>Back</span></button>
+      <div class="conn-step" id="conn-new-panel" role="tabpanel" hidden>
+        <p class="help">Sign in with your account in your browser. The simplest way, with no token to create.</p>
+        <ul class="rows" id="conn-sign-in-list"></ul>
+        <p class="help">Not listed? <button class="conn-link" type="button" data-another>Add its MCP server</button>, or use a token if it has none.</p>
+      </div>
+      <div class="conn-step" id="conn-tab-token" role="tabpanel" hidden>
+        <p class="help">For a tool with no MCP server. You paste its token in the next step.</p>
+        <ul class="rows" id="conn-new-list"></ul>
+        <p class="help">Someone shared one with you? <button class="conn-link" type="button" id="conn-import-open">Paste it here</button>.</p>
+      </div>
+    <form class="conn-step" id="server-form" hidden novalidate>
+      <p class="help" data-kind="url">Paste the address from the tool's docs. You will sign in next if it needs it.</p>
+      <p class="help" data-kind="command">Yardbell starts this command on the machine, and passes it the environment below.</p>
+      <label data-kind="url">Address <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
+      <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
+      <details class="conn-more" id="server-more">
+        <summary>More options</summary>
+        <div class="conn-more-body">
+          <div class="grid2">
+            <label>Name <input type="text" name="name" placeholder="Taken from the address" autocapitalize="off" spellcheck="false"></label>
+            <label>How it runs
+              <select name="kind"><option value="url">At a web address</option><option value="command">As a command on the machine</option></select>
+            </label>
+          </div>
+          <label><span id="server-pairs-label">Environment variables</span>
+            <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=${secret:github}" autocapitalize="off" spellcheck="false"></textarea>
+          </label>
+          <p class="help" data-kind="url">Leave this empty to sign in through your browser. Add a header only if the tool gave you a token.</p>
+          <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">Agent sessions on these machines get this connection. None picked means every machine.</p></fieldset>
+          <div data-kind="url">
+            <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
+            <p class="help">Only for a server you run yourself on this machine or your mesh. Sign-in stops being limited to HTTPS for this server.</p>
+          </div>
+        </div>
+      </details>
+      <div class="form-foot">
+        <p class="help conn-error" id="server-note" role="status"></p>
+        <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
+        <button class="btn primary" type="submit" id="server-save">Continue</button>
+      </div>
+    </form>
+    <form class="conn-step conn-form" id="conn-form" hidden novalidate>
+      <p class="help" id="conn-about"></p>
+      <label>Name <input name="name" autocomplete="off"></label>
+      <label>Address, with its API path <input name="base_url" placeholder="https://api.example.com/1" autocapitalize="off" spellcheck="false"></label>
+      <div class="conn-secrets" id="conn-secrets"></div>
+      <details class="conn-more" id="conn-more">
+        <summary>More options</summary>
+        <div class="conn-more-body">
+          <label>Id, used in pipelines <input name="id" placeholder="Taken from the name" autocapitalize="off" spellcheck="false"></label>
+          <label class="choice"><input type="checkbox" name="enabled">Switched on</label>
+          <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
+          <p class="help">Only for a tool on your own network or mesh. It lets this connection reach addresses that public tools should never need.</p>
+          <p class="pl-field-head">Headers</p>
+          <ul class="conn-headers" id="conn-headers"></ul>
+          <button class="btn small-link" type="button" id="conn-header-add">Add header</button>
+          <p class="help">A login header must use a saved secret, like <code>Bearer ${secret:my_token}</code>.</p>
+          <label class="conn-yaml">Choices a pipeline can make (optional)<textarea name="params_yaml" rows="3" spellcheck="false"></textarea></label>
+          <label class="conn-yaml">Calls<textarea name="calls_yaml" rows="14" spellcheck="false"></textarea></label>
+          <p class="help">Name a <code>list</code> call to start runs from this tool, and a <code>read</code> call to read one item. Each call has a <code>request</code>, and a <code>map</code> saying which reply field is the <code>item_id</code>, <code>title</code>, <code>url</code>, <code>description</code> and <code>state</code>. See the guide for paging.</p>
+        </div>
+      </details>
+      <div class="form-foot">
+        <p class="help conn-error" id="conn-note" role="status"></p>
+        <button class="btn quiet" type="button" id="conn-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+    <form class="conn-step conn-form" id="conn-import" hidden>
+      <label class="conn-yaml">Paste a shared connection<textarea name="text" rows="10" spellcheck="false"></textarea></label>
+      <p class="help">It arrives switched off. Nothing runs until you have read it and switched it on.</p>
+      <div class="form-foot">
+        <button class="btn quiet" type="button" id="conn-import-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Import</button>
+      </div>
+    </form>
+      <div class="conn-step" id="mcp-sign-in" hidden></div>
+      <div class="conn-step" id="mcp-tools" hidden></div>
+      <p class="help conn-error" id="conn-flow-error" role="alert"></p>
+      </div>
+    </dialog>
   </section>
 
   <section id="mcp">

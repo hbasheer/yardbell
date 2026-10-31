@@ -40,6 +40,7 @@ pub struct Started {
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum SignIn {
+    NotNeeded,
     NeedsClient {
         redirect: String,
         sign_in_host: String,
@@ -404,7 +405,7 @@ impl Auth {
         let challenge = match probe.connect().await {
             Ok(_) => {
                 probe.close().await;
-                return Err(SignIn::Failed(format!("{} needs no sign-in", server.name)));
+                return Err(SignIn::NotNeeded);
             }
             Err(Failure::NeedsSignIn(c)) | Err(Failure::NeedsScope(c)) => c,
             Err(Failure::Other(_)) => Challenge::default(),

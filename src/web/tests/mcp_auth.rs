@@ -67,6 +67,17 @@ async fn sign_in_names_the_host_and_stores_nothing_yet() {
 }
 
 #[tokio::test]
+async fn sign_in_says_when_none_is_needed() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let f = crate::mcp_client::tests::fake().await;
+    add_server(&r, &f.base);
+    let (status, out) = call(&r, &c, "POST", &format!("{ROOT}/sign-in"), Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["needs_sign_in"], false);
+}
+
+#[tokio::test]
 async fn sign_in_can_need_a_client() {
     let r = rig();
     let c = cookie(&r.app).await;

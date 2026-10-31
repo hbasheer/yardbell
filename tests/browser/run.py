@@ -2748,6 +2748,7 @@ class Suite:
         self.b.wait("document.querySelector('[data-mcp-act=sign-in]')", "the Sign in button")
 
     def remove_mcp_servers(self):
+        self.b.js("document.getElementById('conn-flow')?.close()")
         self.api("POST", "/api/settings/mcp/servers", {"servers": []})
 
     def test_server_sign_in_flow(self):
@@ -2756,12 +2757,6 @@ class Suite:
         try:
             if "Not signed in" not in b.js("document.getElementById('server-rows').textContent"):
                 raise Failure("the row does not say it is not signed in")
-            self.stub_sign_in({"url": "https://auth.example.com/authorize?x=1", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
-            b.click("[data-mcp-act=sign-in]")
-            b.wait("document.getElementById('mcp-sign-in')?.textContent.includes('You will sign in at auth.example.com')", "the host, before leaving")
-            link = b.js("document.querySelector('#mcp-sign-in a[data-continue]').getAttribute('href')")
-            if link != "https://auth.example.com/authorize?x=1":
-                raise Failure(f"Continue goes to {link}")
             b.viewport(390, 844)
             try:
                 b.wait("window.innerWidth === 390", "the phone width")
@@ -2770,6 +2765,12 @@ class Suite:
                     raise Failure(f"the server buttons run {wide}px past the phone screen")
             finally:
                 b.viewport(1280, 900)
+            self.stub_sign_in({"url": "https://auth.example.com/authorize?x=1", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.getElementById('mcp-sign-in')?.textContent.includes('You will sign in at auth.example.com')", "the host, before leaving")
+            link = b.js("document.querySelector('#mcp-sign-in a[data-continue]').getAttribute('href')")
+            if link != "https://auth.example.com/authorize?x=1":
+                raise Failure(f"Continue goes to {link}")
             self.check_errors("signing in")
         finally:
             self.remove_mcp_servers()
@@ -2825,6 +2826,86 @@ class Suite:
         finally:
             self.remove_mcp_servers()
 
+    def test_new_connection_is_one_step_at_a_time(self):
+        b = self.b
+        self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        reply = {"url": "https://auth.example.com/a", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False}
+        self.stub_sign_in(reply)
+        try:
+            b.click("#conn-new")
+            b.wait("document.getElementById('conn-flow').open", "the modal")
+            tabs = b.js("[...document.querySelectorAll('#conn-tabs [data-tab]')].map((t) => t.textContent).join('|')")
+            if tabs != "Sign in|MCP server|Token":
+                raise Failure(f"the tabs are {tabs}")
+            if b.js("document.querySelector('#conn-tabs [aria-selected=true]').textContent") != "Sign in":
+                raise Failure("Sign in should be the first tab")
+
+            b.click("#conn-tabs [data-tab=server-form]")
+            b.wait("!document.getElementById('server-form').hidden", "the address step")
+            if b.js("document.querySelector('#conn-tabs [aria-selected=true]').textContent") != "MCP server":
+                raise Failure("the tab does not show where you are")
+            if b.js("document.getElementById('conn-new-panel').hidden") is not True:
+                raise Failure("the picker stayed under the form")
+            if b.js("document.getElementById('server-more').open"):
+                raise Failure("the extra options should be folded")
+            self.set_field("#server-form [name=url]", "not an address")
+            b.click("#server-form button[type=submit]")
+            b.wait("document.getElementById('server-note').textContent.includes('https://')", "word about the address")
+            self.set_field("#server-form [name=url]", "https://mcp.example.net/mcp")
+            b.click("#server-form button[type=submit]")
+            b.wait("document.getElementById('mcp-sign-in').textContent.includes('You will sign in at auth.example.com')", "the sign-in step")
+            if not b.js("data.mcp_servers.some((s) => s.name === 'example')"):
+                raise Failure(f"the name was not taken from the address: {b.js('JSON.stringify(data.mcp_servers)')}")
+
+            b.js("""document.addEventListener('click', (e) => { if (e.target.closest('a[data-continue]')) e.preventDefault(); }, true);
+              const stubbed = window.fetch;
+              window.fetch = (u, o) => {
+                const at = String(u);
+                if (at.endsWith('/test')) return Promise.resolve(new Response(JSON.stringify({ version: '2025-11-25', tools: [{ name: 'readCard', description: 'Reads a card' }] }), { headers: { 'content-type': 'application/json' } }));
+                if (at === '/api/settings' && window.__signed) return stubbed(u, o).then((r) => r.json()).then((d) => { d.mcp_auth = { example: 'signed_in' }; return new Response(JSON.stringify(d), { headers: { 'content-type': 'application/json' } }); });
+                return stubbed(u, o);
+              }""")
+            b.click("#mcp-sign-in a[data-continue]")
+            b.wait("document.getElementById('mcp-sign-in').textContent.includes('Finish signing in')", "the waiting step")
+            b.js("window.__signed = true")
+            b.wait("!document.getElementById('mcp-tools').hidden && document.getElementById('mcp-tools').textContent.includes('readCard')", "the tools, with no Test to press")
+            if "Connected to example" not in b.js("document.getElementById('conn-dialog-title').textContent"):
+                raise Failure("it does not say it connected")
+            b.click("[data-close-tools]")
+            b.wait("!document.getElementById('conn-flow').open && document.querySelector('#server-rows [data-mcp-act=test]')", "back on the list")
+            self.check_errors("adding by address")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_a_token_connection_takes_its_secret_in_the_form(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        b.click("#conn-new")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.click("#conn-new-list [data-starter=asana]")
+        b.wait("!document.getElementById('conn-form').hidden && document.querySelector('#conn-secrets input[type=password]')", "a box for its secret")
+        if b.js("document.getElementById('conn-more').open"):
+            raise Failure("headers and calls should be folded for an example")
+        name = b.js("document.querySelector('#conn-secrets input').dataset.secret")
+        self.set_field("#conn-secrets input", "asana-value-BROWSER")
+        b.click("#conn-form button[type=submit]")
+        b.wait("document.querySelector('[data-conn=asana]')", "the saved connection")
+        if "Save the secret" in b.js("document.querySelector('[data-conn=asana]').textContent"):
+            raise Failure("the secret typed in the form was not saved")
+        if "asana-value-BROWSER" in b.js("document.documentElement.outerHTML"):
+            raise Failure("the secret stayed on the page")
+        b.click("[data-conn=asana] [data-conn-act=delete]")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("!document.querySelector('[data-conn=asana]')", "the connection gone")
+        self.api("POST", "/api/settings/secrets/delete", {"name": name})
+        self.check_errors("a token connection")
+
     def test_one_connections_page(self):
         b = self.b
         self.api("POST", "/api/settings/mcp/servers", {"servers": []})
@@ -2845,11 +2926,6 @@ class Suite:
             raise Failure("an empty page does not say so")
         b.click("#conn-new")
         b.wait("document.querySelector('[data-sign-in=trello]')", "Trello under sign in")
-        order = b.js("[...document.querySelectorAll('#conn-new-panel h3, #conn-new-panel summary')].map((x) => x.textContent).join('|')")
-        if order != "Sign in with your account|Use a token instead":
-            raise Failure(f"the groups are {order}")
-        if b.js("document.getElementById('conn-tokens').open"):
-            raise Failure("tokens should stay folded away")
         b.click("[data-another]")
         b.wait("!document.getElementById('server-form').hidden", "the server form")
         if b.js("document.getElementById('server-form').elements.kind.value") != "url":
@@ -2876,7 +2952,7 @@ class Suite:
         if b.js("document.getElementById('conn-trello')"):
             raise Failure("the page still has a button for one tool")
         b.click("#conn-new")
-        b.js("document.getElementById('conn-tokens').open = true")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
         b.wait("document.querySelector('#conn-new-list [data-starter=trello]')", "the examples")
         said = b.js("document.getElementById('conn-new-list').textContent")
         for want in ("Start blank", "Trello", "GitHub Issues", "GitLab Issues", "Jira", "Asana"):
@@ -2886,14 +2962,15 @@ class Suite:
         b.wait("document.querySelector('#conn-form [name=base_url]')?.value.includes('atlassian.net')", "the Jira example")
         b.click("#conn-cancel")
         b.click("#conn-new")
-        b.js("document.getElementById('conn-tokens').open = true")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
         b.click("#conn-new-list [data-starter='']")
         b.wait("document.querySelector('#conn-form [name=base_url]')?.value === ''", "a blank form")
         b.click("#conn-cancel")
         b.click("#conn-new")
-        b.js("document.getElementById('conn-tokens').open = true")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
         b.click("#conn-new-list [data-starter=trello]")
         b.wait("document.querySelector('#conn-form [name=base_url]')?.value === 'https://api.trello.com/1'", "the Trello template")
+        b.js("document.getElementById('conn-more').open = true")
         if "secret:trello_token" not in b.js("document.querySelector('#conn-headers [data-key=value]').value"):
             raise Failure("the template's header is not a secret reference")
         b.click("#conn-form button[type=submit]")
@@ -2907,6 +2984,8 @@ class Suite:
         text = b.js("document.getElementById('conn-share-text').value")
         if "${secret:trello_token}" not in text:
             raise Failure(f"share lost its reference: {text}")
+        b.click("#conn-new")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
         b.click("#conn-import-open")
         self.set_field("#conn-import [name=text]", text.replace("id: trello", "id: copy"))
         b.click("#conn-import button[type=submit]")

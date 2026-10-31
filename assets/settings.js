@@ -222,31 +222,39 @@ function serverAuth(srv) {
 
 function serverActions(srv) {
   const status = data.mcp_auth?.[srv.name];
-  const act = (name, label) => `<button class="btn" type="button" data-mcp-act="${name}" data-name="${esc(srv.name)}">${label}</button>`;
+  const act = (name, label) => `<button class="btn small-link" type="button" data-mcp-act="${name}" data-name="${esc(srv.name)}">${label}</button>`;
   const signIn = status === "not_signed_in" ? act("sign-in", "Sign in") : status === "sign_in_again" ? act("sign-in", "Sign in again") : "";
   const signOut = status === "signed_in" || status === "sign_in_again" ? act("sign-out", "Sign out") : "";
   return `${signIn}${signOut}${act("test", "Test")}`;
 }
 
 function showConnectionsEmpty() {
-  const none = !(data.mcp_servers || []).length && !connections.list.length;
+  const none = !(data?.mcp_servers || []).length && !connections.list.length;
   $("conn-none").hidden = !none;
   $("conn-all").hidden = none;
+  $("conn-guide").open = none;
 }
 
-function serverKind(srv) {
-  if (!srv.url) return "MCP, runs a command";
-  return Object.keys(srv.headers || {}).length ? "MCP, uses saved headers" : "MCP, signs in through your browser";
+const AUTH_CLASS = { signed_in: "pr-ok", sign_in_again: "pr-bad", not_signed_in: "pr-wait" };
+
+function serverWhere(srv) {
+  if (!srv.url) return srv.command;
+  try { return new URL(srv.url).host; } catch { return srv.url; }
 }
 
 function renderServers() {
   const servers = data.mcp_servers || [];
   $("server-rows").hidden = !servers.length;
   showConnectionsEmpty();
-  $("server-rows").innerHTML = servers.map((srv, i) => `<li class="row">
-    <div class="row-main"><div class="row-title"><span class="folder">${esc(srv.name)}</span>${serverAuth(srv) ? `<span class="note">${serverAuth(srv)}</span>` : ""}</div>
-      <p class="help">${esc(serverKind(srv))} · ${esc(serverTarget(srv))} · ${srv.machines?.length ? esc(srv.machines.join(", ")) : "every machine"}</p></div>
-    <div class="row-actions">${serverActions(srv)}<button class="btn" type="button" data-edit="${i}">Edit</button><button class="btn quiet danger" type="button" data-remove="${i}">Remove</button></div></li>`).join("");
+  $("server-rows").innerHTML = servers.map((srv, i) => {
+    const status = data.mcp_auth?.[srv.name];
+    const state = !srv.url ? "Runs as a command" : serverAuth(srv) || "Uses saved headers";
+    const limited = srv.machines?.length ? ` · ${srv.machines.join(", ")}` : "";
+    return `<li class="row conn-row">
+      <span class="conn-name"><strong>${esc(srv.name)}</strong> <small>${esc(serverWhere(srv))}${esc(limited)}</small>
+        <span class="conn-state ${AUTH_CLASS[status] || "pr-wait"}">${esc(state)}</span></span>
+      <span class="conn-actions">${serverActions(srv)}<button class="btn small-link" type="button" data-edit="${i}">Edit</button><button class="btn quiet danger small-link" type="button" data-remove="${i}">Remove</button></span></li>`;
+  }).join("");
 }
 
 let signingIn = null;
@@ -259,20 +267,87 @@ function signsInHere() {
   return ["127.0.0.1", "localhost"].includes(location.hostname);
 }
 
-function closeSignIn() {
+const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools"];
+const FLOW_TABS = ["conn-new-panel", "server-form", "conn-tab-token"];
+let flowStep = null;
+let flowAdding = false;
+
+function showStep(step, title) {
+  const dialog = $("conn-flow");
+  flowStep = step;
+  FLOW_STEPS.forEach((id) => { $(id).hidden = id !== step; });
+  const tabbed = flowAdding && FLOW_TABS.includes(step);
+  $("conn-tabs").hidden = !tabbed;
+  $("conn-back").hidden = tabbed || !flowAdding || step === "mcp-tools";
+  $("conn-tabs").querySelectorAll("[data-tab]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.tab === step)));
+  $("conn-dialog-title").textContent = title || "New connection";
+  $("conn-flow-error").textContent = "";
+  if (!dialog.open) dialog.showModal();
+  dialog.querySelector(".conn-dialog-body").scrollTop = 0;
+}
+
+function closeFlow() {
+  stopWaiting();
   signingIn = null;
-  $("mcp-sign-in").hidden = true;
+  flowStep = null;
+  flowAdding = false;
   $("mcp-sign-in").innerHTML = "";
+  if ($("conn-flow").open) $("conn-flow").close();
+}
+
+function tellFlow(message) {
+  if ($("conn-flow").open) $("conn-flow-error").textContent = message;
+  else toast(message);
+}
+
+function focusIfActive(el) {
+  if (document.hasFocus()) el.focus();
+}
+
+let waiting = null;
+let refreshOnReturn = false;
+
+function stopWaiting() {
+  clearInterval(waiting);
+  waiting = null;
+}
+
+async function checkSignedIn() {
+  const name = signingIn;
+  if (!name) return;
+  await refreshServerAuth();
+  if (data.mcp_auth?.[name] !== "signed_in" || signingIn !== name) return;
+  stopWaiting();
+  await showConnected(name);
+}
+
+function waitForSignIn() {
+  stopWaiting();
+  waiting = setInterval(() => { checkSignedIn().catch(() => {}); }, 3000);
+}
+
+async function showConnected(name) {
+  signingIn = null;
+  stopWaiting();
+  showStep("mcp-tools", `Connected to ${name}`);
+  $("mcp-tools").innerHTML = `<p class="help" role="status">Checking what it can do.</p>`;
+  await refreshServerAuth();
+  try {
+    showTools(name, await api("POST", serverPath(name, "test")), `Connected to ${name}`);
+  } catch (err) {
+    $("mcp-tools").innerHTML = `<p class="help conn-error">It did not answer the check: ${esc(err.message)}</p>
+      <div class="form-foot"><button class="btn primary" type="button" data-close-tools>Done</button></div>`;
+  }
 }
 
 function showSignIn(name, out) {
   const panel = $("mcp-sign-in");
   signingIn = name;
-  panel.hidden = false;
+  if (out.needs_sign_in === false) { showConnected(name); return; }
+  showStep("mcp-sign-in", `Sign in to ${name}`);
   const cancel = `<button class="btn quiet" type="button" data-cancel>Cancel</button>`;
   if (out.needs_client) {
-    panel.innerHTML = `<h3>Sign in to ${esc(name)}</h3>
-      <p class="help">${esc(out.sign_in_host)} does not let Yardbell register itself. Make an app in its developer console with this redirect address, then enter what it gives you.</p>
+    panel.innerHTML = `<p class="help">${esc(out.sign_in_host)} does not let Yardbell register itself. Make an app in its developer console with this redirect address, then enter what it gives you.</p>
       <p><code>${esc(out.redirect)}</code></p>
       <div class="grid2">
         <label>Client ID <input type="text" name="client_id" autocapitalize="off" spellcheck="false"></label>
@@ -284,8 +359,7 @@ function showSignIn(name, out) {
   const paste = signsInHere() ? "" : `
       <p class="help">You are on another device. ${esc(out.sign_in_host)} sends you back to 127.0.0.1, which on this device is not Yardbell, so that page will not load. Copy its address and paste it here.</p>
       <label>Address of the page that did not load <input type="text" name="address" inputmode="url" autocapitalize="off" spellcheck="false"></label>`;
-  panel.innerHTML = `<h3>Sign in to ${esc(name)}</h3>
-      <p>You will sign in at ${esc(out.sign_in_host)}</p>${paste}
+  panel.innerHTML = `<p>You will sign in at ${esc(out.sign_in_host)}</p>${paste}
       <div class="form-foot">${cancel}<a class="btn${paste ? "" : " primary"}" data-continue target="_blank" rel="noopener" href="${esc(out.url)}">Continue</a>${paste ? `<button class="btn primary" type="button" data-finish>Finish signing in</button>` : ""}</div>`;
 }
 
@@ -299,28 +373,25 @@ async function startSignIn(name, client) {
   signingIn = name;
   const panel = $("mcp-sign-in");
   if (!client) {
-    panel.hidden = false;
-    panel.innerHTML = `<h3>Sign in to ${esc(name)}</h3>
-      <p role="status">Finding where ${esc(name)} signs you in. This can take a few seconds.</p>
+    showStep("mcp-sign-in", `Sign in to ${name}`);
+    panel.innerHTML = `<p role="status">Finding where ${esc(name)} signs you in. This can take a few seconds.</p>
       <div class="form-foot"><button class="btn quiet" type="button" data-cancel>Cancel</button></div>`;
   }
   try {
     const out = await api("POST", serverPath(name, "sign-in"), client || {});
     if (signingIn === name) showSignIn(name, out);
   } catch (err) {
-    if (!client && signingIn === name) closeSignIn();
+    if (!client && signingIn === name) closeFlow();
     throw err;
   }
 }
 
-function showTools(name, out) {
-  const panel = $("mcp-tools");
-  panel.hidden = false;
-  const tools = out.tools.map((t) => `<li><code>${esc(t.name)}</code> ${esc(t.description)}</li>`).join("");
-  panel.innerHTML = `<h3>${esc(name)} answered</h3>
-    <p class="help">${out.tools.length} ${out.tools.length === 1 ? "tool" : "tools"}, protocol ${esc(out.version)}. None were called.</p>
+function showTools(name, out, heading = `${name} answered`) {
+  showStep("mcp-tools", heading);
+  const tools = out.tools.map((t) => `<li><code>${esc(t.name)}</code><span>${esc(t.description)}</span></li>`).join("");
+  $("mcp-tools").innerHTML = `<p class="help">It offers ${out.tools.length} ${out.tools.length === 1 ? "tool" : "tools"}. None were called.</p>
     <ul class="mcp-tools">${tools}</ul>
-    <div class="form-foot"><button class="btn quiet" type="button" data-close-tools>Close</button></div>`;
+    <div class="form-foot"><button class="btn primary" type="button" data-close-tools>Done</button></div>`;
 }
 
 function day(stamp) {
@@ -416,21 +487,56 @@ function showKind(kind) {
   $("server-form").elements.pairs.placeholder = kind === "url" ? "Authorization=Bearer ${secret:linear}" : "GITHUB_TOKEN=${secret:github}";
 }
 
-function openServerForm(index) {
+function openServerForm(index, kind) {
   editing = index;
   const srv = index === null ? { name: "", command: "", url: "", env: {}, headers: {}, machines: [], allow_private: false } : data.mcp_servers[index];
   const f = $("server-form");
-  const kind = srv.url ? "url" : "command";
+  const shown = index === null ? kind || "url" : srv.url ? "url" : "command";
   f.elements.name.value = srv.name;
-  f.elements.kind.value = kind;
+  f.elements.kind.value = shown;
   f.elements.command.value = srv.command || "";
   f.elements.url.value = srv.url || "";
   f.elements.allow_private.checked = !!srv.allow_private;
-  f.elements.pairs.value = Object.entries((kind === "url" ? srv.headers : srv.env) || {}).map(([k, v]) => `${k}=${v}`).join("\n");
+  f.elements.pairs.value = Object.entries((shown === "url" ? srv.headers : srv.env) || {}).map(([k, v]) => `${k}=${v}`).join("\n");
   $("server-machines").innerHTML = data.machines.map((m) => `<label class="choice"><input type="checkbox" value="${esc(m.name)}"${srv.machines?.includes(m.name) ? " checked" : ""}>${esc(m.name)}</label>`).join("");
-  showKind(kind);
-  f.hidden = false;
-  f.elements.name.focus();
+  $("server-save").textContent = index === null ? "Continue" : "Save";
+  $("server-note").textContent = "";
+  $("server-more").open = index !== null && Boolean(f.elements.pairs.value);
+  showKind(shown);
+  showStep("server-form", index === null ? "" : `Edit ${srv.name}`);
+  focusIfActive(shown === "url" ? f.elements.url : f.elements.command);
+}
+
+function nameFromAddress(address) {
+  const words = new URL(address).hostname.split(".").filter((w) => !["mcp", "api", "www"].includes(w));
+  const base = (words[0] || "server").replace(/[^A-Za-z0-9_-]/g, "-");
+  const taken = new Set((data.mcp_servers || []).map((s) => s.name));
+  let name = base;
+  for (let n = 2; taken.has(name); n += 1) name = `${base}-${n}`;
+  return name;
+}
+
+function serverOf(f) {
+  const url = f.elements.kind.value === "url";
+  const address = f.elements.url.value.trim();
+  const command = f.elements.command.value.trim();
+  if (url && !/^https?:\/\/[^\s/]+/.test(address)) throw new Error("Paste a full address, starting with https://");
+  if (!url && !command) throw new Error("Type the command that starts the server.");
+  const name = f.elements.name.value.trim() || (url ? nameFromAddress(address) : command.split(/\s+/).pop().replace(/[^A-Za-z0-9_-]/g, "-"));
+  if (!/^[A-Za-z0-9_-]+$/.test(name)) {
+    $("server-more").open = true;
+    throw new Error("A name can only hold letters, digits, - and _.");
+  }
+  const pairs = readPairs(f.elements.pairs.value);
+  return {
+    name,
+    command: url ? "" : command,
+    url: url ? address : "",
+    env: url ? {} : pairs,
+    headers: url ? pairs : {},
+    machines: [...$("server-machines").querySelectorAll("input:checked")].map((c) => c.value),
+    allow_private: url && f.elements.allow_private.checked,
+  };
 }
 
 function readPairs(text) {
@@ -774,19 +880,37 @@ function renderConnHeaders() {
   </li>`).join("");
 }
 
+function secretLabel(name) {
+  const words = name.replace(/_/g, " ");
+  return words[0].toUpperCase() + words.slice(1);
+}
+
+function renderConnSecrets(c) {
+  const missing = c.missing || [];
+  $("conn-secrets").innerHTML = missing.map((name) => `<label>${esc(secretLabel(name))}
+    <input type="password" data-secret="${esc(name)}" autocomplete="new-password" autocapitalize="off" spellcheck="false"></label>`).join("");
+  $("conn-secrets").hidden = !missing.length;
+}
+
 function openConnection(c, was) {
   connWas = was;
   const f = $("conn-form");
-  f.hidden = false;
-  $("conn-import").hidden = true;
   $("conn-output").hidden = true;
   for (const key of ["name", "id", "base_url", "params_yaml", "calls_yaml"]) f.elements[key].value = c[key] || "";
   f.elements.enabled.checked = c.enabled !== false;
   f.elements.allow_private.checked = !!c.allow_private;
   connHeaders = Object.entries(c.headers || {}).map(([name, value]) => ({ name, value }));
   renderConnHeaders();
-  $("conn-note").textContent = c.missing?.length ? `Save the secret ${c.missing.join(", ")} before you switch this on.` : "";
-  f.elements.name.focus();
+  const blank = !c.calls_yaml;
+  $("conn-about").textContent = was ? "" : c.missing?.length
+    ? `${c.about || ""} Create what it asks for in ${c.name}, then paste it here. Yardbell keeps it in secrets and never shows it again.`
+    : blank ? "Describe the tool's API under More options." : c.about || "";
+  $("conn-about").hidden = !$("conn-about").textContent;
+  renderConnSecrets(c);
+  $("conn-more").open = blank;
+  $("conn-note").textContent = "";
+  showStep("conn-form", was ? `Edit ${c.name}` : c.name ? `Connect ${c.name}` : "");
+  focusIfActive(c.missing?.length ? $("conn-secrets").querySelector("input") : f.elements.name);
 }
 
 function showConnOutput(html) {
@@ -795,70 +919,66 @@ function showConnOutput(html) {
   out.innerHTML = html;
 }
 
-function closeNewConnection() {
-  $("conn-new-panel").hidden = true;
-  $("conn-new").setAttribute("aria-expanded", "false");
+const CHEVRON = `<svg class="conn-chevron" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9 6l6 6-6 6"/></svg>`;
+
+function pickRow(attrs, title, about, state) {
+  return `<li class="row"><button class="conn-starter" type="button" ${attrs}><span class="conn-starter-text"><strong>${esc(title)}</strong><small>${esc(about)}</small></span>${state ? `<span class="conn-state pr-ok">${esc(state)}</span>` : ""}${CHEVRON}</button></li>`;
 }
 
-function pickRow(attrs, title, about) {
-  return `<li class="row"><button class="conn-starter" type="button" ${attrs}><strong>${esc(title)}</strong><small>${esc(about)}</small></button></li>`;
-}
-
-$("conn-new").addEventListener("click", () => {
-  const panel = $("conn-new-panel");
-  panel.hidden = !panel.hidden;
-  $("conn-new").setAttribute("aria-expanded", panel.hidden ? "false" : "true");
-  $("conn-tokens").open = false;
+function openPicker(step = "conn-new-panel") {
+  const signedIn = (t) => {
+    const have = (data.mcp_servers || []).find((s) => s.url === t.url);
+    return have && data.mcp_auth?.[have.name] === "signed_in" ? "Signed in" : "";
+  };
   $("conn-sign-in-list").innerHTML = [
-    ...(connections.sign_in || []).map((t) => pickRow(`data-sign-in="${esc(t.id)}"`, t.name, t.about)),
-    pickRow("data-another", "Another MCP server", "Any tool with an MCP server. You need its address."),
+    ...(connections.sign_in || []).map((t) => pickRow(`data-sign-in="${esc(t.id)}"`, t.name, t.about, signedIn(t))),
   ].join("");
   $("conn-new-list").innerHTML = [
-    pickRow('data-starter=""', "Start blank", "Any tool with a web API."),
     ...connections.templates.map((name) => {
       const c = connections.starters[name];
       return pickRow(`data-starter="${esc(name)}"`, c.name, c.about);
     }),
+    pickRow('data-starter=""', "Start blank", "Any tool with a web API."),
   ].join("");
-});
+  flowAdding = true;
+  if (step === "server-form") openServerForm(null);
+  else showStep(step);
+}
+
+$("conn-new").addEventListener("click", () => openPicker());
 
 async function connectByTool(tool) {
   const servers = data.mcp_servers || [];
   const have = servers.find((s) => s.url === tool.url);
-  if (have && data.mcp_auth?.[have.name] === "signed_in") { toast(`${have.name} is already signed in.`, "ok"); return; }
+  if (have && data.mcp_auth?.[have.name] === "signed_in") { await showConnected(have.name); return; }
   if (!have) {
-    if (servers.some((s) => s.name === tool.id)) { toast(`Another connection is already called ${tool.id}. Rename it first.`); return; }
+    if (servers.some((s) => s.name === tool.id)) { tellFlow(`Another connection is already called ${tool.id}. Rename it first.`); return; }
     await saveServers([...servers, { name: tool.id, url: tool.url }], `${tool.name} added.`);
   }
   await startSignIn(have ? have.name : tool.id);
 }
 
+$("conn-new-panel").addEventListener("click", (e) => {
+  if (e.target.closest("[data-another]")) openPicker("server-form");
+});
+
 $("conn-sign-in-list").addEventListener("click", async (e) => {
-  if (e.target.closest("[data-another]")) {
-    closeNewConnection();
-    openServerForm(null);
-    $("server-form").elements.kind.value = "url";
-    showKind("url");
-    return;
-  }
   const pick = e.target.closest("[data-sign-in]");
   if (!pick) return;
-  closeNewConnection();
   try {
     await connectByTool(connections.sign_in.find((t) => t.id === pick.dataset.signIn));
   } catch (err) {
-    toast(err.message);
+    tellFlow(err.message);
   }
 });
 
 $("conn-new-list").addEventListener("click", (e) => {
   const button = e.target.closest("[data-starter]");
   if (!button) return;
-  closeNewConnection();
   const name = button.dataset.starter;
   openConnection(name ? connections.starters[name] : { enabled: true, headers: {} }, "");
 });
-$("conn-cancel").addEventListener("click", () => { $("conn-form").hidden = true; });
+$("conn-cancel").addEventListener("click", closeFlow);
 $("conn-header-add").addEventListener("click", () => {
   connHeaders.push({ name: "", value: "" });
   renderConnHeaders();
@@ -873,13 +993,18 @@ $("conn-headers").addEventListener("click", (e) => {
   connHeaders.splice(Number(button.dataset.headerRemove), 1);
   renderConnHeaders();
 });
+function slugOf(text) {
+  return text.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
+}
+
 $("conn-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
+  const name = f.elements.name.value.trim();
   const body = {
     was: connWas,
-    id: f.elements.id.value.trim(),
-    name: f.elements.name.value.trim(),
+    id: f.elements.id.value.trim() || slugOf(name),
+    name,
     base_url: f.elements.base_url.value.trim(),
     enabled: f.elements.enabled.checked,
     allow_private: f.elements.allow_private.checked,
@@ -888,29 +1013,36 @@ $("conn-form").addEventListener("submit", async (e) => {
     calls_yaml: f.elements.calls_yaml.value,
   };
   try {
+    if (!body.base_url) throw new Error("Type the tool's address, starting with https://");
     await api("POST", "/api/settings/connectors", body);
+    const typed = [...$("conn-secrets").querySelectorAll("input")].filter((i) => i.value);
+    for (const input of typed) await api("POST", "/api/settings/secrets", { name: input.dataset.secret, value: input.value });
+    typed.forEach((i) => { i.value = ""; });
     saved(`${body.name || body.id} saved.`);
-    f.hidden = true;
+    closeFlow();
     await load();
+    const left = connections.list.find((c) => c.id === body.id);
+    if (typed.length && left && !left.missing.length && left.enabled) {
+      document.querySelector(`[data-conn="${CSS.escape(body.id)}"] [data-conn-act=test]`)?.click();
+    }
   } catch (err) {
     $("conn-note").textContent = err.message;
-    toast(err.message);
+    if (/calls|params|header/i.test(err.message)) $("conn-more").open = true;
   }
 });
 $("conn-import-open").addEventListener("click", () => {
-  $("conn-import").hidden = false;
-  $("conn-form").hidden = true;
   $("conn-output").hidden = true;
-  $("conn-import").elements.text.focus();
+  showStep("conn-import", "Paste a shared connection");
+  focusIfActive($("conn-import").elements.text);
 });
-$("conn-import-cancel").addEventListener("click", () => { $("conn-import").hidden = true; });
+$("conn-import-cancel").addEventListener("click", closeFlow);
 $("conn-import").addEventListener("submit", async (e) => {
   e.preventDefault();
   try {
     const out = await api("POST", "/api/settings/connectors/import", { text: e.target.elements.text.value });
-    e.target.hidden = true;
     e.target.elements.text.value = "";
     saved(`${out.id} imported, switched off.`);
+    closeFlow();
     await load();
     const needs = out.secrets.length ? ` It needs the secret ${out.secrets.join(", ")}.` : "";
     showConnOutput(`<p>${esc(out.id)} can reach <strong>${esc(out.host || "")}</strong>.${esc(needs)} Read its calls, then switch it on with <strong>Edit</strong>.</p>`);
@@ -1304,44 +1436,63 @@ $("pair-show").addEventListener("click", async () => {
   }
 });
 
-$("server-cancel").addEventListener("click", () => { $("server-form").hidden = true; });
+$("server-cancel").addEventListener("click", closeFlow);
+$("conn-back").addEventListener("click", () => {
+  const from = flowStep;
+  stopWaiting();
+  signingIn = null;
+  openPicker(from === "conn-form" || from === "conn-import" ? "conn-tab-token" : "conn-new-panel");
+});
+$("conn-close").addEventListener("click", closeFlow);
+$("conn-flow").addEventListener("close", () => {
+  if (!$("conn-flow").open) closeFlow();
+});
+$("conn-tabs").addEventListener("click", (e) => {
+  const tab = e.target.closest("[data-tab]");
+  if (tab) openPicker(tab.dataset.tab);
+});
+$("conn-tabs").addEventListener("keydown", (e) => {
+  if (e.key !== "ArrowRight" && e.key !== "ArrowLeft") return;
+  const at = FLOW_TABS.indexOf(flowStep);
+  const next = FLOW_TABS[(at + (e.key === "ArrowRight" ? 1 : 2)) % 3];
+  openPicker(next);
+  $("conn-tabs").querySelector(`[data-tab="${next}"]`).focus();
+});
 $("server-form").elements.kind.addEventListener("change", (e) => showKind(e.target.value));
 
 $("mcp-sign-in").addEventListener("click", async (e) => {
   const panel = $("mcp-sign-in");
   const name = signingIn;
-  if (e.target.closest("[data-cancel]")) { closeSignIn(); return; }
+  if (e.target.closest("[data-cancel]")) { closeFlow(); return; }
+  if (e.target.closest("[data-continue]")) {
+    if (signsInHere()) {
+      panel.innerHTML = `<p role="status">Finish signing in on the page that opened. This page moves on by itself.</p>
+        <div class="form-foot"><button class="btn quiet" type="button" data-cancel>Cancel</button></div>`;
+    }
+    refreshOnReturn = true;
+    waitForSignIn();
+    return;
+  }
   try {
     if (e.target.closest("[data-client]")) {
       const field = (key) => panel.querySelector(`[name=${key}]`).value;
       await startSignIn(name, { client_id: field("client_id"), client_secret: field("client_secret") });
     } else if (e.target.closest("[data-finish]")) {
       await api("POST", serverPath(name, "finish"), { address: panel.querySelector("[name=address]").value });
-      closeSignIn();
-      saved(`Signed in to ${name}.`);
-      await refreshServerAuth();
+      await showConnected(name);
     }
   } catch (err) {
-    toast(err.message);
+    tellFlow(err.message);
   }
 });
 
 $("mcp-tools").addEventListener("click", (e) => {
-  if (e.target.closest("[data-close-tools]")) $("mcp-tools").hidden = true;
+  if (e.target.closest("[data-close-tools]")) closeFlow();
 });
 
-window.addEventListener("focus", async () => {
-  if (!signingIn) return;
-  const name = signingIn;
-  try {
-    await refreshServerAuth();
-    if (data.mcp_auth?.[name] === "signed_in") {
-      closeSignIn();
-      saved(`Signed in to ${name}.`);
-    }
-  } catch (err) {
-    toast(err.message);
-  }
+window.addEventListener("focus", () => {
+  if (waiting) checkSignedIn().catch((err) => toast(err.message));
+  else if (refreshOnReturn) refreshServerAuth().catch(() => {});
 });
 
 $("server-rows").addEventListener("click", async (e) => {
@@ -1380,24 +1531,17 @@ $("server-rows").addEventListener("click", async (e) => {
 $("server-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
-  const url = f.elements.kind.value === "url";
+  const adding = editing === null;
   try {
-    const pairs = readPairs(f.elements.pairs.value);
-    const srv = {
-      name: f.elements.name.value.trim(),
-      command: url ? "" : f.elements.command.value.trim(),
-      url: url ? f.elements.url.value.trim() : "",
-      env: url ? {} : pairs,
-      headers: url ? pairs : {},
-      machines: [...$("server-machines").querySelectorAll("input:checked")].map((c) => c.value),
-      allow_private: url && f.elements.allow_private.checked,
-    };
+    const srv = serverOf(f);
     const servers = [...(data.mcp_servers || [])];
-    if (editing === null) servers.push(srv); else servers[editing] = srv;
-    await saveServers(servers, `${srv.name} saved. New Claude Code sessions get it.`);
-    f.hidden = true;
+    if (adding) servers.push(srv); else servers[editing] = srv;
+    await saveServers(servers, `${srv.name} saved.`);
+    if (!adding) { closeFlow(); return; }
+    if (srv.url && !Object.keys(srv.headers).length) await startSignIn(srv.name);
+    else await showConnected(srv.name);
   } catch (err) {
-    toast(err.message);
+    $("server-note").textContent = err.message;
   }
 });
 
