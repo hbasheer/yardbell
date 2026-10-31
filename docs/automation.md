@@ -657,8 +657,7 @@ pipelines:
 
 A connector tells Yardbell how to talk to one outside tool, saved as data rather than code, so
 adding a tool needs no new release. It holds the tool's address, which saved secrets log in, and its
-calls: how to list items, read one, move one, or anything else its API does. Trello ships ready to
-use.
+calls: how to list items, read one, move one, or anything else its API does. Examples for Trello, GitHub Issues, GitLab Issues, Jira and Asana are ready to start from.
 
 With a connector, a pipeline can:
 
