@@ -146,11 +146,16 @@ async fn callback(
         .finish(state, code, &app.settings)
         .await
     {
-        Ok(server) => page(
-            StatusCode::OK,
-            &format!("Signed in to {server}"),
-            "You can close this page.",
-        ),
+        Ok(server) => {
+            if let Err(e) = super::connectors_api::switch_on_after_sign_in(&app, &server) {
+                tracing::warn!(error = %e.1, server = %server, "could not switch a connection on");
+            }
+            page(
+                StatusCode::OK,
+                &format!("Signed in to {server}"),
+                "You can close this page.",
+            )
+        }
         Err(e) => refused(&e),
     }
 }
@@ -173,6 +178,7 @@ async fn finish(
         .finish(&state, &code, &app.settings)
         .await
         .map_err(bad)?;
+    super::connectors_api::switch_on_after_sign_in(&app, &server)?;
     Ok(Json(json!({ "server": server })).into_response())
 }
 

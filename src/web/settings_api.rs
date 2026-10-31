@@ -427,9 +427,29 @@ async fn mcp_servers(
     }) {
         return Err(bad(super::mcp_auth_api::own_server_error(&own.name)));
     }
+    let gone: Vec<&str> = cfg
+        .connectors
+        .iter()
+        .filter(|c| !c.server.is_empty() && !req.servers.iter().any(|s| s.name == c.server))
+        .map(|c| c.id.as_str())
+        .collect();
+    if let Some(used) = super::connectors_api::pipeline_using(&app, &gone) {
+        return Err(bad(format!(
+            "{used} uses this connection, so it cannot be removed"
+        )));
+    }
     app.settings
         .set_mcp_servers(req.servers.clone())
         .map_err(bad)?;
+    if !gone.is_empty() {
+        let kept = cfg
+            .connectors
+            .iter()
+            .filter(|c| !gone.contains(&c.id.as_str()));
+        app.settings
+            .set_connectors(kept.cloned().collect())
+            .map_err(bad)?;
+    }
     for old in cfg.mcp_servers.iter().filter(|old| !old.url.is_empty()) {
         if req
             .servers

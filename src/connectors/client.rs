@@ -69,7 +69,8 @@ const GIVEN: [&str; 7] = [
 
 // The values a call needs someone to supply: its slots, less what a run always knows.
 pub fn needs_of(call: &Call) -> Vec<String> {
-    let text = serde_json::to_string(&(&call.request, &call.before)).unwrap_or_default();
+    let text =
+        serde_json::to_string(&(&call.request, &call.before, &call.arguments)).unwrap_or_default();
     let mut names: Vec<String> = slots()
         .captures_iter(&text)
         .map(|s| s[1].to_string())

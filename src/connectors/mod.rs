@@ -425,6 +425,15 @@ pub fn sign_in_tools() -> Vec<SignInTool> {
     ]
 }
 
+// Written only for a tool whose replies have been read from a real account.
+pub fn sign_in_template(id: &str) -> Option<Connector> {
+    let text = match id {
+        "trello" => include_str!("templates/mcp/trello.yml"),
+        _ => return None,
+    };
+    serde_yaml::from_str(text).ok()
+}
+
 pub fn blurb(name: &str) -> &'static str {
     match name {
         "trello" => "Cards on a board. Needs an API key and a token.",

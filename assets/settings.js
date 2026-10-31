@@ -284,7 +284,9 @@ function serverMenu(srv, i) {
   const status = data.mcp_auth?.[srv.name];
   const name = `data-name="${esc(srv.name)}"`;
   const signOut = status === "signed_in" || status === "sign_in_again" ? menuItem(`data-mcp-act="sign-out" ${name}`, "Sign out") : "";
-  return rowMenu(srv.name, `${menuItem(`data-mcp-act="test" ${name}`, "Test")}${menuItem(`data-edit="${i}"`, "Edit")}${signOut}${menuItem(`data-remove="${i}"`, "Remove", true)}`);
+  const linked = connections.list.find((c) => c.server === srv.name);
+  const actions = linked ? menuItem(`data-conn-edit="${esc(linked.id)}"`, "Actions") : "";
+  return rowMenu(srv.name, `${menuItem(`data-mcp-act="test" ${name}`, "Test")}${actions}${menuItem(`data-edit="${i}"`, "Edit")}${signOut}${menuItem(`data-remove="${i}"`, "Remove", true)}`);
 }
 
 function showConnectionsEmpty() {
@@ -442,6 +444,7 @@ async function showConnected(name) {
   showStep("mcp-tools", `Connected to ${name}`);
   $("mcp-tools").innerHTML = `<p class="help" role="status">Checking what it can do.</p>`;
   await refreshServerAuth();
+  await loadConnections();
   try {
     const out = await api("POST", serverPath(name, "test"));
     if (run === flowRun) showTools(name, out, `Connected to ${name}`);
@@ -1006,8 +1009,10 @@ async function loadConnections() {
 
 function renderConnections() {
   showConnectionsEmpty();
-  $("conn-rows").hidden = !connections.list.length;
-  $("conn-rows").innerHTML = connections.list.map((c) => {
+  const own = connections.list.filter((c) => !c.server);
+  $("conn-rows").hidden = !own.length;
+  if (data) renderServers();
+  $("conn-rows").innerHTML = own.map((c) => {
     const status = connections.status[c.id];
     const state = c.missing.length
       ? badge("warn", "Needs a secret")
@@ -1125,16 +1130,16 @@ function callCard(call, i) {
   const word = CALL_WORDS[call.name] || call.name || "New action";
   const extras = [call.extra.page && "reads page by page", call.extra.before?.length && "asks something first"].filter(Boolean);
   return `<details class="conn-call" data-call="${i}" data-call-name="${esc(call.name)}"${connOpenCalls.has(i) ? " open" : ""}>
-    <summary><span class="conn-method">${esc(call.method)}</span><span class="conn-call-title"><strong>${esc(word)}</strong><small>${esc(call.path || "No path yet")}</small></span>${badge(call.changes ? "warn" : "idle", call.changes ? "Changes" : "Reads")}</summary>
+    <summary><span class="conn-method">${esc(call.extra.tool ? "TOOL" : call.method)}</span><span class="conn-call-title"><strong>${esc(word)}</strong><small>${esc(call.extra.tool || call.path || "No path yet")}</small></span>${badge(call.changes ? "warn" : "idle", call.changes ? "Changes" : "Reads")}</summary>
     <div class="conn-call-body">
       <label>Name<input data-field="name" value="${esc(call.name)}" placeholder="list" autocapitalize="off" spellcheck="false"></label>
-      <div class="conn-request">
+      ${call.extra.tool ? `<p class="help">Calls the tool <code>${esc(call.extra.tool)}</code> with <code>${esc(JSON.stringify(call.extra.arguments || {}))}</code>.</p>` : `<div class="conn-request">
         <label>Method<select data-field="method">${METHODS.map((m) => `<option${m === call.method ? " selected" : ""}>${m}</option>`).join("")}</select></label>
         <label>Path<input data-field="path" value="${esc(call.path)}" placeholder="/boards/{{board}}/cards" autocapitalize="off" spellcheck="false"></label>
       </div>
       <p class="help">Values like <code>{{board}}</code> fill in from the run. It is added to the connection's address.</p>
       <div class="conn-sub"><strong>Query</strong>${pairRows(call.query, "query", "Field", "Value")}</div>
-      <label class="conn-body-field"${call.method === "GET" ? " hidden" : ""}>Body, as JSON<textarea data-field="body" rows="4" spellcheck="false">${esc(call.body)}</textarea></label>
+      <label class="conn-body-field"${call.method === "GET" ? " hidden" : ""}>Body, as JSON<textarea data-field="body" rows="4" spellcheck="false">${esc(call.body)}</textarea></label>`}
       <label>Where the list is in the reply<input data-field="items" value="${esc(call.items)}" placeholder="Leave empty if the reply is the list" autocapitalize="off" spellcheck="false"></label>
       <div class="conn-sub"><strong>Reply fields to keep</strong><p class="help">The name Yardbell uses, then where it is in the reply. Use <strong>Test</strong> after saving to see the reply's fields.</p>${pairRows(call.map, "map", "item_id", "id")}</div>
       <label class="choice"><input type="checkbox" data-field="changes"${call.changes ? " checked" : ""}>Changes something in the tool, so your Dispatch rules can refuse it</label>
@@ -1322,7 +1327,8 @@ function openPicker(step = "conn-new-panel") {
   $("conn-sign-in-none").hidden = true;
   const signedIn = (t) => {
     const have = (data.mcp_servers || []).find((s) => s.url === t.url);
-    return have && data.mcp_auth?.[have.name] === "signed_in";
+    if (!have || data.mcp_auth?.[have.name] !== "signed_in") return false;
+    return !t.template || connections.list.some((c) => c.server === have.name);
   };
   $("conn-sign-in-list").innerHTML = [
     ...(connections.sign_in || []).map((t) => pickTile(t.id, signedIn(t) ? "" : `data-sign-in="${esc(t.id)}"`, t.name, t.needs_client ? `${t.about} Needs an app you make in its developer console.` : t.about, "Connect", signedIn(t))),
@@ -1353,16 +1359,12 @@ $("conn-sign-in-search").addEventListener("input", (e) => {
 
 async function connectByTool(tool) {
   const run = flowRun;
-  const servers = data.mcp_servers || [];
-  const have = servers.find((s) => s.url === tool.url);
-  if (have && data.mcp_auth?.[have.name] === "signed_in") { await showConnected(have.name); return; }
-  if (!have) {
-    if (servers.some((s) => s.name === tool.id)) { tellFlow(`Another connection is already called ${tool.id}. Rename it first.`); return; }
-    await saveServers([...servers, { name: tool.id, url: tool.url }], `${tool.name} added.`);
-    if (run !== flowRun) return;
-    if (data.mcp_auth?.[tool.id] === "signed_in") { await showConnected(tool.id); return; }
-  }
-  await startSignIn(have ? have.name : tool.id);
+  const out = await api("POST", "/api/settings/connectors/connect", { template: tool.id });
+  await load();
+  await loadConnections();
+  if (run !== flowRun) return;
+  if (out.signed_in) await showConnected(out.server);
+  else await startSignIn(out.server);
 }
 
 $("conn-new-panel").addEventListener("click", (e) => {
@@ -1400,6 +1402,14 @@ $("conn-headers").addEventListener("click", (e) => {
   connHeaders.splice(Number(button.dataset.headerRemove), 1);
   renderConnHeaders();
 });
+function freeConnectionId(wanted) {
+  if (connWas || !connections.list.some((c) => c.id === wanted)) return wanted;
+  const base = `${wanted}-token`;
+  let id = base;
+  for (let n = 2; connections.list.some((c) => c.id === id); n += 1) id = `${base}-${n}`;
+  return id;
+}
+
 function slugOf(text) {
   return text.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
 }
@@ -1420,7 +1430,7 @@ $("conn-form").addEventListener("submit", async (e) => {
   const choices = connChoices.filter((c) => c.name.trim()).map((c) => ({ name: c.name.trim(), label: c.label, ...(c.options ? { options: c.options } : {}) }));
   const body = {
     was: connWas,
-    id: f.elements.id.value.trim() || slugOf(name),
+    id: freeConnectionId(f.elements.id.value.trim() || slugOf(name)),
     name,
     base_url: connServer ? "" : f.elements.base_url.value.trim(),
     server: connServer,
@@ -1956,6 +1966,12 @@ $("server-rows").addEventListener("click", async (e) => {
   if (!e.target.closest("button")) {
     const row = e.target.closest("[data-server]");
     if (row) openServerForm(Number(row.dataset.server));
+    return;
+  }
+  const linked = e.target.closest("[data-conn-edit]");
+  if (linked) {
+    openConnection(connections.list.find((c) => c.id === linked.dataset.connEdit), linked.dataset.connEdit);
+    $("conn-more").open = true;
     return;
   }
   const act = e.target.closest("[data-mcp-act]");

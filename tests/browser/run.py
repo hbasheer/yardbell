@@ -3018,13 +3018,13 @@ class Suite:
             b.goto(self.url("/settings#connections"))
             b.wait("document.getElementById('conn-new') && connections.templates", "the section")
             b.js("""(() => {
-              const tool = connections.sign_in[0];
+              const tool = connections.sign_in.find((t) => t.id === 'jira');
               data.mcp_servers = [{ name: tool.id, url: tool.url }];
               data.mcp_auth = { [tool.id]: 'signed_in' };
               document.getElementById('conn-new').click();
             })()""")
             b.wait("document.querySelector('#conn-sign-in-list .conn-badge')", "the Connected badge")
-            first = "document.querySelector('#conn-sign-in-list').firstElementChild"
+            first = "document.querySelector('#conn-sign-in-list .conn-badge').closest('.conn-card')"
             if b.js(f"{first}.hasAttribute('data-sign-in') || !{first}.querySelector('svg')"):
                 raise Failure("a connected tile should keep its icon and start no sign-in")
             b.js("document.getElementById('conn-flow').close()")
@@ -3288,6 +3288,40 @@ class Suite:
                 raise Failure("the finished check opened the modal again")
             self.check_errors("closing during a check")
         finally:
+            self.remove_mcp_servers()
+
+    def test_a_signed_in_tool_shows_as_one_row(self):
+        b = self.b
+        self.api("POST", "/api/settings/connectors/connect", {"template": "trello"})
+        try:
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.querySelector('#server-rows .conn-row')", "the row")
+            if b.js("document.querySelector('#conn-rows [data-conn=trello]')"):
+                raise Failure("Trello shows twice")
+            b.click("#server-rows .conn-row [data-row-menu]")
+            b.wait("document.querySelector('#server-rows [data-conn-edit=trello]')?.offsetParent", "its actions in the menu")
+            b.click("#server-rows [data-conn-edit=trello]")
+            b.wait("!document.getElementById('conn-form').hidden", "the form")
+            if b.js("document.querySelector('#conn-form [name=base_url]').offsetParent"):
+                raise Failure("a server connection has no address to type")
+            b.js("document.getElementById('conn-more').open = true")
+            if "trelloReadCard" not in b.js("document.getElementById('conn-call-list').textContent"):
+                raise Failure("the actions do not name their tool")
+            b.js("document.getElementById('conn-flow').close()")
+            data = self.api("GET", "/api/pipelines")
+            if not any(c["id"] == "trello" for c in data["connectors"]):
+                raise Failure("the pipeline builder does not offer Trello")
+            b.click("#conn-new")
+            b.click("#conn-tabs [data-tab=conn-tab-token]")
+            b.click("#conn-new-list [data-starter=trello]")
+            b.wait("!document.getElementById('conn-form').hidden", "the token form")
+            b.click("#conn-form button[type=submit]")
+            b.wait("document.querySelector('[data-conn=trello-token]') && !document.getElementById('conn-flow').open", "a token Trello beside the signed-in one")
+            b.js("fetch('/api/settings/connectors/trello-token', { method: 'DELETE' })")
+            self.check_errors("a signed-in tool")
+        finally:
+            b.js("document.getElementById('conn-flow')?.close(); fetch('/api/settings/connectors/trello', { method: 'DELETE' })")
             self.remove_mcp_servers()
 
     def test_tokens_become_secrets_by_themselves(self):

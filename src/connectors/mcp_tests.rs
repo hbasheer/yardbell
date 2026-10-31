@@ -336,3 +336,64 @@ async fn no_way_to_call_tools_says_so() {
     let plain = Client::new(&connector(), &secrets, vec![]).unwrap();
     assert!(plain.list(&vars(&[("board", "b1")])).await.is_err());
 }
+
+#[test]
+fn every_sign_in_example_is_valid() {
+    let tools = super::sign_in_tools();
+    let with_example: Vec<&str> = tools
+        .iter()
+        .map(|t| t.id)
+        .filter(|id| super::sign_in_template(id).is_some())
+        .collect();
+    assert_eq!(
+        with_example,
+        ["trello"],
+        "only tools whose replies were read get one"
+    );
+    for id in with_example {
+        let example = super::sign_in_template(id).unwrap();
+        validate(std::slice::from_ref(&example)).unwrap();
+        for name in ["boards", "states", "list", "read"] {
+            assert_eq!(example.calls[name].kind(), CallKind::Lookup, "{name}");
+        }
+        for name in ["move", "comment"] {
+            assert_eq!(example.calls[name].kind(), CallKind::Change, "{name}");
+        }
+    }
+}
+
+#[tokio::test]
+async fn the_trello_example_reads_its_real_reply() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secrets.yml");
+    std::fs::write(&path, "").unwrap();
+    let secrets = crate::secrets::Secrets::load(&path).unwrap();
+    let tools = Arc::new(Tools::default());
+    tools
+        .replies
+        .lock()
+        .unwrap()
+        .push_back(text(cards_page("", false)));
+    let example = super::sign_in_template("trello").unwrap();
+    let client = Client::new(&example, &secrets, vec![])
+        .unwrap()
+        .with_tools(tools.clone());
+    let listed = client
+        .list(&vars(&[("board", "ari:board/1")]))
+        .await
+        .unwrap();
+    assert_eq!(listed.items[0].title, "Fix login");
+    assert_eq!(listed.items[0].id, "AbCd");
+    assert_eq!(listed.items[0].state, "todo");
+    assert_eq!(
+        tools.asked.lock().unwrap()[0].2["boardIdOrUrl"],
+        "ari:board/1"
+    );
+}
+
+#[test]
+fn a_tool_call_names_the_values_it_needs() {
+    let example = super::sign_in_template("trello").unwrap();
+    assert_eq!(super::client::needs_of(&example.calls["move"]), ["value"]);
+    assert_eq!(super::client::needs_of(&example.calls["list"]), ["board"]);
+}

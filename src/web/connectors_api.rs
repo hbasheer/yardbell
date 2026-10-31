@@ -16,6 +16,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/settings/connectors", get(list).post(save))
         .route("/api/settings/connectors/import", post(import))
+        .route("/api/settings/connectors/connect", post(connect))
         .route("/api/settings/connectors/{id}", delete(remove))
         .route("/api/settings/connectors/{id}/test", post(test))
         .route("/api/settings/connectors/{id}/share", get(share))
@@ -76,7 +77,11 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         })
         .collect();
     Ok(Json(json!({
-        "sign_in": crate::connectors::sign_in_tools(),
+        "sign_in": crate::connectors::sign_in_tools().iter().map(|t| {
+            let mut tool = json!(t);
+            tool["template"] = json!(crate::connectors::sign_in_template(t.id).is_some());
+            tool
+        }).collect::<Vec<_>>(),
         "list": items,
         "status": app.pipelines.connector_health().all(),
         "templates": templates(),
@@ -323,4 +328,85 @@ async fn import(
     app.settings.set_connectors(all).map_err(bad)?;
     app.state.touch();
     Ok(Json(json!({ "id": id, "host": host, "secrets": names })).into_response())
+}
+
+#[derive(Deserialize)]
+struct ConnectReq {
+    template: String,
+}
+
+async fn connect(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<ConnectReq>,
+) -> Result<Response, ApiError> {
+    let tools = crate::connectors::sign_in_tools();
+    let tool = tools
+        .iter()
+        .find(|t| t.id == req.template)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no tool {}", req.template)))?;
+    let cfg = app.config()?;
+    let mut servers = cfg.mcp_servers.clone();
+    let name = match servers.iter().find(|s| s.url == tool.url) {
+        Some(s) => s.name.clone(),
+        None if servers.iter().any(|s| s.name == tool.id) => {
+            return Err(bad(format!(
+                "another connection is already called {}. Rename it first",
+                tool.id
+            )))
+        }
+        None => {
+            servers.push(crate::config::McpServer {
+                name: tool.id.to_string(),
+                command: String::new(),
+                url: tool.url.to_string(),
+                env: Default::default(),
+                headers: Default::default(),
+                machines: Vec::new(),
+                allow_private: false,
+            });
+            app.settings.set_mcp_servers(servers.clone()).map_err(bad)?;
+            tool.id.to_string()
+        }
+    };
+    let server = servers.iter().find(|s| s.name == name).expect("just found");
+    let signed_in = crate::mcp_client::oauth::Auth::status(server, &app.secrets()?) == "signed_in";
+    let mut list = cfg.connectors.clone();
+    let mut connector = None;
+    if let Some(mut example) = crate::connectors::sign_in_template(tool.id) {
+        if !list.iter().any(|c| c.server == name) {
+            if list.iter().any(|c| c.id == example.id) {
+                example.id = format!("{}-signin", example.id);
+            }
+            example.server = name.clone();
+            example.enabled = signed_in;
+            connector = Some(example.id.clone());
+            list.push(example);
+            app.settings.set_connectors(list).map_err(bad)?;
+        }
+    }
+    Ok(
+        Json(json!({ "server": name, "signed_in": signed_in, "connector": connector }))
+            .into_response(),
+    )
+}
+
+// A connection through a server stays off until that server is signed in to.
+pub(super) fn switch_on_after_sign_in(app: &AppState, server: &str) -> Result<(), ApiError> {
+    let mut list = app.config()?.connectors;
+    let mut changed = false;
+    for c in list.iter_mut().filter(|c| c.server == server && !c.enabled) {
+        c.enabled = true;
+        changed = true;
+    }
+    if changed {
+        app.settings.set_connectors(list).map_err(bad)?;
+    }
+    Ok(())
+}
+
+pub(super) fn pipeline_using(app: &AppState, ids: &[&str]) -> Option<String> {
+    let all = app.pipelines.library().list();
+    all.iter()
+        .find(|def| ids.iter().any(|id| uses_connector(def, id)))
+        .map(|def| def.name.clone())
 }

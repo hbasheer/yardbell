@@ -472,7 +472,7 @@ function choicesFor(id, call, params = {}) {
   return connectorChoices.get(url);
 }
 
-const NO_CONNECTIONS = html`<p class="help">No connections yet. Add one under <a href="/settings#connections">Settings, Connections</a>.</p>`;
+const NO_CONNECTIONS = html`<p class="help">No connection can do this yet. Trello can, once you sign in under <a href="/settings#connections">Settings, Connections</a>. So can a tool you add with a token. Any other signed-in tool works in a <strong>Call MCP tool</strong> step.</p>`;
 
 function connectorSelect(value, change) {
   return html`<select name="connector" @change=${(e) => change(e.target.value)}>

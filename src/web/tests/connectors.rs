@@ -696,3 +696,158 @@ async fn share_holds_no_token_and_import_stays_off() {
     let saved = r.app.config().unwrap().connectors;
     assert!(!saved.iter().find(|x| x.id == "copy").unwrap().enabled);
 }
+
+async fn connect(r: &Rig, c: &str, template: &str) -> (StatusCode, serde_json::Value) {
+    let req = Request::post("/api/settings/connectors/connect")
+        .header(header::COOKIE, c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "template": template }).to_string()))
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    (status, serde_json::from_str(&body).unwrap_or(json!(body)))
+}
+
+#[tokio::test]
+async fn connect_adds_server_and_connector_switched_off() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, out) = connect(&r, &c, "trello").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["server"], "trello");
+    assert_eq!(out["signed_in"], false);
+    let cfg = r.app.config().unwrap();
+    assert_eq!(cfg.mcp_servers[0].url, "https://mcp.trello.com/v1");
+    let saved = cfg.connectors.iter().find(|x| x.id == "trello").unwrap();
+    assert_eq!(saved.server, "trello");
+    assert!(!saved.enabled, "off until signed in");
+}
+
+#[tokio::test]
+async fn a_tool_with_no_example_adds_only_its_server() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, out) = connect(&r, &c, "sentry").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let cfg = r.app.config().unwrap();
+    assert_eq!(cfg.mcp_servers[0].name, "sentry");
+    assert!(cfg.connectors.is_empty());
+}
+
+#[tokio::test]
+async fn connect_twice_does_not_overwrite() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    connect(&r, &c, "trello").await;
+    let mut list = r.app.config().unwrap().connectors;
+    list[0].name = "My Trello".into();
+    r.app.settings.set_connectors(list).unwrap();
+    let (status, _) = connect(&r, &c, "trello").await;
+    assert_eq!(status, StatusCode::OK);
+    let cfg = r.app.config().unwrap();
+    assert_eq!(cfg.mcp_servers.len(), 1);
+    assert_eq!(cfg.connectors.len(), 1);
+    assert_eq!(cfg.connectors[0].name, "My Trello");
+}
+
+#[tokio::test]
+async fn connect_keeps_a_token_connection_of_the_same_name() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let token: crate::connectors::Connector = serde_yaml::from_str(
+        "id: trello\nname: Trello\nbase_url: https://api.trello.com/1\ncalls: {}\n",
+    )
+    .unwrap();
+    r.app.settings.set_connectors(vec![token]).unwrap();
+    let (status, out) = connect(&r, &c, "trello").await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    let cfg = r.app.config().unwrap();
+    assert_eq!(cfg.connectors.len(), 2);
+    assert_eq!(cfg.connectors[0].base_url, "https://api.trello.com/1");
+    assert_eq!(cfg.connectors[1].id, "trello-signin");
+}
+
+#[tokio::test]
+async fn an_unknown_tool_is_refused() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _) = connect(&r, &c, "nothing").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn signing_in_switches_the_connection_on() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    connect(&r, &c, "trello").await;
+    let s = crate::mcp_client::oauth_tests::signing_in(true).await;
+    let mut servers = r.app.config().unwrap().mcp_servers;
+    servers[0].url = format!("{}/mcp", s.base);
+    servers[0].allow_private = true;
+    r.app.settings.set_mcp_servers(servers).unwrap();
+    let req = Request::post("/api/settings/mcp/servers/trello/sign-in")
+        .header(header::COOKIE, c.as_str())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let (_, _, body) = send(&r.app, req).await;
+    let out: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let url = reqwest::Url::parse(out["url"].as_str().unwrap()).unwrap();
+    let state = url
+        .query_pairs()
+        .find(|(k, _)| k == "state")
+        .unwrap()
+        .1
+        .into_owned();
+    let req = Request::get(format!("/oauth/mcp/callback?code=c&state={state}"))
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, page) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{page}");
+    let cfg = r.app.config().unwrap();
+    assert!(
+        cfg.connectors
+            .iter()
+            .find(|x| x.id == "trello")
+            .unwrap()
+            .enabled
+    );
+}
+
+async fn save_servers(r: &Rig, c: &str, servers: serde_json::Value) -> (StatusCode, String) {
+    let req = Request::post("/api/settings/mcp/servers")
+        .header(header::COOKIE, c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "servers": servers }).to_string()))
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    (status, body)
+}
+
+#[tokio::test]
+async fn removing_a_server_removes_its_connection() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    connect(&r, &c, "trello").await;
+    let (status, body) = save_servers(&r, &c, json!([])).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(r.app.config().unwrap().connectors.is_empty());
+}
+
+#[tokio::test]
+async fn a_server_a_pipeline_uses_is_not_removed() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    connect(&r, &c, "trello").await;
+    let cfg = r.app.config().unwrap();
+    let def: crate::pipeline::definition::Definition = serde_json::from_value(json!({
+        "id": "p", "name": "Cards", "trigger": { "kind": "connector", "connector": "trello" },
+        "start": "end", "steps": [],
+    }))
+    .unwrap();
+    let saved = r.app.pipelines.library().save(def, &cfg);
+    assert!(saved.is_ok(), "{saved:?}");
+    let (status, body) = save_servers(&r, &c, json!([])).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("Cards"), "{body}");
+    assert_eq!(r.app.config().unwrap().mcp_servers.len(), 1);
+}

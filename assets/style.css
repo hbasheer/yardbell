@@ -1405,7 +1405,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
   .conn-call > summary .conn-badge { display: none; }
 }
 .conn-via { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
-.conn-step .form-foot { justify-content: flex-end; }
+.conn-step .form-foot { justify-content: flex-end; position: sticky; bottom: -20px; z-index: 2; margin: 0 -20px -20px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--surface); }
 .conn-via .conn-via-option { margin: 0; }
 .conn-via legend { padding: 0 0 6px; font-size: 13px; font-weight: 500; }
 .conn-step label.conn-via-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
