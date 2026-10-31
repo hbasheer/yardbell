@@ -571,6 +571,65 @@ fn comment(run: &Run) -> String {
     lines.join("\n")
 }
 
+// Lists a connector for a trigger, and keeps what it found for Settings to show.
+pub struct ConfigFeed<'a> {
+    pub connectors: &'a [crate::connectors::Connector],
+    pub secrets: &'a Result<Secrets, String>,
+    pub saved: Vec<String>,
+    pub health: &'a crate::connectors::Health,
+}
+
+fn status_of(found: &Result<crate::connectors::Listed, String>) -> crate::connectors::Status {
+    let (ok, message) = match found {
+        Ok(listed) => {
+            let mut said = format!("{} items", listed.items.len());
+            if !listed.skipped.is_empty() {
+                said = format!(
+                    "{said}, {} skipped: {}",
+                    listed.skipped.len(),
+                    listed.skipped[0]
+                );
+            }
+            if let Some(cut) = &listed.cut_off {
+                said = format!("{said}; {cut}");
+            }
+            (true, said)
+        }
+        Err(e) => (false, e.clone()),
+    };
+    crate::connectors::Status {
+        ok,
+        at: chrono::Local::now().to_rfc3339(),
+        message,
+    }
+}
+
+impl super::triggers::ConnectorFeed for ConfigFeed<'_> {
+    fn list<'a>(
+        &'a self,
+        id: &'a str,
+        params: &'a std::collections::BTreeMap<String, String>,
+    ) -> BoxFuture<'a, Result<crate::connectors::Listed, String>> {
+        Box::pin(async move {
+            let found = match crate::connectors::client_for(
+                self.connectors,
+                id,
+                self.secrets,
+                self.saved.clone(),
+            ) {
+                Ok(client) => {
+                    client
+                        .list(&crate::connectors::client::Vars(params.clone()))
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+            self.health.set(id, status_of(&found));
+            found
+        })
+    }
+}
+
 // The pipelines' view of the running server, built afresh each round with that round's config.
 pub struct Live {
     app: Arc<AppState>,
@@ -762,7 +821,21 @@ impl World for Live {
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>> {
         Box::pin(async move {
             if !ticket.is_linear() {
-                return Err(format!("no connector for {}", ticket.source));
+                let client = crate::connectors::client_for(
+                    &self.cfg.connectors,
+                    &ticket.source,
+                    &self.secrets,
+                    crate::mcp_read::saved_values(&self.app),
+                )?;
+                let vars = crate::connectors::client::Vars(
+                    [("item_id".to_string(), ticket.item_id.clone())].into(),
+                );
+                let item = client.read(&vars).await?;
+                let text = TicketText {
+                    description: item.description,
+                    comments: Vec::new(),
+                };
+                return Ok((text, item.closed));
             }
             self.linear.ticket(self.key()?, &ticket.item_id).await
         })

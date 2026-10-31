@@ -139,6 +139,23 @@ pub fn host_of(base_url: &str) -> Option<String> {
     parsed.host_str().map(str::to_ascii_lowercase)
 }
 
+pub fn client_for(
+    list: &[Connector],
+    id: &str,
+    secrets: &Result<crate::secrets::Secrets, String>,
+    saved: Vec<String>,
+) -> Result<client::Client, String> {
+    let c = list
+        .iter()
+        .find(|c| c.id == id)
+        .ok_or_else(|| format!("there is no connector {id}"))?;
+    if !c.enabled {
+        return Err(format!("{} is switched off", c.name));
+    }
+    let secrets = secrets.as_ref().map_err(|e| format!("{}: {e}", c.name))?;
+    client::Client::new(c, secrets, saved)
+}
+
 pub fn templates() -> Vec<&'static str> {
     vec!["trello"]
 }

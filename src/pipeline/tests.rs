@@ -421,6 +421,22 @@ async fn a_report_notifies_as_finished() {
 }
 
 #[tokio::test]
+async fn a_closed_item_waits() {
+    let fake = Fake::default();
+    fake.closed.lock().unwrap().push_back(true);
+    let mut run = run_of("Implement my Linear tickets");
+    run.subject.ticket.as_mut().unwrap().source = "trello".into();
+    run.step = "implement".into();
+    run.state = RunState::Running;
+    run.state_of("implement").machine = "hp".into();
+    let effect = Effect::Agent {
+        step: "implement".into(),
+    };
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(matches!(&seen[..], [Seen::Closed(_)]), "{seen:?}");
+}
+
+#[tokio::test]
 async fn a_linear_step_on_a_trello_item_fails_clearly() {
     let fake = Fake::default();
     let mut run = run_of("Implement my Linear tickets");
@@ -1557,6 +1573,7 @@ mod pipelines {
         let def = p.library().set_enabled(&def.id, true, &cfg()).unwrap();
         let fakes = Fakes::default();
         let src = Sources {
+            connectors: &fakes,
             feeds: &fakes,
             gitlab: &fakes,
             accesses: vec![GitLabAccess {

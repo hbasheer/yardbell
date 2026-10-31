@@ -23,10 +23,19 @@ impl Reviewing for GitLab {
     }
 }
 
+pub trait ConnectorFeed: Send + Sync {
+    fn list<'a>(
+        &'a self,
+        id: &'a str,
+        params: &'a BTreeMap<String, String>,
+    ) -> BoxFuture<'a, Result<crate::connectors::Listed, String>>;
+}
+
 // Where the triggers look, gathered for one round.
 pub struct Sources<'a> {
     pub feeds: &'a dyn Feeds,
     pub gitlab: &'a dyn Reviewing,
+    pub connectors: &'a dyn ConnectorFeed,
     pub accesses: Vec<GitLabAccess>,
     pub linear_key: Result<String, String>,
     pub pattern: Option<Regex>,
@@ -52,6 +61,19 @@ pub struct Watch {
 }
 
 // The Linear identifier a pull or merge request names: in its branch first, then its title.
+pub fn item_subject(source: &str, item: &crate::connectors::client::Item) -> Subject {
+    Subject {
+        ticket: Some(TicketRef {
+            source: source.to_string(),
+            item_id: item.item_id.clone(),
+            id: item.id.clone(),
+            title: item.title.clone(),
+            url: item.url.clone(),
+        }),
+        pr: None,
+    }
+}
+
 pub fn ticket_in(branch: &str, title: &str, pattern: Option<&Regex>) -> Option<String> {
     let shape = Regex::new(r"(?i)\b([a-z][a-z0-9]+-\d+)").expect("static regex");
     for text in [branch, title] {
@@ -143,8 +165,15 @@ impl Watch {
         for def in defs.iter().filter(|d| d.enabled) {
             let found = match &def.trigger {
                 Trigger::Manual => continue,
-                Trigger::Schedule { schedule, state } => {
-                    match self.scheduled(def, schedule, state, src, now).await {
+                Trigger::Schedule {
+                    schedule,
+                    state,
+                    connector,
+                } => {
+                    match self
+                        .scheduled(def, schedule, state, connector, src, now)
+                        .await
+                    {
                         Some(subjects) => subjects,
                         None => continue,
                     }
@@ -207,6 +236,7 @@ impl Watch {
         def: &Definition,
         schedule: &str,
         state: &str,
+        connector: &str,
         src: &Sources<'_>,
         now: DateTime<Local>,
     ) -> Option<Vec<Subject>> {
@@ -224,6 +254,23 @@ impl Watch {
         self.edit(&def.id, |k| k.anchor = now.to_rfc3339());
         if state.trim().is_empty() {
             return Some(vec![Subject::default()]);
+        }
+        if !connector.is_empty() {
+            let listed = src.connectors.list(connector, &BTreeMap::new()).await;
+            let items = match listed {
+                Ok(listed) => listed.items,
+                Err(problem) => {
+                    self.edit(&def.id, |k| k.problem = problem);
+                    return None;
+                }
+            };
+            return Some(
+                items
+                    .iter()
+                    .filter(|i| i.state.eq_ignore_ascii_case(state.trim()))
+                    .map(|i| item_subject(connector, i))
+                    .collect(),
+            );
         }
         let key = src.linear_key.clone().ok()?;
         let tickets = src.feeds.linear(&key).await.ok()?;
@@ -252,6 +299,32 @@ impl Watch {
     ) -> Result<Vec<(String, Subject)>, String> {
         let pattern = src.pattern.as_ref();
         match trigger {
+            Trigger::Connector {
+                connector,
+                params,
+                states,
+            } => {
+                let listed = src.connectors.list(connector, params).await?;
+                Ok(listed
+                    .items
+                    .iter()
+                    .filter(|i| {
+                        params
+                            .iter()
+                            .all(|(k, v)| i.fields.get(k).is_none_or(|f| f == v))
+                    })
+                    .filter_map(|i| {
+                        let key = if states.is_empty() {
+                            format!("item:{connector}:{}", i.item_id)
+                        } else if states.iter().any(|s| s.eq_ignore_ascii_case(&i.state)) {
+                            format!("state:{connector}:{}:{}", i.item_id, i.state.to_lowercase())
+                        } else {
+                            return None;
+                        };
+                        Some((key, item_subject(connector, i)))
+                    })
+                    .collect())
+            }
             Trigger::Linear { assigned, states } => {
                 let key = src.linear_key.clone()?;
                 let mut items = Vec::new();
@@ -371,6 +444,26 @@ pub(crate) mod tests {
         pub linear: StdMutex<Vec<Ticket>>,
         pub reviews: StdMutex<Vec<Ticket>>,
         pub mrs: StdMutex<Vec<Mr>>,
+        pub cards: StdMutex<Vec<crate::connectors::client::Item>>,
+        pub card_problem: StdMutex<Option<String>>,
+    }
+
+    impl ConnectorFeed for Fakes {
+        fn list<'a>(
+            &'a self,
+            _id: &'a str,
+            _params: &'a BTreeMap<String, String>,
+        ) -> BoxFuture<'a, Result<crate::connectors::Listed, String>> {
+            Box::pin(async move {
+                if let Some(problem) = self.card_problem.lock().unwrap().clone() {
+                    return Err(problem);
+                }
+                Ok(crate::connectors::Listed {
+                    items: self.cards.lock().unwrap().clone(),
+                    ..Default::default()
+                })
+            })
+        }
     }
 
     impl Feeds for Fakes {
@@ -403,6 +496,7 @@ pub(crate) mod tests {
         Sources {
             feeds: f,
             gitlab: f,
+            connectors: f,
             accesses: vec![GitLabAccess {
                 host: "git.commslayer.com".into(),
                 api: String::new(),
@@ -452,6 +546,113 @@ pub(crate) mod tests {
             ticket_in("x-eng-9-y", "", Some(&pattern)),
             Some("ENG-9".into())
         );
+    }
+
+    fn item(id: &str, state: &str, board: &str) -> crate::connectors::client::Item {
+        crate::connectors::client::Item {
+            item_id: id.into(),
+            id: id.to_uppercase(),
+            title: format!("Card {id}"),
+            url: format!("https://t/{id}"),
+            state: state.into(),
+            fields: [("board".to_string(), board.to_string())].into(),
+            ..Default::default()
+        }
+    }
+
+    fn connector_trigger(states: &[&str], params: &[(&str, &str)]) -> Trigger {
+        Trigger::Connector {
+            connector: "trello".into(),
+            params: params
+                .iter()
+                .map(|(k, v)| (k.to_string(), v.to_string()))
+                .collect(),
+            states: states.iter().map(|s| s.to_string()).collect(),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_connector_trigger_watches_from_now() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        f.cards.lock().unwrap().push(item("a", "L1", "B1"));
+        let defs = vec![pipeline(connector_trigger(&[], &[]), true)];
+        assert!(w.due(&defs, &sources(&f), at(9, 0)).await.is_empty());
+        f.cards.lock().unwrap().push(item("b", "L1", "B1"));
+        let due = w.due(&defs, &sources(&f), at(9, 4)).await;
+        assert_eq!(due.len(), 1);
+        let t = due[0].1.ticket.as_ref().unwrap();
+        assert_eq!(
+            (
+                t.source.as_str(),
+                t.item_id.as_str(),
+                t.id.as_str(),
+                t.title.as_str()
+            ),
+            ("trello", "b", "B", "Card b")
+        );
+        assert!(w.due(&defs, &sources(&f), at(9, 8)).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_connector_trigger_filters_by_state_and_param() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        let defs = vec![pipeline(
+            connector_trigger(&["todo"], &[("board", "B1")]),
+            true,
+        )];
+        assert!(w.due(&defs, &sources(&f), at(9, 0)).await.is_empty());
+        *f.cards.lock().unwrap() = vec![
+            item("a", "Todo", "B1"),
+            item("b", "Done", "B1"),
+            item("c", "Todo", "B2"),
+        ];
+        let due = w.due(&defs, &sources(&f), at(9, 4)).await;
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].1.ticket.as_ref().unwrap().item_id, "a");
+    }
+
+    #[tokio::test]
+    async fn a_card_moved_into_a_state_starts_once() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        f.cards.lock().unwrap().push(item("a", "Backlog", "B1"));
+        let defs = vec![pipeline(connector_trigger(&["Todo"], &[]), true)];
+        assert!(w.due(&defs, &sources(&f), at(9, 0)).await.is_empty());
+        *f.cards.lock().unwrap() = vec![item("a", "Todo", "B1")];
+        assert_eq!(w.due(&defs, &sources(&f), at(9, 4)).await.len(), 1);
+        assert!(w.due(&defs, &sources(&f), at(9, 8)).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_connector_problem_shows_and_starts_nothing() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        *f.card_problem.lock().unwrap() = Some("Trello: the secret trello_token is not set".into());
+        let def = pipeline(connector_trigger(&[], &[]), true);
+        let defs = vec![def.clone()];
+        assert!(w.due(&defs, &sources(&f), at(9, 0)).await.is_empty());
+        assert!(w.kept(&def.id).problem.contains("trello_token"));
+    }
+
+    #[tokio::test]
+    async fn a_schedule_can_read_a_connector() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        *f.cards.lock().unwrap() = vec![item("a", "Todo", "B1"), item("b", "Done", "B1")];
+        let defs = vec![pipeline(
+            Trigger::Schedule {
+                schedule: "weekdays 09:00".into(),
+                state: "Todo".into(),
+                connector: "trello".into(),
+            },
+            true,
+        )];
+        assert!(w.due(&defs, &sources(&f), at(8, 0)).await.is_empty());
+        let due = w.due(&defs, &sources(&f), at(9, 1)).await;
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].1.ticket.as_ref().unwrap().source, "trello");
     }
 
     #[tokio::test]
@@ -560,6 +761,7 @@ pub(crate) mod tests {
         github.id = "gh".into();
         let mut nightly = pipeline(
             Trigger::Schedule {
+                connector: String::new(),
                 schedule: "every 1h".into(),
                 state: "Todo".into(),
             },

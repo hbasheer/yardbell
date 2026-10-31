@@ -462,9 +462,17 @@ impl Pipelines {
                 };
                 let secrets =
                     crate::secrets::Secrets::for_config(&app.cfg_path).map_err(|e| e.to_string());
+                let connectors = cfg.connectors.clone();
+                let feed = run::ConfigFeed {
+                    connectors: &connectors,
+                    secrets: &secrets,
+                    saved: crate::mcp_read::saved_values(&app),
+                    health: self.connector_health(),
+                };
                 let sources = triggers::Sources {
                     feeds: feeds.as_ref(),
                     gitlab: &gitlab,
+                    connectors: &feed,
                     accesses: crate::pulls::accesses(&cfg.pull_requests, &secrets),
                     linear_key: secrets.as_ref().map_err(Clone::clone).and_then(|s| {
                         s.get(crate::triggers::LINEAR_SECRET)

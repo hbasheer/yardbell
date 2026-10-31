@@ -319,7 +319,14 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
         "run_pipeline" => {
             let r: RunPipeline = arg(input)?;
             runnable(app, &r)?;
-            let subjects = crate::web::pipeline_api::subjects(app, &r.tickets, &r.prs).await?;
+            let def = app.pipelines.library().get(&r.id).ok_or_else(|| {
+                ApiError(
+                    StatusCode::NOT_FOUND,
+                    format!("there is no pipeline {}", r.id),
+                )
+            })?;
+            let subjects =
+                crate::web::pipeline_api::subjects(app, &def, &r.tickets, &r.prs).await?;
             let runs = app
                 .pipelines
                 .start(&r.id, subjects, "dispatch")

@@ -65,6 +65,14 @@ fn machines_of(cfg: &Config, def: &Definition) -> Vec<String> {
         .collect()
 }
 
+fn connectors_of(def: &Definition) -> Vec<String> {
+    match &def.trigger {
+        Trigger::Connector { connector, .. } => vec![connector.clone()],
+        Trigger::Schedule { connector, .. } if !connector.is_empty() => vec![connector.clone()],
+        _ => Vec::new(),
+    }
+}
+
 pub fn pipelines_lines(
     cfg: &Config,
     defs: &[Definition],
@@ -72,10 +80,18 @@ pub fn pipelines_lines(
     gh: &[(String, bool)],
     gitlab: &[(String, Result<String, String>)],
     up: &[(String, bool)],
+    connectors: &[(String, Result<usize, String>)],
 ) -> Vec<(bool, String)> {
     let mut lines = Vec::new();
     for def in defs.iter().filter(|d| d.enabled) {
         let name = &def.name;
+        for id in connectors_of(def) {
+            match connectors.iter().find(|(c, _)| c == &id) {
+                Some((_, Ok(n))) => lines.push((true, format!("{name}: {id} answers, {n} items"))),
+                Some((_, Err(e))) => lines.push((false, format!("{name}: {e}"))),
+                None => lines.push((false, format!("{name}: {id} was not checked"))),
+            }
+        }
         let machines = machines_of(cfg, def);
         let uses_linear = matches!(&def.trigger, Trigger::Linear { .. })
             || matches!(&def.trigger, Trigger::Schedule { state, .. } if !state.trim().is_empty())
@@ -236,7 +252,28 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
                 .await;
             gh.push((m.name.clone(), out.ok()));
         }
-        for (ok, text) in pipelines_lines(&cfg, &defs, &linear, &gh, &signed_in, &up) {
+        let secrets = crate::secrets::Secrets::for_config(path).map_err(|e| e.to_string());
+        let mut connectors: Vec<(String, Result<usize, String>)> = Vec::new();
+        let wanted: std::collections::BTreeSet<String> = defs
+            .iter()
+            .filter(|d| d.enabled)
+            .flat_map(connectors_of)
+            .collect();
+        for id in wanted {
+            let saved = secrets
+                .as_ref()
+                .map(|s| s.values().map(|(_, v)| v.to_string()).collect())
+                .unwrap_or_default();
+            let found = match crate::connectors::client_for(&cfg.connectors, &id, &secrets, saved) {
+                Ok(client) => client
+                    .list(&Default::default())
+                    .await
+                    .map(|l| l.items.len()),
+                Err(e) => Err(e),
+            };
+            connectors.push((id, found));
+        }
+        for (ok, text) in pipelines_lines(&cfg, &defs, &linear, &gh, &signed_in, &up, &connectors) {
             line(ok, &text);
         }
     }
@@ -300,6 +337,36 @@ mod tests {
     }
 
     #[test]
+    fn doctor_names_a_connector_that_fails() {
+        let cfg = crate::pipeline::definition::tests::cfg();
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = crate::pipeline::definition::Trigger::Connector {
+            connector: "trello".into(),
+            params: Default::default(),
+            states: vec![],
+        };
+        let lines = pipelines_lines(
+            &cfg,
+            std::slice::from_ref(&def),
+            &None,
+            &[],
+            &[],
+            &[],
+            &[(
+                "trello".to_string(),
+                Err("Trello: the secret t is not set".to_string()),
+            )],
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|(ok, t)| !ok && t.contains("the secret t is not set")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn the_pipelines_lines_name_what_each_trigger_needs() {
         use crate::pipeline::templates;
         let cfg = crate::pipeline::definition::tests::cfg();
@@ -327,6 +394,7 @@ mod tests {
                 ("mini".into(), true),
                 ("devbox".into(), false),
             ],
+            &[],
         );
         assert_eq!(
             lines,
@@ -353,6 +421,7 @@ mod tests {
                 ("mini".into(), true),
                 ("devbox".into(), true),
             ],
+            &[],
         );
         assert_eq!(
             ok,
@@ -371,7 +440,7 @@ mod tests {
                 ),
             ]
         );
-        let missing = pipelines_lines(&cfg, &[review], &None, &[], &[], &[]);
+        let missing = pipelines_lines(&cfg, &[review], &None, &[], &[], &[], &[]);
         assert_eq!(
             missing[0],
             (false, "Review my merge requests: git.commslayer.com was not checked; add it under pull_requests.gitlab".into())

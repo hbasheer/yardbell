@@ -438,6 +438,55 @@ async fn an_empty_pipeline_is_created_and_cannot_run() {
 }
 
 #[tokio::test]
+async fn run_now_takes_a_connector_item() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let s = crate::connectors::tests::stub().await;
+    s.answer(
+        "/cards/abc",
+        200,
+        r#"{"name":"Fix it","url":"https://t/abc"}"#,
+    );
+    s.answer("/cards/gone", 404, r#"{"message":"gone"}"#);
+    let tool = crate::connectors::tests::connector(
+        &s.base,
+        "  read:\n    request: { method: GET, path: '/cards/{{item_id}}' }\n    map: { title: name, url: url }\n",
+    );
+    let mut cfg = r.app.config().unwrap();
+    let mut tool = tool;
+    tool.headers.clear();
+    cfg.connectors = vec![tool];
+    cfg.save(&r.app.cfg_path).unwrap();
+    let id = copy(&r, &c, "Review my merge requests").await;
+    let mut def = r.app.pipelines.library().get(&id).unwrap();
+    def.trigger = crate::pipeline::definition::Trigger::Connector {
+        connector: "t".into(),
+        params: Default::default(),
+        states: vec![],
+    };
+    let path = format!("/api/pipelines/{id}");
+    let (status, body) = call(&r, &c, "PUT", &path, Some(json!(def))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let runs = format!("/api/pipelines/{id}/runs");
+    let (status, body) = call(&r, &c, "POST", &runs, Some(json!({ "tickets": ["gone"] }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("gone"), "{body}");
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        &runs,
+        Some(json!({ "tickets": ["https://trello.com/c/abc"] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let t = &body["runs"][0]["subject"]["ticket"];
+    assert_eq!(t["source"], "t");
+    assert_eq!(t["item_id"], "abc");
+    assert_eq!(t["title"], "Fix it");
+}
+
+#[tokio::test]
 async fn a_run_can_be_deleted_in_any_state() {
     let r = rig();
     let c = cookie(&r.app).await;

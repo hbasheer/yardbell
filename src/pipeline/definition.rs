@@ -152,6 +152,15 @@ pub enum Trigger {
         schedule: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         state: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        connector: String,
+    },
+    Connector {
+        connector: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, String>,
+        #[serde(default)]
+        states: Vec<String>,
     },
     Linear {
         #[serde(default)]
@@ -265,7 +274,32 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         out.push("the pipeline needs a name".to_string());
     }
     let known = |name: &str| cfg.machine(name).is_some();
+    let source = match &def.trigger {
+        Trigger::Connector { connector, .. } => Some(connector.as_str()),
+        Trigger::Schedule { connector, .. } if !connector.is_empty() => Some(connector.as_str()),
+        _ => None,
+    };
+    if let Some(id) = source {
+        if def
+            .steps
+            .iter()
+            .any(|s| matches!(s.kind, StepKind::Linear { .. }))
+        {
+            out.push(format!(
+                "A Linear step needs a Linear ticket, and this trigger gives a {id} item"
+            ));
+        }
+    }
     if def.enabled {
+        match source.map(|id| (id, cfg.connectors.iter().find(|c| c.id == id))) {
+            Some((id, None)) => out.push(format!(
+                "the trigger names connector {id}, which is not in Settings"
+            )),
+            Some((id, Some(c))) if !c.enabled => {
+                out.push(format!("connector {id} is switched off"))
+            }
+            _ => {}
+        }
         match &def.trigger {
             Trigger::Schedule { schedule, .. } => {
                 if let Err(e) = crate::triggers::Schedule::parse(schedule) {
@@ -495,6 +529,29 @@ pub(crate) mod tests {
 
     fn example() -> Definition {
         serde_json::from_str(EXAMPLE).unwrap()
+    }
+
+    #[test]
+    fn definition_check_knows_connectors() {
+        let mut cfg = cfg();
+        let mut def = crate::pipeline::templates::all().remove(0);
+        def.enabled = true;
+        def.trigger = Trigger::Connector {
+            connector: "x".into(),
+            params: Default::default(),
+            states: vec![],
+        };
+        let problems = |d: &Definition, c: &Config| check(d, c).err().unwrap_or_default();
+        assert!(problems(&def, &cfg)
+            .contains(&"the trigger names connector x, which is not in Settings".to_string()));
+        let mut trello = crate::connectors::template("trello").unwrap();
+        trello.id = "x".into();
+        trello.enabled = false;
+        cfg.connectors = vec![trello];
+        assert!(problems(&def, &cfg).contains(&"connector x is switched off".to_string()));
+        assert!(problems(&def, &cfg).contains(
+            &"A Linear step needs a Linear ticket, and this trigger gives a x item".to_string()
+        ));
     }
 
     #[test]

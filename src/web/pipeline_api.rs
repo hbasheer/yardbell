@@ -325,13 +325,54 @@ struct StartReq {
     prs: Vec<String>,
 }
 
+async fn connector_subjects(
+    app: &AppState,
+    connector: &str,
+    tickets: &[String],
+) -> Result<Vec<Subject>, ApiError> {
+    let cfg = app.config()?;
+    let secrets = crate::secrets::Secrets::for_config(&app.cfg_path).map_err(|e| e.to_string());
+    let client = crate::connectors::client_for(
+        &cfg.connectors,
+        connector,
+        &secrets,
+        crate::mcp_read::saved_values(app),
+    )
+    .map_err(bad)?;
+    let mut out = Vec::new();
+    for given in tickets {
+        let given = given.trim().trim_end_matches('/');
+        let id = given.rsplit('/').next().unwrap_or(given);
+        let vars =
+            crate::connectors::client::Vars([("item_id".to_string(), id.to_string())].into());
+        let item = client
+            .read(&vars)
+            .await
+            .map_err(|e| bad(format!("{given}: {e}")))?;
+        out.push(crate::pipeline::triggers::item_subject(connector, &item));
+    }
+    Ok(out)
+}
+
 pub(crate) async fn subjects(
     app: &AppState,
+    def: &Definition,
     tickets: &[String],
     prs: &[String],
 ) -> Result<Vec<Subject>, ApiError> {
+    let connector = match &def.trigger {
+        crate::pipeline::definition::Trigger::Connector { connector, .. } => Some(connector),
+        crate::pipeline::definition::Trigger::Schedule { connector, .. }
+            if !connector.is_empty() =>
+        {
+            Some(connector)
+        }
+        _ => None,
+    };
     let mut out = Vec::new();
-    if !tickets.is_empty() {
+    if let (Some(connector), false) = (connector, tickets.is_empty()) {
+        out = connector_subjects(app, connector, tickets).await?;
+    } else if !tickets.is_empty() {
         let open = open(app).await?;
         for id in tickets {
             let t = open
@@ -380,7 +421,7 @@ async fn start(
         tickets: Vec::new(),
         prs: Vec::new(),
     });
-    let subjects = subjects(&app, &req.tickets, &req.prs).await?;
+    let subjects = subjects(&app, &def, &req.tickets, &req.prs).await?;
     let runs = app
         .pipelines
         .start(&id, subjects, "you")

@@ -9,11 +9,14 @@ use axum::response::{IntoResponse, Response};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
+type Answer = (u16, Vec<(String, String)>, String);
+type Asked = (String, String, String, String);
+
 #[derive(Clone, Default)]
 pub(crate) struct Stub {
     pub base: String,
-    pub answers: Arc<Mutex<HashMap<String, (u16, Vec<(String, String)>, String)>>>,
-    pub asked: Arc<Mutex<Vec<(String, String, String, String)>>>,
+    pub answers: Arc<Mutex<HashMap<String, Answer>>>,
+    pub asked: Arc<Mutex<Vec<Asked>>>,
     pub fallback: Arc<Mutex<Option<fn(&str) -> String>>>,
 }
 
@@ -756,4 +759,67 @@ fn health_keeps_the_last_status() {
         },
     );
     assert_eq!(h.all()["t"].message, "bad");
+}
+
+#[tokio::test]
+async fn the_feed_reports_a_cut_off_list_in_its_status() {
+    use crate::pipeline::triggers::ConnectorFeed;
+    let s = stub().await;
+    *s.fallback.lock().unwrap() = Some(|_| rows(1, 2));
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(
+        &s.base,
+        &list_call("    page: { style: number, param: page, size: 2, max_pages: 2 }\n"),
+    );
+    let list = vec![c];
+    let store = Ok(secrets(&dir));
+    let health = Health::default();
+    let feed = crate::pipeline::run::ConfigFeed {
+        connectors: &list,
+        secrets: &store,
+        saved: vec![],
+        health: &health,
+    };
+    let out = feed.list("t", &Default::default()).await.unwrap();
+    assert_eq!(out.items.len(), 4);
+    let status = &health.all()["t"];
+    assert!(status.ok);
+    assert!(status.message.contains("cut off"), "{}", status.message);
+}
+
+#[tokio::test]
+async fn the_feed_reports_a_missing_secret() {
+    use crate::pipeline::triggers::ConnectorFeed;
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = connector("https://x.example", &list_call(""));
+    c.headers
+        .insert("Authorization".into(), "Bearer ${secret:gone}".into());
+    let list = vec![c];
+    let store = Ok(secrets(&dir));
+    let health = Health::default();
+    let feed = crate::pipeline::run::ConfigFeed {
+        connectors: &list,
+        secrets: &store,
+        saved: vec![],
+        health: &health,
+    };
+    let e = feed.list("t", &Default::default()).await.unwrap_err();
+    assert!(e.contains("gone"), "{e}");
+    let status = &health.all()["t"];
+    assert!(!status.ok);
+    assert!(status.message.contains("gone"));
+}
+
+#[test]
+fn client_for_says_what_is_wrong() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = Ok(secrets(&dir));
+    let mut c = connector("https://x.example", GET_ITEM);
+    let e = client_for(&[], "t", &store, vec![]).err().unwrap();
+    assert_eq!(e, "there is no connector t");
+    c.enabled = false;
+    let e = client_for(std::slice::from_ref(&c), "t", &store, vec![])
+        .err()
+        .unwrap();
+    assert_eq!(e, "Tool is switched off");
 }
