@@ -1038,11 +1038,22 @@ fn a_chosen_value_stays_with_its_item() {
 }
 
 #[test]
-fn sign_in_tools_are_the_confirmed_ones() {
+fn sign_in_tools_say_which_were_tested() {
     let tools = crate::connectors::sign_in_tools();
-    let ids: Vec<&str> = tools.iter().map(|t| t.id).collect();
-    assert_eq!(ids, ["trello", "jira"]);
+    let tested: Vec<&str> = tools.iter().filter(|t| t.tested).map(|t| t.id).collect();
+    assert_eq!(tested, ["trello", "jira"]);
+    assert!(tools.len() >= 20);
     assert!(tools
         .iter()
         .all(|t| t.url.starts_with("https://") && !t.about.is_empty()));
+    let mut ids: Vec<&str> = tools.iter().map(|t| t.id).collect();
+    ids.sort_unstable();
+    ids.dedup();
+    assert_eq!(ids.len(), tools.len(), "each id is one server name");
+    let client: Vec<&str> = tools
+        .iter()
+        .filter(|t| t.needs_client)
+        .map(|t| t.id)
+        .collect();
+    assert!(client.contains(&"asana") && client.contains(&"github"));
 }

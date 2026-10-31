@@ -2905,7 +2905,7 @@ class Suite:
           return {
             tiles: tiles.length,
             columns: new Set(tiles.map((t) => Math.round(t.getBoundingClientRect().left))).size,
-            logos: tiles.filter((t) => t.querySelector('svg')).length,
+            logos: tiles.filter((t) => t.querySelector('.conn-logo')?.textContent.trim() || t.querySelector('svg')).length,
             clipped: tiles.flatMap((t) => [...t.querySelectorAll('strong, small, button')]).filter((x) => x.scrollWidth > x.clientWidth + 1 && getComputedStyle(x).display !== 'inline').map((x) => x.textContent),
             past: Math.max(...tiles.map((t) => t.getBoundingClientRect().right)) - flow.right,
             sideways: body.scrollWidth - body.clientWidth,
@@ -2976,6 +2976,29 @@ class Suite:
         finally:
             b.viewport(1280, 800)
             b.goto(self.url("/"))
+
+    def test_sign_in_lists_common_tools_and_finds_one(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        b.click("#conn-new")
+        b.wait("document.querySelector('[data-sign-in=linear]')", "more tools than Trello and Jira")
+        count = b.js("document.querySelectorAll('#conn-sign-in-list .conn-card').length")
+        if count < 20:
+            raise Failure(f"only {count} tools")
+        width = b.js("document.getElementById('conn-flow').getBoundingClientRect().width")
+        if width < 800:
+            raise Failure(f"the modal is only {width}px wide")
+        columns = b.js("getComputedStyle(document.getElementById('conn-sign-in-list')).gridTemplateColumns.split(' ').length")
+        if columns != 3:
+            raise Failure(f"{columns} columns")
+        self.set_field("#conn-sign-in-search", "sent")
+        b.wait("document.querySelector('[data-sign-in=sentry]') && !document.querySelector('[data-sign-in=sentry]').hidden && document.querySelector('[data-sign-in=linear]').hidden", "the search to narrow")
+        self.set_field("#conn-sign-in-search", "nothing like this")
+        b.wait("!document.getElementById('conn-sign-in-none').hidden", "word that nothing matched")
+        b.js("document.getElementById('conn-flow').close()")
+        self.check_errors("the sign-in list")
 
     def test_new_connection_is_one_step_at_a_time(self):
         b = self.b

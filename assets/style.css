@@ -1343,7 +1343,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-none[hidden] { display: none; }
 .conn-none h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
 .conn-none .help { margin: 0; }
-.conn-dialog { width: min(560px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 0; border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px rgb(0 0 0 / 0.06), 0 8px 16px -4px rgb(26 26 26 / 0.22); overflow: hidden; }
+.conn-dialog { width: min(820px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 0; border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px rgb(0 0 0 / 0.06), 0 8px 16px -4px rgb(26 26 26 / 0.22); overflow: hidden; }
 .conn-dialog[open] { display: flex; flex-direction: column; }
 .conn-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px 12px; }
 .conn-dialog-head h3 { margin: 0; font-size: 16px; font-weight: 600; overflow-wrap: anywhere; }
@@ -1369,6 +1369,9 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-more-body .help { margin: 0; }
 .conn-secrets { display: grid; gap: 14px; }
 .conn-error { color: var(--bad-text, var(--bad)); flex: 1; margin: 0; min-height: 1.5em; }
+.conn-card[hidden], #conn-sign-in-none[hidden] { display: none; }
+.conn-empty { margin: 0; color: var(--muted); font-size: 13px; }
+#conn-sign-in-search { width: 100%; box-sizing: border-box; }
 .conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
 .conn-card { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: 1fr minmax(28px, auto); gap: 10px 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
 .conn-card[data-sign-in], .conn-card[data-starter] { cursor: pointer; }
