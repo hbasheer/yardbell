@@ -66,3 +66,14 @@ pub fn paths_of(row: &Value) -> Vec<String> {
     out.dedup();
     out
 }
+
+// A link is only kept when it is plainly one, so outside text cannot pass as one.
+pub fn clean_url(text: &str) -> String {
+    let text = text.trim();
+    let plain = text.starts_with("https://") || text.starts_with("http://");
+    if plain && !text.contains(char::is_whitespace) {
+        text.to_string()
+    } else {
+        String::new()
+    }
+}

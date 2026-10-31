@@ -505,18 +505,23 @@ function connectorFields(t, redraw) {
     redraw();
   };
   return html`${field("Tool", connectorSelect(t.connector, (v) => { t.connector = v; t.params = {}; t.states = []; redraw(); }))}
-    ${(connector?.params || []).map((p) => {
+    ${paramFields(connector, params, setParam)}
+    ${connector ? statePicks(t, connector, redraw) : nothing}`;
+}
+
+function paramFields(connector, params, setParam) {
+  const needed = connector?.calls?.find((c) => c.name === "list")?.needs || [];
+  return html`${(connector?.params || []).map((p) => {
       if (!p.options) {
         return field(p.label || p.name, html`<input name=${`param-${p.name}`} .value=${params[p.name] || ""} @change=${(e) => setParam(p.name, e.target.value.trim())}>`);
       }
       const found = choicesFor(connector.id, p.options);
       return field(p.label || p.name, html`<select name=${`param-${p.name}`} @change=${(e) => setParam(p.name, e.target.value)}>
-        <option value="" ?selected=${!params[p.name]}>Any</option>
+        <option value="" ?selected=${!params[p.name]}>${needed.includes(p.name) ? "Pick one" : "Any"}</option>
         ${params[p.name] && !found.list?.some((o) => o.id === params[p.name]) ? html`<option value=${params[p.name]} selected>${params[p.name]}</option>` : nothing}
         ${(found.list || []).map((o) => html`<option value=${o.id} ?selected=${o.id === params[p.name]}>${o.name}</option>`)}
       </select>`, found.error ? "The choices could not be read. Test the connection in Settings." : "");
-    })}
-    ${connector ? statePicks(t, connector, redraw) : nothing}`;
+    })}`;
 }
 
 let hookAddress = null;
@@ -617,6 +622,7 @@ function triggerFields(d, redraw) {
         <option value="" ?selected=${!t.connector}>Linear</option>
         ${data.connectors.map((c) => html`<option value=${c.id} ?selected=${c.id === t.connector}>${c.name}</option>`)}
       </select>`) : nothing}
+      ${t.kind === "schedule" && t.connector ? paramFields(data.connectors.find((c) => c.id === t.connector), t.params || (t.params = {}), (name, value) => { if (value) t.params[name] = value; else delete t.params[name]; redraw(); }) : nothing}
       ${t.kind === "connector" ? connectorFields(t, redraw) : nothing}
       ${t.kind === "webhook" ? webhookFields(d, redraw) : nothing}
       ${t.kind === "linear" ? field("In the states", html`<input name="states" placeholder="Todo, In Progress" .value=${(t.states || []).join(", ")}

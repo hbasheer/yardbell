@@ -355,13 +355,22 @@ async fn connector_subjects(
     let mut out = Vec::new();
     for given in tickets {
         let given = given.trim().trim_end_matches('/');
-        let id = given.rsplit('/').next().unwrap_or(given);
-        let vars =
-            crate::connectors::client::Vars([("item_id".to_string(), id.to_string())].into());
-        let item = client
-            .read(&vars)
-            .await
-            .map_err(|e| bad(format!("{given}: {e}")))?;
+        // A link copied from a browser can end in a readable name after the id.
+        let mut tries = given
+            .rsplit('/')
+            .take(if given.contains("://") { 2 } else { 1 });
+        let first = tries.next().unwrap_or(given);
+        let read = |id: &str| {
+            let vars =
+                crate::connectors::client::Vars([("item_id".to_string(), id.to_string())].into());
+            let client = &client;
+            async move { client.read(&vars).await }
+        };
+        let item = match (read(first).await, tries.next()) {
+            (Ok(item), _) => item,
+            (Err(e), None) => return Err(bad(format!("{given}: {e}"))),
+            (Err(e), Some(id)) => read(id).await.map_err(|_| bad(format!("{given}: {e}")))?,
+        };
         out.push(crate::pipeline::triggers::item_subject(connector, &item));
     }
     Ok(out)
@@ -603,10 +612,10 @@ fn hook_subject(def: &Definition, body: &Value) -> Result<Subject, String> {
     Ok(Subject {
         ticket: Some(TicketRef {
             source: crate::pipeline::run::WEBHOOK_SOURCE.to_string(),
-            item_id: id.clone(),
-            id,
-            title,
-            url: field("url"),
+            item_id: crate::pipeline::prompts::one_line(&id),
+            id: crate::pipeline::prompts::one_line(&id),
+            title: crate::pipeline::prompts::one_line(&title),
+            url: crate::connectors::map::clean_url(&field("url")),
             description: field("description"),
         }),
         pr: None,

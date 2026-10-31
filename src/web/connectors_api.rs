@@ -1,6 +1,7 @@
 use super::{ApiError, AppState};
 use crate::connectors::client::{Client, Vars};
 use crate::connectors::{client_for, host_of, map, template, templates, Connector};
+use crate::pipeline::definition::{Definition, StepKind, Trigger};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -104,6 +105,20 @@ fn parse_yaml<T: serde::de::DeserializeOwned + Default>(
     serde_yaml::from_str(text).map_err(|e| format!("the {what} cannot be read: {e}"))
 }
 
+fn uses_connector(def: &Definition, id: &str) -> bool {
+    let trigger = match &def.trigger {
+        Trigger::Connector { connector, .. } | Trigger::Schedule { connector, .. } => {
+            connector == id
+        }
+        _ => false,
+    };
+    trigger
+        || def
+            .steps
+            .iter()
+            .any(|s| matches!(&s.kind, StepKind::Call { connector, .. } if connector == id))
+}
+
 async fn save(
     AxState(app): AxState<Arc<AppState>>,
     Json(req): Json<SaveReq>,
@@ -123,12 +138,23 @@ async fn save(
         calls: parse_yaml("calls", &req.calls_yaml).map_err(bad)?,
     };
     let mut all = app.config()?.connectors;
-    let replaced = if req.was.is_empty() {
-        &connector.id
-    } else {
-        &req.was
-    };
-    match all.iter().position(|c| &c.id == replaced) {
+    let taken = all.iter().any(|c| c.id == connector.id);
+    if taken && req.was != connector.id {
+        return Err(bad(format!(
+            "there is already a connection with the id {}",
+            connector.id
+        )));
+    }
+    if !req.was.is_empty() && req.was != connector.id {
+        let used = app.pipelines.library().list();
+        if let Some(def) = used.iter().find(|d| uses_connector(d, &req.was)) {
+            return Err(bad(format!(
+                "{} uses {}, so its id cannot change",
+                def.name, req.was
+            )));
+        }
+    }
+    match all.iter().position(|c| c.id == req.was) {
         Some(i) => all[i] = connector,
         None => all.push(connector),
     }
@@ -184,7 +210,7 @@ async fn test(
             "Test only runs a call that reads. If list only reads, add kind: lookup to it".into(),
         ));
     }
-    let mut vars = Vars(req.params);
+    let mut vars = client.with_defaults(&Vars(req.params)).await;
     vars.0.entry("cursor".to_string()).or_default();
     let found = client.list(&vars).await;
     let status = crate::pipeline::run::status_of(&found);
@@ -221,23 +247,11 @@ async fn options(
             "{call} changes something, so it cannot fill a list"
         )));
     }
-    let value = client.call(&call, &Vars(params)).await.map_err(bad)?;
-    let rows = map::path(&value, &spec.items).unwrap_or(Value::Null);
-    let field = |row: &Value, name: &str| {
-        spec.map
-            .get(name)
-            .and_then(|at| map::path(row, at))
-            .map(|v| map::text_of(&v))
-            .unwrap_or_default()
-    };
-    let list: Vec<Value> = rows
-        .as_array()
-        .map(|rows| {
-            rows.iter()
-                .map(|row| json!({ "id": field(row, "id"), "name": field(row, "name") }))
-                .collect()
-        })
-        .unwrap_or_default();
+    let found = client.options(&call, &Vars(params)).await.map_err(bad)?;
+    let list: Vec<Value> = found
+        .into_iter()
+        .map(|(id, name)| json!({ "id": id, "name": name }))
+        .collect();
     Ok(Json(json!(list)).into_response())
 }
 

@@ -679,14 +679,10 @@ async fn run_now_takes_a_connector_item() {
     let (status, body) = call(&r, &c, "POST", &runs, Some(json!({ "tickets": ["gone"] }))).await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(body["error"].as_str().unwrap().contains("gone"), "{body}");
-    let (status, body) = call(
-        &r,
-        &c,
-        "POST",
-        &runs,
-        Some(json!({ "tickets": ["https://trello.com/c/abc"] })),
-    )
-    .await;
+    let long = json!({ "tickets": ["https://trello.com/c/abc/12-fix-it"] });
+    let (status, body) = call(&r, &c, "POST", &runs, Some(long)).await;
+    assert_eq!(status, StatusCode::OK, "a link from the browser: {body}");
+    assert_eq!(body["runs"][0]["subject"]["ticket"]["item_id"], "abc");
     assert_eq!(status, StatusCode::OK, "{body}");
     let t = &body["runs"][0]["subject"]["ticket"];
     assert_eq!(t["source"], "t");

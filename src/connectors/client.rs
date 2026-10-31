@@ -37,6 +37,7 @@ pub(super) struct Reply {
 pub struct Client {
     pub(super) connector: Connector,
     headers: Vec<(HeaderName, HeaderValue)>,
+    query_secrets: BTreeMap<String, String>,
     saved: Vec<String>,
     http: reqwest::Client,
 }
@@ -46,6 +47,11 @@ type Steps = BTreeMap<String, Value>;
 fn slots() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"\{\{\s*([^{}\s]+)\s*\}\}").expect("static regex"))
+}
+
+fn references() -> &'static Regex {
+    static RE: OnceLock<Regex> = OnceLock::new();
+    RE.get_or_init(|| Regex::new(r"\$\{secret:([^}]+)\}").expect("static regex"))
 }
 
 fn lookup(name: &str, vars: &Vars, steps: &Steps) -> Option<String> {
@@ -193,6 +199,18 @@ impl Client {
             value.set_sensitive(true);
             headers.push((name, value));
         }
+        let mut query_secrets = BTreeMap::new();
+        let requests = c.calls.values().flat_map(|call| {
+            std::iter::once(&call.request).chain(call.before.iter().map(|b| &b.request))
+        });
+        for value in requests.flat_map(|r| r.query.values()) {
+            for name in crate::secrets::references(value).map_err(|e| format!("{}: {e}", c.name))? {
+                let found = secrets
+                    .get(name)
+                    .ok_or_else(|| format!("{}: the secret {name} is not set", c.name))?;
+                query_secrets.insert(name.to_string(), found.to_string());
+            }
+        }
         let mut http = reqwest::Client::builder()
             .redirect(reqwest::redirect::Policy::none())
             .timeout(TIMEOUT);
@@ -202,6 +220,7 @@ impl Client {
         Ok(Client {
             connector: c.clone(),
             headers,
+            query_secrets,
             saved,
             http: http.build().map_err(|e| e.to_string())?,
         })
@@ -320,8 +339,17 @@ impl Client {
         let base = self.connector.base_url.trim_end_matches('/');
         let url = self.checked_url(&format!("{base}{path}"))?;
         let mut query = Vec::new();
+        // Secrets become slots of their own, so a value from a ticket that spells a reference stays
+        // the text it is.
+        let mut with_secrets = vars.clone();
+        for (name, value) in &self.query_secrets {
+            with_secrets
+                .0
+                .insert(format!("secret.{name}"), value.clone());
+        }
         for (k, v) in &request.query {
-            let v = fill(v, vars, steps, &str::to_string)
+            let v = references().replace_all(v, "{{secret.$1}}");
+            let v = fill(&v, &with_secrets, steps, &str::to_string)
                 .map_err(|e| format!("{}: {e}", self.connector.name))?;
             query.push((k.clone(), v));
         }
@@ -377,13 +405,14 @@ impl Client {
             .filter(|k| !NAMED.contains(&k.as_str()))
             .map(|k| (k.clone(), mapped(call, row, k)))
             .collect();
-        let item_id = mapped(call, row, "item_id");
-        let id = mapped(call, row, "id");
+        let line = |name: &str| crate::pipeline::prompts::one_line(&mapped(call, row, name));
+        let item_id = line("item_id");
+        let id = line("id");
         Item {
             id: if id.is_empty() { item_id.clone() } else { id },
             item_id,
-            title: mapped(call, row, "title"),
-            url: mapped(call, row, "url"),
+            title: line("title"),
+            url: super::map::clean_url(&mapped(call, row, "url")),
             description: mapped(call, row, "description"),
             state: mapped(call, row, "state"),
             closed: mapped(call, row, "closed") == "true",
@@ -392,6 +421,41 @@ impl Client {
     }
 
     // Only what the connector names is ever kept; the rest of a reply goes no further.
+    pub async fn options(&self, name: &str, vars: &Vars) -> Result<Vec<(String, String)>, String> {
+        let call = self.call_named(name)?;
+        if call.kind() == super::CallKind::Change {
+            return Err(format!(
+                "{name} changes something, so it cannot fill a list"
+            ));
+        }
+        let value = self.call(name, vars).await?;
+        let rows = path(&value, &call.items).unwrap_or(Value::Null);
+        Ok(rows
+            .as_array()
+            .map(|rows| {
+                rows.iter()
+                    .map(|row| (mapped(call, row, "id"), mapped(call, row, "name")))
+                    .collect()
+            })
+            .unwrap_or_default())
+    }
+
+    // A choice nobody made, for a check that only needs to see the connection work.
+    pub async fn with_defaults(&self, vars: &Vars) -> Vars {
+        let mut filled = vars.clone();
+        for param in &self.connector.params {
+            if filled.0.contains_key(&param.name) || param.options.is_empty() {
+                continue;
+            }
+            if let Ok(found) = self.options(&param.options, &filled).await {
+                if let Some((id, _)) = found.into_iter().next() {
+                    filled.0.insert(param.name.clone(), id);
+                }
+            }
+        }
+        filled
+    }
+
     pub fn mapped_reply(call: &Call, value: &Value) -> Value {
         if call.map.is_empty() {
             return Value::Null;

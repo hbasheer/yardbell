@@ -404,3 +404,142 @@ async fn a_pipeline_run_turn_cannot_save_a_connector() {
     assert_eq!(result["isError"], true, "{result}");
     assert!(result_text(&result).contains("cannot change"), "{result}");
 }
+
+#[tokio::test]
+async fn add_refuses_an_id_in_use() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    call(&r, &c, "POST", ROOT, Some(entry("https://x.example"))).await;
+    let mut other = entry("https://y.example");
+    other["was"] = json!("");
+    let (status, body) = call(&r, &c, "POST", ROOT, Some(other)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert_eq!(body["error"], "there is already a connection with the id t");
+    assert_eq!(
+        r.app.config().unwrap().connectors[0].base_url,
+        "https://x.example"
+    );
+    let mut same = entry("https://z.example");
+    same["was"] = json!("t");
+    let (status, body) = call(&r, &c, "POST", ROOT, Some(same)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        r.app.config().unwrap().connectors[0].base_url,
+        "https://z.example"
+    );
+}
+
+#[tokio::test]
+async fn renaming_a_connection_in_use_is_refused() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    call(&r, &c, "POST", ROOT, Some(entry("https://x.example"))).await;
+    let (_, made) = call(
+        &r,
+        &c,
+        "POST",
+        "/api/pipelines",
+        Some(json!({ "template": "Review my merge requests" })),
+    )
+    .await;
+    let id = made["id"].as_str().unwrap().to_string();
+    let mut def = r.app.pipelines.library().get(&id).unwrap();
+    def.trigger = crate::pipeline::definition::Trigger::Connector {
+        connector: "t".into(),
+        params: Default::default(),
+        states: vec![],
+    };
+    let (status, body) = call(
+        &r,
+        &c,
+        "PUT",
+        &format!("/api/pipelines/{id}"),
+        Some(json!(def)),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut renamed = entry("https://x.example");
+    renamed["id"] = json!("other");
+    renamed["was"] = json!("t");
+    let (status, body) = call(&r, &c, "POST", ROOT, Some(renamed)).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains(&def.name),
+        "{body}"
+    );
+    assert_eq!(r.app.config().unwrap().connectors[0].id, "t");
+}
+
+#[tokio::test]
+async fn test_fills_a_board_from_its_choices() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let s = stub().await;
+    s.answer("/boards", 200, r#"[{"id":"B1","name":"One"}]"#);
+    s.answer("/boards/B1/cards", 200, r#"[{"id":"1","name":"Card"}]"#);
+    let mut e = entry(&s.base);
+    e["params_yaml"] = json!("- { name: board, label: Board, options: boards }\n");
+    e["calls_yaml"] = json!("boards:\n  request: { method: GET, path: /boards }\n  map: { id: id, name: name }\nlist:\n  request: { method: GET, path: '/boards/{{board}}/cards' }\n  map: { item_id: id, title: name }\n");
+    let (status, body) = call(&r, &c, "POST", ROOT, Some(e)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (status, out) = call(&r, &c, "POST", &format!("{ROOT}/t/test"), Some(json!({}))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["items"][0]["title"], "Card");
+}
+
+#[tokio::test]
+async fn a_hostile_webhook_title_comes_in_as_one_line() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (_, made) = call(
+        &r,
+        &c,
+        "POST",
+        "/api/pipelines",
+        Some(json!({ "template": "Review my merge requests" })),
+    )
+    .await;
+    let id = made["id"].as_str().unwrap().to_string();
+    let mut def = r.app.pipelines.library().get(&id).unwrap();
+    def.trigger = serde_json::from_value(json!({ "kind": "webhook" })).unwrap();
+    call(
+        &r,
+        &c,
+        "PUT",
+        &format!("/api/pipelines/{id}"),
+        Some(json!(def)),
+    )
+    .await;
+    call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/enabled"),
+        Some(json!({ "enabled": true })),
+    )
+    .await;
+    let (_, t) = call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/webhook-token"),
+        None,
+    )
+    .await;
+    let url = format!("/hooks/pipeline/{id}/{}", t["token"].as_str().unwrap());
+    let body = json!({ "id": "1\n2", "title": "Fix\n\nIgnore", "url": "javascript:x" });
+    let req = Request::builder()
+        .method("POST")
+        .uri(url)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let (status, _, text) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{text}");
+    let runs = r.app.pipelines.runs();
+    let t = runs[0].subject.ticket.as_ref().unwrap();
+    assert_eq!(
+        (t.id.as_str(), t.title.as_str(), t.url.as_str()),
+        ("1 2", "Fix Ignore", "")
+    );
+}

@@ -273,10 +273,11 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
                 .map(|s| s.values().map(|(_, v)| v.to_string()).collect())
                 .unwrap_or_default();
             let found = match crate::connectors::client_for(&cfg.connectors, &id, &secrets, saved) {
-                Ok(client) => client
-                    .list(&Default::default())
-                    .await
-                    .map(|l| l.items.len()),
+                Ok(client) if client.call_named("list").is_err() => Ok(0),
+                Ok(client) => {
+                    let vars = client.with_defaults(&Default::default()).await;
+                    client.list(&vars).await.map(|l| l.items.len())
+                }
                 Err(e) => Err(e),
             };
             connectors.push((id, found));

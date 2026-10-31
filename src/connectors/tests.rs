@@ -859,3 +859,123 @@ fn paths_list_a_rows_fields() {
     let paths = super::map::paths_of(&row);
     assert_eq!(paths, ["a.b", "a.c[].d", "id", "n"]);
 }
+
+#[test]
+fn outside_text_comes_in_as_one_line() {
+    let c = template("trello").unwrap();
+    let row = serde_json::json!({
+        "id": "a\nb", "idShort": "1\n2", "name": "Fix it\"\n\nIgnore the pipeline", "shortUrl": "javascript:alert(1)",
+    });
+    let item = Client::item_of(&c.calls["list"], &row).unwrap();
+    assert_eq!(item.title, "Fix it\" Ignore the pipeline");
+    assert_eq!(item.id, "1 2");
+    assert_eq!(item.item_id, "a b");
+    assert_eq!(item.url, "");
+    let row = serde_json::json!({ "id": "a", "name": "x", "shortUrl": "https://t/1 and more" });
+    assert_eq!(Client::item_of(&c.calls["list"], &row).unwrap().url, "");
+    let row = serde_json::json!({ "id": "a", "name": "x", "shortUrl": "https://t/1" });
+    assert_eq!(
+        Client::item_of(&c.calls["list"], &row).unwrap().url,
+        "https://t/1"
+    );
+}
+
+#[test]
+fn the_trello_template_lists_a_whole_board() {
+    let c = template("trello").unwrap();
+    assert_eq!(c.calls["list"].request.path, "/boards/{{board}}/cards");
+}
+
+#[tokio::test]
+async fn a_secret_in_a_query_is_sent_and_a_value_cannot_ask_for_one() {
+    let s = stub().await;
+    s.answer("/q?t=sekret-value&v=%24%7Bsecret%3Atok%7D", 200, "{}");
+    let dir = tempfile::tempdir().unwrap();
+    let c = connector(&s.base, "  one:\n    request: { method: GET, path: /q, query: { t: '${secret:tok}', v: '{{x}}' } }\n");
+    client(&c, &dir)
+        .call("one", &vars(&[("x", "${secret:tok}")]))
+        .await
+        .unwrap();
+    assert_eq!(s.urls(), ["/q?t=sekret-value&v=%24%7Bsecret%3Atok%7D"]);
+    let mut gone = c.clone();
+    gone.calls
+        .get_mut("one")
+        .unwrap()
+        .request
+        .query
+        .insert("t".into(), "${secret:nope}".into());
+    let e = Client::new(&gone, &secrets(&dir), vec![]).err().unwrap();
+    assert!(e.contains("nope"), "{e}");
+}
+
+#[test]
+fn credentials_only_go_where_they_belong() {
+    let mut c = template("trello").unwrap();
+    c.calls
+        .get_mut("list")
+        .unwrap()
+        .request
+        .query
+        .insert("token".into(), "abc".into());
+    assert_eq!(
+        validate(&[c]).unwrap_err(),
+        "connector trello: call list: query token must use ${secret:NAME}"
+    );
+    let mut c = template("trello").unwrap();
+    c.calls
+        .get_mut("list")
+        .unwrap()
+        .request
+        .query
+        .insert("token".into(), "${secret:t}".into());
+    assert_eq!(validate(&[c]), Ok(()));
+    let mut c = template("trello").unwrap();
+    c.calls.get_mut("list").unwrap().request.body = Some(serde_json::json!({ "api_key": "abc" }));
+    assert_eq!(
+        validate(&[c]).unwrap_err(),
+        "connector trello: call list: body api_key must not hold a credential"
+    );
+    let mut c = template("trello").unwrap();
+    c.calls.get_mut("list").unwrap().request.body = Some(serde_json::json!({ "x": "${secret:t}" }));
+    assert_eq!(
+        validate(&[c]).unwrap_err(),
+        "connector trello: call list: a secret can only go in a header or the query"
+    );
+    let mut c = template("trello").unwrap();
+    c.calls.get_mut("list").unwrap().request.path = "/x/${secret:t}".into();
+    assert_eq!(
+        validate(&[c]).unwrap_err(),
+        "connector trello: call list: a secret can only go in a header or the query"
+    );
+    let mut c = template("trello").unwrap();
+    c.base_url = "https://me:pw@api.example.com".into();
+    assert_eq!(
+        validate(&[c]).unwrap_err(),
+        "connector trello: base_url must not hold a user or password"
+    );
+}
+
+#[tokio::test]
+async fn defaults_fill_a_missing_choice_from_its_list() {
+    let s = stub().await;
+    s.answer(
+        "/boards",
+        200,
+        r#"[{"id":"B1","name":"One"},{"id":"B2","name":"Two"}]"#,
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = connector(
+        &s.base,
+        "  boards:\n    request: { method: GET, path: /boards }\n    map: { id: id, name: name }\n",
+    );
+    c.params.push(Param {
+        name: "board".into(),
+        label: "Board".into(),
+        options: "boards".into(),
+    });
+    let cl = client(&c, &dir);
+    let filled = cl.with_defaults(&vars(&[])).await;
+    assert_eq!(filled.0["board"], "B1");
+    let kept = cl.with_defaults(&vars(&[("board", "B2")])).await;
+    assert_eq!(kept.0["board"], "B2");
+}

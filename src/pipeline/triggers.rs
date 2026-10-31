@@ -171,9 +171,10 @@ impl Watch {
                     schedule,
                     state,
                     connector,
+                    params,
                 } => {
                     match self
-                        .scheduled(def, schedule, state, connector, src, now)
+                        .scheduled(def, schedule, state, connector, params, src, now)
                         .await
                     {
                         Some(subjects) => subjects,
@@ -239,6 +240,7 @@ impl Watch {
         schedule: &str,
         state: &str,
         connector: &str,
+        params: &BTreeMap<String, String>,
         src: &Sources<'_>,
         now: DateTime<Local>,
     ) -> Option<Vec<Subject>> {
@@ -258,9 +260,12 @@ impl Watch {
             return Some(vec![Subject::default()]);
         }
         if !connector.is_empty() {
-            let listed = src.connectors.list(connector, &BTreeMap::new()).await;
+            let listed = src.connectors.list(connector, params).await;
             let items = match listed {
-                Ok(listed) => listed.items,
+                Ok(listed) => {
+                    self.edit(&def.id, |k| k.problem = String::new());
+                    listed.items
+                }
                 Err(problem) => {
                     self.edit(&def.id, |k| k.problem = problem);
                     return None;
@@ -450,15 +455,21 @@ pub(crate) mod tests {
         pub mrs: StdMutex<Vec<Mr>>,
         pub cards: StdMutex<Vec<crate::connectors::client::Item>>,
         pub card_problem: StdMutex<Option<String>>,
+        pub card_params: StdMutex<Vec<BTreeMap<String, String>>>,
+        pub card_hangs: StdMutex<bool>,
     }
 
     impl ConnectorFeed for Fakes {
         fn list<'a>(
             &'a self,
             _id: &'a str,
-            _params: &'a BTreeMap<String, String>,
+            params: &'a BTreeMap<String, String>,
         ) -> BoxFuture<'a, Result<crate::connectors::Listed, String>> {
             Box::pin(async move {
+                self.card_params.lock().unwrap().push(params.clone());
+                if *self.card_hangs.lock().unwrap() {
+                    futures::future::pending::<()>().await;
+                }
                 if let Some(problem) = self.card_problem.lock().unwrap().clone() {
                     return Err(problem);
                 }
@@ -641,6 +652,51 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
+    async fn a_schedules_problem_clears_when_it_works_again() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        *f.cards.lock().unwrap() = vec![item("a", "Todo", "B1")];
+        *f.card_problem.lock().unwrap() = Some("the secret t is not set".into());
+        let def = pipeline(
+            Trigger::Schedule {
+                schedule: "weekdays 09:00".into(),
+                state: "Todo".into(),
+                connector: "trello".into(),
+                params: Default::default(),
+            },
+            true,
+        );
+        let defs = vec![def.clone()];
+        w.due(&defs, &sources(&f), at(8, 0)).await;
+        w.due(&defs, &sources(&f), at(9, 1)).await;
+        assert!(w.kept(&def.id).problem.contains("the secret t"));
+        *f.card_problem.lock().unwrap() = None;
+        w.due(&defs, &sources(&f), at(9, 2)).await;
+        let later = Local.with_ymd_and_hms(2026, 10, 30, 9, 1, 0).unwrap();
+        assert_eq!(w.due(&defs, &sources(&f), later).await.len(), 1);
+        assert_eq!(w.kept(&def.id).problem, "");
+    }
+
+    #[tokio::test]
+    async fn a_schedule_passes_its_choices_to_the_connector() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        *f.cards.lock().unwrap() = vec![item("a", "Todo", "B1")];
+        let defs = vec![pipeline(
+            Trigger::Schedule {
+                schedule: "weekdays 09:00".into(),
+                state: "Todo".into(),
+                connector: "trello".into(),
+                params: [("board".to_string(), "B1".to_string())].into(),
+            },
+            true,
+        )];
+        w.due(&defs, &sources(&f), at(8, 0)).await;
+        w.due(&defs, &sources(&f), at(9, 1)).await;
+        assert_eq!(f.card_params.lock().unwrap().last().unwrap()["board"], "B1");
+    }
+
+    #[tokio::test]
     async fn a_schedule_can_read_a_connector() {
         let (w, _dir) = watch();
         let f = Fakes::default();
@@ -650,6 +706,7 @@ pub(crate) mod tests {
                 schedule: "weekdays 09:00".into(),
                 state: "Todo".into(),
                 connector: "trello".into(),
+                params: Default::default(),
             },
             true,
         )];
@@ -766,6 +823,7 @@ pub(crate) mod tests {
         let mut nightly = pipeline(
             Trigger::Schedule {
                 connector: String::new(),
+                params: Default::default(),
                 schedule: "every 1h".into(),
                 state: "Todo".into(),
             },

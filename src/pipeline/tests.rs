@@ -1455,6 +1455,46 @@ mod pipelines {
     }
 
     #[tokio::test]
+    async fn a_hanging_connector_does_not_hold_the_tick() {
+        let (p, _dir) = pipelines();
+        p.set_due_limit(std::time::Duration::from_millis(50));
+        let mut def = p
+            .library()
+            .copy_template("Review my merge requests", &cfg())
+            .unwrap();
+        def.trigger = crate::pipeline::definition::Trigger::Connector {
+            connector: "t".into(),
+            params: Default::default(),
+            states: vec![],
+        };
+        let mut app_cfg = cfg();
+        app_cfg.connectors = vec![crate::connectors::tests::connector(
+            "https://x.example",
+            "  one:\n    request: { method: GET, path: /x }\n",
+        )];
+        let def = p.library().save(def, &app_cfg).unwrap();
+        p.library().set_enabled(&def.id, true, &app_cfg).unwrap();
+        let fakes = crate::pipeline::triggers::tests::Fakes::default();
+        *fakes.card_hangs.lock().unwrap() = true;
+        let src = Sources {
+            connectors: &fakes,
+            feeds: &fakes,
+            gitlab: &fakes,
+            accesses: vec![],
+            linear_key: Ok("lin".into()),
+            pattern: None,
+        };
+        let fake = Arc::new(Fake::default());
+        let world: Arc<dyn World> = fake.clone();
+        let settings = crate::config::Pipelines::default();
+        let round = p.tick(&world, &settings, Some(&src), chrono::Local::now());
+        tokio::time::timeout(std::time::Duration::from_secs(2), round)
+            .await
+            .expect("the tick carried on without the connector");
+        assert!(fakes.card_params.lock().unwrap().len() == 1, "it was asked");
+    }
+
+    #[tokio::test]
     async fn a_result_off_the_screen_is_read_from_the_transcript() {
         let (p, _dir) = pipelines();
         let def = p

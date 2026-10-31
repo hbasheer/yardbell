@@ -152,7 +152,7 @@ async fn answer(app: &AppState, name: &str, args: &Value) -> Option<Result<Value
     }
 }
 
-fn credential(key: &str) -> bool {
+pub(crate) fn credential(key: &str) -> bool {
     let key = key.to_lowercase();
     [
         "token", "secret", "password", "passcode", "auth", "cookie", "key",

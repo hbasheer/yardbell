@@ -685,8 +685,9 @@ Comments on an item are not read, only its title and description.
 2. In Yardbell, save them as the secrets `trello_key` and `trello_token`, under **Settings, MCP servers,
    Secrets**.
 3. Under **Settings, Connections**, press **Add Trello**, then **Save**.
-4. Press **Test**. It shows your cards and every field you could map.
+4. Press **Test**. It reads your first board, and shows its cards and every field you could map.
 5. On a pipeline's **Build** tab, pick **A connected tool** under **Start when**, then the board and lists.
+   A trigger sees every open card on that board, assigned to you or not. Pick the lists work starts from.
 
 A template's **Linear** step cannot run on a Trello card. Use a **Call API** step with `move` or
 `comment`, and give its `value` the list id or the comment's text.

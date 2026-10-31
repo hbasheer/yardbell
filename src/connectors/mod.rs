@@ -176,9 +176,53 @@ fn check_path(path: &str) -> bool {
     path.starts_with('/') && !path.starts_with("//") && !path.contains("://")
 }
 
+fn holds_reference(value: &Value) -> bool {
+    match value {
+        Value::String(s) => crate::secrets::has_reference(s),
+        Value::Array(list) => list.iter().any(holds_reference),
+        Value::Object(map) => map.values().any(holds_reference),
+        _ => false,
+    }
+}
+
+fn literal_credential(value: &Value) -> Option<String> {
+    match value {
+        Value::Array(list) => list.iter().find_map(literal_credential),
+        Value::Object(map) => map.iter().find_map(|(k, v)| match v {
+            Value::String(s)
+                if crate::mcp_read::credential(k) && !s.is_empty() && !s.contains("{{") =>
+            {
+                Some(k.clone())
+            }
+            other => literal_credential(other),
+        }),
+        _ => None,
+    }
+}
+
+fn check_request(r: &Request) -> Result<(), String> {
+    if crate::secrets::has_reference(&r.path) || r.body.as_ref().is_some_and(holds_reference) {
+        return Err("a secret can only go in a header or the query".into());
+    }
+    if let Some(key) = r.body.as_ref().and_then(literal_credential) {
+        return Err(format!("body {key} must not hold a credential"));
+    }
+    for (k, v) in &r.query {
+        if crate::mcp_read::credential(k) && !crate::secrets::has_reference(v) && !v.contains("{{")
+        {
+            return Err(format!("query {k} must use ${{secret:NAME}}"));
+        }
+    }
+    Ok(())
+}
+
 fn check_call(call: &Call) -> Result<(), String> {
     if call.before.len() > BEFORE_MAX {
         return Err(format!("at most {BEFORE_MAX} before requests"));
+    }
+    check_request(&call.request)?;
+    for b in &call.before {
+        check_request(&b.request)?;
     }
     let requests = call.before.iter().map(|b| &b.request);
     if !std::iter::once(&call.request)
@@ -212,6 +256,11 @@ fn check_connector(c: &Connector) -> Result<(), String> {
     });
     if !secure {
         return Err("base_url must be an https address".into());
+    }
+    if reqwest::Url::parse(&c.base_url)
+        .is_ok_and(|u| !u.username().is_empty() || u.password().is_some())
+    {
+        return Err("base_url must not hold a user or password".into());
     }
     for (name, value) in &c.headers {
         if !crate::secrets::has_reference(value) && !plain_header(name) {

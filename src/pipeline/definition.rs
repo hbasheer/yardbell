@@ -160,6 +160,8 @@ pub enum Trigger {
         state: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         connector: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, String>,
     },
     Connector {
         connector: String,
@@ -322,6 +324,20 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                     s.name
                 )),
                 Some(_) => {}
+            }
+        }
+        let chosen = match &def.trigger {
+            Trigger::Connector { params, .. } | Trigger::Schedule { params, .. } => Some(params),
+            _ => None,
+        };
+        let connector = source.and_then(|id| cfg.connectors.iter().find(|c| c.id == id));
+        if let (Some(c), Some(chosen)) = (connector, chosen) {
+            let needs = c.calls.get("list").map(crate::connectors::client::needs_of);
+            for p in &c.params {
+                let needed = needs.as_ref().is_some_and(|n| n.contains(&p.name));
+                if needed && !chosen.contains_key(&p.name) {
+                    out.push(format!("Pick a {} for the trigger", p.label));
+                }
             }
         }
         match source.map(|id| (id, cfg.connectors.iter().find(|c| c.id == id))) {
@@ -582,6 +598,34 @@ pub(crate) mod tests {
             problems.contains(
                 &"Update Trello names the call nope, which trello does not have".to_string()
             ),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_trigger_must_pick_what_its_list_needs() {
+        let mut cfg = cfg();
+        cfg.connectors = vec![crate::connectors::template("trello").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = Trigger::Connector {
+            connector: "trello".into(),
+            params: Default::default(),
+            states: vec![],
+        };
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            problems.contains(&"Pick a Board for the trigger".to_string()),
+            "{problems:?}"
+        );
+        def.trigger = Trigger::Connector {
+            connector: "trello".into(),
+            params: [("board".to_string(), "B1".to_string())].into(),
+            states: vec![],
+        };
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            !problems.iter().any(|p| p.contains("Pick a")),
             "{problems:?}"
         );
     }

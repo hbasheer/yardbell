@@ -25,6 +25,9 @@ use store::Store;
 use tokio::task::JoinHandle;
 
 const HOOKS_PER_MINUTE: u32 = 30;
+// A connector can take minutes to give up, and pipelines keep stepping only after this round's
+// triggers are read. What was not reached is asked again on the next round.
+const DUE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 const TICK: std::time::Duration = std::time::Duration::from_secs(10);
 pub const KEEP_FINISHED: usize = 50;
 
@@ -40,6 +43,7 @@ pub struct Pipelines {
     // Sessions of runs that went with a deleted pipeline, stopped on the next round.
     orphans: Mutex<Vec<(String, String)>>,
     connector_health: crate::connectors::Health,
+    due_limit: Mutex<std::time::Duration>,
     hook_window: Mutex<std::collections::HashMap<String, (chrono::DateTime<chrono::Local>, u32)>>,
 }
 
@@ -68,6 +72,7 @@ impl Pipelines {
             linear: Mutex::new(Arc::new(linear::Linear::new())),
             orphans: Mutex::new(Vec::new()),
             connector_health: Default::default(),
+            due_limit: Mutex::new(DUE_LIMIT),
             hook_window: Mutex::new(Default::default()),
         }
     }
@@ -92,6 +97,11 @@ impl Pipelines {
             .all()
             .iter()
             .any(|r| r.pipeline == pipeline && r.key == key)
+    }
+
+    #[cfg(test)]
+    pub fn set_due_limit(&self, limit: std::time::Duration) {
+        *self.due_limit.lock().expect("pipelines due limit") = limit;
     }
 
     pub fn connector_health(&self) -> &crate::connectors::Health {
@@ -323,7 +333,16 @@ impl Pipelines {
         };
         *self.cfg.lock().expect("pipelines cfg") = cfg.clone();
         if let Some(src) = sources {
-            for (pipeline, subject) in self.watch.due(&self.library.list(), src, now).await {
+            let limit = *self.due_limit.lock().expect("pipelines due limit");
+            let defs = self.library.list();
+            let found = self.watch.due(&defs, src, now);
+            let found = tokio::time::timeout(limit, found)
+                .await
+                .unwrap_or_else(|_| {
+                    tracing::warn!("reading the pipeline triggers took too long; carrying on");
+                    Vec::new()
+                });
+            for (pipeline, subject) in found {
                 if let Err(e) = self.start(&pipeline, vec![subject], "a trigger") {
                     tracing::debug!(error = %e, "a trigger found an item already in a run");
                 }
