@@ -206,7 +206,8 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   `HostName` lines in `~/.ssh/config`, with backups of both. If the host's own address changes,
   restart Yardbell (a button does it when Yardbell runs as a service).
 - **Connect a phone:** shows a pairing code for the Android app.
-- **Notifications:** which notifications the Android app shows, and whether it is connected, see
+- **Notifications:** which notifications the Android app shows, including **Pipeline needs you**,
+  **Pipeline finished** and **Proposals**, and whether it is connected, see
   [Phone notifications](apps.md#phone-notifications).
 - **Dispatch:** your own instructions for Dispatch, the agent it starts, the model it runs on and
   whether it asks before each step, see [Dispatch](#dispatch). **Memory** below them lists what
@@ -214,6 +215,9 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   [Memory](#memory).
 - **Triggers:** start a saved task on a schedule, or for a Linear or GitHub ticket that comes your
   way, see [Triggers](#triggers).
+- **Worktree setup:** a command to run in each new worktree, and one to clear it when a pipeline run
+  ends, see [Worktree setup](automation.md#worktree-setup).
+- **GitHub and GitLab:** see [below](#github-and-gitlab).
 - **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
   servers for the sessions it starts, see [Agent tools (MCP)](agents.md#agent-tools-mcp). Their
   tokens go in **Secrets** under the list: add, replace or delete one by name, and refer to it as
@@ -231,6 +235,28 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   to "Running on" at the bottom of the sidebar opens this section, and so does **About Yardbell**
   in the desktop app's tray menu.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
+
+#### GitHub and GitLab
+
+This section decides how sessions get their pull or merge request badge and CI.
+
+- **Show pull and merge requests** and **Post a card in Dispatch** switch the badges and the cards,
+  and **Check every** sets how often each branch is asked about.
+- **GitHub** needs nothing entered. Yardbell asks `gh` on each session's machine, so each machine needs
+  it installed and signed in with `gh auth login`. Each machine shows `gh works`, what is wrong, or
+  **Not checked yet**, which lasts until a session there has a branch.
+- **GitLab** needs each server your folders use. Save a personal access token as a secret first, under
+  **MCP servers, Secrets**, with the `read_api` scope, or `api` if a pipeline opens merge requests.
+  Then press **Add GitLab host**, enter the host as your remote address names it, and pick the token.
+  **Address** is only for an instance whose web address differs, such as another port. Each host shows
+  whether its token works.
+- **Your folders** reads each folder's `origin` remote when the section opens, and says which service
+  it uses and whether it is ready. A folder on a GitLab host you have not added offers a button that
+  adds it. A self-hosted GitLab without "gitlab" in its name shows as not known, with **Add as
+  GitLab**, because a name cannot prove what a server runs.
+
+The **GitHub** and **GitLab** switches stop badges and cards for that service and keep what you
+entered. A pipeline can still open a merge request with GitLab switched off.
 
 ### Pipelines
 
@@ -267,15 +293,20 @@ A pipeline opens full screen (the button beside **Delete** puts it back in the p
   **Continue on fail** and **Drop**; and each step's report.
 - **History**: every saved version. Click one to see it on the canvas, then **Restore** it or go
   **Back to the current version**.
-  Under the canvas is the run's live terminal, which follows the run you pick. During a review it
-  shows the reviewer, with a switch back to the main session; **Stop session** stops the one shown.
-  **Stop this run**, or **Drop** while it waits for you, ends a run and stops its sessions. **Delete
-  this run** works in any state: it stops the run and its sessions first, then removes its record.
-  The worktree, the branch and any pull request stay. Yardbell reads a Claude Code step's result from
-  its transcript, so it arrives whatever the terminal's size or scroll position. If a step goes quiet
-  with no result, its agent is asked to print it again; if that fails, the run waits and says so.
-  **Show terminal** opens the terminal under the
-  canvas, and it stays closed until you do.
+
+On the **Runs** tab:
+
+- **Show terminal** opens the run's live terminal under the canvas, and **Hide terminal** gives the
+  canvas its room back. It starts closed, each device remembers your choice, and it follows the run
+  you pick. During a review it can switch between the reviewer and the main session.
+- **Stop session** stops the session shown. If that is the current step's, the step waits for you
+  rather than starting the agent again.
+- **Stop this run**, or **Drop** while it waits for you, ends a run and stops its sessions. It stays in
+  the list.
+- **Delete this run** works in any state. A run still going is stopped first, its sessions close and
+  teardown runs, then its record goes. The worktree, the branch and any pull request stay.
+
+[How a run works](automation.md#how-a-run-works) explains sessions, results and waiting.
 
 On every canvas, drag or scroll with two fingers to move around; pinch, Ctrl or Cmd with the wheel,
 or **−**, **+** and **Fit** zoom; the overview at the bottom right moves the view. Leaving with

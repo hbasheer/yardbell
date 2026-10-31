@@ -126,7 +126,8 @@ window and `Ctrl+Q` quits.
 ## Phone notifications
 
 Yardbell can tell your phone when an agent is waiting for you, a session ends, a machine goes down
-or comes back, or a machine's memory reaches 95%. No browser tab or desktop app has to be open.
+or comes back, a machine's memory reaches 95%, a pipeline run needs you or finishes, or a proposal
+waits. No browser tab or desktop app has to be open.
 
 The Android app does it with nothing to set up. While it is signed in to a server, it keeps a
 connection to it in the background and shows its notifications. Android asks once whether Yardbell

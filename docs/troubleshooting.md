@@ -30,6 +30,18 @@ Start with `yardbell doctor`. Common cases:
   This lets every device on your mesh reach every published container on the host, including ones
   you start later. To test, run `curl -I http://<host-mesh-ip>:<port>/` from another machine.
 
+- **A session says No PR info, or which service a folder uses is not clear.** Open **Settings, GitHub
+  and GitLab**. **Your folders** shows the service each folder's `origin` is on and whether it is
+  ready, and offers to add a GitLab host that is missing.
+- **A pipeline step says it ended without a result.** The agent went quiet and Yardbell read no result
+  block for that try. Press **Show terminal** on the run. If the agent's result is there, press
+  **Continue on pass** or **Continue on fail**; otherwise press **Retry step**. Only Claude Code's
+  result is read from its transcript, so with other agents make the terminal bigger and keep it
+  scrolled to the bottom. A run that was going when you upgraded asks for the new `step:` line, so it
+  can stop here once.
+- **A pipeline's teardown did not run.** The run page says why when another session or run was using
+  the folder. It also does not run in a worktree the run did not create, see
+  [Teardown](automation.md#teardown).
 - **A GitLab branch shows no merge request badge.** Run `yardbell doctor`: it signs in to each host
   under `pull_requests.gitlab` and says whether the token's secret is missing, GitLab refused the
   token, or the host did not answer (and why). The host must be the one in the branch's remote

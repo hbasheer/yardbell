@@ -12,8 +12,9 @@ and the project uses [Semantic Versioning](https://semver.org).
   transcript too, and a reviewer that goes quiet is asked to print its result rather than stopped and
   started again.
 - Fixed: a long summary was cut at its first line, which could lose an agent's question.
-- A run with no result no longer says it needs your answer, and says what you can do. A phone
-  notification from a pipeline now opens that run.
+- A run with no result no longer says it needs your answer, and says what you can do. A pipeline
+  notification now carries a link to its run, though the Android app does not follow it yet: tapping
+  a notification opens the app.
 
 ## [0.9.1] - 2026-10-30
 

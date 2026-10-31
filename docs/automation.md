@@ -1,6 +1,6 @@
 # Triggers, worktree setup, rules and pipelines
 
-How to let Yardbell start work for you, prepare every new worktree, decide what Dispatch may do
+How to let Yardbell start work for you, prepare and clear every worktree, decide what Dispatch may do
 without asking, and carry tickets and merge requests through pipelines of steps you define. Each part has
 what it is, when it helps, and examples you can copy.
 
@@ -294,6 +294,35 @@ The `[ -f ... ]` check skips a file the main checkout does not have, instead of 
 `acme/*` covers each repository directly in `acme`. A more exact entry, like `acme/storefront`
 above, still wins for that one.
 
+### Teardown
+
+A worktree's setup may start things that outlive the agent, such as containers. A teardown command,
+set on the same entry as the setup, clears them when a [pipeline run](#pipelines) ends or is dropped:
+
+```yaml
+worktree_setup:
+  - folder: acme/web
+    command: docker compose up -d && bin/setup
+    teardown: docker compose down
+```
+
+An entry needs a command, a teardown or both. Yardbell looks for each separately, so a teardown on
+`acme/*` still applies when a more exact entry for `acme/web` only has a setup command. It runs like
+the setup, with the same variables, timeout and log. The worktree itself stays.
+
+Teardown runs only where it is safe:
+
+| The run's folder | Teardown runs? |
+|---|---|
+| A worktree this run created | yes, once per folder |
+| A worktree that already existed, or the main checkout | no |
+| Another session is working in the folder | no, and the run page says so |
+| Another active run uses the folder | no, and the run page says so |
+
+If it fails, the run still ends and the run page shows why. A later run that reuses a torn-down
+worktree does not run the setup again, because the worktree already exists, so its agent may find
+the containers down.
+
 ## Dispatch rules, instructions and memory
 
 Three things shape what Dispatch does. They are easy to mix up, and they work differently:
@@ -452,6 +481,79 @@ Two templates ship, both saved switched off so you can look at them first:
 
 Without a machine named `devbox`, a copied template tests where the code already is.
 
+### How a run works
+
+```
+ trigger or Run now
+      |
+      v
+ Plan                     Dispatch picks the machine, folder and branch (optional step)
+      |
+      v
+ agent step               starts a session in a new worktree, or types into the run's session
+      |
+      v
+ YARDBELL RESULT          the agent says pass, fail or needs you
+      |
+      v
+ the line for that word   another step, End the run, or Wait for me
+      |
+      v
+ end of the run           every session stops, teardown runs, the worktree and branch stay
+```
+
+**Sessions.** A run keeps as few agents alive as it can. A step reuses one of the run's live sessions
+when all three of these match; otherwise it starts its own, in the same folder:
+
+| Must match | Why |
+|---|---|
+| Machine | A session runs on one machine. |
+| Agent | The step's agent field, as written. |
+| Read-only | An agent's read-only setting is fixed when it starts. |
+
+So with the usual steps:
+
+| Step | Session |
+|---|---|
+| Implement, then Fix | One session. Fix is typed into Implement's session. |
+| Review (**Review: new read-only session** on) | Its own read-only session, which cannot edit files and did not write the code. It shares the worktree, so no setup runs and no containers start. |
+| Another read-only step on the same machine after Review | Shares the reviewer's session. |
+| A step on another machine, or naming another agent | Its own session. |
+
+To run a review in the main session and use one session in all, untick **Review: new read-only
+session** on that step in **Build**. The review can then edit files, and it reviews work it wrote
+itself.
+
+A task is typed in only when the session is idle. If the agent is asking something, the run waits for
+you; if it is busy, the task goes in once it is quiet. A session nothing needs any more stops by
+itself: everything but the current step's and the newest writer's. So a reviewer stops when Fix
+starts, and a Review run again starts a new one that reads the code afresh.
+
+**Session names.** A run's sessions end with the end of its id, like `hp-com-1-ab12cd`, so a run can
+never stop or type into a session someone else started under a name it remembers.
+
+**Results.** The task tells the agent to end its reply with this block:
+
+```
+YARDBELL RESULT
+step: review-1-ab12cd
+status: pass
+summary: Reviewed the three commits. No blocking problems.
+- 323 examples, 0 failures
+END RESULT
+```
+
+The `step:` line names the step, its run count and the run, so a result is matched to the exact try
+it answers, even in a shared session. Yardbell reads the block from the terminal's screen. For Claude
+Code it also reads the session's transcript in `~/.claude/projects`, because agents draw on tmux's
+alternate screen, where only what fits in the pane can be seen. A long result, a small terminal or a
+view scrolled up cannot hide it there.
+
+If a step goes quiet with no result, it gets one more try after a 2 minute wait: a reviewer is asked to
+print its result again, and a writer gets its task again. After that the run waits and says **ended
+without a result**, and **Show terminal** shows what the agent did. Your **Retry step** starts a
+reviewer afresh.
+
 ### Steps
 
 | Step | What it does |
@@ -485,18 +587,25 @@ A run waits under **Waiting for me**, with a phone notification, when:
 - the push or a step was refused, by the secret check or a rule;
 - its machine stayed offline for 30 minutes, or the ticket was closed meanwhile.
 
+Tapping the notification opens the app. **Waiting for me** on the Pipelines page lists every run that
+waits, and clicking one opens it.
+
 On the run you can **Send answer** (the step runs again with it, the waiting agent gets it typed in,
 or Plan gets your answers), **Retry step**, **Continue on pass** or **Continue on fail** (follow that
 line as if the step had ended so), or **Drop** (stops its sessions and leaves the worktree and
-branch).
+branch). **Stop session** stops one session and makes its step wait, and **Delete this run** stops
+the run first if it is still going, then removes it.
+
+When a run ends or is dropped, every session stops and [teardown](#teardown) runs. Deleting a whole
+pipeline stops its runs' sessions but runs no teardown, so stop a run first if its containers should go.
 
 ### Set one up
 
 1. Save your Linear API key as the secret `linear` (Settings, MCP servers, Secrets), for Linear
    triggers, Plan and Linear steps.
 2. Log in `gh` on the machines that push, for draft pull requests. For GitLab, add the host under
-   `pull_requests.gitlab`; its token needs the `api` scope to open merge requests and to list the
-   ones you review.
+   [Settings, GitHub and GitLab](usage.md#github-and-gitlab); its token needs the `api` scope to open
+   merge requests and to list the ones you review.
 3. On the **Pipelines** page, **New pipeline**, start an **Empty pipeline** or pick a template.
    On the **Build** canvas, set the trigger on **Start when**, drag in the steps you want, and draw
    their pass, fail and needs-you lines from each card's dots. **Save** checks it: every line goes
@@ -536,5 +645,6 @@ pipelines:
 ### Limits
 
 - Plan can only pick a folder a machine already has; otherwise it says so and waits.
-- An agent step reports through its result block. One that ends without it is asked once more,
-  then waits for you.
+- An agent step reports through its result block. One that ends without it gets one more try, then
+  waits for you. Only Claude Code's result is also read from its transcript; other agents' results
+  must fit on the terminal's screen.
