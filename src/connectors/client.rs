@@ -121,6 +121,10 @@ pub fn render_path(text: &str, vars: &Vars) -> Result<String, String> {
     fill_path(text, vars, &Steps::new())
 }
 
+pub fn render_text(text: &str, vars: &Vars) -> Result<String, String> {
+    fill(text, vars, &Steps::new(), &str::to_string)
+}
+
 pub fn render_json(value: &Value, vars: &Vars) -> Result<Value, String> {
     fill_json(value, vars, &Steps::new())
 }
@@ -186,7 +190,7 @@ impl Client {
         })
     }
 
-    pub(super) fn call_named(&self, name: &str) -> Result<&Call, String> {
+    pub fn call_named(&self, name: &str) -> Result<&Call, String> {
         self.connector
             .calls
             .get(name)
@@ -368,6 +372,19 @@ impl Client {
             closed: mapped(call, row, "closed") == "true",
             fields,
         }
+    }
+
+    // Only what the connector names is ever kept; the rest of a reply goes no further.
+    pub fn mapped_reply(call: &Call, value: &Value) -> Value {
+        if call.map.is_empty() {
+            return Value::Null;
+        }
+        let kept = call
+            .map
+            .iter()
+            .filter_map(|(k, at)| path(value, at).map(|v| (k.clone(), v)))
+            .collect();
+        Value::Object(kept)
     }
 
     pub fn item_of(call: &Call, row: &Value) -> Result<Item, String> {

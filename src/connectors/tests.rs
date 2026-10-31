@@ -11,13 +11,14 @@ use std::sync::{Arc, Mutex};
 
 type Answer = (u16, Vec<(String, String)>, String);
 type Asked = (String, String, String, String);
+type Fallback = fn(&str) -> String;
 
 #[derive(Clone, Default)]
 pub(crate) struct Stub {
     pub base: String,
     pub answers: Arc<Mutex<HashMap<String, Answer>>>,
     pub asked: Arc<Mutex<Vec<Asked>>>,
-    pub fallback: Arc<Mutex<Option<fn(&str) -> String>>>,
+    pub fallback: Arc<Mutex<Option<Fallback>>>,
 }
 
 impl Stub {
@@ -822,4 +823,25 @@ fn client_for_says_what_is_wrong() {
         .err()
         .unwrap();
     assert_eq!(e, "Tool is switched off");
+}
+
+#[test]
+fn a_reply_keeps_only_its_mapped_fields() {
+    let c = connector(
+        "https://x.example",
+        "  one:\n    request: { method: GET, path: /x }\n    map: { state: a.b }\n",
+    );
+    let out = Client::mapped_reply(
+        &c.calls["one"],
+        &serde_json::json!({ "a": { "b": 1 }, "secret": "x" }),
+    );
+    assert_eq!(out, serde_json::json!({ "state": 1 }));
+    let c = connector(
+        "https://x.example",
+        "  one:\n    request: { method: GET, path: /x }\n",
+    );
+    assert_eq!(
+        Client::mapped_reply(&c.calls["one"], &serde_json::json!({ "a": 1 })),
+        serde_json::Value::Null
+    );
 }

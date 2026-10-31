@@ -118,6 +118,7 @@ fn enter(mut run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Ru
         StepKind::Push => Effect::Push { step: id.into() },
         StepKind::Linear { .. } => Effect::Linear { step: id.into() },
         StepKind::Report => Effect::Report { step: id.into() },
+        StepKind::Call { .. } => Effect::Call { step: id.into() },
     };
     let st = run.state_of(id);
     st.runs += 1;
@@ -402,6 +403,14 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.notes.push(format!("Linear: {e}"));
             follow(run, Outcome::Fail, now)
         }
+        Seen::Called(result) => {
+            let (outcome, report) = match result {
+                Ok(report) => (Outcome::Pass, report),
+                Err(e) => (Outcome::Fail, e),
+            };
+            run.state_of(&id).report = report;
+            follow(run, outcome, now)
+        }
         Seen::Reported(written) => {
             match written {
                 Ok(text) => run.report = text,
@@ -649,6 +658,54 @@ pub(crate) mod tests {
         assert_eq!(run.state, RunState::Waiting);
         let w = run.waiting.as_ref().unwrap();
         (w.kind, w.step.clone(), w.reason.clone())
+    }
+
+    fn with_call(run: &mut Run) {
+        let def = run.definition.as_mut().unwrap();
+        def.steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "update", "name": "Update Trello", "kind": "call",
+                "connector": "trello", "call": "move", "params": { "value": "L2" },
+                "next": { "pass": "qa", "fail": "report", "needs_you": "wait" },
+            }))
+            .unwrap(),
+        );
+        run.step = "update".into();
+        run.state = RunState::Running;
+    }
+
+    #[test]
+    fn a_call_step_passes_with_its_report() {
+        let mut run = run_of("Implement my Linear tickets");
+        with_call(&mut run);
+        let (run, _) = step(run, Seen::Called(Ok("moved".into())), &cfg(), at(5));
+        assert_eq!(run.steps["update"].report, "moved");
+        assert_eq!(run.steps["update"].outcome, Some(Outcome::Pass));
+        assert_eq!(run.step, "qa");
+    }
+
+    #[test]
+    fn a_failed_call_goes_down_the_fail_line() {
+        let mut run = run_of("Implement my Linear tickets");
+        with_call(&mut run);
+        let (run, _) = step(run, Seen::Called(Err("answered 401".into())), &cfg(), at(5));
+        assert_eq!(run.steps["update"].report, "answered 401");
+        assert_eq!(run.steps["update"].outcome, Some(Outcome::Fail));
+        assert_eq!(run.step, "report");
+    }
+
+    #[test]
+    fn entering_a_call_step_calls() {
+        let mut run = run_of("Implement my Linear tickets");
+        with_call(&mut run);
+        run.state_of("implement").outcome = None;
+        let (_, did) = enter(run, "update", &at(5), false);
+        assert_eq!(
+            did,
+            vec![Effect::Call {
+                step: "update".into()
+            }]
+        );
     }
 
     #[test]

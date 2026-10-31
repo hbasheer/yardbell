@@ -116,6 +116,12 @@ pub enum StepKind {
         state: String,
     },
     Report,
+    Call {
+        connector: String,
+        call: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, String>,
+    },
     Wait {
         #[serde(default)]
         message: String,
@@ -291,6 +297,25 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         }
     }
     if def.enabled {
+        for s in &def.steps {
+            let StepKind::Call {
+                connector, call, ..
+            } = &s.kind
+            else {
+                continue;
+            };
+            match cfg.connectors.iter().find(|c| &c.id == connector) {
+                None => out.push(format!(
+                    "{} names connector {connector}, which is not in Settings",
+                    s.name
+                )),
+                Some(c) if !c.calls.contains_key(call) => out.push(format!(
+                    "{} names the call {call}, which {connector} does not have",
+                    s.name
+                )),
+                Some(_) => {}
+            }
+        }
         match source.map(|id| (id, cfg.connectors.iter().find(|c| c.id == id))) {
             Some((id, None)) => out.push(format!(
                 "the trigger names connector {id}, which is not in Settings"
@@ -529,6 +554,28 @@ pub(crate) mod tests {
 
     fn example() -> Definition {
         serde_json::from_str(EXAMPLE).unwrap()
+    }
+
+    #[test]
+    fn check_names_a_bad_call() {
+        let mut cfg = cfg();
+        cfg.connectors = vec![crate::connectors::template("trello").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "update", "name": "Update Trello", "kind": "call",
+                "connector": "trello", "call": "nope",
+            }))
+            .unwrap(),
+        );
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            problems.contains(
+                &"Update Trello names the call nope, which trello does not have".to_string()
+            ),
+            "{problems:?}"
+        );
     }
 
     #[test]

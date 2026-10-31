@@ -285,6 +285,9 @@ pub enum Effect {
     Report {
         step: String,
     },
+    Call {
+        step: String,
+    },
     Notify {
         text: String,
     },
@@ -331,6 +334,7 @@ pub enum Seen {
     Opened(Result<PullRef, String>),
     Linear(Result<(), String>),
     Reported(Result<String, String>),
+    Called(Result<String, String>),
     Answer(String),
     Retry,
     Continue(Outcome),

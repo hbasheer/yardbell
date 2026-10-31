@@ -770,7 +770,7 @@ started or proposed.",
 pub(crate) fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
     if matches!(
         called,
-        "remember" | "change_settings" | "save_task" | "run_trigger"
+        "remember" | "change_settings" | "save_task" | "run_trigger" | "call_connector"
     ) || crate::mcp_pipeline::owns(called)
     {
         return Step {

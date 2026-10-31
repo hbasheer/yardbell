@@ -61,6 +61,14 @@ fn previous(run: &Run) -> Option<&Step> {
         .and_then(|e| run.def().step(&e.step))
 }
 
+// The newest finished step's report, as it is, for a value sent to another system.
+pub fn last_report(run: &Run) -> String {
+    previous(run)
+        .and_then(|s| run.steps.get(&s.id))
+        .map(|s| s.report.clone())
+        .unwrap_or_default()
+}
+
 fn branch(run: &Run) -> String {
     match &run.subject.pr {
         Some(pr) if !pr.branch.is_empty() => pr.branch.clone(),

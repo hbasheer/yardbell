@@ -71,6 +71,14 @@ fn connectors_of(def: &Definition) -> Vec<String> {
         Trigger::Schedule { connector, .. } if !connector.is_empty() => vec![connector.clone()],
         _ => Vec::new(),
     }
+    .into_iter()
+    .chain(def.steps.iter().filter_map(|s| match &s.kind {
+        StepKind::Call { connector, .. } => Some(connector.clone()),
+        _ => None,
+    }))
+    .collect::<std::collections::BTreeSet<_>>()
+    .into_iter()
+    .collect()
 }
 
 pub fn pipelines_lines(

@@ -55,6 +55,17 @@ pub trait World: Send + Sync {
         path: &'a str,
     ) -> BoxFuture<'a, Result<PullRef, String>>;
     fn notify(&self, kind: Note, text: &str, run: &Run);
+    fn connector_call_kind(
+        &self,
+        connector: &str,
+        call: &str,
+    ) -> Result<crate::connectors::CallKind, String>;
+    fn call_connector<'a>(
+        &'a self,
+        connector: &'a str,
+        call: &'a str,
+        vars: crate::connectors::client::Vars,
+    ) -> BoxFuture<'a, Result<Value, String>>;
     fn written_result<'a>(
         &'a self,
         machine: &'a str,
@@ -397,6 +408,75 @@ async fn closed(world: &dyn World, run: &Run) -> bool {
     }
 }
 
+const CALL_REPORT_MAX: usize = 4000;
+
+fn call_vars(
+    run: &Run,
+    params: &std::collections::BTreeMap<String, String>,
+) -> Result<crate::connectors::client::Vars, String> {
+    let ticket = run.subject.ticket.clone().unwrap_or_default();
+    let mut vars = crate::connectors::client::Vars(
+        [
+            ("item_id", ticket.item_id),
+            ("ticket", ticket.id),
+            ("title", ticket.title),
+            ("url", ticket.url),
+            ("branch", branch(run)),
+            ("report", prompts::last_report(run)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v))
+        .collect(),
+    );
+    for (name, text) in params {
+        let value = crate::connectors::client::render_text(text, &vars)?;
+        vars.0.insert(name.clone(), value);
+    }
+    Ok(vars)
+}
+
+async fn call_step(
+    world: &dyn World,
+    run: &Run,
+    connector: &str,
+    call: &str,
+    params: &std::collections::BTreeMap<String, String>,
+) -> Seen {
+    let kind = match world.connector_call_kind(connector, call) {
+        Ok(kind) => kind,
+        Err(reason) => return Seen::Refused(reason),
+    };
+    let input = json!({ "connector": connector, "call": call, "params": params });
+    if kind == crate::connectors::CallKind::Change {
+        if let Some(reason) = world.refused("call_connector", &input) {
+            return Seen::Refused(reason);
+        }
+    }
+    let vars = match call_vars(run, params) {
+        Ok(vars) => vars,
+        Err(e) => return Seen::Called(Err(e)),
+    };
+    let out = world.call_connector(connector, call, vars).await;
+    world.record(
+        &run.conversation,
+        "call_connector",
+        input,
+        None,
+        &out,
+        &run.started,
+    );
+    Seen::Called(out.map(|value| {
+        match value {
+            Value::Null => format!("{connector} {call}: done"),
+            value => serde_json::to_string_pretty(&value)
+                .unwrap_or_default()
+                .chars()
+                .take(CALL_REPORT_MAX)
+                .collect(),
+        }
+    }))
+}
+
 pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Vec<Seen> {
     let step_of = |id: &str| run.def().step(id).cloned();
     match effect {
@@ -478,6 +558,14 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 }],
             }
         }
+        Effect::Call { step } => match step_of(step).map(|s| s.kind) {
+            Some(StepKind::Call {
+                connector,
+                call,
+                params,
+            }) => vec![call_step(world, run, &connector, &call, &params).await],
+            _ => vec![],
+        },
         Effect::Report { .. } => {
             let reply = world.ask(&run.conversation, &prompts::report(run)).await;
             let written = reply.and_then(|t| prompts::parse_report(&t));
@@ -894,6 +982,47 @@ impl World for Live {
             let m = self.cfg.machine(machine)?;
             let lines = self.app.sessions.transcript_lines(m, path, marker).await?;
             prompts::written_result(&lines, marker)
+        })
+    }
+
+    fn connector_call_kind(
+        &self,
+        connector: &str,
+        call: &str,
+    ) -> Result<crate::connectors::CallKind, String> {
+        let c = self
+            .cfg
+            .connectors
+            .iter()
+            .find(|c| c.id == connector)
+            .ok_or_else(|| format!("there is no connector {connector}"))?;
+        if !c.enabled {
+            return Err(format!("{} is switched off", c.name));
+        }
+        c.calls
+            .get(call)
+            .map(crate::connectors::Call::kind)
+            .ok_or_else(|| format!("{} has no call {call}", c.name))
+    }
+
+    fn call_connector<'a>(
+        &'a self,
+        connector: &'a str,
+        call: &'a str,
+        vars: crate::connectors::client::Vars,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async move {
+            let client = crate::connectors::client_for(
+                &self.cfg.connectors,
+                connector,
+                &self.secrets,
+                crate::mcp_read::saved_values(&self.app),
+            )?;
+            let reply = client.call(call, &vars).await?;
+            let named = client.call_named(call)?;
+            Ok(crate::connectors::client::Client::mapped_reply(
+                named, &reply,
+            ))
         })
     }
 
