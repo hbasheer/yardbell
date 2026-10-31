@@ -1,0 +1,26 @@
+id: trello
+name: Trello
+base_url: https://api.trello.com/1
+headers:
+  Authorization: 'OAuth oauth_consumer_key="${secret:trello_key}", oauth_token="${secret:trello_token}"'
+params:
+  - { name: board, label: Board, options: boards }
+calls:
+  boards:
+    request: { method: GET, path: /members/me/boards, query: { filter: open, fields: 'id,name' } }
+    map: { id: id, name: name }
+  states:
+    request: { method: GET, path: '/boards/{{board}}/lists', query: { fields: 'id,name' } }
+    map: { id: id, name: name }
+  list:
+    request: { method: GET, path: /members/me/cards, query: { filter: open } }
+    map: { item_id: id, id: idShort, title: name, url: shortUrl, description: desc, state: idList, board: idBoard }
+  read:
+    request: { method: GET, path: '/cards/{{item_id}}' }
+    map: { title: name, url: shortUrl, description: desc, state: idList, closed: closed }
+  move:
+    kind: change
+    request: { method: PUT, path: '/cards/{{item_id}}', query: { idList: '{{value}}' } }
+  comment:
+    kind: change
+    request: { method: POST, path: '/cards/{{item_id}}/actions/comments', query: { text: '{{value}}' } }

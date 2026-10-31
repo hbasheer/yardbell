@@ -496,6 +496,8 @@ pub struct Config {
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub triggers: Vec<crate::triggers::Trigger>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub connectors: Vec<crate::connectors::Connector>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_setup: Vec<crate::worktrees::setup::WorktreeSetup>,
     pub machines: Vec<Machine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -629,6 +631,7 @@ impl Config {
             .validate_gitlab()
             .map_err(ConfigError::Invalid)?;
         self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
+        crate::connectors::validate(&self.connectors).map_err(ConfigError::Invalid)?;
         self.validate_dispatch().map_err(ConfigError::Invalid)?;
         if !(1..=6).contains(&self.pipelines.per_machine) {
             return invalid("pipelines.per_machine must be from 1 to 6".into());
@@ -1185,6 +1188,16 @@ mod tests {
                 .to_string();
             assert!(err.contains(says), "{line}: {err}");
         }
+    }
+
+    #[test]
+    fn a_config_without_connectors_does_not_write_them() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        fixture().save(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("connectors"));
     }
 
     #[test]
