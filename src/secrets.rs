@@ -38,6 +38,11 @@ pub fn is_own(name: &str) -> bool {
     OWN.contains(&name)
 }
 
+// Yardbell's own stored values: hidden from the Secrets list, and written only by Yardbell.
+pub fn is_reserved(name: &str) -> bool {
+    name.starts_with("mcp_oauth_") || name.starts_with("pipeline_hook_")
+}
+
 pub fn check_name(name: &str) -> Result<(), String> {
     if name.len() > NAME_MAX || !NAME_RE.is_match(name) {
         return Err(format!(

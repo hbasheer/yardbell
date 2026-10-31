@@ -136,7 +136,7 @@ fn secrets_view(cfg: &crate::config::Config, store: &Secrets) -> serde_json::Val
     let list: Vec<_> = store
         .list()
         .into_iter()
-        .filter(|i| !crate::secrets::is_own(&i.name))
+        .filter(|i| !crate::secrets::is_own(&i.name) && !crate::secrets::is_reserved(&i.name))
         .map(|i| json!({ "name": i.name, "updated": i.updated, "used_by": used_by(&i.name) }))
         .collect();
     let missing: Vec<_> = cfg

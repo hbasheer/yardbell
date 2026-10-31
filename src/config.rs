@@ -371,6 +371,12 @@ pub struct McpServer {
     pub headers: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub machines: Vec<String>,
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub allow_private: bool,
+}
+
+fn is_off(on: &bool) -> bool {
+    !*on
 }
 
 impl McpServer {

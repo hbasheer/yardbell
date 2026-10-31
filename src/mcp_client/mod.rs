@@ -1,4 +1,7 @@
 pub mod http;
+pub mod oauth;
+#[cfg(test)]
+pub(crate) mod oauth_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 

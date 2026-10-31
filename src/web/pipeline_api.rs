@@ -569,7 +569,7 @@ async fn webhook_token(
     let bytes: [u8; 32] = rand::thread_rng().gen();
     let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
     app.settings
-        .set_secret(&hook_secret(&def.id), &token)
+        .set_reserved_secrets(&[(hook_secret(&def.id), token.clone())])
         .map_err(bad)?;
     let cfg = app.config()?;
     let url = crate::phone::base_url(&cfg)

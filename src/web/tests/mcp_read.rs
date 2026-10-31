@@ -68,6 +68,7 @@ async fn no_secret_reaches_read_settings() {
                 ]
                 .into(),
                 machines: vec![],
+                allow_private: false,
             },
             crate::config::McpServer {
                 name: "remote".into(),
@@ -76,6 +77,7 @@ async fn no_secret_reaches_read_settings() {
                 env: Default::default(),
                 headers: Default::default(),
                 machines: vec![],
+                allow_private: false,
             },
         ];
         cfg.pull_requests.gitlab = vec![crate::config::GitLabHost {
@@ -608,4 +610,48 @@ async fn a_credential_in_a_teardown_command_is_hidden() {
         !shown.contains("ghp_planted") && !shown.contains("pwplanted"),
         "{shown}"
     );
+}
+
+#[tokio::test]
+async fn tokens_are_not_in_read_settings() {
+    let r = rig();
+    r.app
+        .settings
+        .set_reserved_secrets(&[(
+            "mcp_oauth_tool_access".to_string(),
+            "acc-secret-1".to_string(),
+        )])
+        .unwrap();
+    let c = cookie(&r.app).await;
+    let req = Request::builder()
+        .uri("/api/settings")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, text) = send(&r.app, req).await;
+    assert!(
+        !text.contains("mcp_oauth_tool"),
+        "hidden from the Secrets list"
+    );
+    assert!(!text.contains("acc-secret-1"));
+    let cfg = r.app.config().unwrap();
+    let shown = crate::mcp_read::shown_area(&r.app, &cfg, "session_mcp_servers");
+    assert!(!shown.to_string().contains("acc-secret-1"));
+    assert!(!std::fs::read_to_string(&r.app.cfg_path)
+        .unwrap()
+        .contains("acc-secret-1"));
+    assert!(
+        crate::mcp_read::saved_values(&r.app).contains(&"acc-secret-1".to_string()),
+        "scrubbed from replies"
+    );
+}
+
+#[tokio::test]
+async fn a_proposal_cannot_allow_private_addresses() {
+    let r = rig();
+    let saved = crate::mcp_read::saved_values(&r.app);
+    let value =
+        serde_json::json!([{ "name": "x", "url": "https://x.example/mcp", "allow_private": true }]);
+    crate::mcp_change::apply(&r.app.settings, "session_mcp_servers", value, &saved).unwrap();
+    assert!(!r.app.config().unwrap().mcp_servers[0].allow_private);
 }

@@ -43,6 +43,7 @@ pub struct Pipelines {
     // Sessions of runs that went with a deleted pipeline, stopped on the next round.
     orphans: Mutex<Vec<(String, String)>>,
     connector_health: crate::connectors::Health,
+    mcp_auth: crate::mcp_client::oauth::Auth,
     due_limit: Mutex<std::time::Duration>,
     hook_window: Mutex<std::collections::HashMap<String, (chrono::DateTime<chrono::Local>, u32)>>,
 }
@@ -72,6 +73,7 @@ impl Pipelines {
             linear: Mutex::new(Arc::new(linear::Linear::new())),
             orphans: Mutex::new(Vec::new()),
             connector_health: Default::default(),
+            mcp_auth: Default::default(),
             due_limit: Mutex::new(DUE_LIMIT),
             hook_window: Mutex::new(Default::default()),
         }
@@ -102,6 +104,10 @@ impl Pipelines {
     #[cfg(test)]
     pub fn set_due_limit(&self, limit: std::time::Duration) {
         *self.due_limit.lock().expect("pipelines due limit") = limit;
+    }
+
+    pub fn mcp_auth(&self) -> &crate::mcp_client::oauth::Auth {
+        &self.mcp_auth
     }
 
     pub fn connector_health(&self) -> &crate::connectors::Health {

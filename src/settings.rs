@@ -266,8 +266,26 @@ impl Settings {
         (self.clock)().with_timezone(&Utc)
     }
 
+    pub fn set_reserved_secrets(&self, entries: &[(String, String)]) -> Result<(), String> {
+        let _lock = self.secrets.lock().expect("secrets lock");
+        let mut store = self.secrets()?;
+        for (name, value) in entries {
+            store.set(name, value, self.now_utc())?;
+        }
+        store.save().map_err(|e| e.to_string())
+    }
+
+    pub fn remove_reserved(&self, names: &[String]) -> Result<(), String> {
+        let _lock = self.secrets.lock().expect("secrets lock");
+        let mut store = self.secrets()?;
+        for name in names {
+            store.remove(name);
+        }
+        store.save().map_err(|e| e.to_string())
+    }
+
     pub fn set_secret(&self, name: &str, value: &str) -> Result<(), String> {
-        if secrets::is_own(name) {
+        if secrets::is_own(name) || secrets::is_reserved(name) {
             return Err(format!("{name} is Yardbell's own, pick another name"));
         }
         let _lock = self.secrets.lock().expect("secrets lock");
@@ -277,7 +295,7 @@ impl Settings {
     }
 
     pub fn delete_secret(&self, name: &str) -> Result<(), String> {
-        if secrets::is_own(name) {
+        if secrets::is_own(name) || secrets::is_reserved(name) {
             return Err(format!(
                 "{name} is Yardbell's own and cannot be deleted here"
             ));
@@ -836,6 +854,7 @@ mod tests {
             env: BTreeMap::new(),
             headers: BTreeMap::from([("Authorization".into(), "Bearer lin_api_x".into())]),
             machines: Vec::new(),
+            allow_private: false,
         }])
         .unwrap();
         let mode = |p: &Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
