@@ -477,7 +477,7 @@ Two templates ship, both saved switched off so you can look at them first:
 
 | Template | Trigger | Steps |
 |---|---|---|
-| Implement my Linear tickets | a Linear ticket assigned to you | Plan, Implement in a new worktree, Review (a fail goes to Fix and back, up to 3 times), QA on devbox (a fail goes to Fix after QA), Push and draft PR, Move in Linear to In Review, Report to me |
+| Implement my tickets | a Linear ticket assigned to you | Plan, Implement in a new worktree, Review (a fail goes to Fix and back, up to 3 times), QA on devbox (a fail goes to Fix after QA), Push and draft PR, Move in Linear to In Review, Report to me |
 | Review my merge requests | a GitLab merge request adds you as reviewer | Plan, Understand, Root cause, Security, Test on devbox, Report to me. Any fail goes straight to the report. |
 
 Without a machine named `devbox`, a copied template tests where the code already is.
@@ -563,7 +563,7 @@ reviewer afresh.
 | Plan | Dispatch reads the ticket and its comments and picks the machine, folder and branch, from all machines or the ones you tick. Unclear tickets come back to you as questions. |
 | Push and draft PR | Pushes the run's branch (with the secret check, never forced) and opens a draft pull or merge request. |
 | Linear | Moves the ticket to a state, or drafts a comment that you post yourself. |
-| Call API | Calls a [connector](#connectors): reads from or changes an outside tool. Its reply goes on the pass line and an error on the fail line. |
+| Use a connected tool | Does one action in a [connection](#connectors): reads from or changes an outside tool. Its reply goes on the pass line and an error on the fail line. |
 | Report to me | Dispatch writes what the run did and found, and your phone gets the first line. |
 | Wait for me | Stops with your message until you continue it. |
 
@@ -604,9 +604,9 @@ pipeline stops its runs' sessions but runs no teardown, so stop a run first if i
 ### Set one up
 
 1. Save your Linear API key as the secret `linear` (Settings, Connections, Secrets), for Linear
-   triggers, Plan and Linear steps.
+   triggers, Plan and Update the ticket steps.
 2. Log in `gh` on the machines that push, for draft pull requests. For GitLab, add the host under
-   [Settings, Connections, GitHub and GitLab](usage.md#github-and-gitlab); its token needs the `api` scope to open
+   [Settings, Connections, GitHub and GitLab](usage.md#linear-github-and-gitlab); its token needs the `api` scope to open
    merge requests and to list the ones you review.
 3. On the **Pipelines** page, **New pipeline**, start an **Empty pipeline** or pick a template.
    On the **Build** canvas, set the trigger on **Start when**, drag in the steps you want, and draw
@@ -663,7 +663,7 @@ With a connector, a pipeline can:
 
 - start a run when a new item appears, or one reaches a state;
 - give the agent the item's title and description;
-- change the tool during a run with a **Call API** step, such as moving a card or adding a comment.
+- change the tool during a run with a **Use a connected tool** step, such as moving a card or adding a comment.
 
 ### What a connector can reach
 
@@ -678,6 +678,15 @@ It needs a web API that takes a token you can paste in and replies in JSON. Most
 
 Comments on an item are not read, only its title and description.
 
+### One way to start and update
+
+- **New ticket** under **Start when** takes its work from any connection, Linear or Trello or a tool you
+  added. Pick which under **From**.
+- **Update the ticket** moves the ticket or comments on it, using the connection that started the run.
+  A connection needs a `move` or `comment` action for this, and **Save** says if it has none. In Linear,
+  a comment is still drafted for you to post. A webhook's item has nowhere to update.
+- **Implement my tickets** is the template, and pipelines saved before this keep working unchanged.
+
 ### Connect by signing in
 
 The simplest way to connect a tool needs no token. Under **Settings, Connections**, press **New
@@ -690,10 +699,10 @@ removing the connection does too.
 | Tool | Sign-in | In pipelines |
 |---|---|---|
 | Trello | Tested with a real account | Starts runs by itself. It can also read, move and comment on cards. Reading the card list is tested with a real account; the others are not yet |
-| Jira | Tested with a real account | **Call MCP tool** steps. Starting runs waits until its issue search has been read from a real site |
-| Sentry | Tested with a real account | **Call MCP tool** steps |
-| GitHub, Slack, Asana, PagerDuty, HubSpot | Not tried. Each needs an app you make in its developer console, and Yardbell asks for the client ID and shows the redirect address to register | **Call MCP tool** steps |
-| Linear, GitLab, Notion, ClickUp, monday.com, Datadog, PostHog, Vercel, Supabase, Stripe, Figma, Intercom, Airtable, Zapier, Dropbox | Not tried. Each answers as an MCP server wanting a sign-in, but may still refuse Yardbell | **Call MCP tool** steps |
+| Jira | Tested with a real account | **Use a connected tool** steps. Starting runs waits until its issue search has been read from a real site |
+| Sentry | Tested with a real account | **Use a connected tool** steps |
+| GitHub, Slack, Asana, PagerDuty, HubSpot | Not tried. Each needs an app you make in its developer console, and Yardbell asks for the client ID and shows the redirect address to register | **Use a connected tool** steps |
+| Linear, GitLab, Notion, ClickUp, monday.com, Datadog, PostHog, Vercel, Supabase, Stripe, Figma, Intercom, Airtable, Zapier, Dropbox | Not tried. Each answers as an MCP server wanting a sign-in, but may still refuse Yardbell | **Use a connected tool** steps |
 
 **Not listed?** Use the **MCP server** tab, paste the address from the tool's docs, and press
 **Continue**. Yardbell takes the name from the address, signs in if the server asks for it, and lists
@@ -711,10 +720,10 @@ a browser by itself. Sign in, then retry the run.
 **Agents sign in separately.** An agent session gets the connection's address, but not Yardbell's
 sign-in, and signs in by itself on its own machine.
 
-### Call MCP tool
+### Use a connected tool
 
-A **Call MCP tool** step calls one tool on a connected server, with no agent and no model. Pick the
-server and the tool, and fill in the fields drawn from what the tool accepts. A value such as
+A **Use a connected tool** step does one action in a tool, with no agent and no model. Pick the
+connection and the action. On a signed-in server you can pick any of its tools, and fill in the fields drawn from what the tool accepts. A value such as
 `{{ticket}}` fills in from the run. A field Yardbell cannot draw takes JSON.
 
 - The reply is the step's report, up to 20,000 characters, and later agents read it as quoted data.
@@ -737,8 +746,7 @@ server and the tool, and fill in the fields drawn from what the tool accepts. A 
 5. On a pipeline's **Build** tab, pick **A connected tool** under **Start when**, then the board and lists.
    A trigger sees every open card on that board, assigned to you or not. Pick the lists work starts from.
 
-A template's **Linear** step cannot run on a Trello card. Use a **Call API** step with `move` or
-`comment`, and give its `value` the list id or the comment's text.
+An **Update the ticket** step moves or comments on a Trello card the same way it does a Linear ticket.
 
 ### Add another tool
 

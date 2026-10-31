@@ -9,9 +9,12 @@ and the project uses [Semantic Versioning](https://semver.org).
   in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
   common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have
   not. Signing in from a phone works through a box to paste the address into.
-- **Call MCP tool.** A new pipeline step calls a tool on a connected server with no agent. A step that
-  changes something can be refused by a Dispatch rule, and a run waits if the server changed the tool.
-  Trello can also start runs through its sign-in.
+- **Use a connected tool.** This pipeline step does one action in any connection with no agent, replacing
+  Call API. A step that changes something can be refused by a Dispatch rule, and a run waits if the server
+  changed the tool. Trello can also start runs through its sign-in.
+- **Tickets from any connection.** **New ticket** starts a run from Linear or any connection, **Update the
+  ticket** moves or comments wherever the ticket came from, and the template is now **Implement my
+  tickets**. Linear is a row under **Connections**. Saved pipelines keep working.
 - **One Connections page.** MCP servers, connectors, GitHub, GitLab and secrets are all on it, and the
   fields in its forms replace YAML. A token you paste is saved as a secret by itself. Removing a
   signed-in tool also removes its connection.

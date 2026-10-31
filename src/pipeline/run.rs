@@ -1,4 +1,4 @@
-use super::definition::{LinearAction, Outcome, Step, StepKind, Workspace};
+use super::definition::{Outcome, Step, StepKind, UpdateAction, Workspace};
 use super::forge::{Draft, Forge};
 use super::linear::Linear;
 use super::prompts::{self, TicketText};
@@ -651,23 +651,30 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             None => vec![Seen::Opened(Err("no step made a worktree".into()))],
         },
         Effect::Linear { step } => {
-            let Some(StepKind::Linear { action, state }) = step_of(step).map(|s| s.kind) else {
+            let Some(StepKind::Update { action, state }) = step_of(step).map(|s| s.kind) else {
                 return vec![];
             };
             let Some(ticket) = &run.subject.ticket else {
-                return vec![Seen::Linear(Err("this run has no Linear ticket".into()))];
+                return vec![Seen::Linear(Err("this run has no ticket to update".into()))];
             };
+            if ticket.source == WEBHOOK_SOURCE {
+                return vec![Seen::Linear(Err(
+                    "this item came from a webhook, so there is nowhere to update it".into(),
+                ))];
+            }
             if !ticket.is_linear() {
-                return vec![Seen::Linear(Err(format!(
-                    "{} is not a Linear ticket",
-                    ticket.id
-                )))];
+                let (call, value) = match action {
+                    UpdateAction::Move => ("move", state),
+                    UpdateAction::Comment => ("comment", "{{report}}".to_string()),
+                };
+                let params = std::collections::BTreeMap::from([("value".to_string(), value)]);
+                return vec![call_step(world, run, &ticket.source, call, &params).await];
             }
             match action {
-                LinearAction::Move => {
+                UpdateAction::Move => {
                     vec![Seen::Linear(world.move_ticket(ticket, &state).await)]
                 }
-                LinearAction::Comment => vec![Seen::Ended {
+                UpdateAction::Comment => vec![Seen::Ended {
                     step: step.clone(),
                     outcome: Outcome::Pass,
                     report: comment(run),

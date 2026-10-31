@@ -267,9 +267,7 @@ async fn tasks_and_their_versions() {
 fn implement(r: &Rig) -> crate::pipeline::definition::Definition {
     let cfg = r.app.config().unwrap();
     let lib = r.app.pipelines.library();
-    let def = lib
-        .copy_template("Implement my Linear tickets", &cfg)
-        .unwrap();
+    let def = lib.copy_template("Implement my tickets", &cfg).unwrap();
     let mut changed = def.clone();
     changed.steps[1].name = "Build it".into();
     lib.save(changed, &cfg).unwrap()

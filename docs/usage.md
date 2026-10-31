@@ -217,7 +217,7 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   way, see [Triggers](#triggers).
 - **Worktree setup:** a command to run in each new worktree, and one to clear it when a pipeline run
   ends, see [Worktree setup](automation.md#worktree-setup).
-- **GitHub and GitLab:** rows under **Connections**. See [below](#github-and-gitlab).
+- **GitHub and GitLab:** rows under **Connections**. See [below](#linear-github-and-gitlab).
 - **Connections:** the outside tools pipelines can use, such as Trello, with **Test**, **Share** and
   **Import**, see [Connectors](automation.md#connectors).
 - **Let agents use Yardbell** and **Connections:** turn on Yardbell's MCP server and list other MCP
@@ -238,7 +238,9 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   in the desktop app's tray menu.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
-#### GitHub and GitLab
+#### Linear, GitHub and GitLab
+
+Linear has a row under **Settings, Connections** for its API key, saved as the secret `linear`.
 
 GitHub and GitLab are rows under **Settings, Connections**, each with a **How it connects** choice:
 

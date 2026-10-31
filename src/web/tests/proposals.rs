@@ -316,9 +316,7 @@ async fn a_proposal_that_no_longer_passes_fails_on_its_card() {
     let c = cookie(&r.app).await;
     let cfg = r.app.config().unwrap();
     let library = r.app.pipelines.library();
-    let mut def = library
-        .copy_template("Implement my Linear tickets", &cfg)
-        .unwrap();
+    let mut def = library.copy_template("Implement my tickets", &cfg).unwrap();
     def.trigger = crate::pipeline::definition::Trigger::Manual;
     let def = library.save(def, &cfg).unwrap();
     let mut run = r

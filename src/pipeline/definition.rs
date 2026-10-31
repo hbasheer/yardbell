@@ -86,7 +86,7 @@ pub enum SessionChoice {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LinearAction {
+pub enum UpdateAction {
     Move,
     Comment,
 }
@@ -111,8 +111,9 @@ pub enum StepKind {
         machines: Vec<String>,
     },
     Push,
-    Linear {
-        action: LinearAction,
+    #[serde(rename = "update", alias = "linear")]
+    Update {
+        action: UpdateAction,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         state: String,
     },
@@ -311,14 +312,29 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         _ => source,
     };
     if let Some(id) = gives {
-        if def
-            .steps
-            .iter()
-            .any(|s| matches!(s.kind, StepKind::Linear { .. }))
-        {
-            out.push(format!(
-                "A Linear step needs a Linear ticket, and this trigger gives a {id} item"
-            ));
+        for s in &def.steps {
+            let StepKind::Update { action, .. } = &s.kind else {
+                continue;
+            };
+            if id == "webhook" {
+                out.push(format!(
+                    "{} updates a ticket, and a webhook gives none to update",
+                    s.name
+                ));
+                continue;
+            }
+            let need = match action {
+                UpdateAction::Move => "move",
+                UpdateAction::Comment => "comment",
+            };
+            if let Some(c) = cfg.connectors.iter().find(|c| c.id == id) {
+                if !c.calls.contains_key(need) {
+                    out.push(format!(
+                        "{} needs the action {need}, which {} does not have",
+                        s.name, c.name
+                    ));
+                }
+            }
         }
     }
     for s in &def.steps {
@@ -543,8 +559,8 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                     ));
                 }
             }
-            StepKind::Linear {
-                action: LinearAction::Move,
+            StepKind::Update {
+                action: UpdateAction::Move,
                 state,
             } if state.trim().is_empty() => {
                 out.push(format!(
@@ -679,9 +695,6 @@ pub(crate) mod tests {
         trello.enabled = false;
         cfg.connectors = vec![trello];
         assert!(problems(&def, &cfg).contains(&"connector x is switched off".to_string()));
-        assert!(problems(&def, &cfg).contains(
-            &"A Linear step needs a Linear ticket, and this trigger gives a x item".to_string()
-        ));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 use super::*;
 use crate::pipeline::definition::{Definition, Trigger};
 
-const IMPLEMENT: &str = "Implement my Linear tickets";
+const IMPLEMENT: &str = "Implement my tickets";
 const REVIEW: &str = "Review my merge requests";
 
 fn text(result: &serde_json::Value) -> String {

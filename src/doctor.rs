@@ -116,10 +116,11 @@ pub fn pipelines_lines(
         let machines = machines_of(cfg, def);
         let uses_linear = matches!(&def.trigger, Trigger::Linear { .. })
             || matches!(&def.trigger, Trigger::Schedule { state, .. } if !state.trim().is_empty())
-            || def
-                .steps
-                .iter()
-                .any(|s| matches!(s.kind, StepKind::Linear { .. }));
+            || (matches!(&def.trigger, Trigger::Manual)
+                && def
+                    .steps
+                    .iter()
+                    .any(|s| matches!(s.kind, StepKind::Update { .. })));
         if uses_linear {
             match linear {
                 Some(Ok(n)) => lines.push((
@@ -460,9 +461,9 @@ mod tests {
         assert_eq!(
             lines,
             vec![
-                (false, "Implement my Linear tickets: Linear refused the API key in the secret linear".into()),
-                (false, "Implement my Linear tickets: gh is not logged in on mini, so draft GitHub pull requests cannot be opened there (run gh auth login on mini)".into()),
-                (false, "Implement my Linear tickets: devbox is not reachable".into()),
+                (false, "Implement my tickets: Linear refused the API key in the secret linear".into()),
+                (false, "Implement my tickets: gh is not logged in on mini, so draft GitHub pull requests cannot be opened there (run gh auth login on mini)".into()),
+                (false, "Implement my tickets: devbox is not reachable".into()),
                 (true, "Review my merge requests: signed in to git.commslayer.com as hbasheer".into()),
                 (false, "Review my merge requests: devbox is not reachable".into()),
             ]
@@ -489,15 +490,15 @@ mod tests {
             vec![
                 (
                     true,
-                    "Implement my Linear tickets: Linear answers, 3 open tickets are yours".into()
+                    "Implement my tickets: Linear answers, 3 open tickets are yours".into()
                 ),
                 (
                     true,
-                    "Implement my Linear tickets: gh is logged in on hp, mini, devbox".into()
+                    "Implement my tickets: gh is logged in on hp, mini, devbox".into()
                 ),
                 (
                     true,
-                    "Implement my Linear tickets: hp, mini, devbox are reachable".into()
+                    "Implement my tickets: hp, mini, devbox are reachable".into()
                 ),
             ]
         );

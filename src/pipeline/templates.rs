@@ -1,9 +1,9 @@
 use super::definition::{
-    Definition, LinearAction, MachineChoice, Next, SessionChoice, Step, StepKind, Trigger,
+    Definition, MachineChoice, Next, SessionChoice, Step, StepKind, Trigger, UpdateAction,
     Workspace, END, WAIT,
 };
 
-const IMPLEMENT: &str = "Implement the Linear ticket {ticket} \"{title}\" ({url}).\n\nYou are on \
+const IMPLEMENT: &str = "Implement the ticket {ticket} \"{title}\" ({url}).\n\nYou are on \
 the branch {branch} in a new worktree. Make the change the ticket asks for, add or update tests for \
 it, run the tests that cover it, and commit on this branch with a message that names {ticket}. Do \
 not push: Yardbell reviews and tests the branch first.";
@@ -105,8 +105,8 @@ fn implement() -> Definition {
         read_only: false,
     };
     Definition {
-        id: "implement-my-linear-tickets".into(),
-        name: "Implement my Linear tickets".into(),
+        id: "implement-my-tickets".into(),
+        name: "Implement my tickets".into(),
         enabled: false,
         version: 0,
         trigger: Trigger::Linear {
@@ -186,9 +186,9 @@ fn implement() -> Definition {
             ),
             built_in(
                 "linear-move",
-                "Move in Linear",
-                StepKind::Linear {
-                    action: LinearAction::Move,
+                "Move the ticket",
+                StepKind::Update {
+                    action: UpdateAction::Move,
                     state: "In Review".into(),
                 },
                 ("report", "report"),
@@ -298,7 +298,7 @@ mod tests {
         let names: Vec<String> = all().iter().map(|d| d.name.clone()).collect();
         assert_eq!(
             names,
-            vec!["Implement my Linear tickets", "Review my merge requests"]
+            vec!["Implement my tickets", "Review my merge requests"]
         );
         for mut def in all() {
             assert_eq!(check(&def, &cfg()), Ok(()), "{}", def.name);

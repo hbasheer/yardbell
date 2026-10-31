@@ -153,7 +153,7 @@ function card(p) {
 }
 
 const TEMPLATE_HINTS = {
-  "Implement my Linear tickets": "Plan, implement, review and fix, QA, push a draft, move the ticket, report",
+  "Implement my tickets": "Plan, implement, review and fix, QA, push a draft, move the ticket, report",
   "Review my merge requests": "Understand, root cause, security, test on devbox, report",
 };
 
@@ -472,7 +472,45 @@ function choicesFor(id, call, params = {}) {
   return connectorChoices.get(url);
 }
 
-const NO_CONNECTIONS = html`<p class="help">No connection can do this yet. Trello can, once you sign in under <a href="/settings#connections">Settings, Connections</a>. So can a tool you add with a token. Any other signed-in tool works in a <strong>Call MCP tool</strong> step.</p>`;
+const NO_CONNECTIONS = html`<p class="help">No connections yet. Add one under <a href="/settings#connections">Settings, Connections</a>.</p>`;
+
+function connectionField(step, redraw) {
+  const value = step.kind === "tool" ? `server:${step.server}` : `connector:${step.connector}`;
+  const pick = (chosen) => {
+    const [kind, name] = [chosen.slice(0, chosen.indexOf(":")), chosen.slice(chosen.indexOf(":") + 1)];
+    for (const key of ["connector", "call", "params", "server", "tool", "arguments", "call_kind", "schema_hash"]) delete step[key];
+    if (kind === "server") Object.assign(step, { kind: "tool", server: name, tool: "", arguments: {}, call_kind: "change", schema_hash: "" });
+    else Object.assign(step, { kind: "call", connector: name, call: "", params: {} });
+    redraw();
+  };
+  return field("Connection", html`<select name="connection" @change=${(e) => pick(e.target.value)}>
+    ${data.connectors.length ? html`<optgroup label="Actions you set up">${data.connectors.map((c) => html`<option value=${`connector:${c.id}`} ?selected=${value === `connector:${c.id}`}>${c.name}</option>`)}</optgroup>` : nothing}
+    ${data.mcp_servers.length ? html`<optgroup label="Any tool on a signed-in server">${data.mcp_servers.map((m) => html`<option value=${`server:${m}`} ?selected=${value === `server:${m}`}>${m}</option>`)}</optgroup>` : nothing}
+  </select>`);
+}
+
+function updateFields(step, redraw) {
+  const t = draft.trigger;
+  const from = t.kind === "connector" || (t.kind === "schedule" && t.connector) ? data.connectors.find((c) => c.id === t.connector) : null;
+  const typed = field("To the state", html`<input name="state" .value=${step.state || ""} @input=${(e) => { step.state = e.target.value; redraw(); }}>`, "The state's name in Linear, or its id in another tool.");
+  let target = typed;
+  if (from?.calls.some((c) => c.name === "states")) {
+    const found = choicesFor(from.id, "states", t.params);
+    if (found.list) {
+      target = field("To the state", html`<select name="state" @change=${(e) => { step.state = e.target.value; redraw(); }}>
+        <option value="" ?selected=${!step.state}>Pick a state</option>
+        ${found.list.map((s) => html`<option value=${s.id} ?selected=${s.id === step.state}>${s.name}</option>`)}
+      </select>`);
+    }
+  }
+  return html`<div class="pl-fields">
+    ${field("Action", html`<select name="action" @change=${(e) => { step.action = e.target.value; redraw(); }}>
+      <option value="move" ?selected=${step.action === "move"}>Move the ticket</option>
+      <option value="comment" ?selected=${step.action === "comment"}>Comment with the run's report</option>
+    </select>`, "It uses whichever connection started the run. In Linear, a comment is drafted for you to post.")}
+    ${step.action === "move" ? target : nothing}
+  </div>`;
+}
 
 function connectorSelect(value, change) {
   return html`<select name="connector" @change=${(e) => change(e.target.value)}>
@@ -504,7 +542,7 @@ function connectorFields(t, redraw) {
     t.states = [];
     redraw();
   };
-  return html`${field("Tool", connectorSelect(t.connector, (v) => { t.connector = v; t.params = {}; t.states = []; redraw(); }))}
+  return html`
     ${paramFields(connector, params, setParam)}
     ${connector ? statePicks(t, connector, redraw) : nothing}`;
 }
@@ -545,12 +583,11 @@ function webhookFields(d, redraw) {
 }
 
 function callFields(step, redraw) {
-  if (!data.connectors.length) return NO_CONNECTIONS;
+  if (!data.connectors.length && !data.mcp_servers.length) return NO_CONNECTIONS;
   const connector = data.connectors.find((c) => c.id === step.connector);
   const call = connector?.calls.find((c) => c.name === step.call);
   const params = step.params || (step.params = {});
   return html`<div class="pl-fields">
-    ${field("Tool", connectorSelect(step.connector, (v) => { step.connector = v; step.call = ""; step.params = {}; redraw(); }))}
     ${field("Call", html`<select name="call" @change=${(e) => { step.call = e.target.value; redraw(); }}>
       <option value="" ?selected=${!step.call}>Pick a call</option>
       ${(connector?.calls || []).map((c) => html`<option value=${c.name} ?selected=${c.name === step.call}>${c.name}, ${c.kind === "lookup" ? "reads" : "changes"}</option>`)}
@@ -598,9 +635,6 @@ function argumentField(step, name, schema, required, redraw) {
 }
 
 function toolFields(step, redraw) {
-  if (!data.mcp_servers.length) {
-    return html`<p class="help">No MCP servers yet. Add one under <a href="/settings#connections">Settings, Connections</a>.</p>`;
-  }
   const listed = toolsOf(step.server, redraw);
   const tool = listed.tools.find((t) => t.name === step.tool);
   const properties = tool?.input_schema?.properties || {};
@@ -614,9 +648,7 @@ function toolFields(step, redraw) {
     redraw();
   };
   return html`<div class="pl-fields">
-    ${field("Server", html`<select name="server" @change=${(e) => { step.server = e.target.value; step.tool = ""; step.arguments = {}; step.schema_hash = ""; redraw(); }}>
-      ${data.mcp_servers.map((m) => html`<option value=${m} ?selected=${m === step.server}>${m}</option>`)}
-    </select>`, listed.error || (listed.loading ? "Asking the server for its tools." : ""))}
+    ${listed.error || listed.loading ? html`<p class="help">${listed.error || "Asking the server for its tools."}</p>` : nothing}
     ${field("Tool", html`<select name="tool" @change=${(e) => choose(e.target.value)}>
       <option value="" ?selected=${!step.tool}>Pick a tool</option>
       ${listed.tools.map((t) => html`<option value=${t.name} ?selected=${t.name === step.tool}>${t.name}</option>`)}
@@ -629,17 +661,11 @@ function toolFields(step, redraw) {
 
 function kindFields(step, others, redraw) {
   switch (step.kind) {
-    case "call": return callFields(step, redraw);
-    case "tool": return toolFields(step, redraw);
+    case "call": return html`${connectionField(step, redraw)}${callFields(step, redraw)}`;
+    case "tool": return html`${connectionField(step, redraw)}${toolFields(step, redraw)}`;
     case "agent": return agentFields(step, others, redraw);
     case "plan": return field("Dispatch may pick from", picks(data.machines, step.machines || [], (list) => { step.machines = list; redraw(); }, "plan"), "None ticked means any machine.");
-    case "linear": return html`<div class="pl-fields">
-      ${field("Action", html`<select name="action" @change=${(e) => { step.action = e.target.value; redraw(); }}>
-        <option value="move" ?selected=${step.action === "move"}>Move the ticket</option>
-        <option value="comment" ?selected=${step.action === "comment"}>Draft a comment for me</option>
-      </select>`)}
-      ${step.action === "move" ? field("To the state", html`<input name="state" .value=${step.state || ""} @input=${(e) => { step.state = e.target.value; redraw(); }}>`) : nothing}
-    </div>`;
+    case "update": return updateFields(step, redraw);
     case "wait": return field("Message", html`<textarea name="message" rows="2" .value=${step.message || ""} @input=${(e) => { step.message = e.target.value; redraw(); }}></textarea>`);
     default: return nothing;
   }
@@ -675,7 +701,7 @@ function stepForm(step, d, redraw) {
 
 function triggerFields(d, redraw) {
   const t = d.trigger;
-  const kinds = [["manual", "By hand"], ["schedule", "On a schedule"], ["linear", "A Linear ticket"], ["connector", "A connected tool"], ["webhook", "A webhook"], ["github_review", "A GitHub review request"], ["gitlab_reviewer", "A GitLab merge request reviewer"]];
+  const kinds = [["manual", "By hand"], ["schedule", "On a schedule"], ["linear", "New ticket from a connection"], ["webhook", "A webhook"], ["github_review", "A GitHub review request"], ["gitlab_reviewer", "A GitLab merge request reviewer"]];
   const setKind = (k) => {
     d.trigger = newTrigger(k);
     redraw();
@@ -683,7 +709,14 @@ function triggerFields(d, redraw) {
   return html`<fieldset class="pl-step-form pl-trigger-form">
     <legend>Start when</legend>
     <div class="pl-fields">
-      ${field("Starts", html`<select name="trigger" @change=${(e) => setKind(e.target.value)}>${kinds.map(([k, l]) => html`<option value=${k} ?selected=${t.kind === k}>${l}</option>`)}</select>`)}
+      ${field("Starts", html`<select name="trigger" @change=${(e) => setKind(e.target.value)}>${kinds.map(([k, l]) => html`<option value=${k} ?selected=${t.kind === k || (k === "linear" && t.kind === "connector")}>${l}</option>`)}</select>`)}
+      ${t.kind === "linear" || t.kind === "connector" ? field("From", html`<select name="ticket-source" @change=${(e) => {
+        d.trigger = e.target.value === "linear" ? newTrigger("linear") : { kind: "connector", connector: e.target.value, params: {}, states: [] };
+        redraw();
+      }}>
+        <option value="linear" ?selected=${t.kind === "linear"}>Linear</option>
+        ${data.connectors.map((c) => html`<option value=${c.id} ?selected=${t.kind === "connector" && t.connector === c.id}>${c.name}</option>`)}
+      </select>`) : nothing}
       ${t.kind === "schedule" ? html`
         ${field("Schedule", html`<input name="schedule" placeholder="weekdays 02:00" .value=${t.schedule || ""} @input=${(e) => { t.schedule = e.target.value; redraw(); }}>`)}
         ${field("With my open tickets in", html`<input name="state" placeholder="Todo, or empty for none" .value=${t.state || ""} @input=${(e) => { t.state = e.target.value; redraw(); }}>`)}` : nothing}
@@ -723,9 +756,9 @@ function save() {
 }
 
 const LIBRARY = [
-  ["Start when", [["manual", "manual", "By hand", "From Run now"], ["schedule", "schedule", "Schedule", "Weekdays, every day, a time"], ["linear", "ticket", "Linear ticket", "Assigned to me, or a state"], ["connector", "ticket", "A connected tool", "A new item, or one in a state"], ["webhook", "call", "A webhook", "Another system calls an address"], ["github_review", "pull", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "pull", "GitLab reviewer", "An MR adds me as reviewer"]]],
+  ["Start when", [["manual", "manual", "By hand", "From Run now"], ["schedule", "schedule", "Schedule", "Weekdays, every day, a time"], ["linear", "ticket", "New ticket", "From Linear, Trello or any connection"], ["webhook", "call", "A webhook", "Another system calls an address"], ["github_review", "pull", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "pull", "GitLab reviewer", "An MR adds me as reviewer"]]],
   ["Agent", [["agent", "agent", "Agent step", "Your instructions, on a machine"], ["plan", "plan", "Plan", "Picks machine, folder and branch"]]],
-  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["linear", "linear", "Linear", "Move the ticket, or draft a comment"], ["call", "call", "Call API", "Read from or change a connected tool"], ["tool", "tool", "Call MCP tool", "A tool on a connected server"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
+  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["update", "update", "Update the ticket", "Move or comment, wherever it came from"], ["call", "call", "Use a connected tool", "Do one action in a tool, with no agent"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
   ["You", [["wait", "wait", "Wait for me", "Continues when you say"]]],
 ];
 
@@ -854,14 +887,15 @@ function slug(name, taken) {
   for (let n = 2; ; n++) if (!taken.includes(`${base}-${n}`)) return `${base}-${n}`;
 }
 
-function blank(kind) {
+function blank(wanted) {
+  const kind = wanted === "call" && !data.connectors.length && data.mcp_servers.length ? "tool" : wanted;
   const names = draft.steps.map((s) => s.name.toLowerCase());
   let name = KINDS[kind];
   for (let n = 2; names.includes(name.toLowerCase()); n++) name = `${KINDS[kind]} ${n}`;
   const fields = {
     agent: { instructions: "", agent: "", machine: { pick: [] }, workspace: { kind: "new_worktree" }, session: "new", read_only: false, mcp_servers: [] },
     plan: { machines: [] },
-    linear: { action: "move", state: "In Review" },
+    update: { action: "move", state: "In Review" },
     call: { connector: data.connectors[0]?.id || "", call: "", params: {} },
     tool: { server: data.mcp_servers[0] || "", tool: "", arguments: {}, call_kind: "change", schema_hash: "" },
     wait: { message: "" },

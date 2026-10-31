@@ -289,6 +289,15 @@ function serverMenu(srv, i) {
   return rowMenu(srv.name, `${menuItem(`data-mcp-act="test" ${name}`, "Test")}${actions}${menuItem(`data-edit="${i}"`, "Edit")}${signOut}${menuItem(`data-remove="${i}"`, "Remove", true)}`);
 }
 
+// Only when something changed, so a load does not lose a click on a row or close its menu.
+const shownRows = new Map();
+
+function setRows(id, html) {
+  if (shownRows.get(id) === html) return;
+  shownRows.set(id, html);
+  $(id).innerHTML = html;
+}
+
 function showConnectionsEmpty() {
   $("conn-guide").open = !(data?.mcp_servers || []).length && !connections.list.length;
 }
@@ -324,11 +333,13 @@ function renderForges() {
     checked: Object.keys(status.hosts).length > 0,
   };
   const on = (flag) => flag !== false;
-  $("forge-rows").innerHTML = [
+  const linearKey = (data.secrets?.list || []).some((x) => x.name === "linear");
+  setRows("forge-rows", [
+    forgeRow("linear", "Linear", "Tickets for pipelines", "Token", linearKey ? badge("ok", "Saved") : badge("idle", "No key"), ""),
     forgeRow("github", "GitHub", "Pull requests and CI on sessions", githubToken ? "Token" : "gh", forgeBadge(on(value.use_github), github.problem, github.checked), on(value.use_github) ? github.problem : ""),
     forgeRow("gitlab", "GitLab", hosts.length ? hosts.map((h) => h.host).join(", ") : "Merge requests and CI on sessions", gitlabGlab ? "glab" : "Token",
       hosts.length ? forgeBadge(on(value.use_gitlab), gitlab.problem, gitlab.checked) : badge("idle", "No hosts"), on(value.use_gitlab) ? gitlab.problem : ""),
-  ].join("");
+  ].join(""));
 }
 
 function showForgeFields() {
@@ -341,7 +352,7 @@ function showForgeFields() {
 function openForge(key) {
   flowAdding = false;
   showForgeFields();
-  showStep(`forge-${key}`, key === "github" ? "GitHub" : "GitLab");
+  showStep(`forge-${key}`, { github: "GitHub", gitlab: "GitLab", linear: "Linear" }[key]);
 }
 
 function serverWhere(srv) {
@@ -354,14 +365,14 @@ function renderServers() {
   const servers = data.mcp_servers || [];
   $("server-rows").hidden = !servers.length;
   showConnectionsEmpty();
-  $("server-rows").innerHTML = servers.map((srv, i) => {
+  setRows("server-rows", servers.map((srv, i) => {
     const limited = srv.machines?.length ? ` · ${srv.machines.join(", ")}` : "";
     return `<li class="row conn-row" data-server="${i}">
       <span class="conn-name"><strong>${esc(srv.name)}</strong><small>${esc(serverWhere(srv))}${esc(limited)}</small></span>
       <span class="conn-type">${serverType(srv)}</span>
       <span class="conn-status">${serverStatus(srv)}</span>
       <span class="conn-actions">${serverNeeds(srv)}${serverMenu(srv, i)}</span></li>`;
-  }).join("");
+  }).join(""));
 }
 
 let signingIn = null;
@@ -374,7 +385,7 @@ function signsInHere() {
   return ["127.0.0.1", "localhost"].includes(location.hostname);
 }
 
-const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools", "conn-output", "forge-github", "forge-gitlab", "secret-form"];
+const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools", "conn-output", "forge-github", "forge-gitlab", "forge-linear", "secret-form"];
 const FLOW_TABS = ["conn-new-panel", "server-form", "conn-tab-token"];
 let flowStep = null;
 let flowAdding = false;
@@ -1016,7 +1027,7 @@ function renderConnections() {
   const own = connections.list.filter((c) => !c.server);
   $("conn-rows").hidden = !own.length;
   if (data) renderServers();
-  $("conn-rows").innerHTML = own.map((c) => {
+  setRows("conn-rows", own.map((c) => {
     const status = connections.status[c.id];
     const state = c.missing.length
       ? badge("warn", "Needs a secret")
@@ -1033,7 +1044,7 @@ function renderConnections() {
       <span class="conn-status">${state}</span>
       <span class="conn-actions">${rowMenu(c.name, items)}</span>
     </li>`;
-  }).join("");
+  }).join(""));
 }
 
 function renderConnHeaders() {
@@ -1961,6 +1972,19 @@ $("conn-flow").addEventListener("click", (e) => {
   renderPullRequests();
 });
 
+$("forge-linear").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const key = e.target.elements.linear_key;
+  try {
+    await api("POST", "/api/settings/secrets", { name: "linear", value: key.value.trim() });
+    key.value = "";
+    closeFlow();
+    await load();
+  } catch (err) {
+    tellFlow(err.message);
+  }
+});
+
 $("conn-flow").addEventListener("change", (e) => {
   if (["use_github", "use_gitlab", "gitlab_via"].includes(e.target.name)) renderFolders();
   if (["github_via", "gitlab_via"].includes(e.target.name)) showForgeFields();
@@ -2332,9 +2356,12 @@ function renderSetups() {
     : `<li class="row rule-empty">No setup commands. New worktrees start the agent right away.</li>`;
 }
 
+let setupsAdded = false;
+
 async function loadSetups() {
   try {
     const res = await api("GET", "/api/settings/worktree-setup");
+    if (setupsAdded) return;
     setups = (res.setups || []).map((x) => ({ machine: "any", timeout_seconds: 300, ...x }));
   } catch {
     setups = [];
@@ -2343,6 +2370,7 @@ async function loadSetups() {
 }
 
 $("setup-add").addEventListener("click", () => {
+  setupsAdded = true;
   setups.push({ folder: "", machine: "any", command: "", timeout_seconds: 300 });
   renderSetups();
   $("setup-rows").querySelector("li:last-child input")?.focus();
@@ -2369,6 +2397,7 @@ $("setup-form").addEventListener("submit", async (e) => {
   try {
     await api("POST", "/api/settings/worktree-setup", { setups });
     saved("Worktree setup saved. It applies to the next worktree Yardbell creates.");
+    setupsAdded = false;
     await loadSetups();
   } catch (err) {
     toast(err.message);

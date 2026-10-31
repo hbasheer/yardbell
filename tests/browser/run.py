@@ -1896,9 +1896,9 @@ class Suite:
         b.goto(self.url("/pipeline"))
         b.click("#pl-new")
         b.wait("document.querySelector('#pl-templates button')", "the templates")
-        b.js("[...document.querySelectorAll('#pl-templates button')].find((x) => x.textContent.includes('Implement my Linear tickets')).click()")
-        b.wait("new URLSearchParams(location.search).get('p') === 'implement-my-linear-tickets'", "the new pipeline opened")
-        b.wait("document.querySelector('.pl-title-name')?.value === 'Implement my Linear tickets'", "its name")
+        b.js("[...document.querySelectorAll('#pl-templates button')].find((x) => x.textContent.includes('Implement my tickets')).click()")
+        b.wait("new URLSearchParams(location.search).get('p') === 'implement-my-tickets'", "the new pipeline opened")
+        b.wait("document.querySelector('.pl-title-name')?.value === 'Implement my tickets'", "its name")
         b.click("#pl-back")
         b.wait("document.querySelectorAll('.pl-card[data-id]').length === 2", "two pipeline cards")
 
@@ -2194,7 +2194,7 @@ class Suite:
 
     def test_builder_switching_on_survives_a_save(self):
         b = self.b
-        made = self.api("POST", "/api/pipelines", {"template": "Implement my Linear tickets"})
+        made = self.api("POST", "/api/pipelines", {"template": "Implement my tickets"})
         b.js("localStorage.setItem('yb-pipeline-full', '1')")
         b.goto(self.url(f"/pipeline?p={made['id']}&tab=build"))
         b.wait("document.querySelector('.pl-node')", "the builder")
@@ -2638,8 +2638,9 @@ class Suite:
                 return real(u, o);
               };
             })()""")
-            b.js("document.querySelector('.pl-lib-item[data-kind=\"connector\"][data-group=\"Start when\"]').click()")
-            b.wait("document.querySelector('#pl-inspector select[name=connector]')", "the tool picker")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"linear\"][data-group=\"Start when\"]').click()")
+            b.wait("document.querySelector('#pl-inspector select[name=ticket-source]')", "where tickets come from")
+            self.set_field("#pl-inspector select[name=ticket-source]", "trello")
             b.wait("document.querySelector('#pl-inspector select[name=param-board]')?.textContent.includes('Main board')", "the board by name")
             self.set_field("#pl-inspector select[name=param-board]", "B1")
             b.wait("[...document.querySelectorAll('#pl-inspector .pl-state-pick')].some((x) => x.textContent.includes('Todo'))", "the list by name")
@@ -2664,7 +2665,7 @@ class Suite:
                   { name: 'moveCard', description: 'Moves a card', read_only_hint: false, schema_hash: 'hash-move', input_schema: { type: 'object', properties: { list: { type: 'string' } } } },
                 ] }), { headers: { 'content-type': 'application/json' } }))
               : window.__tools_real(u, o)""")
-            b.js("document.querySelector('.pl-lib-item[data-kind=\"tool\"]').click()")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"call\"]').click()")
             b.wait("document.querySelector('.pl-node.kind-tool')", "the step")
             b.wait("document.querySelector('#pl-inspector select[name=tool]')", "the tool picker")
             b.wait("document.querySelector('#pl-inspector select[name=tool] option[value=moveCard]')", "the tools listed")
@@ -3038,7 +3039,7 @@ class Suite:
         b.goto(self.url("/"))
         b.goto(self.url("/settings#connections"))
         b.wait("document.getElementById('conn-new') && connections.templates", "the section")
-        b.click("#conn-new")
+        b.js("document.getElementById('conn-new').click()")
         b.wait("document.querySelector('[data-sign-in=linear]')", "more tools than Trello and Jira")
         count = b.js("document.querySelectorAll('#conn-sign-in-list .conn-card').length")
         if count < 20:
@@ -3170,6 +3171,64 @@ class Suite:
         finally:
             self.remove_mcp_servers()
 
+    def test_tickets_come_from_any_connection(self):
+        b = self.b
+        self.api("POST", "/api/settings/connectors/connect", {"template": "trello"})
+        try:
+            made = self.api("POST", "/api/pipelines", {"template": "Implement my tickets"})
+            pid = made.get("id") or made["definition"]["id"]
+            b.js("localStorage.setItem('yb-pipeline-full', '1')")
+            b.goto(self.url(f"/pipeline?p={pid}&tab=build"))
+            b.wait("document.querySelector('.pl-node[data-step=\"plan\"]')", "the builder")
+            b.click(".pl-node.pl-start")
+            names = b.js("[...document.querySelectorAll('.pl-lib-item')].map((x) => x.textContent).join('|')")
+            for gone in ("A connected tool", "Linear ticket", "Call API", "Call MCP tool"):
+                if gone in names:
+                    raise Failure(f"the library still has {gone}: {names}")
+            for want in ("New ticket", "Update the ticket", "Use a connected tool"):
+                if want not in names:
+                    raise Failure(f"the library does not have {want}: {names}")
+            b.wait("document.querySelector('#pl-inspector select[name=ticket-source]')", "where tickets come from")
+            sources = b.js("[...document.querySelectorAll('#pl-inspector select[name=ticket-source] option')].map((o) => o.textContent).join('|')")
+            if sources != "Linear|Trello":
+                raise Failure(f"the sources are {sources}")
+            self.set_field("#pl-inspector select[name=ticket-source]", "trello")
+            b.wait("document.querySelector('.pl-canvas').textContent.includes('When Trello has a new item')", "the trigger on Trello")
+            if b.js("document.querySelector('#pl-inspector select[name=ticket-source]').value") != "trello":
+                raise Failure("the choice did not stay")
+            self.set_field("#pl-inspector select[name=ticket-source]", "linear")
+            b.wait("document.querySelector('.pl-canvas').textContent.includes('When a Linear ticket')", "the trigger back on Linear")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"call\"]').click()")
+            b.wait("document.querySelector('#pl-inspector select[name=connection]')", "the connection picker")
+            options = b.js("[...document.querySelectorAll('#pl-inspector select[name=connection] option')].map((o) => o.value).join('|')")
+            if "connector:trello" not in options or "server:trello" not in options:
+                raise Failure(f"the connections are {options}")
+            self.set_field("#pl-inspector select[name=connection]", "server:trello")
+            b.wait("document.querySelector('.pl-node.kind-tool')", "the step as a tool")
+            self.check_errors("tickets from any connection")
+        finally:
+            b.goto(self.url("/"))
+            b.js("fetch('/api/settings/connectors/trello', { method: 'DELETE' })")
+            self.remove_mcp_servers()
+
+    def test_linear_is_a_connection(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.querySelector('#forge-rows [data-forge=linear]')", "Linear among the connections")
+        b.click("#forge-rows [data-forge=linear]")
+        b.wait("!document.getElementById('forge-linear').hidden", "the Linear step")
+        self.set_field("#forge-linear [name=linear_key]", "lin_api_BROWSER_KEY")
+        b.click("#forge-linear button[type=submit]")
+        b.wait("!document.getElementById('conn-flow').open", "the key saved")
+        b.wait("document.querySelector('#forge-rows [data-forge=linear]').textContent.includes('Saved')", "the row saying so")
+        with open(self.y.config) as f:
+            if "lin_api_BROWSER_KEY" in f.read():
+                raise Failure("the key reached yardbell.yml")
+        if "lin_api_BROWSER_KEY" in b.js("document.documentElement.outerHTML"):
+            raise Failure("the key stayed on the page")
+        self.check_errors("Linear as a connection")
+
     def test_connection_actions_are_fields(self):
         b = self.b
         b.goto(self.url("/"))
@@ -3296,7 +3355,7 @@ class Suite:
         try:
             b.goto(self.url("/"))
             b.goto(self.url("/settings#connections"))
-            b.wait("document.querySelector('#server-rows .conn-row')", "the row")
+            b.wait("document.querySelector('#server-rows .conn-row') && connections.templates", "the row")
             if b.js("document.querySelector('#conn-rows [data-conn=trello]')"):
                 raise Failure("Trello shows twice")
             b.click("#server-rows .conn-row [data-row-menu]")
@@ -3322,6 +3381,21 @@ class Suite:
             self.check_errors("a signed-in tool")
         finally:
             b.js("document.getElementById('conn-flow')?.close(); fetch('/api/settings/connectors/trello', { method: 'DELETE' })")
+            self.remove_mcp_servers()
+
+    def test_loading_again_does_not_redraw_unchanged_rows(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            b.wait("connections.templates", "the connections")
+            b.js("window.__row = document.querySelector('#server-rows .conn-row'); window.__forge = document.querySelector('#forge-rows .conn-row')")
+            b.js("void loadConnections()")
+            b.pump(0.3)
+            b.js("void refreshServerAuth()")
+            b.pump(0.3)
+            if not b.js("window.__row.isConnected && window.__forge.isConnected"):
+                raise Failure("an unchanged row was redrawn, which can lose a click")
+        finally:
             self.remove_mcp_servers()
 
     def test_a_pasted_token_never_replaces_a_secret(self):

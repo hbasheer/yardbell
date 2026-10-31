@@ -459,7 +459,7 @@ async fn a_report_notifies_as_finished() {
     use super::run::Note;
     let fake = Fake::default();
     fake.replies.lock().unwrap().push_back(REPORTED.to_string());
-    let run = run_of("Implement my Linear tickets");
+    let run = run_of("Implement my tickets");
     act(
         &fake,
         &Pipelines::default(),
@@ -486,7 +486,7 @@ async fn a_report_notifies_as_finished() {
 }
 
 fn call_run() -> (Run, Effect) {
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     run.definition.as_mut().unwrap().steps.push(
         serde_json::from_value(json!({
             "id": "update", "name": "Update Trello", "kind": "call",
@@ -638,7 +638,7 @@ async fn a_call_with_a_missing_value_fails() {
 async fn a_closed_item_waits() {
     let fake = Fake::default();
     fake.closed.lock().unwrap().push_back(true);
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     run.subject.ticket.as_mut().unwrap().source = "trello".into();
     run.step = "implement".into();
     run.state = RunState::Running;
@@ -650,27 +650,10 @@ async fn a_closed_item_waits() {
     assert!(matches!(&seen[..], [Seen::Closed(_)]), "{seen:?}");
 }
 
-#[tokio::test]
-async fn a_linear_step_on_a_trello_item_fails_clearly() {
-    let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
-    let ticket = run.subject.ticket.as_mut().unwrap();
-    ticket.source = "trello".into();
-    let effect = Effect::Linear {
-        step: "linear-move".into(),
-    };
-    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
-    match &seen[..] {
-        [Seen::Linear(Err(e))] => assert!(e.contains("is not a Linear ticket"), "{e}"),
-        other => panic!("{other:?}"),
-    }
-    assert!(fake.calls().is_empty());
-}
-
 #[test]
 fn a_finished_review_session_is_needless() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     set_session(&mut run, "review", "hp", "hp-review", "/r/main");
     run.step = "qa".into();
@@ -686,7 +669,7 @@ fn a_finished_review_session_is_needless() {
 #[test]
 fn a_waiting_steps_session_stays() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     set_session(&mut run, "review", "hp", "hp-review", "/r/main");
     run.step = "review".into();
@@ -711,7 +694,7 @@ fn a_shared_reviewer_stays_while_the_next_read_only_step_uses_it() {
 #[tokio::test]
 async fn a_run_that_ends_stops_every_session_and_keeps_the_worktree() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     set_session(&mut run, "review", "hp", "hp-review", "/r/main");
     fake.session("hp", "hp-main", "b", Activity::Idle);
@@ -727,7 +710,7 @@ async fn a_run_that_ends_stops_every_session_and_keeps_the_worktree() {
 #[tokio::test]
 async fn teardown_runs_once_per_folder() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     set_session(&mut run, "fix", "hp", "hp-main", "/r/main");
     set_session(&mut run, "qa", "devbox", "devbox-qa", "/r/copy");
@@ -744,7 +727,7 @@ async fn teardown_runs_once_per_folder() {
 async fn a_failing_teardown_still_ends_the_run() {
     let fake = Fake::default();
     *fake.teardown_fails.lock().unwrap() = true;
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     made(&mut run, "implement");
     run.state = RunState::Done;
@@ -783,7 +766,7 @@ async fn stop_all(fake: &Fake, run: &Run) -> Option<String> {
 #[tokio::test]
 async fn teardown_leaves_a_folder_the_run_did_not_make() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main-checkout");
     assert_eq!(stop_all(&fake, &run).await, None);
     assert!(fake.teardowns.lock().unwrap().is_empty());
@@ -792,7 +775,7 @@ async fn teardown_leaves_a_folder_the_run_did_not_make() {
 #[tokio::test]
 async fn teardown_leaves_a_folder_another_session_works_in() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/someone");
     made(&mut run, "implement");
     fake.session("hp", "someone", "b", Activity::Idle);
@@ -804,10 +787,10 @@ async fn teardown_leaves_a_folder_another_session_works_in() {
 #[tokio::test]
 async fn teardown_leaves_a_folder_another_active_run_holds() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     made(&mut run, "implement");
-    let mut other = run_of("Implement my Linear tickets");
+    let mut other = run_of("Implement my tickets");
     other.id = "r2".into();
     other.state = RunState::Done;
     set_session(&mut other, "implement", "hp", "hp-other", "/r/main");
@@ -831,7 +814,7 @@ async fn teardown_leaves_a_folder_another_active_run_holds() {
 async fn a_failed_stop_at_the_end_of_a_run_is_told() {
     let fake = Fake::default();
     *fake.stop_fails.lock().unwrap() = true;
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     fake.session("hp", "hp-main", "b", Activity::Idle);
     let problem = stop_all(&fake, &run).await.expect("a note");
@@ -841,7 +824,7 @@ async fn a_failed_stop_at_the_end_of_a_run_is_told() {
 #[tokio::test]
 async fn a_start_says_which_worktree_it_made() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     run.step = "implement".into();
     run.place.machine = "hp".into();
     run.place.folder = "acme/app".into();
@@ -872,7 +855,7 @@ async fn a_start_says_which_worktree_it_made() {
 #[tokio::test]
 async fn a_run_tags_the_sessions_it_starts() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     let calls = enter_step(&fake, &mut run, "implement").await;
     assert!(
         calls[0].starts_with("start_session") && calls[0].contains("\"name_tag\":\"r1\""),
@@ -883,7 +866,7 @@ async fn a_run_tags_the_sessions_it_starts() {
 #[tokio::test]
 async fn a_blocked_shared_session_is_not_typed_into() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     fake.session("hp", "hp-main", "b", Activity::Blocked);
     run.step = "fix".into();
@@ -908,7 +891,7 @@ async fn a_blocked_shared_session_is_not_typed_into() {
 #[tokio::test]
 async fn a_busy_shared_session_is_typed_into_once_it_is_idle() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     fake.session("hp", "hp-main", "b", Activity::Active);
     run.step = "fix".into();
@@ -943,7 +926,7 @@ async fn a_busy_shared_session_is_typed_into_once_it_is_idle() {
 #[tokio::test]
 async fn a_copy_from_a_stopped_session_names_its_folder() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-gone", "/r/main");
     run.state_of("qa").machine = "devbox".into();
     let calls = enter_step(&fake, &mut run, "qa").await;
@@ -980,7 +963,7 @@ fn a_runs_file_that_cannot_be_read_is_kept() {
 #[test]
 fn a_stale_session_is_left_out_of_the_sweep() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     set_session(&mut run, "review", "hp", "hp-review", "/r/main");
     run.step = "qa".into();
@@ -1036,7 +1019,7 @@ fn count(calls: &[String], tool: &str) -> usize {
 #[tokio::test]
 async fn steps_share_one_session() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
     edit_agent(&mut run, "fix", |_, session| *session = SessionChoice::New);
@@ -1053,7 +1036,7 @@ async fn steps_share_one_session() {
 #[tokio::test]
 async fn a_review_step_gets_its_own_session() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
     let calls = enter_step(&fake, &mut run, "review").await;
@@ -1081,7 +1064,7 @@ async fn consecutive_read_only_steps_share_a_session() {
 #[tokio::test]
 async fn a_step_on_another_machine_gets_its_own_session() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
     edit_agent(&mut run, "fix", |_, session| *session = SessionChoice::New);
@@ -1094,7 +1077,7 @@ async fn a_step_on_another_machine_gets_its_own_session() {
 #[tokio::test]
 async fn a_step_naming_another_agent_gets_its_own_session() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     fake.session("hp", "hp-main", "com-1-fix", Activity::Idle);
     edit_agent(&mut run, "fix", |agent, session| {
@@ -1109,7 +1092,7 @@ async fn a_step_naming_another_agent_gets_its_own_session() {
 #[tokio::test]
 async fn a_dead_shared_session_is_started_again_in_the_same_folder() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-gone", "/r/main");
     let calls = enter_step(&fake, &mut run, "fix").await;
     let start = calls
@@ -1120,7 +1103,7 @@ async fn a_dead_shared_session_is_started_again_in_the_same_folder() {
     assert!(!start.contains("new_branch"), "{start}");
 
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-gone", "/r/main");
     run.state_of("implement").runs = 2;
     let calls = enter_step(&fake, &mut run, "implement").await;
@@ -1137,7 +1120,7 @@ async fn a_dead_shared_session_is_started_again_in_the_same_folder() {
 #[tokio::test]
 async fn a_retried_step_keeps_the_shared_session() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-old", "/r/main");
     run.state_of("implement").runs = 2;
     fake.session("hp", "hp-old", "com-1-fix", Activity::Idle);
@@ -1155,7 +1138,7 @@ async fn a_retried_step_keeps_the_shared_session() {
 #[tokio::test]
 async fn a_quiet_reviewer_is_asked_for_its_result_not_stopped() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     set_session(&mut run, "review", "hp", "hp-review", "/r/main");
     run.state_of("review").runs = 1;
@@ -1178,7 +1161,7 @@ async fn a_quiet_reviewer_is_asked_for_its_result_not_stopped() {
 #[tokio::test]
 async fn a_working_reviewer_is_left_alone_on_a_second_try() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     set_session(&mut run, "review", "hp", "hp-review", "/r/main");
     run.state_of("review").runs = 1;
@@ -1192,7 +1175,7 @@ async fn a_working_reviewer_is_left_alone_on_a_second_try() {
 #[tokio::test]
 async fn a_retried_reviewer_starts_afresh() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     set_session(&mut run, "implement", "hp", "hp-main", "/r/main");
     set_session(&mut run, "review", "hp", "hp-review", "/r/main");
     run.state_of("review").runs = 2;
@@ -1212,7 +1195,7 @@ async fn a_retried_reviewer_starts_afresh() {
 #[tokio::test]
 async fn a_new_worktree_step_never_takes_over_another_session() {
     let fake = Fake::default();
-    let mut run = run_of("Implement my Linear tickets");
+    let mut run = run_of("Implement my tickets");
     run.place = crate::pipeline::record::Place {
         machine: "hp".into(),
         folder: "acme/app".into(),
@@ -1332,12 +1315,7 @@ async fn continue_types_into_the_session() {
         .lock()
         .unwrap()
         .extend([PLANNED.to_string(), REPORTED.to_string()]);
-    let run = drive(
-        &fake,
-        run_of("Implement my Linear tickets"),
-        &[("review", "fail")],
-    )
-    .await;
+    let run = drive(&fake, run_of("Implement my tickets"), &[("review", "fail")]).await;
     let implement = run.steps["implement"].session.clone();
     let sent = fake
         .calls()
@@ -1359,7 +1337,7 @@ async fn a_denying_rule_waits() {
         "start_session".into(),
         "Your rule: deny start_session on hp".into(),
     );
-    let run = drive(&fake, run_of("Implement my Linear tickets"), &[]).await;
+    let run = drive(&fake, run_of("Implement my tickets"), &[]).await;
     assert_eq!(
         run.waiting.map(|w| (w.kind, w.reason)),
         Some((
@@ -1374,7 +1352,7 @@ async fn a_closed_ticket_waits() {
     let fake = Fake::default();
     fake.replies.lock().unwrap().push_back(PLANNED.to_string());
     fake.closed.lock().unwrap().extend([false, true]);
-    let run = drive(&fake, run_of("Implement my Linear tickets"), &[]).await;
+    let run = drive(&fake, run_of("Implement my tickets"), &[]).await;
     assert_eq!(run.waiting.map(|w| w.kind), Some(WaitKind::Closed));
     assert!(!fake.calls().iter().any(|c| c.starts_with("start_session")));
 }
@@ -1386,7 +1364,7 @@ async fn the_implement_template_pushes_and_moves_the_ticket() {
         .lock()
         .unwrap()
         .extend([PLANNED.to_string(), REPORTED.to_string()]);
-    let run = drive(&fake, run_of("Implement my Linear tickets"), &[]).await;
+    let run = drive(&fake, run_of("Implement my tickets"), &[]).await;
     assert_eq!(run.state, RunState::Done, "{:?}", run.history);
     let calls = fake.calls();
     let implement = run.steps["implement"].path.clone();
@@ -1459,7 +1437,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1536,7 +1514,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1571,7 +1549,7 @@ mod pipelines {
 
     #[test]
     fn a_notification_opens_its_run() {
-        let mut run = crate::pipeline::engine::tests::run_of("Implement my Linear tickets");
+        let mut run = crate::pipeline::engine::tests::run_of("Implement my tickets");
         run.id = "run-1".into();
         run.pipeline = "implement".into();
         assert_eq!(
@@ -1585,7 +1563,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1626,7 +1604,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1645,7 +1623,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1667,7 +1645,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1700,7 +1678,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1744,7 +1722,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1776,7 +1754,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         for n in 0..60 {
             let mut run = p
@@ -1798,7 +1776,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let runs = p.start(&def.id, vec![ticket("COM-1")], "you").unwrap();
         assert_eq!(
@@ -1809,7 +1787,7 @@ mod pipelines {
         );
         let err = p.start(&def.id, vec![ticket("COM-1")], "you").unwrap_err();
         assert!(
-            err.contains("COM-1 Fix is already in a run of Implement my Linear tickets"),
+            err.contains("COM-1 Fix is already in a run of Implement my tickets"),
             "{err}"
         );
         assert!(p.start("nope", vec![ticket("COM-2")], "you").is_err());
@@ -1869,7 +1847,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -1908,7 +1886,7 @@ mod pipelines {
         let (p, _dir) = pipelines();
         let def = p
             .library()
-            .copy_template("Implement my Linear tickets", &cfg())
+            .copy_template("Implement my tickets", &cfg())
             .unwrap();
         let mut run = p
             .start(&def.id, vec![ticket("COM-1")], "you")
@@ -2216,4 +2194,125 @@ fn a_proposal_cannot_mark_a_tool_as_only_reading() {
     );
     assert_eq!(kind("b"), crate::connectors::CallKind::Change);
     assert_eq!(kind("n"), crate::connectors::CallKind::Change);
+}
+
+fn update_run(source: &str, action: &str) -> (Run, Effect) {
+    let mut run = run_of("Review my merge requests");
+    run.subject.ticket = Some(TicketRef {
+        source: source.into(),
+        item_id: "u-1".into(),
+        id: "T-1".into(),
+        title: "A card".into(),
+        url: String::new(),
+        description: String::new(),
+        fields: Default::default(),
+    });
+    run.definition.as_mut().unwrap().steps.push(
+        serde_json::from_value(json!({
+            "id": "update", "name": "Update", "kind": "update", "action": action, "state": "list-2",
+        }))
+        .unwrap(),
+    );
+    (
+        run,
+        Effect::Linear {
+            step: "update".into(),
+        },
+    )
+}
+
+#[test]
+fn an_old_linear_step_still_loads() {
+    let step: super::definition::Step = serde_json::from_value(json!({
+        "id": "m", "name": "Move", "kind": "linear", "action": "move", "state": "In Review",
+    }))
+    .unwrap();
+    assert!(matches!(step.kind, StepKind::Update { .. }));
+    assert_eq!(serde_json::to_value(&step).unwrap()["kind"], "update");
+}
+
+#[tokio::test]
+async fn updating_moves_an_item_through_its_connection() {
+    let fake = Fake::default();
+    let (run, effect) = update_run("trello", "move");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(matches!(&seen[..], [Seen::Called(Ok(_))]), "{seen:?}");
+    assert_eq!(fake.calls(), ["connector trello move"]);
+    let vars = fake.call_vars.lock().unwrap()[0].clone();
+    assert_eq!(vars.0["value"], "list-2");
+    assert_eq!(vars.0["item_id"], "u-1");
+}
+
+#[tokio::test]
+async fn updating_comments_with_the_report_through_its_connection() {
+    let fake = Fake::default();
+    let (run, effect) = update_run("trello", "comment");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(matches!(&seen[..], [Seen::Called(Ok(_))]), "{seen:?}");
+    assert_eq!(fake.calls(), ["connector trello comment"]);
+}
+
+#[tokio::test]
+async fn a_rule_can_refuse_updating_a_connected_item() {
+    let fake = Fake::default();
+    fake.refuse
+        .lock()
+        .unwrap()
+        .insert("call_connector".into(), "Your rule".into());
+    let (run, effect) = update_run("trello", "move");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(
+        matches!(&seen[..], [Seen::Refused(r)] if r == "Your rule"),
+        "{seen:?}"
+    );
+    assert!(fake.calls().is_empty());
+}
+
+#[tokio::test]
+async fn updating_a_linear_ticket_still_uses_linear() {
+    let fake = Fake::default();
+    let (run, effect) = update_run("linear", "move");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(matches!(&seen[..], [Seen::Linear(Ok(()))]), "{seen:?}");
+    assert!(
+        fake.calls().iter().any(|c| c.contains("move")),
+        "{:?}",
+        fake.calls()
+    );
+    assert!(!fake.calls().iter().any(|c| c.starts_with("connector")));
+}
+
+#[tokio::test]
+async fn a_webhook_item_cannot_be_updated() {
+    let fake = Fake::default();
+    let (run, effect) = update_run(super::run::WEBHOOK_SOURCE, "move");
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    assert!(
+        matches!(&seen[..], [Seen::Linear(Err(e))] if e.contains("webhook")),
+        "{seen:?}"
+    );
+}
+
+#[test]
+fn saving_says_when_a_connection_lacks_the_update() {
+    let mut cfg = super::definition::tests::cfg();
+    cfg.connectors = vec![serde_yaml::from_str(
+        "id: t\nname: Tool\nbase_url: https://x.example\ncalls:\n  list: { request: { method: GET, path: /i } }\n",
+    )
+    .unwrap()];
+    let mut def = run_of("Review my merge requests").definition.unwrap();
+    def.trigger = serde_json::from_value(json!({ "kind": "connector", "connector": "t" })).unwrap();
+    def.steps.push(
+        serde_json::from_value(
+            json!({ "id": "u", "name": "Up", "kind": "update", "action": "move", "state": "x" }),
+        )
+        .unwrap(),
+    );
+    let problems = super::definition::check(&def, &cfg).unwrap_err();
+    assert!(
+        problems
+            .iter()
+            .any(|p| p.contains("Up") && p.contains("move") && p.contains("Tool")),
+        "{problems:?}"
+    );
 }

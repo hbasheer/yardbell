@@ -134,7 +134,7 @@ mod tests {
         "YARDBELL RESULT\nstep: implement-1-r1\nstatus: pass\nsummary: Fixed the redirect.\n- 12 passed\nEND RESULT\n";
 
     fn running(step: &str) -> Run {
-        let mut run = run_of("Implement my Linear tickets");
+        let mut run = run_of("Implement my tickets");
         run.step = step.into();
         run.state = RunState::Running;
         run.step_since = at(0).to_rfc3339();
@@ -249,7 +249,7 @@ mod tests {
 
     #[test]
     fn an_offline_machine() {
-        let mut run = run_of("Implement my Linear tickets");
+        let mut run = run_of("Implement my tickets");
         run.state = RunState::Queued;
         run.slot = Some("hp".into());
         assert_eq!(

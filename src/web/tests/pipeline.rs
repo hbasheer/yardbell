@@ -62,7 +62,7 @@ async fn copy(r: &Rig, c: &str, template: &str) -> String {
     body["id"].as_str().unwrap().to_string()
 }
 
-const IMPLEMENT: &str = "Implement my Linear tickets";
+const IMPLEMENT: &str = "Implement my tickets";
 const REVIEW: &str = "Review my merge requests";
 
 #[tokio::test]
@@ -291,7 +291,7 @@ async fn starting_by_tickets_and_a_ticket_already_running() {
         body["error"]
             .as_str()
             .unwrap()
-            .contains("is already in a run of Implement my Linear tickets"),
+            .contains("is already in a run of Implement my tickets"),
         "{body}"
     );
     let (status, tickets) = call(&r, &c, "GET", "/api/pipelines/tickets", None).await;

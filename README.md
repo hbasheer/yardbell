@@ -35,8 +35,8 @@ plain HTML UI, plus apps for macOS, Linux and Android.
   pipelines, with your rules deciding what waits for you. It sits beside your terminals in the
   Workspace, and hides with one click.
 - **Connections.** Sign in to Trello, Jira and other tools from your browser, with no token to paste, or
-  connect any MCP server by its address. Trello can start pipeline runs, and a **Call MCP tool** step
-  calls any connected tool with no agent. A tool with no MCP server connects with a token, and a token
+  connect any MCP server by its address. Trello can start pipeline runs, and a **Use a connected tool** step
+  does one action in any connected tool with no agent. A tool with no MCP server connects with a token, and a token
   you paste is saved as a secret by itself.
 - **Proposals.** Changes asked for by other MCP clients, such as Claude Code with Yardbell added, wait
   in one inbox until you approve, edit or reject them.
@@ -76,7 +76,7 @@ plain HTML UI, plus apps for macOS, Linux and Android.
 6. **When the run ends,** every session stops and the worktree and branch stay. A teardown command,
    such as `docker compose down`, can clear what the worktree started.
 
-Two templates are ready to copy: **Implement my Linear tickets** and **Review my merge requests**.
+Two templates are ready to copy: **Implement my tickets** and **Review my merge requests**.
 [Pipelines](docs/automation.md#pipelines) explains every step and setting.
 
 ## Download
