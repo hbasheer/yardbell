@@ -1927,6 +1927,35 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .side-rail .side-link[href="/proposals"] { position: relative; }
 .side-rail .side-count { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; line-height: 14px; font-size: 10px; }
 .proposals-main .pr-intro { margin: -4px 0 16px; }
+.conn-add { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
+.conn-form input:not([type="checkbox"]) { height: 32px; box-sizing: border-box; padding: 0 10px; min-width: 0; width: 100%; }
+#conn-header-add { justify-self: start; }
+#conn-none { color: var(--muted); }
+.conn-rows { margin-top: 12px; }
+.conn-rows[hidden], .conn-form[hidden], .conn-output[hidden], #conn-none[hidden] { display: none; }
+.conn-row { flex-wrap: wrap; justify-content: space-between; }
+.conn-name { display: grid; gap: 2px; min-width: 0; }
+.conn-name small { color: var(--muted); }
+.conn-state { font-size: 12.5px; overflow-wrap: anywhere; }
+.conn-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.conn-form { display: grid; gap: 10px; margin-top: 12px; }
+.conn-fields { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.conn-fields label, .conn-yaml { display: grid; gap: 4px; min-width: 0; color: var(--muted); font-size: 12.5px; }
+.conn-wide { grid-column: 1 / -1; }
+.conn-form textarea, .conn-output textarea { width: 100%; box-sizing: border-box; font: 12.5px/1.5 var(--mono); }
+.conn-headers { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.conn-header { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 32px; gap: 6px; }
+.conn-header .btn { width: 32px; padding: 0; }
+.conn-output { margin-top: 12px; overflow-wrap: anywhere; }
+.conn-items { margin: 8px 0; padding: 0; list-style: none; font-size: 13px; }
+.conn-items small { color: var(--muted); }
+.conn-paths code { display: inline-block; margin: 2px 4px 2px 0; }
+@media (max-width: 760px) {
+  .conn-fields { grid-template-columns: minmax(0, 1fr); }
+  .conn-header { grid-template-columns: minmax(0, 1fr) 32px; }
+  .conn-header input[data-key="value"] { grid-column: 1; }
+  .conn-header .btn { grid-column: 2; grid-row: 1; }
+}
 .pr-part { margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
 .pr-part-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 32px; }
 .pr-none { margin: 10px 0 0; color: var(--warn-text); font-size: 13px; }

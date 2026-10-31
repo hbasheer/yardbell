@@ -393,6 +393,7 @@ async function load() {
   renderDispatch();
   renderPullRequests();
   pullFoldersWanted();
+  await loadConnections().catch((err) => toast(err.message));
   await loadTriggers().catch((err) => toast(err.message));
   await loadSetups();
   await loadMemory().catch((err) => toast(err.message));
@@ -628,6 +629,166 @@ $("pr-folders").addEventListener("click", (e) => {
   gitlabHosts.push({ host: button.dataset.addHost, url: "", token: "" });
   renderHosts();
   $("pr-hosts").querySelector(".row:last-child [data-key=token]").focus();
+});
+
+let connections = { list: [], status: {}, starters: {} };
+let connHeaders = [];
+let connWas = "";
+
+async function loadConnections() {
+  connections = await api("GET", "/api/settings/connectors");
+  renderConnections();
+}
+
+function renderConnections() {
+  $("conn-none").hidden = connections.list.length > 0;
+  $("conn-rows").hidden = !connections.list.length;
+  $("conn-rows").innerHTML = connections.list.map((c) => {
+    const status = connections.status[c.id];
+    const line = c.missing.length
+      ? { cls: "pr-bad", text: `Save the secret ${c.missing.join(", ")}` }
+      : !c.enabled
+        ? { cls: "pr-wait", text: "Switched off" }
+        : status
+          ? { cls: status.ok ? "pr-ok" : "pr-bad", text: status.message }
+          : { cls: "pr-wait", text: "Not checked yet" };
+    return `<li class="row conn-row" data-conn="${esc(c.id)}">
+      <span class="conn-name"><strong>${esc(c.name)}</strong> <small>${esc(c.host || "")}</small>
+        <span class="conn-state ${line.cls}">${esc(line.text)}</span></span>
+      <span class="conn-actions">
+        <button class="btn small-link" type="button" data-conn-act="test">Test</button>
+        <button class="btn small-link" type="button" data-conn-act="share">Share</button>
+        <button class="btn small-link" type="button" data-conn-act="edit">Edit</button>
+        <button class="btn quiet danger small-link" type="button" data-conn-act="delete">Delete</button>
+      </span>
+    </li>`;
+  }).join("");
+}
+
+function renderConnHeaders() {
+  $("conn-headers").innerHTML = connHeaders.map((h, i) => `<li class="conn-header" data-header="${i}">
+    <input data-key="name" aria-label="Header name" placeholder="Authorization" value="${esc(h.name)}" autocapitalize="off" spellcheck="false">
+    <input data-key="value" aria-label="Header value" placeholder="Bearer \${secret:my_token}" value="${esc(h.value)}" autocapitalize="off" spellcheck="false">
+    <button class="btn quiet danger" type="button" data-header-remove="${i}" aria-label="Remove header" title="Remove header">${CROSS}</button>
+  </li>`).join("");
+}
+
+function openConnection(c, was) {
+  connWas = was;
+  const f = $("conn-form");
+  f.hidden = false;
+  $("conn-import").hidden = true;
+  $("conn-output").hidden = true;
+  for (const key of ["name", "id", "base_url", "params_yaml", "calls_yaml"]) f.elements[key].value = c[key] || "";
+  f.elements.enabled.checked = c.enabled !== false;
+  f.elements.allow_private.checked = !!c.allow_private;
+  connHeaders = Object.entries(c.headers || {}).map(([name, value]) => ({ name, value }));
+  renderConnHeaders();
+  $("conn-note").textContent = c.missing?.length ? `Save the secret ${c.missing.join(", ")} before you switch this on.` : "";
+  f.elements.name.focus();
+}
+
+function showConnOutput(html) {
+  const out = $("conn-output");
+  out.hidden = false;
+  out.innerHTML = html;
+}
+
+$("conn-trello").addEventListener("click", () => openConnection(connections.starters.trello, ""));
+$("conn-blank").addEventListener("click", () => openConnection({ enabled: true, headers: {} }, ""));
+$("conn-cancel").addEventListener("click", () => { $("conn-form").hidden = true; });
+$("conn-header-add").addEventListener("click", () => {
+  connHeaders.push({ name: "", value: "" });
+  renderConnHeaders();
+});
+$("conn-headers").addEventListener("input", (e) => {
+  const row = e.target.closest("[data-header]");
+  if (row && e.target.dataset.key) connHeaders[Number(row.dataset.header)][e.target.dataset.key] = e.target.value;
+});
+$("conn-headers").addEventListener("click", (e) => {
+  const button = e.target.closest("[data-header-remove]");
+  if (!button) return;
+  connHeaders.splice(Number(button.dataset.headerRemove), 1);
+  renderConnHeaders();
+});
+$("conn-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {
+    was: connWas,
+    id: f.elements.id.value.trim(),
+    name: f.elements.name.value.trim(),
+    base_url: f.elements.base_url.value.trim(),
+    enabled: f.elements.enabled.checked,
+    allow_private: f.elements.allow_private.checked,
+    headers: Object.fromEntries(connHeaders.filter((h) => h.name.trim()).map((h) => [h.name.trim(), h.value.trim()])),
+    params_yaml: f.elements.params_yaml.value,
+    calls_yaml: f.elements.calls_yaml.value,
+  };
+  try {
+    await api("POST", "/api/settings/connectors", body);
+    saved(`${body.name || body.id} saved.`);
+    f.hidden = true;
+    await load();
+  } catch (err) {
+    $("conn-note").textContent = err.message;
+    toast(err.message);
+  }
+});
+$("conn-import-open").addEventListener("click", () => {
+  $("conn-import").hidden = false;
+  $("conn-form").hidden = true;
+  $("conn-output").hidden = true;
+  $("conn-import").elements.text.focus();
+});
+$("conn-import-cancel").addEventListener("click", () => { $("conn-import").hidden = true; });
+$("conn-import").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  try {
+    const out = await api("POST", "/api/settings/connectors/import", { text: e.target.elements.text.value });
+    e.target.hidden = true;
+    e.target.elements.text.value = "";
+    saved(`${out.id} imported, switched off.`);
+    await load();
+    const needs = out.secrets.length ? ` It needs the secret ${out.secrets.join(", ")}.` : "";
+    showConnOutput(`<p>${esc(out.id)} can reach <strong>${esc(out.host || "")}</strong>.${esc(needs)} Read its calls, then switch it on with <strong>Edit</strong>.</p>`);
+  } catch (err) {
+    toast(err.message);
+  }
+});
+$("conn-rows").addEventListener("click", async (e) => {
+  const button = e.target.closest("[data-conn-act]");
+  if (!button) return;
+  const id = button.closest("[data-conn]").dataset.conn;
+  const c = connections.list.find((x) => x.id === id);
+  const at = `/api/settings/connectors/${encodeURIComponent(id)}`;
+  try {
+    if (button.dataset.connAct === "edit") openConnection(c, id);
+    if (button.dataset.connAct === "delete") {
+      if (!(await Nav.confirm(`Delete ${c.name}?`, "A pipeline using it waits until it has another. Its secrets stay.", { confirm: "Delete", danger: true }))) return;
+      await api("DELETE", at);
+      saved(`${c.name} deleted.`);
+      await load();
+    }
+    if (button.dataset.connAct === "share") {
+      const { text } = await api("GET", `${at}/share`);
+      showConnOutput(`<p class="help">This holds no secret values, only their names.</p><textarea id="conn-share-text" rows="12" readonly spellcheck="false">${esc(text)}</textarea>`);
+    }
+    if (button.dataset.connAct === "test") {
+      showConnOutput(`<p class="help">Reading ${esc(c.name)}...</p>`);
+      const out = await api("POST", `${at}/test`, {});
+      const items = out.items.map((i) => `<li><strong>${esc(i.id)}</strong> ${esc(i.title)} <small>${esc(i.state)}</small></li>`).join("");
+      const skipped = out.skipped.map((s) => `<li class="pr-bad">Skipped: ${esc(s)}</li>`).join("");
+      showConnOutput(`<p><strong>${out.count} items.</strong>${out.cut_off ? ` <span class="pr-bad">${esc(out.cut_off)}</span>` : ""}</p>
+        <ul class="conn-items">${skipped}${items}</ul>
+        <p class="pl-field-head">Fields you can map</p>
+        <p class="conn-paths">${out.paths.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>`);
+      await loadConnections();
+    }
+  } catch (err) {
+    showConnOutput(`<p class="pr-bad">${esc(err.message)}</p>`);
+    await loadConnections().catch(() => {});
+  }
 });
 
 $("pr-add-host").addEventListener("click", () => {

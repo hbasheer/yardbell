@@ -71,6 +71,7 @@
       <a href="#triggers">Triggers</a>
       <a href="#worktree-setup">Worktree setup</a>
       <a href="#pull-requests">GitHub and GitLab</a>
+      <a href="#connections">Connections</a>
       <a href="#mcp">Agent tools (MCP)</a>
       <a href="#servers">MCP servers</a>
       <p class="nav-label">General</p>
@@ -354,6 +355,50 @@
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
+  </section>
+
+  <section id="connections">
+    <div class="section-head"><h2>Connections</h2>
+      <div class="conn-add">
+        <button class="btn small-link" type="button" id="conn-import-open">Import</button>
+        <button class="btn small-link" type="button" id="conn-blank">Blank</button>
+        <button class="btn small-link" type="button" id="conn-trello">Add Trello</button>
+      </div>
+    </div>
+    <p class="help">Pipelines can take work from these tools and call their APIs. A connection needs a web API that takes a token you can paste in and replies in JSON. Save its token as a secret first, under <a href="#servers">MCP servers, Secrets</a>.</p>
+    <ul class="rows conn-rows" id="conn-rows"></ul>
+    <p class="pr-none" id="conn-none">No connections yet.</p>
+    <form class="panel conn-form" id="conn-form" hidden>
+      <div class="conn-fields">
+        <label>Name<input name="name" autocomplete="off"></label>
+        <label>Id, used in pipelines<input name="id" autocapitalize="off" spellcheck="false" required></label>
+        <label class="conn-wide">Address, with its API path<input name="base_url" placeholder="https://api.example.com/1" autocapitalize="off" spellcheck="false" required></label>
+      </div>
+      <label class="choice"><input type="checkbox" name="enabled">Switched on</label>
+      <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
+      <p class="help">Only for a tool on your own network or mesh. It lets this connection reach addresses that public tools should never need.</p>
+      <p class="pl-field-head">Headers</p>
+      <ul class="conn-headers" id="conn-headers"></ul>
+      <button class="btn small-link" type="button" id="conn-header-add">Add header</button>
+      <p class="help">A login header must use a saved secret, like <code>Bearer ${secret:my_token}</code>.</p>
+      <label class="conn-yaml">Choices a pipeline can make (optional)<textarea name="params_yaml" rows="3" spellcheck="false"></textarea></label>
+      <label class="conn-yaml">Calls<textarea name="calls_yaml" rows="14" spellcheck="false"></textarea></label>
+      <p class="help">Name a <code>list</code> call to start runs from this tool, and a <code>read</code> call to read one item. Each call has a <code>request</code>, and a <code>map</code> saying which reply field is the <code>item_id</code>, <code>title</code>, <code>url</code>, <code>description</code> and <code>state</code>. See the guide for paging.</p>
+      <div class="form-foot">
+        <p class="help" id="conn-note" role="status"></p>
+        <button class="btn quiet" type="button" id="conn-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+    <form class="panel conn-form" id="conn-import" hidden>
+      <label class="conn-yaml">Paste a shared connection<textarea name="text" rows="10" spellcheck="false"></textarea></label>
+      <p class="help">It arrives switched off. Nothing runs until you have read it and switched it on.</p>
+      <div class="form-foot">
+        <button class="btn quiet" type="button" id="conn-import-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Import</button>
+      </div>
+    </form>
+    <div class="panel conn-output" id="conn-output" hidden></div>
   </section>
 
   <section id="mcp">

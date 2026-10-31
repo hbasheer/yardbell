@@ -636,6 +636,17 @@ impl Settings {
         self.save(&cfg, backup, None)
     }
 
+    pub fn set_connectors(
+        &self,
+        connectors: Vec<crate::connectors::Connector>,
+    ) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.connectors = connectors;
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
     pub fn set_pipelines(&self, pipelines: crate::config::Pipelines) -> Result<(), String> {
         let mut cfg = self.load()?;
         cfg.pipelines = pipelines;

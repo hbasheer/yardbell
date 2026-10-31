@@ -668,7 +668,7 @@ pub struct ConfigFeed<'a> {
     pub health: &'a crate::connectors::Health,
 }
 
-fn status_of(found: &Result<crate::connectors::Listed, String>) -> crate::connectors::Status {
+pub fn status_of(found: &Result<crate::connectors::Listed, String>) -> crate::connectors::Status {
     let (ok, message) = match found {
         Ok(listed) => {
             let mut said = format!("{} items", listed.items.len());

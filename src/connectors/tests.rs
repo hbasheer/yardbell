@@ -852,3 +852,10 @@ fn same_compares_whole_values() {
     assert!(!super::net::same("abc", "abd"));
     assert!(!super::net::same("abc", "abcd"));
 }
+
+#[test]
+fn paths_list_a_rows_fields() {
+    let row = serde_json::json!({ "id": 1, "a": { "b": 2, "c": [{ "d": 3 }] }, "n": null });
+    let paths = super::map::paths_of(&row);
+    assert_eq!(paths, ["a.b", "a.c[].d", "id", "n"]);
+}

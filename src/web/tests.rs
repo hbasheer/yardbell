@@ -11,6 +11,7 @@ use http_body_util::BodyExt;
 use std::path::Path;
 use tower::ServiceExt;
 
+mod connectors;
 mod insights;
 mod mcp_change;
 mod mcp_pipeline;

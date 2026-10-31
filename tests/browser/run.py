@@ -2647,6 +2647,40 @@ class Suite:
             raise Failure("the token's value reached yardbell.yml")
         self.check_errors("the Pull requests section")
 
+    def test_connections_section(self):
+        b = self.b
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-trello')", "the section")
+        b.click("#conn-trello")
+        b.wait("document.querySelector('#conn-form [name=base_url]')?.value === 'https://api.trello.com/1'", "the Trello template")
+        if "secret:trello_token" not in b.js("document.querySelector('#conn-headers [data-key=value]').value"):
+            raise Failure("the template's header is not a secret reference")
+        b.click("#conn-form button[type=submit]")
+        b.wait("document.querySelector('[data-conn=trello]')", "the saved connection")
+        row = b.js("document.querySelector('[data-conn=trello]').textContent")
+        for want in ("api.trello.com", "Save the secret", "trello_token"):
+            if want not in row:
+                raise Failure(f"the row does not say {want!r}: {row}")
+        b.click("[data-conn=trello] [data-conn-act=share]")
+        b.wait("document.getElementById('conn-share-text')", "the shared text")
+        text = b.js("document.getElementById('conn-share-text').value")
+        if "${secret:trello_token}" not in text:
+            raise Failure(f"share lost its reference: {text}")
+        b.click("#conn-import-open")
+        self.set_field("#conn-import [name=text]", text.replace("id: trello", "id: copy"))
+        b.click("#conn-import button[type=submit]")
+        b.wait("document.querySelector('[data-conn=copy]')", "the imported connection")
+        if "Switched off" not in b.js("document.querySelector('[data-conn=copy]').textContent") and "Save the secret" not in b.js("document.querySelector('[data-conn=copy]').textContent"):
+            raise Failure("an import did not arrive switched off")
+        if "api.trello.com" not in b.js("document.getElementById('conn-output').textContent"):
+            raise Failure("the import does not name its host")
+        for name in ("copy", "trello"):
+            b.click(f"[data-conn={name}] [data-conn-act=delete]")
+            b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait(f"!document.querySelector('[data-conn={name}]')", "the connection gone")
+        self.check_errors("the Connections section")
+
     def test_settings_explains_github_and_gitlab(self):
         b = self.b
         cfg_before = self.api("GET", "/api/settings")["pull_requests"]["value"]
