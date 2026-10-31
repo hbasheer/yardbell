@@ -641,6 +641,27 @@ impl Auth {
         Ok(Some(tokens.access))
     }
 
+    // The server refused a token that looked good. A refresh tells a token gone stale from a
+    // sign-in revoked on the tool's side, which then says Sign in again.
+    pub async fn after_refusal(&self, server: &McpServer, store: &Settings) {
+        let Ok(secrets) = store.secrets() else {
+            return;
+        };
+        let Some(mut meta) =
+            read_meta(&secrets, &server.name).filter(|m| m.server_url == server.url && !m.failed)
+        else {
+            return;
+        };
+        meta.expires_at = 1;
+        let text = serde_json::to_string(&meta).unwrap_or_default();
+        if store
+            .set_reserved_secrets(&[(name_of(&server.name, "meta"), text)])
+            .is_ok()
+        {
+            let _ = self.bearer(server, store).await;
+        }
+    }
+
     pub async fn sign_out(&self, server: &McpServer, store: &Settings) -> Result<(), String> {
         let secrets = store.secrets()?;
         if let Some(meta) = read_meta(&secrets, &server.name).filter(|m| !m.revocation.is_empty()) {

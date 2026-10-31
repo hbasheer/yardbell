@@ -19,13 +19,15 @@ pub const TOOLS: [&str; 5] = [
     "answer_run",
 ];
 
-// The hash records what a person accepted, so what an agent sends for it never counts.
+// The hash and whether a step only reads record what a person chose, so what an agent sends for
+// them never counts.
 pub(crate) fn keep_tool_hashes(def: &mut Definition, before: Option<&Definition>) {
     for step in &mut def.steps {
         let StepKind::Tool {
             server,
             tool,
             schema_hash,
+            call_kind,
             ..
         } = &mut step.kind
         else {
@@ -38,11 +40,14 @@ pub(crate) fn keep_tool_hashes(def: &mut Definition, before: Option<&Definition>
                     server: s,
                     tool: t,
                     schema_hash: h,
+                    call_kind: k,
                     ..
-                } if s == server && t == tool => Some(h.clone()),
+                } if s == server && t == tool => Some((h.clone(), *k)),
                 _ => None,
             });
-        *schema_hash = kept.unwrap_or_default();
+        let (hash, kind) = kept.unwrap_or((String::new(), crate::connectors::CallKind::Change));
+        *schema_hash = hash;
+        *call_kind = kind;
     }
 }
 

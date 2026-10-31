@@ -13,6 +13,10 @@ const ACCEPTS: &str = "application/json, text/event-stream";
 const SNIPPET: usize = 200;
 const METHOD_NOT_FOUND: i64 = -32601;
 
+// For the requests that have no time limit of their own. The limit around a request with an answer
+// comes first, so its clearer message is the one seen.
+const LAST_RESORT_MARGIN: Duration = Duration::from_secs(1);
+
 pub struct HttpOptions {
     pub url: String,
     pub headers: Vec<(String, String)>,
@@ -80,7 +84,9 @@ impl HttpClient {
         if !allowed {
             return Err(format!("{} must be an https address", options.url));
         }
-        let mut http = reqwest::Client::builder().redirect(reqwest::redirect::Policy::none());
+        let mut http = reqwest::Client::builder()
+            .redirect(reqwest::redirect::Policy::none())
+            .timeout(options.timeout + LAST_RESORT_MARGIN);
         if !options.allow_private {
             http = http.dns_resolver(Arc::new(PublicOnly));
         }

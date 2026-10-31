@@ -465,3 +465,25 @@ async fn close_sends_delete() {
     assert_eq!(heard.last().unwrap().0, "DELETE");
     assert_eq!(heard.last().unwrap().1["mcp-session-id"], "s1");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_server_that_stalls_after_initialize_is_ended_by_the_time_limit() {
+    let f = fake_with(Arc::new(|message, _| {
+        if message["method"] == "notifications/initialized" {
+            std::thread::sleep(Duration::from_secs(4));
+        }
+        None
+    }))
+    .await;
+    let mut o = options(&f.base);
+    o.timeout = Duration::from_millis(500);
+    let mut client = HttpClient::new(o).unwrap();
+    let began = std::time::Instant::now();
+    let got = client.connect().await;
+    assert!(got.is_err(), "{got:?}");
+    assert!(
+        began.elapsed() < Duration::from_secs(3),
+        "{:?}",
+        began.elapsed()
+    );
+}

@@ -151,6 +151,18 @@ fn resolved_all(
         .collect()
 }
 
+pub async fn noting_refusal<T>(
+    result: Result<T, Failure>,
+    server: &crate::config::McpServer,
+    auth: &oauth::Auth,
+    store: &crate::settings::Settings,
+) -> Result<T, Failure> {
+    if matches!(result, Err(Failure::NeedsSignIn(_))) {
+        auth.after_refusal(server, store).await;
+    }
+    result
+}
+
 pub async fn client_for(
     server: &crate::config::McpServer,
     cfg: &crate::config::Config,

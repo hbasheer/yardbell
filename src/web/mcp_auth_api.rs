@@ -1,7 +1,7 @@
 use super::{ApiError, AppState};
 use crate::config::McpServer;
 use crate::mcp_client::oauth::{Auth, SignIn};
-use crate::mcp_client::{client_for, Failure};
+use crate::mcp_client::{client_for, noting_refusal, Failure};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -227,7 +227,9 @@ async fn test(
     )
     .await
     .map_err(|f| said(&name, f))?;
-    let version = client.connect().await.map_err(|f| said(&name, f))?;
+    let version = noting_refusal(client.connect().await, server, auth, &app.settings)
+        .await
+        .map_err(|f| said(&name, f))?;
     let tools = client.list_tools().await.map_err(|f| said(&name, f));
     client.close().await;
     let tools: Vec<_> = tools?
@@ -261,7 +263,9 @@ async fn tools(
     )
     .await
     .map_err(|f| said(&name, f))?;
-    client.connect().await.map_err(|f| said(&name, f))?;
+    noting_refusal(client.connect().await, server, auth, &app.settings)
+        .await
+        .map_err(|f| said(&name, f))?;
     let listed = client.list_tools().await.map_err(|f| said(&name, f));
     client.close().await;
     let tools: Vec<_> = listed?

@@ -639,8 +639,12 @@ function nameFromAddress(address) {
 const SECRET_NAME = /authori[sz]ation|token|secret|api[-_]?key|password|private/i;
 
 async function keptAsSecret(name, value) {
-  const clean = name.toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 64);
+  const base = name.toLowerCase().replace(/[^a-z0-9_-]/g, "_").slice(0, 60);
+  const taken = new Set((data.secrets?.list || []).map((s) => s.name));
+  let clean = base;
+  for (let n = 2; taken.has(clean); n += 1) clean = `${base}-${n}`;
   await api("POST", "/api/settings/secrets", { name: clean, value });
+  data.secrets?.list?.push({ name: clean, used_by: [] });
   return `\${secret:${clean}}`;
 }
 

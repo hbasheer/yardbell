@@ -660,3 +660,22 @@ fn reserved_names_are_hidden_and_refused() {
         Some("value-1")
     );
 }
+
+#[test]
+fn a_sign_in_cannot_be_named_as_a_secret() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("secrets.yml");
+    std::fs::write(&path, "mcp_oauth_tool_access: tok-1\nplain: fine\n").unwrap();
+    let secrets = crate::secrets::Secrets::load(&path).unwrap();
+    assert_eq!(secrets.resolve("${secret:plain}").unwrap(), "fine");
+    let e = secrets
+        .resolve("Bearer ${secret:mcp_oauth_tool_access}")
+        .unwrap_err()
+        .to_string();
+    assert!(!e.contains("tok-1"), "{e}");
+    assert_eq!(
+        secrets.get("mcp_oauth_tool_access"),
+        Some("tok-1"),
+        "Yardbell itself still reads it"
+    );
+}

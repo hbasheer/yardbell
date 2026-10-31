@@ -389,3 +389,53 @@ async fn own_server_is_refused() {
         &cfg
     ));
 }
+
+#[tokio::test]
+async fn a_token_revoked_on_the_tool_says_sign_in_again() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let s = signing_in(true).await;
+    add_server(&r, &format!("{}/mcp", s.base));
+    let (_, out) = call(&r, &c, "POST", &format!("{ROOT}/sign-in"), Some(json!({}))).await;
+    let state = state_of(out["url"].as_str().unwrap());
+    call(
+        &r,
+        "",
+        "GET",
+        &format!("/oauth/mcp/callback?code=c&state={state}"),
+        None,
+    )
+    .await;
+    let (_, shown) = call(&r, &c, "GET", "/api/settings", None).await;
+    assert_eq!(shown["mcp_auth"]["tool"], "signed_in");
+    s.answer("/token", 400, r#"{"error":"invalid_grant"}"#);
+    let (status, out) = call(&r, &c, "POST", &format!("{ROOT}/test"), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+    let (_, shown) = call(&r, &c, "GET", "/api/settings", None).await;
+    assert_eq!(shown["mcp_auth"]["tool"], "sign_in_again");
+}
+
+#[tokio::test]
+async fn a_token_the_server_refuses_is_refreshed_before_giving_up() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let s = signing_in(true).await;
+    add_server(&r, &format!("{}/mcp", s.base));
+    let (_, out) = call(&r, &c, "POST", &format!("{ROOT}/sign-in"), Some(json!({}))).await;
+    let state = state_of(out["url"].as_str().unwrap());
+    call(
+        &r,
+        "",
+        "GET",
+        &format!("/oauth/mcp/callback?code=c&state={state}"),
+        None,
+    )
+    .await;
+    let (status, _) = call(&r, &c, "POST", &format!("{ROOT}/test"), None).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (_, shown) = call(&r, &c, "GET", "/api/settings", None).await;
+    assert_eq!(
+        shown["mcp_auth"]["tool"], "signed_in",
+        "the refresh worked, so it is not lost"
+    );
+}

@@ -840,10 +840,12 @@ impl crate::connectors::ToolCaller for AppTools {
                 TOOL_TIMEOUT,
             )
             .await?;
-            client.connect().await?;
+            let auth = self.pipelines.mcp_auth();
+            crate::mcp_client::noting_refusal(client.connect().await, found, auth, &self.settings)
+                .await?;
             let reply = client.call_tool(tool, arguments).await;
             client.close().await;
-            reply
+            crate::mcp_client::noting_refusal(reply, found, auth, &self.settings).await
         })
     }
 }
@@ -940,6 +942,25 @@ impl Live {
 }
 
 impl Live {
+    async fn noting<T>(
+        &self,
+        server: &str,
+        result: Result<T, crate::mcp_client::Failure>,
+    ) -> Result<T, crate::mcp_client::Failure> {
+        match self.cfg.mcp_servers.iter().find(|s| s.name == server) {
+            Some(found) => {
+                crate::mcp_client::noting_refusal(
+                    result,
+                    found,
+                    self.app.pipelines.mcp_auth(),
+                    &self.app.settings,
+                )
+                .await
+            }
+            None => result,
+        }
+    }
+
     async fn tool_client(
         &self,
         server: &str,
@@ -1252,7 +1273,7 @@ impl World for Live {
     ) -> BoxFuture<'a, Result<(String, String), crate::mcp_client::Failure>> {
         Box::pin(async move {
             let mut client = self.tool_client(server).await?;
-            client.connect().await?;
+            self.noting(server, client.connect().await).await?;
             let tools = client.list_tools().await;
             client.close().await;
             let found = tools?.into_iter().find(|t| t.name == tool).ok_or_else(|| {
@@ -1275,10 +1296,10 @@ impl World for Live {
     ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>> {
         Box::pin(async move {
             let mut client = self.tool_client(server).await?;
-            client.connect().await?;
+            self.noting(server, client.connect().await).await?;
             let reply = client.call_tool(tool, arguments).await;
             client.close().await;
-            reply
+            self.noting(server, reply).await
         })
     }
 

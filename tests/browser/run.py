@@ -3324,6 +3324,23 @@ class Suite:
             b.js("document.getElementById('conn-flow')?.close(); fetch('/api/settings/connectors/trello', { method: 'DELETE' })")
             self.remove_mcp_servers()
 
+    def test_a_pasted_token_never_replaces_a_secret(self):
+        b = self.b
+        self.api("POST", "/api/settings/secrets", {"name": "other_token", "value": "keep-me-BROWSER"})
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates && data.secrets", "the section")
+        made = b.js("keptAsSecret('other_token', 'new-value-BROWSER')")
+        if made != "${secret:other_token-2}":
+            raise Failure(f"it reused the name: {made}")
+        secrets_file = os.path.join(os.path.dirname(self.y.config), "secrets.yml")
+        with open(secrets_file) as f:
+            stored = f.read()
+        if "keep-me-BROWSER" not in stored:
+            raise Failure("the earlier secret was replaced")
+        for name in ("other_token", "other_token-2"):
+            self.api("POST", "/api/settings/secrets/delete", {"name": name})
+
     def test_tokens_become_secrets_by_themselves(self):
         b = self.b
         before = self.api("GET", "/api/settings/pull-requests") if False else self.api("GET", "/api/settings")["pull_requests"]["value"]

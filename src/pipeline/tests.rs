@@ -2186,3 +2186,34 @@ fn save_pipeline_keeps_the_hash_from_the_server() {
     assert_eq!(hash("t"), "real");
     assert_eq!(hash("n"), "");
 }
+
+#[test]
+fn a_proposal_cannot_mark_a_tool_as_only_reading() {
+    let mut before = run_of("Review my merge requests").definition.unwrap();
+    before.steps.push(serde_json::from_value(json!({ "id": "a", "name": "A", "kind": "tool", "server": "s", "tool": "x", "call_kind": "lookup" })).unwrap());
+    before.steps.push(
+        serde_json::from_value(
+            json!({ "id": "b", "name": "B", "kind": "tool", "server": "s", "tool": "y" }),
+        )
+        .unwrap(),
+    );
+    let mut sent = before.clone();
+    for step in &mut sent.steps {
+        if let StepKind::Tool { call_kind, .. } = &mut step.kind {
+            *call_kind = crate::connectors::CallKind::Lookup;
+        }
+    }
+    sent.steps.push(serde_json::from_value(json!({ "id": "n", "name": "N", "kind": "tool", "server": "s", "tool": "z", "call_kind": "lookup" })).unwrap());
+    crate::mcp_pipeline::keep_tool_hashes(&mut sent, Some(&before));
+    let kind = |id: &str| match &sent.steps.iter().find(|s| s.id == id).unwrap().kind {
+        StepKind::Tool { call_kind, .. } => *call_kind,
+        other => panic!("{other:?}"),
+    };
+    assert_eq!(
+        kind("a"),
+        crate::connectors::CallKind::Lookup,
+        "what a person chose stays"
+    );
+    assert_eq!(kind("b"), crate::connectors::CallKind::Change);
+    assert_eq!(kind("n"), crate::connectors::CallKind::Change);
+}

@@ -231,6 +231,9 @@ impl Secrets {
                 SecretsError::Invalid("a ${secret: reference is not closed".into())
             })?;
             let name = &after[..end];
+            if is_reserved(name) {
+                return Err(SecretsError::Missing(name.to_string()));
+            }
             let value = self
                 .get(name)
                 .ok_or_else(|| SecretsError::Missing(name.to_string()))?;
