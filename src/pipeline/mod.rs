@@ -24,6 +24,7 @@ use std::sync::{Arc, Mutex};
 use store::Store;
 use tokio::task::JoinHandle;
 
+const HOOKS_PER_MINUTE: u32 = 30;
 const TICK: std::time::Duration = std::time::Duration::from_secs(10);
 pub const KEEP_FINISHED: usize = 50;
 
@@ -39,6 +40,7 @@ pub struct Pipelines {
     // Sessions of runs that went with a deleted pipeline, stopped on the next round.
     orphans: Mutex<Vec<(String, String)>>,
     connector_health: crate::connectors::Health,
+    hook_window: Mutex<std::collections::HashMap<String, (chrono::DateTime<chrono::Local>, u32)>>,
 }
 
 fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
@@ -66,11 +68,30 @@ impl Pipelines {
             linear: Mutex::new(Arc::new(linear::Linear::new())),
             orphans: Mutex::new(Vec::new()),
             connector_health: Default::default(),
+            hook_window: Mutex::new(Default::default()),
         }
     }
 
     pub fn library(&self) -> &Library {
         &self.library
+    }
+
+    // At most HOOKS_PER_MINUTE requests a pipeline, counted over a fixed minute.
+    pub fn hook_allowed(&self, id: &str, now: chrono::DateTime<chrono::Local>) -> bool {
+        let mut all = self.hook_window.lock().expect("pipelines hooks");
+        let entry = all.entry(id.to_string()).or_insert((now, 0));
+        if (now - entry.0).num_seconds() >= 60 {
+            *entry = (now, 0);
+        }
+        entry.1 += 1;
+        entry.1 <= HOOKS_PER_MINUTE
+    }
+
+    pub fn has_run_for(&self, pipeline: &str, key: &str) -> bool {
+        self.store
+            .all()
+            .iter()
+            .any(|r| r.pipeline == pipeline && r.key == key)
     }
 
     pub fn connector_health(&self) -> &crate::connectors::Health {

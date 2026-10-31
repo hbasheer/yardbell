@@ -408,6 +408,7 @@ async fn closed(world: &dyn World, run: &Run) -> bool {
     }
 }
 
+pub const WEBHOOK_SOURCE: &str = "webhook";
 const CALL_REPORT_MAX: usize = 4000;
 
 fn call_vars(
@@ -908,6 +909,13 @@ impl World for Live {
         ticket: &'a TicketRef,
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>> {
         Box::pin(async move {
+            if ticket.source == WEBHOOK_SOURCE {
+                let text = TicketText {
+                    description: ticket.description.clone(),
+                    comments: Vec::new(),
+                };
+                return Ok((text, false));
+            }
             if !ticket.is_linear() {
                 let client = crate::connectors::client_for(
                     &self.cfg.connectors,

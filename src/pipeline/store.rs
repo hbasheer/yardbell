@@ -184,6 +184,7 @@ mod tests {
                 id: id.into(),
                 title: "Fix the webhook dedup".into(),
                 url: format!("https://linear.app/acme/issue/{id}"),
+                description: String::new(),
             }),
             pr: None,
         }

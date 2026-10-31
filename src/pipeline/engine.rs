@@ -482,6 +482,7 @@ pub(crate) mod tests {
                     id: "COM-1".into(),
                     title: "Fix the login".into(),
                     url: "https://linear.app/acme/issue/COM-1".into(),
+                    description: String::new(),
                 }),
                 pr: None,
             },

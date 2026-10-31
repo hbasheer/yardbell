@@ -174,6 +174,10 @@ pub enum Trigger {
         #[serde(default)]
         states: Vec<String>,
     },
+    Webhook {
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        map: BTreeMap<String, String>,
+    },
     GithubReview,
     GitlabReviewer {
         #[serde(default)]
@@ -285,7 +289,11 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         Trigger::Schedule { connector, .. } if !connector.is_empty() => Some(connector.as_str()),
         _ => None,
     };
-    if let Some(id) = source {
+    let gives = match &def.trigger {
+        Trigger::Webhook { .. } => Some("webhook"),
+        _ => source,
+    };
+    if let Some(id) = gives {
         if def
             .steps
             .iter()

@@ -1,5 +1,5 @@
 use super::{ApiError, AppState};
-use crate::pipeline::definition::{Definition, Outcome};
+use crate::pipeline::definition::{Definition, Outcome, Trigger};
 use crate::pipeline::linear::Ticket;
 use crate::pipeline::record::{PrRef, Run, RunState, Subject, TicketRef};
 use crate::triggers::LINEAR_SECRET;
@@ -22,6 +22,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/pipelines/{id}/history", get(history))
         .route("/api/pipelines/{id}/restore", post(restore))
         .route("/api/pipelines/{id}/runs", get(runs).post(start))
+        .route("/api/pipelines/{id}/webhook-token", post(webhook_token))
+        .route("/hooks/pipeline/{id}/{token}", post(hook).head(hook_head))
         .route("/api/runs", get(all_runs))
         .route("/api/runs/{id}", axum::routing::delete(delete_run))
         .route("/api/runs/{id}/answer", post(answer))
@@ -361,12 +363,8 @@ pub(crate) async fn subjects(
     prs: &[String],
 ) -> Result<Vec<Subject>, ApiError> {
     let connector = match &def.trigger {
-        crate::pipeline::definition::Trigger::Connector { connector, .. } => Some(connector),
-        crate::pipeline::definition::Trigger::Schedule { connector, .. }
-            if !connector.is_empty() =>
-        {
-            Some(connector)
-        }
+        Trigger::Connector { connector, .. } => Some(connector),
+        Trigger::Schedule { connector, .. } if !connector.is_empty() => Some(connector),
         _ => None,
     };
     let mut out = Vec::new();
@@ -386,6 +384,7 @@ pub(crate) async fn subjects(
                     id: t.id.clone(),
                     title: t.title.clone(),
                     url: t.url.clone(),
+                    description: String::new(),
                 }),
                 pr: None,
             });
@@ -523,6 +522,120 @@ async fn stop_session(
     app.recheck(&m.name);
     app.state.touch();
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+const HOOK_BODY_MAX: usize = 1024 * 1024;
+
+fn hook_secret(id: &str) -> String {
+    format!("pipeline_hook_{id}")
+}
+
+async fn webhook_token(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let def = found(&app, &id)?;
+    use rand::Rng;
+    let bytes: [u8; 32] = rand::thread_rng().gen();
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    app.settings
+        .set_secret(&hook_secret(&def.id), &token)
+        .map_err(bad)?;
+    let cfg = app.config()?;
+    let url = crate::phone::base_url(&cfg)
+        .map(|base| format!("{base}/hooks/pipeline/{}/{token}", def.id));
+    Ok(Json(json!({ "url": url, "token": token })).into_response())
+}
+
+fn hook_error(status: StatusCode, error: String) -> Response {
+    (status, Json(json!({ "error": error }))).into_response()
+}
+
+// One answer for every way in that is not allowed, so a wrong token says nothing about a pipeline.
+fn hook_pipeline(app: &AppState, id: &str, token: &str) -> Option<Definition> {
+    let def = app.pipelines.library().get(id)?;
+    if !def.enabled || !matches!(def.trigger, Trigger::Webhook { .. }) {
+        return None;
+    }
+    let store = app.secrets().ok()?;
+    let saved = store.get(&hook_secret(id))?;
+    crate::connectors::net::same(saved, token).then_some(def)
+}
+
+async fn hook_head(
+    AxState(app): AxState<Arc<AppState>>,
+    Path((id, token)): Path<(String, String)>,
+) -> StatusCode {
+    match hook_pipeline(&app, &id, &token) {
+        Some(_) => StatusCode::OK,
+        None => StatusCode::NOT_FOUND,
+    }
+}
+
+fn hook_subject(def: &Definition, body: &Value) -> Result<Subject, String> {
+    let Trigger::Webhook { map } = &def.trigger else {
+        return Err("this pipeline does not take webhooks".into());
+    };
+    let field = |name: &str| {
+        let at = map.get(name).map_or(name, String::as_str);
+        crate::connectors::map::path(body, at)
+            .map(|v| crate::connectors::map::text_of(&v))
+            .unwrap_or_default()
+    };
+    let (id, title) = (field("id"), field("title"));
+    if id.trim().is_empty() {
+        return Err("the body has no id".into());
+    }
+    if title.trim().is_empty() {
+        return Err("the body has no title".into());
+    }
+    Ok(Subject {
+        ticket: Some(TicketRef {
+            source: crate::pipeline::run::WEBHOOK_SOURCE.to_string(),
+            item_id: id.clone(),
+            id,
+            title,
+            url: field("url"),
+            description: field("description"),
+        }),
+        pr: None,
+    })
+}
+
+async fn hook(
+    AxState(app): AxState<Arc<AppState>>,
+    Path((id, token)): Path<(String, String)>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(def) = hook_pipeline(&app, &id, &token) else {
+        return hook_error(StatusCode::NOT_FOUND, "there is no such address".into());
+    };
+    if !app.pipelines.hook_allowed(&id, chrono::Local::now()) {
+        return hook_error(StatusCode::TOO_MANY_REQUESTS, "too many requests".into());
+    }
+    if body.len() > HOOK_BODY_MAX {
+        return hook_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the body is over 1 MB".into(),
+        );
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(&body) else {
+        return hook_error(StatusCode::BAD_REQUEST, "the body is not JSON".into());
+    };
+    let subject = match hook_subject(&def, &value) {
+        Ok(subject) => subject,
+        Err(e) => return hook_error(StatusCode::BAD_REQUEST, e),
+    };
+    if app.pipelines.has_run_for(&id, &subject.key()) {
+        return Json(json!({ "started": false })).into_response();
+    }
+    match app.pipelines.start(&id, vec![subject], "a webhook") {
+        Ok(_) => {
+            app.state.touch();
+            (StatusCode::ACCEPTED, Json(json!({ "started": true }))).into_response()
+        }
+        Err(e) => hook_error(StatusCode::CONFLICT, e),
+    }
 }
 
 async fn settings(

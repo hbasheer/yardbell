@@ -845,3 +845,10 @@ fn a_reply_keeps_only_its_mapped_fields() {
         serde_json::Value::Null
     );
 }
+
+#[test]
+fn same_compares_whole_values() {
+    assert!(super::net::same("abc", "abc"));
+    assert!(!super::net::same("abc", "abd"));
+    assert!(!super::net::same("abc", "abcd"));
+}

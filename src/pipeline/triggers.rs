@@ -69,6 +69,7 @@ pub fn item_subject(source: &str, item: &crate::connectors::client::Item) -> Sub
             id: item.id.clone(),
             title: item.title.clone(),
             url: item.url.clone(),
+            description: String::new(),
         }),
         pr: None,
     }
@@ -96,6 +97,7 @@ fn named(id: Option<String>, title: &str) -> Option<TicketRef> {
         id,
         title: title.to_string(),
         url: String::new(),
+        description: String::new(),
     })
 }
 
@@ -164,7 +166,7 @@ impl Watch {
         self.forget_all_but(defs);
         for def in defs.iter().filter(|d| d.enabled) {
             let found = match &def.trigger {
-                Trigger::Manual => continue,
+                Trigger::Manual | Trigger::Webhook { .. } => continue,
                 Trigger::Schedule {
                     schedule,
                     state,
@@ -285,6 +287,7 @@ impl Watch {
                         id: t.ticket,
                         title: t.title,
                         url: t.url,
+                        description: String::new(),
                     }),
                     pr: None,
                 })
@@ -336,6 +339,7 @@ impl Watch {
                             id: t.ticket.clone(),
                             title: t.title.clone(),
                             url: t.url.clone(),
+                            description: String::new(),
                         }),
                         pr: None,
                     };

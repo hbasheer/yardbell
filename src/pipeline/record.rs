@@ -11,6 +11,9 @@ pub struct TicketRef {
     pub id: String,
     pub title: String,
     pub url: String,
+    // Only a source with nothing to read it back from, such as a webhook, keeps it here.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
 }
 
 impl TicketRef {

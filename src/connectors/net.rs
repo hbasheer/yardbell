@@ -41,3 +41,8 @@ impl Resolve for PublicOnly {
         })
     }
 }
+
+// Takes as long whichever byte differs, so a token cannot be guessed one byte at a time.
+pub fn same(a: &str, b: &str) -> bool {
+    a.len() == b.len() && a.bytes().zip(b.bytes()).fold(0, |d, (x, y)| d | (x ^ y)) == 0
+}

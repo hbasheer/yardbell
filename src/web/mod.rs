@@ -330,6 +330,10 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
         }
         return next.run(req).await;
     }
+    // A webhook comes from another system with its own token, checked by its handler.
+    if req.uri().path().starts_with("/hooks/pipeline/") {
+        return next.run(req).await;
+    }
     if req.method() != Method::GET && !term::origin_ok(req.headers()) {
         return error(
             StatusCode::FORBIDDEN,
