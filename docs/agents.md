@@ -112,7 +112,7 @@ there, whatever your approval setting or allow rules say (a rule that refuses th
 refuses it). The client's answer names the proposal. A pipeline run's own Dispatch turn cannot call
 any of them, whatever the rules say, so text in a ticket cannot answer the run it belongs to.
 
-**MCP servers for sessions** in Settings lists other MCP servers (a command such as
+**Connections** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code
 sessions that Yardbell starts get them through `--mcp-config`, without touching the agent's own
 settings. Keep their tokens in the **Secrets** list below them and write `${secret:NAME}` in the
@@ -121,6 +121,9 @@ header or variable, for example `Authorization=Bearer ${secret:linear}`, see
 list to a file only your account can read on that machine and gives Claude Code its path, see
 [`mcp_servers`](configuration.md#mcp_servers-optional). Other agents configure MCP their own way
 and do not get them.
+
+Signing in to a server under **Connections** is for Yardbell's own pipeline steps. An agent does not
+get that sign-in, and signs in to the server by itself on its own machine.
 
 ## Making every session openable
 

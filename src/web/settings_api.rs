@@ -143,9 +143,7 @@ fn secrets_view(cfg: &crate::config::Config, store: &Secrets) -> serde_json::Val
         {
             users.push("Linear triggers");
         }
-        let holds = |text: &str| {
-            crate::secrets::references(text).is_ok_and(|r| r.iter().any(|n| *n == name))
-        };
+        let holds = |text: &str| crate::secrets::references(text).is_ok_and(|r| r.contains(&name));
         users.extend(
             cfg.connectors
                 .iter()

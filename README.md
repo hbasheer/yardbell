@@ -34,11 +34,13 @@ plain HTML UI, plus apps for macOS, Linux and Android.
   then starts an agent there. It can also read and change Yardbell itself, and build and run
   pipelines, with your rules deciding what waits for you. It sits beside your terminals in the
   Workspace, and hides with one click.
-- **Connectors.** Connect Trello, or any tool with a web API and a token, from Settings with no new
-  release. Runs start from its items, and a **Call API** step can change them.
+- **Connections.** Sign in to Trello, Jira and other tools from your browser, with no token to paste, or
+  connect any MCP server by its address. Trello can start pipeline runs, and a **Call MCP tool** step
+  calls any connected tool with no agent. A tool with no MCP server connects with a token, and a token
+  you paste is saved as a secret by itself.
 - **Proposals.** Changes asked for by other MCP clients, such as Claude Code with Yardbell added, wait
   in one inbox until you approve, edit or reject them.
-- **GitHub and GitLab.** Each session shows its branch's pull or merge request with its state and CI.
+- **GitHub and GitLab.** Each session shows its branch's pull or merge request with its state and CI, through local `gh` or `glab`, or a token.
   Settings says which service each of your folders uses and whether `gh` and each GitLab token work.
 - **Phone notifications.** The Android app says when an agent waits for you, a session ends, a
   machine goes down, memory runs low, a pipeline needs you or finishes, or a proposal waits, with no

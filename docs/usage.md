@@ -217,10 +217,10 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   way, see [Triggers](#triggers).
 - **Worktree setup:** a command to run in each new worktree, and one to clear it when a pipeline run
   ends, see [Worktree setup](automation.md#worktree-setup).
-- **GitHub and GitLab:** see [below](#github-and-gitlab).
+- **GitHub and GitLab:** rows under **Connections**. See [below](#github-and-gitlab).
 - **Connections:** the outside tools pipelines can use, such as Trello, with **Test**, **Share** and
   **Import**, see [Connectors](automation.md#connectors).
-- **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
+- **Let agents use Yardbell** and **Connections:** turn on Yardbell's MCP server and list other MCP
   servers for the sessions it starts, see [Agent tools (MCP)](agents.md#agent-tools-mcp). Their
   tokens go in **Secrets** under the list: add, replace or delete one by name, and refer to it as
   `${secret:NAME}`. A saved value is never shown again. When `yardbell.yml` still holds tokens
@@ -240,16 +240,28 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 
 #### GitHub and GitLab
 
-This section decides how sessions get their pull or merge request badge and CI.
+GitHub and GitLab are rows under **Settings, Connections**, each with a **How it connects** choice:
+
+| Service | Choice | What it needs |
+|---|---|---|
+| GitHub | **Local gh**, the default | `gh` installed and signed in on each session's machine |
+| GitHub | **A token** | A token saved here, for github.com only. Machines need nothing installed |
+| GitLab | **A token for each host**, the default | A token for each GitLab host |
+| GitLab | **Local glab** | `glab` installed and signed in on each session's machine |
+
+A token pasted here is saved as a secret by itself. The switches for showing them, Dispatch cards and
+how often to check are under **Pull and merge requests** on the same page.
+
+This decides how sessions get their pull or merge request badge and CI.
 
 - **Show pull and merge requests** and **Post a card in Dispatch** switch the badges and the cards,
   and **Check every** sets how often each branch is asked about.
-- **GitHub** needs nothing entered. Yardbell asks `gh` on each session's machine, so each machine needs
-  it installed and signed in with `gh auth login`. Each machine shows `gh works`, what is wrong, or
+- **GitHub through local gh** needs nothing entered. Yardbell asks `gh` on each session's machine, so each
+  machine needs it installed and signed in with `gh auth login`. Each machine shows `gh works`, what is wrong, or
   **Not checked yet**, which lasts until a session there has a branch.
-- **GitLab** needs each server your folders use. Save a personal access token as a secret first, under
-  **MCP servers, Secrets**, with the `read_api` scope, or `api` if a pipeline opens merge requests.
-  Then press **Add GitLab host**, enter the host as your remote address names it, and pick the token.
+- **GitLab** needs each server your folders use. Press **Add GitLab host** and enter the host as your
+  remote address names it. With **A token for each host**, paste a personal access token with the
+  `read_api` scope, or `api` if a pipeline opens merge requests, or pick a saved secret.
   **Address** is only for an instance whose web address differs, such as another port. Each host shows
   whether its token works.
 - **Your folders** reads each folder's `origin` remote when the section opens, and says which service
@@ -588,7 +600,7 @@ so before you start it.
 A task with independent parts, such as two repositories or several tickets, gets one session per
 part. Ask it to work through tickets and it reads them first, proposes a numbered plan (machine,
 folder, agent and branch for each) and starts nothing until you agree. Dispatch can use the MCP
-servers listed under **MCP servers** in Settings, so with Linear added there,
+servers listed under **Connections** in Settings, so with Linear added there,
 **Plan my Linear tickets** reads your open tickets and plans them.
 
 The **Claude usage** card at the bottom of the main sidebar shows how much of your Claude plan's

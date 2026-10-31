@@ -57,6 +57,19 @@ Start with `yardbell doctor`. Common cases:
   (letter case does not matter), and the token needs `read_api` and access to the project. After a refusal Yardbell waits
   10 minutes before asking that host again.
 
+### Connections
+
+| What you see | What it means | What to do |
+|---|---|---|
+| **Sign in again** on a connection | The sign-in expired or was revoked | Press it. Then retry any run that waited |
+| A sign-in page refuses Yardbell, or an error about the client | That tool does not accept new apps this way | Use its **Token** example, or an app of your own |
+| Yardbell asks for a client ID | The server has no way for Yardbell to register itself, as with Asana | Make an app in its developer console with the redirect address shown, and enter its ID and secret |
+| Jira says an admin must allow the app | An Atlassian admin can block new apps for a site | Ask them, or use the **Token** example |
+| The page after signing in does not load | You are on another device, and it sent you to `127.0.0.1` | Paste that page's address into the box Yardbell shows |
+| `glab is not signed in` | `glab` on that machine has no login for the host | Run `glab auth login` there |
+| `GitHub refused the token` | The saved token expired or lacks access | Paste a new one under GitHub's **Edit** |
+| A step waits with **Accept and run** | The server changed the tool since the step was saved | Read what it does now, then accept it |
+
 ## Limitations
 
 - Only sessions inside tmux can be opened from Yardbell.

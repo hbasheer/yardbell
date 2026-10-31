@@ -28,6 +28,9 @@ default_agent: claude            # preselected in New session; built in: claude,
 #   memory: true                 # notify when a machine's memory reaches 95%
 
 # Outside tools pipelines can take work from. Settings, Connections adds Trello in one click.
+# pull_requests:
+#   github_via: gh       # or token, with github_token: ${secret:NAME}
+#   gitlab_via: token    # or glab
 # connectors:
 #   - id: tracker
 #     name: Tracker

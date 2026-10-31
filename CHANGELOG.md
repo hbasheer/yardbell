@@ -5,6 +5,18 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
+  in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
+  common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have
+  not. Signing in from a phone works through a box to paste the address into.
+- **Call MCP tool.** A new pipeline step calls a tool on a connected server with no agent. A step that
+  changes something can be refused by a Dispatch rule, and a run waits if the server changed the tool.
+  Trello can also start runs through its sign-in.
+- **One Connections page.** MCP servers, connectors, GitHub, GitLab and secrets are all on it, and the
+  fields in its forms replace YAML. A token you paste is saved as a secret by itself. Removing a
+  signed-in tool also removes its connection.
+- **GitHub and GitLab connect your way.** GitHub through local `gh` or a token, GitLab through a token or
+  local `glab`.
 - **Connectors.** Pipelines can now take work from any tool with a web API and a token, set up under the
   new **Settings, Connections** with no new release. **New connection** starts blank or from an example:
   Trello, GitHub Issues, GitLab Issues, Jira or Asana. A connector holds the

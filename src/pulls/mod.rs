@@ -776,11 +776,11 @@ impl Pulls {
 
     // Only a host listed under pull_requests.gitlab goes to GitLab, so without one no remote is
     // read and GitHub is asked exactly as before.
-    async fn on_gitlab<'a>(
+    async fn on_gitlab(
         &self,
         m: &Machine,
         t: &Target,
-        hosts: &'a [GitLabAccess],
+        hosts: &[GitLabAccess],
         now: Instant,
     ) -> Option<(GitLabAccess, Repo)> {
         if hosts.is_empty() {

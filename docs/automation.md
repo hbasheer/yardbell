@@ -76,7 +76,7 @@ each time. Keep that one as a saved task and send it from the **Tasks** list.
    `{ticket}` or `{url}`, the ticket is added at the end of the task. `{repo}` is only filled for
    GitHub; Linear tickets leave it empty.
 2. For Linear, make a personal API key under Linear's Settings, Security & access, and save it in
-   Yardbell under **Settings**, **MCP servers**, **Secrets** with the name `linear`. For GitHub,
+   Yardbell under **Settings**, **Connections**, **Secrets** with the name `linear`. For GitHub,
    run `gh auth login` on the machine Yardbell runs on.
 3. In **Settings**, **Triggers**, press **Add trigger**: a name, the task, and when it starts.
 4. Press **Run now** (a schedule) or **Check now** (a ticket trigger) to try it at once. The row
@@ -107,7 +107,7 @@ triggers:
 
 When ENG-1234 is assigned to you, a conversation starts, and with the default approval setting you
 find a **Start a session** card waiting: approve it, edit the branch or machine, or reject it. For
-Dispatch to read the ticket's description, add Linear under **MCP servers** in Settings as well;
+Dispatch to read the ticket's description, add Linear under **Connections** in Settings as well;
 the trigger itself only passes the ticket's number, title, state and link.
 
 **Pick up a ticket when it moves to a state.** Use `states` to start only when a ticket is ready,
@@ -603,10 +603,10 @@ pipeline stops its runs' sessions but runs no teardown, so stop a run first if i
 
 ### Set one up
 
-1. Save your Linear API key as the secret `linear` (Settings, MCP servers, Secrets), for Linear
+1. Save your Linear API key as the secret `linear` (Settings, Connections, Secrets), for Linear
    triggers, Plan and Linear steps.
 2. Log in `gh` on the machines that push, for draft pull requests. For GitLab, add the host under
-   [Settings, GitHub and GitLab](usage.md#github-and-gitlab); its token needs the `api` scope to open
+   [Settings, Connections, GitHub and GitLab](usage.md#github-and-gitlab); its token needs the `api` scope to open
    merge requests and to list the ones you review.
 3. On the **Pipelines** page, **New pipeline**, start an **Empty pipeline** or pick a template.
    On the **Build** canvas, set the trigger on **Start when**, drag in the steps you want, and draw
@@ -678,10 +678,59 @@ It needs a web API that takes a token you can paste in and replies in JSON. Most
 
 Comments on an item are not read, only its title and description.
 
-### Connect Trello
+### Connect by signing in
+
+The simplest way to connect a tool needs no token. Under **Settings, Connections**, press **New
+connection**, stay on the **Sign in** tab, and pick the tool. Yardbell names the site you will sign in
+at, your browser opens that site, and you approve what Yardbell may do. When you finish, the page moves
+on by itself and lists what the tool offers. Yardbell keeps the tokens in its secrets store, hidden
+from the **Secrets** list, and refreshes them by itself. **Sign out** on the row forgets them, and
+removing the connection does too.
+
+| Tool | Sign-in | In pipelines |
+|---|---|---|
+| Trello | Tested with a real account | Starts runs by itself. It can also read, move and comment on cards. Reading the card list is tested with a real account; the others are not yet |
+| Jira | Tested with a real account | **Call MCP tool** steps. Starting runs waits until its issue search has been read from a real site |
+| Sentry | Tested with a real account | **Call MCP tool** steps |
+| GitHub, Slack, Asana, PagerDuty, HubSpot | Not tried. Each needs an app you make in its developer console, and Yardbell asks for the client ID and shows the redirect address to register | **Call MCP tool** steps |
+| Linear, GitLab, Notion, ClickUp, monday.com, Datadog, PostHog, Vercel, Supabase, Stripe, Figma, Intercom, Airtable, Zapier, Dropbox | Not tried. Each answers as an MCP server wanting a sign-in, but may still refuse Yardbell | **Call MCP tool** steps |
+
+**Not listed?** Use the **MCP server** tab, paste the address from the tool's docs, and press
+**Continue**. Yardbell takes the name from the address, signs in if the server asks for it, and lists
+its tools. If the tool gave you a token instead, open **More options** and paste it under **Token**.
+
+**On another device.** A sign-in sends your browser back to `127.0.0.1` on the machine running
+Yardbell, which on a phone is the phone itself, so that page will not load. Yardbell says so first and
+shows a box. Copy the address of the page that did not load, paste it there, and press **Finish signing
+in**.
+
+**Sign in again.** A sign-in can expire or be revoked on the tool's side. The row then says **Sign in
+again**, a trigger starts nothing, and a step that needs it waits and tells you once. No run ever opens
+a browser by itself. Sign in, then retry the run.
+
+**Agents sign in separately.** An agent session gets the connection's address, but not Yardbell's
+sign-in, and signs in by itself on its own machine.
+
+### Call MCP tool
+
+A **Call MCP tool** step calls one tool on a connected server, with no agent and no model. Pick the
+server and the tool, and fill in the fields drawn from what the tool accepts. A value such as
+`{{ticket}}` fills in from the run. A field Yardbell cannot draw takes JSON.
+
+- The reply is the step's report, up to 20,000 characters, and later agents read it as quoted data.
+- An error from the tool, or no answer within 60 seconds, goes down the fail line.
+- A step counts as changing something unless you tick **Only reads**. A tool's own label is only a hint,
+  and only pre-ticks the box. A step that changes something can be refused by a Dispatch rule on
+  `call_tool`.
+- Yardbell remembers each tool as it was when you saved the step. If the server changes its name,
+  description or inputs, the run waits and shows the tool as it is now, and **Accept and run** goes on.
+  A step Dispatch proposed waits this way the first time too.
+- A step cannot call Yardbell's own MCP server. That is refused on save and when it runs.
+
+### Connect Trello with a token
 
 1. In Trello, make an API key and a token: [Trello's guide](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/).
-2. In Yardbell, save them as the secrets `trello_key` and `trello_token`, under **Settings, MCP servers,
+2. In Yardbell, save them as the secrets `trello_key` and `trello_token`, under **Settings, Connections,
    Secrets**.
 3. Under **Settings, Connections**, press **New connection**, pick **Trello**, then **Save**.
 4. Press **Test**. It reads your first board, and shows its cards and every field you could map.
@@ -693,7 +742,8 @@ A template's **Linear** step cannot run on a Trello card. Use a **Call API** ste
 
 ### Add another tool
 
-Press **New connection** under **Settings, Connections** and pick an example (Trello, GitHub Issues, GitLab Issues, Jira or Asana, which you check with **Test** on your own account) or **Start blank**, or ask Dispatch: "connect my Jira". Dispatch's version
+For a tool with no MCP server, press **New connection** under **Settings, Connections**, open the
+**Token** tab and pick an example (Trello, GitHub Issues, GitLab Issues, Jira or Asana, which you check with **Test** on your own account) or **Start blank**, or ask Dispatch: "connect my Jira". Dispatch's version
 waits for you as a proposal and arrives switched off. A connector looks like this:
 
 ```yaml
