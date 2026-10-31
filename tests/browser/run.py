@@ -2744,7 +2744,7 @@ class Suite:
     def add_mcp_server(self):
         self.api("POST", "/api/settings/mcp/servers", {"servers": [{"name": "tool", "url": "https://mcp.example.com/mcp"}]})
         self.b.goto(self.url("/"))
-        self.b.goto(self.url("/settings#servers"))
+        self.b.goto(self.url("/settings#connections"))
         self.b.wait("document.querySelector('[data-mcp-act=sign-in]')", "the Sign in button")
 
     def remove_mcp_servers(self):
@@ -2825,6 +2825,50 @@ class Suite:
         finally:
             self.remove_mcp_servers()
 
+    def test_one_connections_page(self):
+        b = self.b
+        self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        nav = b.js("[...document.querySelectorAll('.settings-nav a')].map((a) => a.textContent).join('|')")
+        if "MCP servers" in nav:
+            raise Failure(f"the menu still splits them: {nav}")
+        if not b.js("document.querySelector('#connections #server-rows') && document.querySelector('#connections #conn-rows') && document.querySelector('#connections #secret-rows')"):
+            raise Failure("servers, connections and secrets are not all on the one page")
+        guide = b.js("document.querySelector('#connections .conn-guide').textContent")
+        for part in ("New connection", "Sign in", "Test"):
+            if part not in guide:
+                raise Failure(f"the guide does not mention {part}: {guide}")
+        empty = b.js("!connections.list.length")
+        if empty and b.js("document.getElementById('conn-none').hidden"):
+            raise Failure("an empty page does not say so")
+        b.click("#conn-new")
+        b.wait("document.querySelector('[data-sign-in=trello]')", "Trello under sign in")
+        order = b.js("[...document.querySelectorAll('#conn-new-panel h3, #conn-new-panel summary')].map((x) => x.textContent).join('|')")
+        if order != "Sign in with your account|Use a token instead":
+            raise Failure(f"the groups are {order}")
+        if b.js("document.getElementById('conn-tokens').open"):
+            raise Failure("tokens should stay folded away")
+        b.click("[data-another]")
+        b.wait("!document.getElementById('server-form').hidden", "the server form")
+        if b.js("document.getElementById('server-form').elements.kind.value") != "url":
+            raise Failure("Another MCP server should ask for an address")
+        b.click("#server-cancel")
+        self.stub_sign_in({"url": "https://auth.example.com/a", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+        try:
+            b.click("#conn-new")
+            b.wait("document.querySelector('[data-sign-in=trello]')", "Trello under sign in")
+            b.click("[data-sign-in=trello]")
+            b.wait("document.getElementById('mcp-sign-in').textContent.includes('You will sign in at auth.example.com')", "the host, after picking Trello")
+            if not b.js("data.mcp_servers.some((s) => s.name === 'trello' && s.url === 'https://mcp.trello.com/v1')"):
+                raise Failure("picking Trello did not add it")
+            if b.js("document.getElementById('conn-none').hidden") is not True:
+                raise Failure("the empty message stayed")
+            self.check_errors("the one Connections page")
+        finally:
+            self.remove_mcp_servers()
+
     def test_connections_section(self):
         b = self.b
         b.goto(self.url("/settings#connections"))
@@ -2832,6 +2876,7 @@ class Suite:
         if b.js("document.getElementById('conn-trello')"):
             raise Failure("the page still has a button for one tool")
         b.click("#conn-new")
+        b.js("document.getElementById('conn-tokens').open = true")
         b.wait("document.querySelector('#conn-new-list [data-starter=trello]')", "the examples")
         said = b.js("document.getElementById('conn-new-list').textContent")
         for want in ("Start blank", "Trello", "GitHub Issues", "GitLab Issues", "Jira", "Asana"):
@@ -2841,10 +2886,12 @@ class Suite:
         b.wait("document.querySelector('#conn-form [name=base_url]')?.value.includes('atlassian.net')", "the Jira example")
         b.click("#conn-cancel")
         b.click("#conn-new")
+        b.js("document.getElementById('conn-tokens').open = true")
         b.click("#conn-new-list [data-starter='']")
         b.wait("document.querySelector('#conn-form [name=base_url]')?.value === ''", "a blank form")
         b.click("#conn-cancel")
         b.click("#conn-new")
+        b.js("document.getElementById('conn-tokens').open = true")
         b.click("#conn-new-list [data-starter=trello]")
         b.wait("document.querySelector('#conn-form [name=base_url]')?.value === 'https://api.trello.com/1'", "the Trello template")
         if "secret:trello_token" not in b.js("document.querySelector('#conn-headers [data-key=value]').value"):

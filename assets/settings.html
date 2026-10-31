@@ -72,8 +72,7 @@
       <a href="#worktree-setup">Worktree setup</a>
       <a href="#pull-requests">GitHub and GitLab</a>
       <a href="#connections">Connections</a>
-      <a href="#mcp">Agent tools (MCP)</a>
-      <a href="#servers">MCP servers</a>
+      <a href="#mcp">Let agents use Yardbell</a>
       <p class="nav-label">General</p>
       <a href="#appearance">Appearance</a>
       <a href="#security">Security</a>
@@ -285,7 +284,7 @@
       <div data-kind="linear" class="trigger-watch">
         <label class="choice"><input type="checkbox" name="linear_assigned">A ticket is assigned to me</label>
         <label>Or one of my tickets moves to <input type="text" name="states" placeholder="In Progress, Ready for dev" autocomplete="off"></label>
-        <p class="help trigger-help">Yardbell reads your open Linear tickets every 3 minutes with the API key saved as the secret <code>linear</code>, under MCP servers, Secrets. Separate states with commas.</p>
+        <p class="help trigger-help">Yardbell reads your open Linear tickets every 3 minutes with the API key saved as the secret <code>linear</code>, under Connections, Secrets. Separate states with commas.</p>
       </div>
       <div data-kind="github" class="trigger-watch">
         <label class="choice"><input type="checkbox" name="gh_assigned">An issue is assigned to me</label>
@@ -336,7 +335,7 @@
           <label class="choice"><input type="checkbox" name="use_gitlab"><strong>GitLab</strong></label>
           <button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button>
         </div>
-        <p class="help">Add each GitLab server your folders use. Yardbell asks its API with a personal access token that has the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Save the token as a secret first, under <a href="#servers">MCP servers, Secrets</a>.</p>
+        <p class="help">Add each GitLab server your folders use. Yardbell asks its API with a personal access token that has the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Save the token as a secret first, under <a href="#servers">Connections, Secrets</a>.</p>
         <p class="pr-none" id="pr-no-hosts">No GitLab hosts yet, so merge requests do not show.</p>
         <ul class="rows pr-hosts" id="pr-hosts"></ul>
       </div>
@@ -364,13 +363,56 @@
         <button class="btn primary small-link" type="button" id="conn-new" aria-expanded="false">New connection</button>
       </div>
     </div>
-    <p class="help">Pipelines can take work from these tools and call their APIs. A connection needs a web API that takes a token you can paste in and replies in JSON. Save its token as a secret first, under <a href="#servers">MCP servers, Secrets</a>.</p>
-    <div class="panel conn-new-panel" id="conn-new-panel" hidden>
-      <p class="help">Start from an example, then press <strong>Test</strong> to check it against your account.</p>
-      <ul class="rows" id="conn-new-list"></ul>
+    <div class="panel conn-guide">
+      <h3>How to connect a tool</h3>
+      <ol>
+        <li><strong>Press New connection and pick your tool.</strong> If it is not listed, add it with the address of its MCP server. The tool's docs give the address.</li>
+        <li><strong>Sign in with your account.</strong> Your browser opens the tool's own page, where you approve what Yardbell may do. There is no token to create or paste.</li>
+        <li><strong>Press Test.</strong> It lists what the connection can do, and changes nothing.</li>
+      </ol>
+      <p class="help">Pipelines use a connection in a trigger or a step. Agent sessions get every MCP connection too, and sign in to it themselves on their own machine. Use a token only for a tool with no MCP server.</p>
     </div>
-    <ul class="rows conn-rows" id="conn-rows"></ul>
-    <p class="pr-none" id="conn-none">No connections yet.</p>
+    <div class="panel conn-new-panel" id="conn-new-panel" hidden>
+      <h3>Sign in with your account</h3>
+      <p class="help">The simplest way, with no token to create.</p>
+      <ul class="rows" id="conn-sign-in-list"></ul>
+      <details class="conn-tokens" id="conn-tokens">
+        <summary>Use a token instead</summary>
+        <p class="help">For a tool with no MCP server. Create a token in the tool, save it under Secrets below, then start from an example and press <strong>Test</strong>.</p>
+        <ul class="rows" id="conn-new-list"></ul>
+      </details>
+    </div>
+    <div class="conn-all" id="conn-all">
+      <ul class="rows" id="server-rows"></ul>
+      <ul class="rows conn-rows" id="conn-rows"></ul>
+    </div>
+    <p class="pr-none" id="conn-none">No connections yet. Press New connection to add your first.</p>
+    <div class="panel mcp-panel" id="mcp-sign-in" hidden></div>
+    <div class="panel mcp-panel" id="mcp-tools" hidden></div>
+    <form class="panel" id="server-form" hidden>
+      <div class="grid2">
+        <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" placeholder="github" autocapitalize="off" spellcheck="false" required></label>
+        <label>Kind
+          <select name="kind"><option value="command">Command (runs on the machine)</option><option value="url">URL (HTTP server)</option></select>
+        </label>
+      </div>
+      <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
+      <label data-kind="url">Address of its MCP server <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
+      <div data-kind="url">
+        <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
+        <p class="help">Only for a server you run yourself on this machine or your mesh. Sign-in stops being limited to HTTPS for this server.</p>
+      </div>
+      <label><span id="server-pairs-label">Environment variables</span>
+        <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=${secret:github}" autocapitalize="off" spellcheck="false"></textarea>
+      </label>
+      <p class="help" data-kind="url">Leave this empty to sign in through your browser. Add a header only if the tool gave you a token.</p>
+      <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">Agent sessions on these machines get this connection. None picked means every machine.</p></fieldset>
+      <div class="form-foot">
+        <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+
     <form class="panel conn-form" id="conn-form" hidden>
       <div class="conn-fields">
         <label>Name<input name="name" autocomplete="off"></label>
@@ -402,54 +444,10 @@
       </div>
     </form>
     <div class="panel conn-output" id="conn-output" hidden></div>
-  </section>
-
-  <section id="mcp">
-    <div class="section-head"><h2>Agent tools (MCP)</h2><button class="btn quiet danger small-link" type="button" id="mcp-turn-off" hidden>Turn off</button></div>
-    <div class="panel phone-intro" id="mcp-intro" hidden>
-      <p>Let AI agents see your machines and sessions, and start, read and answer sessions, through an MCP server built into Yardbell.</p>
-      <button class="btn primary" type="button" id="mcp-on">Turn on</button>
-    </div>
-    <div class="panel mcp-on" id="mcp-panel" hidden>
-      <p>Add Yardbell to Claude Code on any machine on the mesh. Run this command, then paste the token when it asks for it:</p>
-      <p class="phone-field"><code id="mcp-command"></code><button class="btn" type="button" id="mcp-copy">Copy</button></p>
-      <p class="phone-field"><code id="mcp-token"></code><button class="btn" type="button" id="mcp-token-copy">Copy token</button></p>
-      <p class="help">The token is read without showing it, so it stays out of your shell history and off the command you type. Claude Code keeps it in its own config, <code>~/.claude.json</code>. The token lets an agent start and type into sessions on every machine. Keep it secret. Make a new one if it leaks: the old one stops working at once.</p>
-      <button class="btn" type="button" id="mcp-rotate">Make a new token</button>
-    </div>
-  </section>
-
-  <section id="servers">
-    <div class="section-head"><h2>MCP servers for sessions</h2><button class="btn small-link" type="button" id="server-add">Add server</button></div>
-    <p class="help">Claude Code sessions that Yardbell starts get these servers, in a file only your account can read on that machine. Keep tokens in the secrets below and write <code>${secret:NAME}</code> where they go.</p>
-    <ul class="rows" id="server-rows"></ul>
-    <div class="panel mcp-panel" id="mcp-sign-in" hidden></div>
-    <div class="panel mcp-panel" id="mcp-tools" hidden></div>
-    <form class="panel" id="server-form" hidden>
-      <div class="grid2">
-        <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" placeholder="github" autocapitalize="off" spellcheck="false" required></label>
-        <label>Kind
-          <select name="kind"><option value="command">Command (runs on the machine)</option><option value="url">URL (HTTP server)</option></select>
-        </label>
-      </div>
-      <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
-      <label data-kind="url">URL <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
-      <div data-kind="url">
-        <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
-        <p class="help">Only for a server you run yourself on this machine or your mesh. Sign-in stops being limited to HTTPS for this server.</p>
-      </div>
-      <label><span id="server-pairs-label">Environment variables</span>
-        <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=${secret:github}" autocapitalize="off" spellcheck="false"></textarea>
-      </label>
-      <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">None picked means every machine.</p></fieldset>
-      <div class="form-foot">
-        <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Save server</button>
-      </div>
-    </form>
-
+  
+    <div id="servers">
     <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
-    <p class="help">Tokens for the servers above, kept in <code id="secrets-file">secrets.yml</code>, which only your account can read. A value is never shown again once it is saved. Refer to one as <code>${secret:NAME}</code> in a header, an environment variable or a URL, for example <code>Authorization=Bearer ${secret:linear}</code>.</p>
+    <p class="help">Tokens for connections that need one, kept in <code id="secrets-file">secrets.yml</code>, which only your account can read. A value is never shown again once it is saved. Refer to one as <code>${secret:NAME}</code> in a header, an environment variable or a URL, for example <code>Authorization=Bearer ${secret:linear}</code>.</p>
     <div class="banner" id="secrets-missing" hidden>
       <div class="banner-text"><strong>A secret is not set</strong><span id="secrets-missing-text"></span></div>
     </div>
@@ -474,7 +472,24 @@
         <button class="btn primary" type="submit">Save secret</button>
       </div>
     </form>
+    </div>
   </section>
+
+  <section id="mcp">
+    <div class="section-head"><h2>Let agents use Yardbell</h2><button class="btn quiet danger small-link" type="button" id="mcp-turn-off" hidden>Turn off</button></div>
+    <div class="panel phone-intro" id="mcp-intro" hidden>
+      <p>Let AI agents see your machines and sessions, and start, read and answer sessions, through an MCP server built into Yardbell.</p>
+      <button class="btn primary" type="button" id="mcp-on">Turn on</button>
+    </div>
+    <div class="panel mcp-on" id="mcp-panel" hidden>
+      <p>Add Yardbell to Claude Code on any machine on the mesh. Run this command, then paste the token when it asks for it:</p>
+      <p class="phone-field"><code id="mcp-command"></code><button class="btn" type="button" id="mcp-copy">Copy</button></p>
+      <p class="phone-field"><code id="mcp-token"></code><button class="btn" type="button" id="mcp-token-copy">Copy token</button></p>
+      <p class="help">The token is read without showing it, so it stays out of your shell history and off the command you type. Claude Code keeps it in its own config, <code>~/.claude.json</code>. The token lets an agent start and type into sessions on every machine. Keep it secret. Make a new one if it leaks: the old one stops working at once.</p>
+      <button class="btn" type="button" id="mcp-rotate">Make a new token</button>
+    </div>
+  </section>
+
 
   <section id="security">
     <div class="section-head"><h2>Security</h2></div>

@@ -1036,3 +1036,13 @@ fn a_chosen_value_stays_with_its_item() {
     assert_eq!(vars.0["repo"], "a/b");
     assert_eq!(vars.0["item_id"], "12");
 }
+
+#[test]
+fn sign_in_tools_are_the_confirmed_ones() {
+    let tools = crate::connectors::sign_in_tools();
+    let ids: Vec<&str> = tools.iter().map(|t| t.id).collect();
+    assert_eq!(ids, ["trello", "jira"]);
+    assert!(tools
+        .iter()
+        .all(|t| t.url.starts_with("https://") && !t.about.is_empty()));
+}

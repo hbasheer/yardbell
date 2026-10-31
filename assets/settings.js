@@ -229,12 +229,24 @@ function serverActions(srv) {
   return `${signIn}${signOut}${act("test", "Test")}`;
 }
 
+function showConnectionsEmpty() {
+  const none = !(data.mcp_servers || []).length && !connections.list.length;
+  $("conn-none").hidden = !none;
+  $("conn-all").hidden = none;
+}
+
+function serverKind(srv) {
+  if (!srv.url) return "MCP, runs a command";
+  return Object.keys(srv.headers || {}).length ? "MCP, uses saved headers" : "MCP, signs in through your browser";
+}
+
 function renderServers() {
   const servers = data.mcp_servers || [];
   $("server-rows").hidden = !servers.length;
+  showConnectionsEmpty();
   $("server-rows").innerHTML = servers.map((srv, i) => `<li class="row">
     <div class="row-main"><div class="row-title"><span class="folder">${esc(srv.name)}</span>${serverAuth(srv) ? `<span class="note">${serverAuth(srv)}</span>` : ""}</div>
-      <p class="help">${esc(serverTarget(srv))} · ${srv.machines?.length ? esc(srv.machines.join(", ")) : "every machine"}</p></div>
+      <p class="help">${esc(serverKind(srv))} · ${esc(serverTarget(srv))} · ${srv.machines?.length ? esc(srv.machines.join(", ")) : "every machine"}</p></div>
     <div class="row-actions">${serverActions(srv)}<button class="btn" type="button" data-edit="${i}">Edit</button><button class="btn quiet danger" type="button" data-remove="${i}">Remove</button></div></li>`).join("");
 }
 
@@ -731,7 +743,7 @@ async function loadConnections() {
 }
 
 function renderConnections() {
-  $("conn-none").hidden = connections.list.length > 0;
+  showConnectionsEmpty();
   $("conn-rows").hidden = !connections.list.length;
   $("conn-rows").innerHTML = connections.list.map((c) => {
     const status = connections.status[c.id];
@@ -784,23 +796,66 @@ function showConnOutput(html) {
   out.innerHTML = html;
 }
 
+function closeNewConnection() {
+  $("conn-new-panel").hidden = true;
+  $("conn-new").setAttribute("aria-expanded", "false");
+}
+
+function pickRow(attrs, title, about) {
+  return `<li class="row"><button class="conn-starter" type="button" ${attrs}><strong>${esc(title)}</strong><small>${esc(about)}</small></button></li>`;
+}
+
 $("conn-new").addEventListener("click", () => {
   const panel = $("conn-new-panel");
   panel.hidden = !panel.hidden;
   $("conn-new").setAttribute("aria-expanded", panel.hidden ? "false" : "true");
+  $("conn-tokens").open = false;
+  $("conn-sign-in-list").innerHTML = [
+    ...(connections.sign_in || []).map((t) => pickRow(`data-sign-in="${esc(t.id)}"`, t.name, t.about)),
+    pickRow("data-another", "Another MCP server", "Any tool with an MCP server. You need its address."),
+  ].join("");
   $("conn-new-list").innerHTML = [
-    `<li class="row"><button class="conn-starter" type="button" data-starter=""><strong>Start blank</strong><small>Any tool with a web API.</small></button></li>`,
+    pickRow('data-starter=""', "Start blank", "Any tool with a web API."),
     ...connections.templates.map((name) => {
       const c = connections.starters[name];
-      return `<li class="row"><button class="conn-starter" type="button" data-starter="${esc(name)}"><strong>${esc(c.name)}</strong><small>${esc(c.about)}</small></button></li>`;
+      return pickRow(`data-starter="${esc(name)}"`, c.name, c.about);
     }),
   ].join("");
 });
+
+async function connectByTool(tool) {
+  const servers = data.mcp_servers || [];
+  const have = servers.find((s) => s.url === tool.url);
+  if (have && data.mcp_auth?.[have.name] === "signed_in") { toast(`${have.name} is already signed in.`, "ok"); return; }
+  if (!have) {
+    if (servers.some((s) => s.name === tool.id)) { toast(`Another connection is already called ${tool.id}. Rename it first.`); return; }
+    await saveServers([...servers, { name: tool.id, url: tool.url }], `${tool.name} added.`);
+  }
+  await startSignIn(have ? have.name : tool.id);
+}
+
+$("conn-sign-in-list").addEventListener("click", async (e) => {
+  if (e.target.closest("[data-another]")) {
+    closeNewConnection();
+    openServerForm(null);
+    $("server-form").elements.kind.value = "url";
+    showKind("url");
+    return;
+  }
+  const pick = e.target.closest("[data-sign-in]");
+  if (!pick) return;
+  closeNewConnection();
+  try {
+    await connectByTool(connections.sign_in.find((t) => t.id === pick.dataset.signIn));
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
 $("conn-new-list").addEventListener("click", (e) => {
   const button = e.target.closest("[data-starter]");
   if (!button) return;
-  $("conn-new-panel").hidden = true;
-  $("conn-new").setAttribute("aria-expanded", "false");
+  closeNewConnection();
   const name = button.dataset.starter;
   openConnection(name ? connections.starters[name] : { enabled: true, headers: {} }, "");
 });
@@ -1250,7 +1305,6 @@ $("pair-show").addEventListener("click", async () => {
   }
 });
 
-$("server-add").addEventListener("click", () => openServerForm(null));
 $("server-cancel").addEventListener("click", () => { $("server-form").hidden = true; });
 $("server-form").elements.kind.addEventListener("change", (e) => showKind(e.target.value));
 

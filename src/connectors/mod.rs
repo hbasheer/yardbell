@@ -172,6 +172,32 @@ pub fn template(name: &str) -> Option<Connector> {
     serde_yaml::from_str(text).ok()
 }
 
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct SignInTool {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub url: &'static str,
+    pub about: &'static str,
+}
+
+// A tool is listed only once a real account has signed in to it.
+pub fn sign_in_tools() -> Vec<SignInTool> {
+    vec![
+        SignInTool {
+            id: "trello",
+            name: "Trello",
+            url: "https://mcp.trello.com/v1",
+            about: "Boards and cards. Each sign-in covers one workspace.",
+        },
+        SignInTool {
+            id: "jira",
+            name: "Jira",
+            url: "https://mcp.atlassian.com/v2/mcp",
+            about: "Jira issues and Confluence pages. An admin can block new apps.",
+        },
+    ]
+}
+
 pub fn blurb(name: &str) -> &'static str {
     match name {
         "trello" => "Cards on a board. Needs an API key and a token.",

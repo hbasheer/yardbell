@@ -1332,6 +1332,17 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 }
 
 .mcp-panel { margin-top: 12px; }
+.conn-guide { margin-top: 12px; }
+.conn-guide h3 { margin: 0 0 8px; }
+.conn-guide ol { margin: 0 0 10px; padding-left: 20px; display: grid; gap: 6px; }
+.conn-all { margin-top: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.conn-all[hidden] { display: none; }
+.conn-all .rows { border: 0; border-radius: 0; margin: 0; }
+.conn-all .rows:not([hidden]) + .rows:not([hidden]) { border-top: 1px solid var(--line); }
+.conn-new-panel h3 { margin: 0 0 4px; }
+.conn-tokens { margin-top: 14px; }
+.conn-tokens summary { cursor: pointer; font-weight: 600; }
+#server-form { margin-top: 12px; }
 .mcp-panel h3 { margin: 0 0 8px; }
 .mcp-panel code { overflow-wrap: anywhere; }
 .mcp-panel label { display: block; margin-top: 12px; }
@@ -1947,7 +1958,7 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .conn-new-panel { margin-top: 12px; }
 .conn-new-panel[hidden] { display: none; }
 #conn-new-list { margin-top: 10px; }
-#conn-new-list .row { padding: 0; }
+#conn-new-list .row, #conn-sign-in-list .row { padding: 0; }
 .conn-starter { display: grid; gap: 2px; width: 100%; padding: 10px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .conn-starter:hover { background: var(--hover); }
 .conn-starter small { color: var(--muted); }

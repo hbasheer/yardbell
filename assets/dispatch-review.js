@@ -52,7 +52,7 @@ const SETTINGS_AREAS = {
   triggers: ["Triggers", "/settings#triggers"],
   worktree_setup: ["Worktree setup", "/settings#worktree-setup"],
   agents: ["Agents", "/settings"],
-  session_mcp_servers: ["MCP servers for sessions", "/settings#servers"],
+  session_mcp_servers: ["Connections for sessions", "/settings#connections"],
   phone: ["Phone notifications", "/settings#phone"],
   machines: ["Machines", "/settings#machines"],
   pipelines: ["Pipelines", "/pipeline"],

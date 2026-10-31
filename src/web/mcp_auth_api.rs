@@ -108,7 +108,7 @@ fn escape(text: &str) -> String {
 
 fn page(status: StatusCode, heading: &str, detail: &str) -> Response {
     let body = format!(
-        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Yardbell</title><link rel=\"stylesheet\" href=\"/style.css\"></head><body class=\"login\"><main class=\"panel\"><h1>{}</h1><p>{}</p><p><a href=\"/settings#servers\">Back to Settings</a></p></main></body></html>",
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width, initial-scale=1\"><title>Yardbell</title><link rel=\"stylesheet\" href=\"/style.css\"></head><body class=\"login\"><main class=\"panel\"><h1>{}</h1><p>{}</p><p><a href=\"/settings#connections\">Back to Settings</a></p></main></body></html>",
         escape(heading),
         escape(detail),
     );

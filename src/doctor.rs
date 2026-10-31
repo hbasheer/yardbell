@@ -88,7 +88,7 @@ pub fn mcp_sign_in_lines(cfg: &Config, secrets: &crate::secrets::Secrets) -> Vec
         .map(|s| {
             (
                 false,
-                format!("{}: sign in again under Settings, MCP servers", s.name),
+                format!("{}: sign in again under Settings, Connections", s.name),
             )
         })
         .collect()
@@ -384,7 +384,7 @@ mod tests {
             lines,
             vec![(
                 false,
-                "tool: sign in again under Settings, MCP servers".to_string()
+                "tool: sign in again under Settings, Connections".to_string()
             )]
         );
     }

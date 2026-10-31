@@ -73,6 +73,7 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         })
         .collect();
     Ok(Json(json!({
+        "sign_in": crate::connectors::sign_in_tools(),
         "list": items,
         "status": app.pipelines.connector_health().all(),
         "templates": templates(),
