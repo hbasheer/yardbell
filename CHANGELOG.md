@@ -5,35 +5,36 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.0] - 2026-11-01
+
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
-  in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
-  common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have
-  not. Signing in from a phone works through a box to paste the address into.
-- **Use a connected tool.** This pipeline step does one action in any connection with no agent, replacing
-  Call API. A step that changes something can be refused by a Dispatch rule, and a run waits if the server
-  changed the tool. Trello can also start runs through its sign-in.
+  in with your browser, with no token to create. **New connection** has **Sign in**, **MCP server** and
+  **Token** tabs, and lists 23 common tools. Signing in to Trello, Jira and Sentry has been tried with real
+  accounts; the list says the rest have not. Signing in from a phone works through a box to paste the
+  address into.
 - **Tickets from any connection.** **New ticket** starts a run from Linear or any connection, **Update the
   ticket** moves or comments wherever the ticket came from, and the template is now **Implement my
   tickets**. Linear is a row under **Connections**. Saved pipelines keep working.
+- **Use a connected tool.** This pipeline step does one action in any connection with no agent. A step
+  that changes something can be refused by a Dispatch rule, and a run waits if the server changed the
+  tool.
 - **One Connections page.** MCP servers, connectors, GitHub, GitLab and secrets are all on it, and the
   fields in its forms replace YAML. A token you paste is saved as a secret by itself. Removing a
   signed-in tool also removes its connection.
 - **GitHub and GitLab connect your way.** GitHub through local `gh` or a token, GitLab through a token or
   local `glab`.
-- **Connectors.** Pipelines can now take work from any tool with a web API and a token, set up under the
-  new **Settings, Connections** with no new release. **New connection** starts blank or from an example:
-  Trello, GitHub Issues, GitLab Issues, Jira or Asana. A connector holds the
-  tool's address, the secrets that log in, and its calls, with paging and field mapping. **Test** shows
-  what it reads, **Share** and **Import** pass one on without its tokens, and `yardbell doctor` checks each
-  one a pipeline uses.
-- **A connected tool as a trigger.** A pipeline can start from a new item, or one that reaches a state, and
-  **Run now** takes item ids or links. A schedule can read a connected tool too.
-- **Call API step.** Reads from or changes a connected tool during a run. Changes are the rule action
-  `call_connector`, so your Dispatch rules can refuse them.
+- **Connectors.** Any tool with a web API and a token can be set up with no new release, starting blank
+  or from an example: Trello, GitHub Issues, GitLab Issues, Jira or Asana. A connector holds the tool's
+  address, the secrets that log in, and its calls, with paging and field mapping. **Test** shows what it
+  reads, **Share** and **Import** pass one on without its tokens, and `yardbell doctor` checks each one a
+  pipeline uses. A schedule can read a connected tool too, and **Run now** takes item ids or links.
 - **Webhook trigger.** Another system can start a run by calling an address with its own token. Yardbell
   listens on this machine and your mesh, so an outside service needs a tunnel you set up.
 - **Dispatch can propose a connection** with `save_connector`. It always waits for you, arrives switched
   off, and cannot carry a token or turn on private addresses.
+- **What it's working on.** Insights now opens with what a Claude Code session was asked, its latest
+  instruction and message, its last few actions and the files it touched, read from its transcript with
+  saved secrets removed. Other agents show the end of their terminal.
 
 ## [0.9.2] - 2026-10-30
 

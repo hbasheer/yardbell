@@ -6589,7 +6589,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell"
-version = "0.9.2"
+version = "0.10.0"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6611,6 +6611,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_yaml",
+ "sha2 0.10.9",
  "thiserror 2.0.21",
  "time",
  "tokio",
@@ -6621,7 +6622,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell-desktop"
-version = "0.9.2"
+version = "0.10.0"
 dependencies = [
  "axum",
  "gtk",
