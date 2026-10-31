@@ -1369,8 +1369,17 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-more-body .help { margin: 0; }
 .conn-secrets { display: grid; gap: 14px; }
 .conn-error { color: var(--bad-text, var(--bad)); flex: 1; margin: 0; min-height: 1.5em; }
-.rows .conn-card { display: flex; align-items: center; gap: 12px; padding: 10px 14px; cursor: pointer; }
-.conn-card:hover { background: var(--hover); }
+.conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }
+.conn-card { display: grid; grid-template-columns: 28px minmax(0, 1fr); grid-template-rows: 1fr minmax(28px, auto); gap: 10px 12px; padding: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
+.conn-card[data-sign-in], .conn-card[data-starter] { cursor: pointer; }
+.conn-card[data-sign-in]:hover, .conn-card[data-starter]:hover { background: var(--hover); }
+.conn-card > .btn, .conn-card > .conn-badge { grid-column: 2; justify-self: start; align-self: center; }
+.conn-logo { display: grid; place-items: center; width: 28px; height: 28px; border-radius: var(--radius-sm); background: var(--side); color: var(--ink); font-size: 13px; font-weight: 600; }
+.conn-logo svg:not(.icon) { width: 16px; height: 16px; fill: currentColor; }
+@media (max-width: 480px) {
+  .conn-card { grid-template-columns: 28px minmax(0, 1fr) auto; grid-template-rows: auto; align-items: center; }
+  .conn-card > .btn, .conn-card > .conn-badge { grid-column: 3; }
+}
 .conn-starter-text small { color: var(--muted); }
 .conn-head, .rows .conn-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 124px 118px; align-items: center; gap: 12px; }
 .conn-head { padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--side, var(--hover)); border-radius: var(--radius) var(--radius) 0 0; color: var(--muted); font-size: 12px; font-weight: 500; }
@@ -1397,7 +1406,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
   .conn-status { grid-column: 1; grid-row: 2; }
   .conn-actions { grid-column: 2; grid-row: 1 / span 2; }
 }
-.conn-starter-text { display: grid; gap: 2px; flex: 1; min-width: 0; }
+.conn-starter-text { display: grid; align-content: start; gap: 2px; min-width: 0; }
 .mcp-panel h3 { margin: 0 0 8px; }
 .mcp-panel code { overflow-wrap: anywhere; }
 .mcp-panel label { display: block; margin-top: 12px; }
@@ -2011,10 +2020,6 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .conn-form input:not([type="checkbox"]) { height: 32px; box-sizing: border-box; padding: 0 10px; min-width: 0; width: 100%; }
 #conn-header-add { justify-self: start; }
 #conn-none { color: var(--muted); }
-#conn-new-list { margin-top: 10px; }
-.conn-starter { width: 100%; padding: 10px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
-.conn-starter:hover { background: var(--hover); }
-.conn-starter small { color: var(--muted); }
 .conn-rows[hidden], .conn-form[hidden], .conn-output[hidden], #conn-none[hidden] { display: none; }
 .conn-name { display: grid; gap: 2px; min-width: 0; }
 .conn-name small { color: var(--muted); }

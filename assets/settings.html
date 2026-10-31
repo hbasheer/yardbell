@@ -419,12 +419,12 @@
       <button class="conn-back" type="button" id="conn-back" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span>Back</span></button>
       <div class="conn-step" id="conn-new-panel" role="tabpanel" hidden>
         <p class="help">Sign in with your account in your browser. The simplest way, with no token to create.</p>
-        <ul class="rows" id="conn-sign-in-list"></ul>
+        <ul class="conn-grid" id="conn-sign-in-list"></ul>
         <p class="help">Not listed? <button class="conn-link" type="button" data-another>Add its MCP server</button>, or use a token if it has none.</p>
       </div>
       <div class="conn-step" id="conn-tab-token" role="tabpanel" hidden>
         <p class="help">For a tool with no MCP server. You paste its token in the next step.</p>
-        <ul class="rows" id="conn-new-list"></ul>
+        <ul class="conn-grid" id="conn-new-list"></ul>
         <p class="help">Someone shared one with you? <button class="conn-link" type="button" id="conn-import-open">Paste it here</button>.</p>
       </div>
     <form class="conn-step" id="server-form" hidden novalidate>

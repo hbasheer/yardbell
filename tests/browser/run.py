@@ -2895,6 +2895,88 @@ class Suite:
         finally:
             self.remove_mcp_servers()
 
+    def test_connection_templates_are_a_grid(self):
+        b = self.b
+        lists = {"conn-new-panel": "conn-sign-in-list", "conn-tab-token": "conn-new-list"}
+        measure = """((list) => {
+          const tiles = [...document.getElementById(list).children];
+          const flow = document.getElementById('conn-flow').getBoundingClientRect();
+          const body = document.querySelector('.conn-dialog-body');
+          return {
+            tiles: tiles.length,
+            columns: new Set(tiles.map((t) => Math.round(t.getBoundingClientRect().left))).size,
+            logos: tiles.filter((t) => t.querySelector('svg')).length,
+            clipped: tiles.flatMap((t) => [...t.querySelectorAll('strong, small, button')]).filter((x) => x.scrollWidth > x.clientWidth + 1 && getComputedStyle(x).display !== 'inline').map((x) => x.textContent),
+            past: Math.max(...tiles.map((t) => t.getBoundingClientRect().right)) - flow.right,
+            sideways: body.scrollWidth - body.clientWidth,
+            page: document.documentElement.scrollWidth - innerWidth,
+            flowBottom: flow.bottom,
+            height: innerHeight,
+          };
+        })"""
+
+        def sizes(tab, list_id):
+            b.click(f"#conn-tabs [data-tab={tab}]")
+            b.wait(f"!document.getElementById('{tab}').hidden", f"the {tab} tab")
+            return b.js(f"{measure}('{list_id}')")
+
+        def check(seen, list_id, want):
+            if seen["tiles"] != want:
+                raise Failure(f"{list_id} has {seen['tiles']} tiles for {want} templates")
+            if seen["logos"] != want:
+                raise Failure(f"only {seen['logos']} of {want} tiles in {list_id} have an icon")
+            if seen["clipped"]:
+                raise Failure(f"clipped text in {list_id}: {seen['clipped']}")
+            if seen["sideways"] > 0 or seen["page"] > 0 or seen["past"] > 0:
+                raise Failure(f"{list_id} runs sideways: {seen}")
+            if seen["flowBottom"] > seen["height"]:
+                raise Failure(f"the modal runs past the window: {seen}")
+
+        def open_modal():
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+            b.click("#conn-new")
+            b.wait("document.getElementById('conn-flow').open", "the modal")
+            return {
+                "conn-sign-in-list": b.js("connections.sign_in.length"),
+                "conn-new-list": b.js("connections.templates.length") + 1,
+            }
+
+        try:
+            b.viewport(1280, 800)
+            want = open_modal()
+            for tab, list_id in lists.items():
+                seen = sizes(tab, list_id)
+                check(seen, list_id, want[list_id])
+                if seen["columns"] < 2:
+                    raise Failure(f"{list_id} lays out in {seen['columns']} column at desktop width")
+
+            b.viewport(390, 844, 3)
+            want = open_modal()
+            for tab, list_id in lists.items():
+                check(sizes(tab, list_id), list_id, want[list_id])
+
+            b.viewport(1280, 800)
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+            b.js("""(() => {
+              const tool = connections.sign_in[0];
+              data.mcp_servers = [{ name: tool.id, url: tool.url }];
+              data.mcp_auth = { [tool.id]: 'signed_in' };
+              document.getElementById('conn-new').click();
+            })()""")
+            b.wait("document.querySelector('#conn-sign-in-list .conn-badge')", "the Connected badge")
+            first = "document.querySelector('#conn-sign-in-list').firstElementChild"
+            if b.js(f"{first}.hasAttribute('data-sign-in') || !{first}.querySelector('svg')"):
+                raise Failure("a connected tile should keep its icon and start no sign-in")
+            b.js("document.getElementById('conn-flow').close()")
+            self.check_errors("the template grid")
+        finally:
+            b.viewport(1280, 800)
+            b.goto(self.url("/"))
+
     def test_new_connection_is_one_step_at_a_time(self):
         b = self.b
         self.api("POST", "/api/settings/mcp/servers", {"servers": []})
