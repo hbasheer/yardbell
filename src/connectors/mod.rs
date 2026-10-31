@@ -1,5 +1,7 @@
 pub mod client;
 pub mod map;
+#[cfg(test)]
+mod mcp_tests;
 pub mod net;
 pub mod page;
 #[cfg(test)]
@@ -35,7 +37,10 @@ pub struct Connector {
     pub name: String,
     #[serde(default = "on", skip_serializing_if = "is_on")]
     pub enabled: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
     pub base_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub server: String,
     #[serde(default, skip_serializing_if = "is_off")]
     pub allow_private: bool,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -59,7 +64,12 @@ pub struct Param {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Call {
+    #[serde(default, skip_serializing_if = "Request::is_unset")]
     pub request: Request,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool: String,
+    #[serde(default, skip_serializing_if = "Value::is_null")]
+    pub arguments: Value,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub before: Vec<NamedRequest>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -74,7 +84,7 @@ pub struct Call {
     pub page: Option<Page>,
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Request {
     pub method: String,
@@ -83,6 +93,25 @@ pub struct Request {
     pub query: BTreeMap<String, String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub body: Option<Value>,
+}
+
+impl Request {
+    fn is_unset(&self) -> bool {
+        self.method.is_empty() && self.path.is_empty()
+    }
+}
+
+// How a connector over MCP reaches its server, so signing in stays out of this module.
+pub trait ToolCaller: Send + Sync {
+    fn call<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+        arguments: Value,
+    ) -> futures::future::BoxFuture<
+        'a,
+        Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>,
+    >;
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -144,6 +173,7 @@ pub fn client_for(
     id: &str,
     secrets: &Result<crate::secrets::Secrets, String>,
     saved: Vec<String>,
+    tools: Option<std::sync::Arc<dyn ToolCaller>>,
 ) -> Result<client::Client, String> {
     let c = list
         .iter()
@@ -153,7 +183,11 @@ pub fn client_for(
         return Err(format!("{} is switched off", c.name));
     }
     let secrets = secrets.as_ref().map_err(|e| format!("{}: {e}", c.name))?;
-    client::Client::new(c, secrets, saved)
+    let client = client::Client::new(c, secrets, saved)?;
+    Ok(match tools {
+        Some(tools) => client.with_tools(tools),
+        None => client,
+    })
 }
 
 pub fn templates() -> Vec<&'static str> {
@@ -484,7 +518,38 @@ fn check_call(call: &Call) -> Result<(), String> {
     }
 }
 
+fn check_tool_connector(c: &Connector) -> Result<(), String> {
+    if !c.base_url.is_empty() {
+        return Err("use either an address or a server, not both".into());
+    }
+    if !c.headers.is_empty() {
+        return Err("a connection through a server takes no headers".into());
+    }
+    for (name, call) in &c.calls {
+        if call.tool.is_empty() {
+            return Err(format!("call {name} needs a tool"));
+        }
+        if !call.request.is_unset() || !call.before.is_empty() {
+            return Err(format!("call {name} uses a server, so it takes no request"));
+        }
+        if call
+            .page
+            .as_ref()
+            .is_some_and(|p| p.style == PageStyle::Link)
+        {
+            return Err(format!("call {name}: a tool has no Link header to page by"));
+        }
+    }
+    Ok(())
+}
+
 fn check_connector(c: &Connector) -> Result<(), String> {
+    if !c.server.is_empty() {
+        return check_tool_connector(c);
+    }
+    if c.calls.values().any(|call| !call.tool.is_empty()) {
+        return Err("a call with a tool needs the connection to name a server".into());
+    }
     let parsed = reqwest::Url::parse(&c.base_url).ok();
     let secure = parsed.is_some_and(|u| {
         u.has_host() && (u.scheme() == "https" || (u.scheme() == "http" && c.allow_private))

@@ -134,6 +134,12 @@ fn connector_as_saved(cfg: &Config, mut c: Connector) -> Result<Connector, ApiEr
     if c.name.trim().is_empty() {
         c.name = c.id.clone();
     }
+    if !c.server.is_empty() && !cfg.mcp_servers.iter().any(|s| s.name == c.server) {
+        return Err(bad(format!(
+            "{} is not in Settings, Connections, and only a person can add a server",
+            c.server
+        )));
+    }
     crate::connectors::validate(std::slice::from_ref(&c)).map_err(bad)?;
     Ok(c)
 }

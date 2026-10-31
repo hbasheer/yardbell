@@ -281,18 +281,26 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
             .flat_map(connectors_of)
             .collect();
         for id in wanted {
+            if cfg
+                .connectors
+                .iter()
+                .any(|c| c.id == id && !c.server.is_empty())
+            {
+                continue;
+            }
             let saved = secrets
                 .as_ref()
                 .map(|s| s.values().map(|(_, v)| v.to_string()).collect())
                 .unwrap_or_default();
-            let found = match crate::connectors::client_for(&cfg.connectors, &id, &secrets, saved) {
-                Ok(client) if client.call_named("list").is_err() => Ok(0),
-                Ok(client) => {
-                    let vars = client.with_defaults(&Default::default()).await;
-                    client.list(&vars).await.map(|l| l.items.len())
-                }
-                Err(e) => Err(e),
-            };
+            let found =
+                match crate::connectors::client_for(&cfg.connectors, &id, &secrets, saved, None) {
+                    Ok(client) if client.call_named("list").is_err() => Ok(0),
+                    Ok(client) => {
+                        let vars = client.with_defaults(&Default::default()).await;
+                        client.list(&vars).await.map(|l| l.items.len())
+                    }
+                    Err(e) => Err(e),
+                };
             connectors.push((id, found));
         }
         for (ok, text) in pipelines_lines(&cfg, &defs, &linear, &gh, &signed_in, &up, &connectors) {

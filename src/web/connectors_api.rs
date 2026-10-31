@@ -50,7 +50,8 @@ fn view(app: &AppState, c: &Connector) -> Value {
         "name": c.name,
         "enabled": c.enabled,
         "base_url": c.base_url,
-        "host": host_of(&c.base_url),
+        "host": if c.server.is_empty() { host_of(&c.base_url) } else { Some(c.server.clone()) },
+        "server": c.server,
         "allow_private": c.allow_private,
         "headers": c.headers,
         "missing": missing,
@@ -86,6 +87,8 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
 
 #[derive(Deserialize)]
 struct SaveReq {
+    #[serde(default)]
+    server: String,
     id: String,
     #[serde(default)]
     was: String,
@@ -141,6 +144,7 @@ async fn save(
         id: req.id.trim().to_string(),
         enabled: req.enabled,
         base_url: req.base_url.trim().to_string(),
+        server: req.server.trim().to_string(),
         allow_private: req.allow_private,
         headers: req.headers,
         params: parse_yaml("params", &req.params_yaml).map_err(bad)?,
@@ -204,7 +208,15 @@ fn client(app: &AppState, id: &str) -> Result<Client, ApiError> {
     for c in &mut list {
         c.enabled = true;
     }
-    client_for(&list, id, &secrets, crate::mcp_read::saved_values(app)).map_err(bad)
+    let tools = crate::pipeline::run::AppTools::of(app);
+    client_for(
+        &list,
+        id,
+        &secrets,
+        crate::mcp_read::saved_values(app),
+        Some(tools),
+    )
+    .map_err(bad)
 }
 
 async fn test(

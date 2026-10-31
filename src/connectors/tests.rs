@@ -779,6 +779,7 @@ async fn the_feed_reports_a_cut_off_list_in_its_status() {
         connectors: &list,
         secrets: &store,
         saved: vec![],
+        tools: None,
         health: &health,
     };
     let out = feed.list("t", &Default::default()).await.unwrap();
@@ -802,6 +803,7 @@ async fn the_feed_reports_a_missing_secret() {
         connectors: &list,
         secrets: &store,
         saved: vec![],
+        tools: None,
         health: &health,
     };
     let e = feed.list("t", &Default::default()).await.unwrap_err();
@@ -816,10 +818,10 @@ fn client_for_says_what_is_wrong() {
     let dir = tempfile::tempdir().unwrap();
     let store = Ok(secrets(&dir));
     let mut c = connector("https://x.example", GET_ITEM);
-    let e = client_for(&[], "t", &store, vec![]).err().unwrap();
+    let e = client_for(&[], "t", &store, vec![], None).err().unwrap();
     assert_eq!(e, "there is no connector t");
     c.enabled = false;
-    let e = client_for(std::slice::from_ref(&c), "t", &store, vec![])
+    let e = client_for(std::slice::from_ref(&c), "t", &store, vec![], None)
         .err()
         .unwrap();
     assert_eq!(e, "Tool is switched off");

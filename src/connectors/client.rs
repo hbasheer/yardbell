@@ -40,6 +40,7 @@ pub struct Client {
     query_secrets: BTreeMap<String, String>,
     saved: Vec<String>,
     http: reqwest::Client,
+    tools: Option<Arc<dyn super::ToolCaller>>,
 }
 
 type Steps = BTreeMap<String, Value>;
@@ -223,7 +224,83 @@ impl Client {
             query_secrets,
             saved,
             http: http.build().map_err(|e| e.to_string())?,
+            tools: None,
         })
+    }
+
+    pub fn with_tools(mut self, tools: Arc<dyn super::ToolCaller>) -> Client {
+        self.tools = Some(tools);
+        self
+    }
+
+    async fn ask_tool(
+        &self,
+        call: &Call,
+        vars: &Vars,
+        steps: &Steps,
+        extra: Option<(String, String)>,
+    ) -> Result<Reply, String> {
+        use crate::mcp_client::Failure;
+        let name = &self.connector.name;
+        let server = &self.connector.server;
+        let tools = self.tools.as_ref().ok_or_else(|| {
+            format!("{name} goes through {server}, which only the running server can reach")
+        })?;
+        let mut arguments =
+            fill_json(&call.arguments, vars, steps).map_err(|e| format!("{name}: {e}"))?;
+        if let Some(fields) = arguments.as_object_mut() {
+            fields.retain(|_, v| v != "");
+            if let Some((key, value)) = extra {
+                fields.insert(key, Value::String(value));
+            }
+        }
+        let reply =
+            tools
+                .call(server, &call.tool, arguments)
+                .await
+                .map_err(|failure| match failure {
+                    Failure::NeedsSignIn(_) => {
+                        format!("{server}: sign in again under Settings, Connections")
+                    }
+                    Failure::NeedsScope(c) => format!(
+                    "{server} wants more access ({}). Sign in again under Settings, Connections",
+                    c.scope.as_deref().unwrap_or("no scope named")
+                ),
+                    Failure::NotAllowed(e) | Failure::Other(e) => self.scrub(&e),
+                })?;
+        if reply.is_error {
+            return Err(format!("{name}: {}", self.scrub(&reply.text)));
+        }
+        let value = match reply.structured {
+            Some(value) => value,
+            None => match serde_json::from_str(&reply.text) {
+                Ok(value) => value,
+                Err(_) if call.kind() == super::CallKind::Change => {
+                    Value::String(self.scrub(&reply.text))
+                }
+                Err(_) => {
+                    return Err(format!(
+                        "{name}: {} answered with text that is not JSON",
+                        call.tool
+                    ))
+                }
+            },
+        };
+        Ok(Reply { value, link: None })
+    }
+
+    pub(super) async fn send_call(
+        &self,
+        call: &Call,
+        vars: &Vars,
+        steps: &Steps,
+        extra: Option<(String, String)>,
+    ) -> Result<Reply, String> {
+        if call.tool.is_empty() {
+            self.send(&call.request, vars, steps, extra).await
+        } else {
+            self.ask_tool(call, vars, steps, extra).await
+        }
     }
 
     pub fn call_named(&self, name: &str) -> Result<&Call, String> {
@@ -393,7 +470,7 @@ impl Client {
     pub async fn call(&self, name: &str, vars: &Vars) -> Result<Value, String> {
         let call = self.call_named(name)?;
         let steps = self.run_before(call, vars).await?;
-        let reply = self.send(&call.request, vars, &steps, None).await?;
+        let reply = self.send_call(call, vars, &steps, None).await?;
         self.check_error(call, &reply.value)?;
         Ok(reply.value)
     }
@@ -408,6 +485,10 @@ impl Client {
         let line = |name: &str| crate::pipeline::prompts::one_line(&mapped(call, row, name));
         let item_id = line("item_id");
         let id = line("id");
+        let id = match id.rsplit_once('/') {
+            Some((_, last)) if id.contains("://") && !last.is_empty() => last.to_string(),
+            _ => id,
+        };
         Item {
             id: if id.is_empty() { item_id.clone() } else { id },
             item_id,

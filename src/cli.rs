@@ -294,11 +294,11 @@ pub async fn serve(
         host_mesh: crate::mesh::HostMesh::new(runner.clone()),
         folders: crate::folders::Folders::new(runner.clone(), ssh.clone()),
         worktrees: crate::worktrees::Worktrees::new(runner.clone(), ssh.clone()),
-        settings: crate::settings::Settings::new(
+        settings: Arc::new(crate::settings::Settings::new(
             path.clone(),
             expand_tilde("~/.ssh/config"),
             Arc::new(chrono::Local::now),
-        ),
+        )),
         phone,
         dispatch,
         triggers,

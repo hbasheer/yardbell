@@ -353,6 +353,7 @@ async fn connector_subjects(
         connector,
         &secrets,
         crate::mcp_read::saved_values(app),
+        Some(crate::pipeline::run::AppTools::of(app)),
     )
     .map_err(bad)?;
     let mut out = Vec::new();

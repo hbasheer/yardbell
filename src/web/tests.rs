@@ -148,11 +148,11 @@ fn rig() -> Rig {
             fake.clone(),
             Ssh::new(dir.path().join("state3")),
         ),
-        settings: crate::settings::Settings::new(
+        settings: Arc::new(crate::settings::Settings::new(
             cfg_path.clone(),
             dir.path().join("ssh_config"),
             Arc::new(chrono::Local::now),
-        ),
+        )),
         phone: Arc::new(Phone::default()),
         dispatch: Arc::new(crate::dispatch::Dispatch::new(
             fake.clone(),

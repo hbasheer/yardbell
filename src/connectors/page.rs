@@ -46,11 +46,38 @@ fn next_link(header: &str) -> Option<String> {
     })
 }
 
+// Rows grouped under a parent, such as cards under their list. Each row keeps its parent, without
+// the rows, as _parent, so a map can read what only the group knows.
+fn nested_rows(value: &Value, outer: &str, inner: &str) -> Option<Value> {
+    let groups = path(value, outer)?;
+    let mut out = Vec::new();
+    for group in groups.as_array()? {
+        let Some(list) = path(group, inner) else {
+            continue;
+        };
+        let mut parent = group.clone();
+        if let Some(fields) = parent.as_object_mut() {
+            fields.remove(inner);
+        }
+        for row in list.as_array().into_iter().flatten() {
+            let mut row = row.clone();
+            if let Some(fields) = row.as_object_mut() {
+                fields.insert("_parent".to_string(), parent.clone());
+            }
+            out.push(row);
+        }
+    }
+    Some(Value::Array(out))
+}
+
 fn rows<'a>(call: &Call, value: &'a Value, found: &'a mut Value) -> Option<&'a Vec<Value>> {
     if call.items.is_empty() {
         return value.as_array();
     }
-    *found = path(value, &call.items)?;
+    *found = match call.items.split_once("[].") {
+        Some((outer, inner)) => nested_rows(value, outer, inner)?,
+        None => path(value, &call.items)?,
+    };
     found.as_array()
 }
 
@@ -132,10 +159,7 @@ impl Client {
         for page_no in 1.. {
             let reply = match &link {
                 Some(url) => self.send_link(&call.request, url).await?,
-                None => {
-                    self.send(&call.request, &vars, &steps, extra.take())
-                        .await?
-                }
+                None => self.send_call(call, &vars, &steps, extra.take()).await?,
             };
             self.check_error(call, &reply.value)?;
             let mut holder = Value::Null;

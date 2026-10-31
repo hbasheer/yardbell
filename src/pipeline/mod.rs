@@ -526,6 +526,7 @@ impl Pipelines {
                     connectors: &connectors,
                     secrets: &secrets,
                     saved: crate::mcp_read::saved_values(&app),
+                    tools: Some(run::AppTools::of(&app)),
                     health: self.connector_health(),
                 };
                 let sources = triggers::Sources {

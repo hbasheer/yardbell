@@ -997,6 +997,7 @@ $("pr-folders").addEventListener("click", (e) => {
 let connections = { list: [], status: {}, starters: {} };
 let connHeaders = [];
 let connWas = "";
+let connServer = "";
 
 async function loadConnections() {
   connections = await api("GET", "/api/settings/connectors");
@@ -1059,7 +1060,9 @@ const toPairs = (object) => Object.entries(object || {}).map(([key, value]) => (
 const fromPairs = (pairs) => Object.fromEntries(pairs.filter((p) => p.key.trim()).map((p) => [p.key.trim(), p.value]));
 
 function callFromSaved(name, saved) {
-  const { request, map, items, kind, ...extra } = saved;
+  const { request, map, items, kind, tool, arguments: args, ...extra } = saved;
+  if (tool) extra.tool = tool;
+  if (args !== undefined) extra.arguments = args;
   const method = request?.method || "GET";
   const body = request?.body;
   return {
@@ -1080,8 +1083,16 @@ function callsToSave() {
   for (const call of connCalls) {
     const name = call.name.trim();
     if (!name) throw new Error("Every action needs a name.");
-    if (!call.path.trim()) throw new Error(`The action ${name} needs a path.`);
+    if (!call.path.trim() && !call.extra.tool) throw new Error(`The action ${name} needs a path.`);
     if (Object.hasOwn(out, name)) throw new Error(`There are two actions called ${name}.`);
+    if (call.extra.tool) {
+      const saved = { ...call.extra, kind: call.changes ? "change" : "lookup" };
+      const map = fromPairs(call.map);
+      if (Object.keys(map).length) saved.map = map;
+      if (call.items.trim()) saved.items = call.items.trim();
+      out[name] = saved;
+      continue;
+    }
     const request = { method: call.method, path: call.path.trim() };
     const query = fromPairs(call.query);
     if (Object.keys(query).length) request.query = query;
@@ -1234,7 +1245,9 @@ $("conn-choice-list").addEventListener("click", (e) => {
 
 function openConnection(c, was) {
   connWas = was;
+  connServer = c.server || "";
   const f = $("conn-form");
+  f.querySelector("[name=base_url]").closest("label").hidden = Boolean(connServer);
   $("conn-output").hidden = true;
   for (const key of ["name", "id", "base_url"]) f.elements[key].value = c[key] || "";
   const known = Object.keys(CALL_WORDS);
@@ -1409,7 +1422,8 @@ $("conn-form").addEventListener("submit", async (e) => {
     was: connWas,
     id: f.elements.id.value.trim() || slugOf(name),
     name,
-    base_url: f.elements.base_url.value.trim(),
+    base_url: connServer ? "" : f.elements.base_url.value.trim(),
+    server: connServer,
     enabled: f.elements.enabled.checked,
     allow_private: f.elements.allow_private.checked,
     headers: Object.fromEntries(connHeaders.filter((h) => h.name.trim()).map((h) => [h.name.trim(), h.value.trim()])),
@@ -1417,7 +1431,7 @@ $("conn-form").addEventListener("submit", async (e) => {
     calls_yaml: JSON.stringify(calls),
   };
   try {
-    if (!body.base_url) throw new Error("Type the tool's address, starting with https://");
+    if (!body.base_url && !connServer) throw new Error("Type the tool's address, starting with https://");
     body.headers = await tokensKept(body.headers, body.id);
     connHeaders = toPairs(body.headers).map(({ key, value }) => ({ name: key, value }));
     renderConnHeaders();

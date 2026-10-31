@@ -589,3 +589,110 @@ async fn a_secret_says_every_connection_that_uses_it() {
     let shared = list.iter().find(|s| s["name"] == "shared").unwrap();
     assert_eq!(shared["used_by"], json!(["My tool"]));
 }
+
+fn through_server(url: &str) -> (crate::config::McpServer, crate::connectors::Connector) {
+    let server = crate::config::McpServer {
+        name: "tracker".into(),
+        command: String::new(),
+        url: url.into(),
+        env: Default::default(),
+        headers: Default::default(),
+        machines: vec![],
+        allow_private: true,
+    };
+    let connector = serde_yaml::from_str(
+        r#"
+id: t
+name: Tracker
+server: tracker
+calls:
+  list:
+    tool: readCards
+    kind: lookup
+    items: cards
+    map: { item_id: id, title: name, url: url }
+"#,
+    )
+    .unwrap();
+    (server, connector)
+}
+
+async fn cards_server() -> crate::mcp_client::tests::Fake {
+    crate::mcp_client::tests::fake_with(std::sync::Arc::new(|message, _| {
+        (message["method"] == "tools/call").then(|| {
+            let cards = json!({ "cards": [{ "id": "c1", "name": "Fix login", "url": "https://x.example/c1", "private": "no" }] });
+            crate::mcp_client::tests::ok(
+                &message["id"],
+                json!({ "content": [{ "type": "text", "text": cards.to_string() }] }),
+            )
+        })
+    }))
+    .await
+}
+
+#[tokio::test]
+async fn test_shows_fields_from_a_tool() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let f = cards_server().await;
+    let (server, connector) = through_server(&f.base);
+    r.app.settings.set_mcp_servers(vec![server]).unwrap();
+    r.app.settings.set_connectors(vec![connector]).unwrap();
+    let req = Request::post("/api/settings/connectors/t/test")
+        .header(header::COOKIE, c.as_str())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from("{}"))
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let out: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(out["items"][0]["title"], "Fix login");
+    assert!(
+        out["paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|p| p == "private"),
+        "{out}"
+    );
+    let called = f
+        .heard
+        .lock()
+        .unwrap()
+        .iter()
+        .any(|h| h.2["params"]["name"] == "readCards");
+    assert!(called);
+}
+
+#[tokio::test]
+async fn share_holds_no_token_and_import_stays_off() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let f = cards_server().await;
+    let (server, connector) = through_server(&f.base);
+    r.app.settings.set_mcp_servers(vec![server]).unwrap();
+    r.app.settings.set_connectors(vec![connector]).unwrap();
+    let req = Request::get("/api/settings/connectors/t/share")
+        .header(header::COOKIE, c.as_str())
+        .header(header::ACCEPT, "application/json")
+        .body(Body::empty())
+        .unwrap();
+    let (_, _, body) = send(&r.app, req).await;
+    let shared: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let text = shared["text"].as_str().unwrap().to_string();
+    assert!(
+        text.contains("server: tracker") && !text.contains("Bearer"),
+        "{text}"
+    );
+    let req = Request::post("/api/settings/connectors/import")
+        .header(header::COOKIE, c.as_str())
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(
+            json!({ "text": text.replace("id: t\n", "id: copy\n") }).to_string(),
+        ))
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = r.app.config().unwrap().connectors;
+    assert!(!saved.iter().find(|x| x.id == "copy").unwrap().enabled);
+}

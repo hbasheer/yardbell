@@ -796,10 +796,63 @@ fn comment(run: &Run) -> String {
 }
 
 // Lists a connector for a trigger, and keeps what it found for Settings to show.
+// Calls a tool on one of Settings' servers, with its sign-in, as a connector over MCP needs.
+pub struct AppTools {
+    settings: Arc<crate::settings::Settings>,
+    pipelines: Arc<super::Pipelines>,
+}
+
+impl AppTools {
+    pub fn of(app: &AppState) -> Arc<dyn crate::connectors::ToolCaller> {
+        Arc::new(AppTools {
+            settings: app.settings.clone(),
+            pipelines: app.pipelines.clone(),
+        })
+    }
+}
+
+impl crate::connectors::ToolCaller for AppTools {
+    fn call<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+        arguments: Value,
+    ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>> {
+        Box::pin(async move {
+            use crate::mcp_client::Failure;
+            let cfg = self.settings.load().map_err(Failure::Other)?;
+            let secrets = self.settings.secrets().map_err(Failure::Other)?;
+            let found = cfg
+                .mcp_servers
+                .iter()
+                .find(|s| s.name == server)
+                .ok_or_else(|| {
+                    Failure::NotAllowed(format!("{server} is not in Settings, Connections"))
+                })?;
+            let saved = secrets.values().map(|(_, v)| v.to_string()).collect();
+            let mut client = crate::mcp_client::client_for(
+                found,
+                &cfg,
+                &secrets,
+                self.pipelines.mcp_auth(),
+                &self.settings,
+                saved,
+                TOOL_TIMEOUT,
+            )
+            .await?;
+            client.connect().await?;
+            let reply = client.call_tool(tool, arguments).await;
+            client.close().await;
+            reply
+        })
+    }
+}
+
 pub struct ConfigFeed<'a> {
     pub connectors: &'a [crate::connectors::Connector],
     pub secrets: &'a Result<Secrets, String>,
     pub saved: Vec<String>,
+    pub tools: Option<Arc<dyn crate::connectors::ToolCaller>>,
     pub health: &'a crate::connectors::Health,
 }
 
@@ -840,6 +893,7 @@ impl super::triggers::ConnectorFeed for ConfigFeed<'_> {
                 id,
                 self.secrets,
                 self.saved.clone(),
+                self.tools.clone(),
             ) {
                 Ok(client) => {
                     client
@@ -1088,6 +1142,7 @@ impl World for Live {
                     &ticket.source,
                     &self.secrets,
                     crate::mcp_read::saved_values(&self.app),
+                    Some(AppTools::of(&self.app)),
                 )?;
                 let item = client.read(&ticket.vars()).await?;
                 let text = TicketText {
@@ -1239,6 +1294,7 @@ impl World for Live {
                 connector,
                 &self.secrets,
                 crate::mcp_read::saved_values(&self.app),
+                Some(AppTools::of(&self.app)),
             )?;
             let reply = client.call(call, &vars).await?;
             let named = client.call_named(call)?;
