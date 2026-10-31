@@ -84,7 +84,11 @@ fn action_of(tool: &str, input: &Value, cwd: &str) -> Action {
         "Bash" => {
             let said = field("description");
             let command = field("command").lines().next().unwrap_or_default();
-            format!("Ran {}", if said.is_empty() { command } else { said })
+            if said.is_empty() {
+                format!("Ran {command}")
+            } else {
+                said.to_string()
+            }
         }
         "Grep" | "Glob" => format!("Searched for {}", field("pattern")),
         "Task" | "Agent" => format!("Started an agent: {}", field("description")),
@@ -245,11 +249,7 @@ mod tests {
         let did: Vec<&str> = work.actions.iter().map(|a| a.what.as_str()).collect();
         assert_eq!(
             did,
-            [
-                "Ran Run the tests",
-                "Edited src/login.rs",
-                "Read src/login.rs"
-            ]
+            ["Run the tests", "Edited src/login.rs", "Read src/login.rs"]
         );
         assert!(!text_contains(&work, "secret file body"));
     }
