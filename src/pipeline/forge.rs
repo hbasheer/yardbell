@@ -39,6 +39,10 @@ impl Forge {
         }
     }
 
+    pub fn remotes(&self) -> Remotes {
+        Remotes::new(self.runner.clone(), self.ssh.clone())
+    }
+
     // GitHub through gh on the machine the branch was pushed from; a host listed under
     // pull_requests.gitlab through GitLab's API from here, with the token the watcher uses.
     pub async fn open_draft(
@@ -47,14 +51,24 @@ impl Forge {
         path: &str,
         d: &Draft,
         gitlab: &[GitLabAccess],
+        github: Option<&crate::pulls::github_api::GitHubApi>,
     ) -> Result<PullRef, String> {
         let repo = Remotes::new(self.runner.clone(), self.ssh.clone())
             .read(m, path, &d.branch)
             .await
             .ok_or_else(|| format!("the branch {} has no remote Yardbell can read", d.branch))?;
         match gitlab.iter().find(|g| g.host == repo.host) {
+            Some(access) if access.glab => {
+                self.merge_request_glab(m, access, &repo.project, d).await
+            }
             Some(access) => self.merge_request(access, &repo.project, d).await,
-            None => self.pull_request(m, path, d).await,
+            None => match github {
+                Some(api) => api
+                    .create_draft(m, path, &d.branch, &d.title, &d.body)
+                    .await
+                    .map(|(url, number)| PullRef { url, number }),
+                None => self.pull_request(m, path, d).await,
+            },
         }
     }
 
@@ -96,6 +110,53 @@ gh pr create --draft --head {} --title {} --body-file -",
         Ok(PullRef {
             url: url.to_string(),
             number: number(url).unwrap_or_default(),
+        })
+    }
+
+    async fn merge_request_glab(
+        &self,
+        m: &Machine,
+        access: &GitLabAccess,
+        project: &str,
+        d: &Draft,
+    ) -> Result<PullRef, String> {
+        use crate::pulls::{glab_error, run_glab};
+        let base = format!("projects/{}", encode(project));
+        let about = run_glab(self.runner.as_ref(), &self.ssh, m, &access.host, &base, &[]).await;
+        if !about.ok() {
+            return Err(glab_error(
+                about.status,
+                &about.stderr,
+                &access.host,
+                &m.name,
+            ));
+        }
+        let cannot_read = || format!("glab on {} sent an answer Yardbell cannot read", m.name);
+        let about: Value = serde_json::from_str(&about.stdout).map_err(|_| cannot_read())?;
+        let target = about["default_branch"].as_str().unwrap_or("main");
+        let title = format!("Draft: {}", d.title);
+        let fields = [
+            ("source_branch", d.branch.as_str()),
+            ("target_branch", target),
+            ("title", title.as_str()),
+            ("description", d.body.as_str()),
+        ];
+        let made = run_glab(
+            self.runner.as_ref(),
+            &self.ssh,
+            m,
+            &access.host,
+            &format!("{base}/merge_requests"),
+            &fields,
+        )
+        .await;
+        if !made.ok() {
+            return Err(glab_error(made.status, &made.stderr, &access.host, &m.name));
+        }
+        let made: Value = serde_json::from_str(&made.stdout).map_err(|_| cannot_read())?;
+        Ok(PullRef {
+            url: made["web_url"].as_str().unwrap_or_default().to_string(),
+            number: made["iid"].as_u64().unwrap_or_default(),
         })
     }
 
@@ -226,7 +287,7 @@ mod tests {
             Output::ok_with("Creating draft...\nhttps://github.com/acme/app/pull/12\n"),
         );
         let pull = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[])
+            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[], None)
             .await
             .unwrap();
         assert_eq!(
@@ -272,7 +333,7 @@ mod tests {
             ),
         );
         let err = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[])
+            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[], None)
             .await
             .unwrap_err();
         assert_eq!(err, "gh is not logged in on hp");
@@ -315,6 +376,8 @@ mod tests {
             api: api.into(),
             secret: "gitlab".into(),
             token: Ok("glpat-secret".into()),
+            glab: false,
+            machine: None,
         }
     }
 
@@ -328,7 +391,13 @@ mod tests {
             Output::ok_with("git@git.example.com:acme/app.git\n"),
         );
         let pull = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[access(&api)])
+            .open_draft(
+                &machine("hp"),
+                "/r/acme/app",
+                &draft(),
+                &[access(&api)],
+                None,
+            )
             .await
             .unwrap();
         assert_eq!(pull.number, 87);
@@ -359,7 +428,13 @@ mod tests {
             Output::ok_with("git@git.example.com:acme/app.git\n"),
         );
         let err = forge(&runner)
-            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[access(&api)])
+            .open_draft(
+                &machine("hp"),
+                "/r/acme/app",
+                &draft(),
+                &[access(&api)],
+                None,
+            )
             .await
             .unwrap_err();
         assert_eq!(
@@ -367,5 +442,35 @@ mod tests {
             "the GitLab token for git.example.com needs the api scope to open a merge request"
         );
         assert!(!err.contains("glpat"));
+    }
+
+    #[tokio::test]
+    async fn glab_opens_a_draft_merge_request_on_the_machine() {
+        let runner = Arc::new(FakeRunner::default());
+        runner.stub(
+            "remote get-url",
+            Output::ok_with("git@git.example.com:acme/app.git\n"),
+        );
+        runner.stub(
+            "merge_requests",
+            Output::ok_with(
+                r#"{"web_url":"https://git.example.com/acme/app/-/merge_requests/7","iid":7}"#,
+            ),
+        );
+        runner.stub("glab api", Output::ok_with(r#"{"default_branch":"trunk"}"#));
+        let mut one = access("https://git.example.com/api/v4");
+        one.glab = true;
+        one.token = Ok(String::new());
+        let pull = forge(&runner)
+            .open_draft(&machine("hp"), "/r/acme/app", &draft(), &[one], None)
+            .await
+            .unwrap();
+        assert_eq!(pull.number, 7);
+        let calls = runner.calls().concat().join(" ");
+        assert!(
+            calls.contains("--raw-field") && calls.contains("target_branch=trunk"),
+            "{calls}"
+        );
+        assert!(calls.contains("Draft: COM-1 Fix"), "{calls}");
     }
 }

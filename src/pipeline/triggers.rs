@@ -526,6 +526,8 @@ pub(crate) mod tests {
                 api: String::new(),
                 secret: "gitlab".into(),
                 token: Ok("t".into()),
+                glab: false,
+                machine: None,
             }],
             linear_key: Ok("lin".into()),
             pattern: None,

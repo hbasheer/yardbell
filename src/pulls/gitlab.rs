@@ -1,11 +1,13 @@
 use super::{last_lines, Check, Ci, Note, Pull, LOG_BYTES, LOG_LINES, SEEN_NOTES};
 use crate::config::PullRequests;
 use crate::secrets::Secrets;
+use crate::shell::{quote, Runner};
+use crate::ssh::Ssh;
 use regex::Regex;
 use reqwest::{StatusCode, Url};
 use serde::Deserialize;
 use std::collections::HashMap;
-use std::sync::{Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 const TIMEOUT: Duration = Duration::from_secs(20);
@@ -20,6 +22,8 @@ pub struct GitLabAccess {
     pub api: String,
     pub secret: String,
     pub token: Result<String, String>,
+    pub glab: bool,
+    pub machine: Option<crate::config::Machine>,
 }
 
 impl std::fmt::Debug for GitLabAccess {
@@ -33,6 +37,7 @@ impl std::fmt::Debug for GitLabAccess {
             .field("api", &self.api)
             .field("secret", &self.secret)
             .field("token", &token)
+            .field("glab", &self.glab)
             .finish()
     }
 }
@@ -44,6 +49,27 @@ pub struct Mr {
     pub title: String,
     pub source_branch: String,
     pub project: String,
+}
+
+pub fn accesses_for(
+    cfg: &crate::config::Config,
+    secrets: &Result<Secrets, String>,
+) -> Vec<GitLabAccess> {
+    let here = cfg
+        .machines
+        .iter()
+        .find(|m| m.is_local())
+        .or(cfg.machines.first());
+    let glab = cfg.pull_requests.gitlab_via == crate::config::GitlabVia::Glab;
+    let mut list = accesses(&cfg.pull_requests, secrets);
+    for access in &mut list {
+        access.glab = glab;
+        access.machine = here.cloned();
+        if glab {
+            access.token = Ok(String::new());
+        }
+    }
+    list
 }
 
 pub fn accesses(cfg: &PullRequests, secrets: &Result<Secrets, String>) -> Vec<GitLabAccess> {
@@ -64,6 +90,8 @@ pub fn accesses(cfg: &PullRequests, secrets: &Result<Secrets, String>) -> Vec<Gi
                 api: g.api(),
                 secret: named.first().map(|n| n.to_string()).unwrap_or_default(),
                 token,
+                glab: false,
+                machine: None,
             }
         })
         .collect()
@@ -81,7 +109,7 @@ pub enum Answer {
 
 // A 401 means the token itself is refused, for every project on the host; a 403 only that this
 // token may not read one thing, such as one project or its jobs.
-enum Problem {
+pub(crate) enum Problem {
     Refused(String),
     Forbidden,
     NotFound,
@@ -100,10 +128,91 @@ impl From<Problem> for Answer {
 }
 
 fn the_token(access: &GitLabAccess) -> String {
-    if access.secret.is_empty() {
+    if access.glab {
+        "the glab login".into()
+    } else if access.secret.is_empty() {
         "its token".into()
     } else {
         format!("the token in secret {}", access.secret)
+    }
+}
+
+const NO_GLAB: i32 = 127;
+const GLAB_TIMEOUT: crate::shell::Duration = crate::shell::Duration::from_secs(30);
+
+fn endpoint(segments: &[&str], query: &[(&str, &str)]) -> String {
+    let mut url = Url::parse("http://glab.invalid/").expect("a static address");
+    url.path_segments_mut()
+        .expect("a static address")
+        .pop_if_empty()
+        .extend(segments);
+    if !query.is_empty() {
+        url.query_pairs_mut().extend_pairs(query);
+    }
+    let path = url.path().trim_start_matches('/');
+    match url.query() {
+        Some(q) => format!("{path}?{q}"),
+        None => path.to_string(),
+    }
+}
+
+pub(crate) async fn run_glab(
+    runner: &dyn Runner,
+    ssh: &Ssh,
+    m: &crate::config::Machine,
+    host: &str,
+    endpoint: &str,
+    post: &[(&str, &str)],
+) -> crate::shell::Output {
+    let mut cmd = format!(
+        "GLAB_CHECK_UPDATE=false NO_COLOR=1 NO_PROMPT=1; export GLAB_CHECK_UPDATE NO_COLOR NO_PROMPT; command -v glab >/dev/null 2>&1 || exit {NO_GLAB}; glab api --hostname {} {}",
+        quote(host),
+        quote(endpoint)
+    );
+    if !post.is_empty() {
+        cmd.push_str(" --method POST");
+        for (key, value) in post {
+            cmd.push_str(&format!(
+                " --raw-field {}",
+                quote(&format!("{key}={value}"))
+            ));
+        }
+    }
+    runner.run(ssh.command(m, &cmd), None, GLAB_TIMEOUT).await
+}
+
+pub(crate) fn glab_problem(
+    status: Option<i32>,
+    stderr: &str,
+    host: &str,
+    machine: &str,
+) -> Problem {
+    if status == Some(NO_GLAB) {
+        return Problem::Refused(format!("glab is not installed on {machine}"));
+    }
+    let answered = |code: &str| stderr.contains(&format!("HTTP {code}"));
+    if answered("401") {
+        return Problem::Refused(format!(
+            "glab is not signed in to {host} on {machine}. Run glab auth login there"
+        ));
+    }
+    if answered("403") {
+        return Problem::Forbidden;
+    }
+    if answered("404") {
+        return Problem::NotFound;
+    }
+    let said = stderr.lines().next().unwrap_or("no reason given").trim();
+    Problem::Failed(format!("glab failed on {machine}: {said}"))
+}
+
+pub(crate) fn glab_error(status: Option<i32>, stderr: &str, host: &str, machine: &str) -> String {
+    match glab_problem(status, stderr, host, machine) {
+        Problem::Refused(said) | Problem::Failed(said) => said,
+        Problem::Forbidden => format!("the glab login on {machine} cannot do this on {host}"),
+        Problem::NotFound => format!(
+            "{host} does not have this project, or the glab login on {machine} cannot see it"
+        ),
     }
 }
 
@@ -142,11 +251,20 @@ fn unreadable(e: String) -> Problem {
 pub struct GitLab {
     http: reqwest::Client,
     me: Mutex<HashMap<String, String>>,
+    runner: Option<(Arc<dyn Runner>, Ssh)>,
 }
 
 impl Default for GitLab {
     fn default() -> GitLab {
         GitLab::new()
+    }
+}
+
+impl GitLabAccess {
+    pub fn on(&self, m: &crate::config::Machine) -> GitLabAccess {
+        let mut access = self.clone();
+        access.machine = Some(m.clone());
+        access
     }
 }
 
@@ -159,7 +277,42 @@ impl GitLab {
                 .build()
                 .expect("an HTTP client"),
             me: Mutex::new(HashMap::new()),
+            runner: None,
         }
+    }
+
+    pub fn with_runner(mut self, runner: Arc<dyn Runner>, ssh: Ssh) -> GitLab {
+        self.runner = Some((runner, ssh));
+        self
+    }
+
+    async fn through_glab(
+        &self,
+        access: &GitLabAccess,
+        segments: &[&str],
+        query: &[(&str, &str)],
+    ) -> Result<String, Problem> {
+        let (Some((runner, ssh)), Some(m)) = (&self.runner, &access.machine) else {
+            return Err(Problem::Failed(
+                "glab cannot be asked from here, so check the connection's settings".into(),
+            ));
+        };
+        let out = run_glab(
+            runner.as_ref(),
+            ssh,
+            m,
+            &access.host,
+            &endpoint(segments, query),
+            &[],
+        )
+        .await;
+        if out.ok() {
+            return Ok(out.stdout);
+        }
+        if out.timed_out {
+            return Err(Problem::Failed(format!("glab timed out on {}", m.name)));
+        }
+        Err(glab_problem(out.status, &out.stderr, &access.host, &m.name))
     }
 
     async fn get(
@@ -211,6 +364,9 @@ impl GitLab {
         segments: &[&str],
         query: &[(&str, &str)],
     ) -> Result<String, Problem> {
+        if access.glab {
+            return self.through_glab(access, segments, query).await;
+        }
         let res = self.get(access, segments, query).await?;
         res.text().await.map_err(|e| unanswered(&access.host, e))
     }
@@ -322,8 +478,9 @@ impl GitLab {
             Ok(Some((pull, false))) => Answer::Partial(Box::new(pull)),
             Ok(None) => Answer::NoPull,
             Err(Problem::NotFound) => Answer::Failed(format!(
-                "project {project} not found on {}, or the token cannot see it",
-                access.host
+                "project {project} not found on {}, or {} cannot see it",
+                access.host,
+                the_token(access)
             )),
             Err(Problem::Forbidden) => Answer::Failed(forbidden(access, project)),
             Err(p) => p.into(),
@@ -1039,6 +1196,8 @@ pub(crate) mod stub {
                 api: format!("{}/api/v4", self.base),
                 secret: "gitlab".into(),
                 token: Ok(token.into()),
+                glab: false,
+                machine: None,
             }
         }
 
@@ -1329,6 +1488,8 @@ mod http_tests {
             api: format!("http://{addr}/api/v4"),
             secret: "gitlab".into(),
             token: Ok("glpat-good".into()),
+            glab: false,
+            machine: None,
         };
         let check = Check {
             name: "test / rspec".into(),
@@ -1383,7 +1544,7 @@ mod http_tests {
             .fetch(&stub.access("glpat-good"), "commslayer/app", "eng-2")
             .await;
         assert!(
-            matches!(&got, Answer::Failed(m) if m == "project commslayer/app not found on git.commslayer.com, or the token cannot see it"),
+            matches!(&got, Answer::Failed(m) if m == "project commslayer/app not found on git.commslayer.com, or the token in secret gitlab cannot see it"),
             "{got:?}"
         );
     }

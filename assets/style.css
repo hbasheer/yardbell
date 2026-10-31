@@ -1339,10 +1339,6 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-all[hidden], .conn-step[hidden], #conn-secrets[hidden], #conn-about[hidden] { display: none; }
 .conn-all .rows { border: 0; border-radius: 0; margin: 0; }
 .conn-all .rows:not([hidden]) + .rows:not([hidden]) { border-top: 1px solid var(--line); }
-.conn-none { margin-top: 12px; padding: 32px 20px; border: 1px solid var(--line); border-radius: var(--radius); text-align: center; }
-.conn-none[hidden] { display: none; }
-.conn-none h3 { margin: 0 0 4px; font-size: 14px; font-weight: 600; }
-.conn-none .help { margin: 0; }
 .conn-dialog { width: min(820px, calc(100vw - 32px)); max-height: calc(100dvh - 32px); padding: 0; border: 0; border-radius: 16px; background: var(--surface); color: var(--ink); box-shadow: 0 0 0 1px rgb(0 0 0 / 0.06), 0 8px 16px -4px rgb(26 26 26 / 0.22); overflow: hidden; }
 .conn-dialog[open] { display: flex; flex-direction: column; }
 .conn-dialog-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 16px 20px 12px; }
@@ -1369,7 +1365,17 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-more-body .help { margin: 0; }
 .conn-secrets { display: grid; gap: 14px; }
 .conn-error { color: var(--bad-text, var(--bad)); flex: 1; margin: 0; min-height: 1.5em; }
-.conn-card[hidden], #conn-sign-in-none[hidden] { display: none; }
+.conn-card[hidden], #conn-sign-in-none[hidden], #github-token-fields[hidden], #pr-github[hidden] { display: none; }
+.conn-via { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.conn-step .form-foot { justify-content: flex-end; }
+.conn-via .conn-via-option { margin: 0; }
+.conn-via legend { padding: 0 0 6px; font-size: 13px; font-weight: 500; }
+.conn-step label.conn-via-option { display: flex; align-items: flex-start; gap: 10px; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; cursor: pointer; }
+.conn-via-option:has(input:checked) { border-color: var(--ink); }
+.conn-via-option span { display: grid; gap: 2px; }
+.conn-via-option small { color: var(--muted); font-size: 12.5px; font-weight: 400; }
+#github-token-fields { display: grid; gap: 14px; }
+.pr-hosts.no-tokens label:has([data-key=token]) { display: none; }
 .conn-empty { margin: 0; color: var(--muted); font-size: 13px; }
 #conn-sign-in-search { width: 100%; box-sizing: border-box; }
 .conn-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(200px, 100%), 1fr)); gap: 8px; margin: 0; padding: 0; list-style: none; }

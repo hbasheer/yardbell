@@ -2,7 +2,7 @@ use crate::config::Machine;
 use std::path::PathBuf;
 
 pub const REMOTE_PATH: &str =
-    r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"; export PATH; "#;
+    r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/snap/bin:$HOME/.local/bin"; export PATH; "#;
 
 const SOCKET_PATH_MAX: usize = 100;
 const CONTROL_HASH_LEN: usize = 40;
@@ -123,7 +123,7 @@ mod tests {
                 "-o",
                 "ServerAliveCountMax=3",
                 "hp-host",
-                r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"; export PATH; true"#
+                r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/snap/bin:$HOME/.local/bin"; export PATH; true"#
             ]
         );
         assert!(control_dir(dir.path()).is_dir());

@@ -247,8 +247,13 @@ pub async fn serve(
     });
     Arc::new(
         crate::pulls::Pulls::new(
-            Arc::new(crate::pulls::GitHub::new(runner.clone(), ssh.clone())),
-            Arc::new(crate::pulls::GitLab::new()),
+            Arc::new(crate::pulls::github_api::GitHubEither::new(
+                Arc::new(crate::pulls::GitHub::new(runner.clone(), ssh.clone())),
+                Arc::new(crate::pulls::github_api::GitHubApi::new(
+                    crate::pulls::Remotes::new(runner.clone(), ssh.clone()),
+                )),
+            )),
+            Arc::new(crate::pulls::GitLab::new().with_runner(runner.clone(), ssh.clone())),
             crate::pulls::Remotes::new(runner.clone(), ssh.clone()),
             dir.join("pulls.json"),
         )

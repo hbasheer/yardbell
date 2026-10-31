@@ -288,10 +288,58 @@ function serverMenu(srv, i) {
 }
 
 function showConnectionsEmpty() {
-  const none = !(data?.mcp_servers || []).length && !connections.list.length;
-  $("conn-none").hidden = !none;
-  $("conn-all").hidden = none;
-  $("conn-guide").open = none;
+  $("conn-guide").open = !(data?.mcp_servers || []).length && !connections.list.length;
+}
+
+function forgeRow(key, name, where, type, state, detail) {
+  return `<li class="row conn-row" data-forge="${key}">
+    <span class="conn-name"><strong>${esc(name)}</strong><small>${esc(where)}</small>${detail ? `<small class="conn-detail">${esc(detail)}</small>` : ""}</span>
+    <span class="conn-type">${esc(type)}</span>
+    <span class="conn-status">${state}</span>
+    <span class="conn-actions"><button class="btn small-link" type="button">Edit</button></span>
+  </li>`;
+}
+
+function forgeBadge(on, problem, checked) {
+  if (!on) return badge("idle", "Switched off");
+  if (problem) return badge("bad", "Failing");
+  return checked ? badge("ok", "Working") : badge("idle", "Not checked");
+}
+
+function renderForges() {
+  const { value, status } = data.pull_requests;
+  const githubToken = value.github_via === "token";
+  const gitlabGlab = value.gitlab_via === "glab";
+  const github = githubToken
+    ? { problem: status.github_problem, checked: status.github_checked }
+    : {
+      problem: Object.values(status.machines).find(Boolean),
+      checked: Object.keys(status.machines).length > 0,
+    };
+  const hosts = value.gitlab || [];
+  const gitlab = {
+    problem: hosts.length ? Object.values(status.hosts).find(Boolean) : "",
+    checked: Object.keys(status.hosts).length > 0,
+  };
+  const on = (flag) => flag !== false;
+  $("forge-rows").innerHTML = [
+    forgeRow("github", "GitHub", "Pull requests and CI on sessions", githubToken ? "Token" : "gh", forgeBadge(on(value.use_github), github.problem, github.checked), on(value.use_github) ? github.problem : ""),
+    forgeRow("gitlab", "GitLab", hosts.length ? hosts.map((h) => h.host).join(", ") : "Merge requests and CI on sessions", gitlabGlab ? "glab" : "Token",
+      hosts.length ? forgeBadge(on(value.use_gitlab), gitlab.problem, gitlab.checked) : badge("idle", "No hosts"), on(value.use_gitlab) ? gitlab.problem : ""),
+  ].join("");
+}
+
+function showForgeFields() {
+  const f = $("pr-form").elements;
+  $("github-token-fields").hidden = f.github_via.value !== "token";
+  $("pr-github").hidden = f.github_via.value === "token";
+  $("pr-hosts").classList.toggle("no-tokens", f.gitlab_via.value === "glab");
+}
+
+function openForge(key) {
+  flowAdding = false;
+  showForgeFields();
+  showStep(`forge-${key}`, key === "github" ? "GitHub" : "GitLab");
 }
 
 function serverWhere(srv) {
@@ -323,7 +371,7 @@ function signsInHere() {
   return ["127.0.0.1", "localhost"].includes(location.hostname);
 }
 
-const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools", "conn-output"];
+const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools", "conn-output", "forge-github", "forge-gitlab"];
 const FLOW_TABS = ["conn-new-panel", "server-form", "conn-tab-token"];
 let flowStep = null;
 let flowAdding = false;
@@ -774,8 +822,16 @@ function renderPullRequests() {
   f.elements.poll_seconds.value = value.poll_seconds;
   f.elements.use_github.checked = value.use_github !== false;
   f.elements.use_gitlab.checked = value.use_gitlab !== false;
+  f.elements.github_via.value = value.github_via || "gh";
+  f.elements.gitlab_via.value = value.gitlab_via || "token";
+  $("forge-github").querySelector("[name=github_paste]").value = "";
+  const names = (data.secrets?.list || []).map((x) => `\${secret:${x.name}}`);
+  f.elements.github_token.innerHTML = `<option value="">${names.length ? "Pick a saved secret" : "No saved secrets yet"}</option>${names.map((t) => `<option value="${esc(t)}"${t === value.github_token ? " selected" : ""}>${esc(t)}</option>`).join("")}`;
+  renderForges();
+  showForgeFields();
   gitlabHosts = (value.gitlab || []).map((g) => ({ host: g.host, url: g.url || "", token: g.token }));
   renderHosts();
+  $("pr-github").hidden = value.github_via === "token";
   $("pr-github").innerHTML = (data.machines || []).map((m) => {
     const seen = Object.hasOwn(status.machines, m.name);
     const line = serviceLine(status.machines[m.name], seen ? "gh works" : "");
@@ -825,6 +881,11 @@ function folderState(f) {
   if (f.service === "none") return { cls: "pr-wait", text: "This folder has no origin remote." };
   if (f.service === "github") {
     if (!form.use_github.checked) return { cls: "pr-wait", text: "GitHub is switched off." };
+    if (form.github_via.value === "token") {
+      const { github_problem: problem, github_checked: checked } = data.pull_requests.status;
+      if (problem) return { cls: "pr-bad", text: problem };
+      return checked ? { cls: "pr-ok", text: "Read with the token, which works." } : { cls: "pr-wait", text: "Read with the token. Not checked yet." };
+    }
     const { machines } = data.pull_requests.status;
     if (machines[f.machine]) return { cls: "pr-bad", text: machines[f.machine] };
     return Object.hasOwn(machines, f.machine) ? { cls: "pr-ok", text: "Read with gh, which works." } : { cls: "pr-wait", text: "Read with gh. Not checked yet." };
@@ -833,7 +894,8 @@ function folderState(f) {
     if (!form.use_gitlab.checked) return { cls: "pr-wait", text: "GitLab is switched off." };
     const { hosts } = data.pull_requests.status;
     if (hosts[f.host]) return { cls: "pr-bad", text: hosts[f.host] };
-    return Object.hasOwn(hosts, f.host) ? { cls: "pr-ok", text: "Read with its token, which works." } : { cls: "pr-wait", text: "Read with its token. Not checked yet." };
+    const way = form.gitlab_via.value === "glab" ? "glab" : "its token";
+    return Object.hasOwn(hosts, f.host) ? { cls: "pr-ok", text: `Read with ${way}, which works.` } : { cls: "pr-wait", text: `Read with ${way}. Not checked yet.` };
   }
   if (f.service === "gitlab_unlisted") return { cls: "pr-bad", text: `Add ${f.host} to see its merge requests.`, add: "Add this host" };
   return { cls: "pr-wait", text: `Yardbell cannot tell what ${f.host} runs. If it is GitLab, add it.`, add: "Add as GitLab" };
@@ -882,16 +944,12 @@ window.addEventListener("hashchange", pullFoldersWanted);
 
 $("pr-folders-refresh").addEventListener("click", loadPullFolders);
 
-$("pr-form").addEventListener("change", (e) => {
-  if (["use_github", "use_gitlab"].includes(e.target.name)) renderFolders();
-});
-
 $("pr-folders").addEventListener("click", (e) => {
   const button = e.target.closest("[data-add-host]");
   if (!button) return;
   gitlabHosts.push({ host: button.dataset.addHost, url: "", token: "" });
   renderHosts();
-  $("pr-hosts").querySelector(".row:last-child [data-key=token]").focus();
+  openForge("gitlab");
 });
 
 let connections = { list: [], status: {}, starters: {} };
@@ -1215,15 +1273,25 @@ $("pr-form").addEventListener("submit", async (e) => {
     use_github: f.elements.use_github.checked,
     use_gitlab: f.elements.use_gitlab.checked,
     poll_seconds: Number(f.elements.poll_seconds.value),
+    github_via: f.elements.github_via.value,
+    github_token: f.elements.github_token.value,
+    gitlab_via: f.elements.gitlab_via.value,
     gitlab: gitlabHosts.map((g) => ({ host: g.host.trim(), ...(g.url.trim() ? { url: g.url.trim() } : {}), token: g.token })),
   };
+  const paste = $("forge-github").querySelector("[name=github_paste]");
   try {
+    if (paste.value.trim()) {
+      await api("POST", "/api/settings/secrets", { name: "github_pr", value: paste.value.trim() });
+      body.github_token = "${secret:github_pr}";
+    }
     await api("POST", "/api/settings/pull-requests", body);
+    paste.value = "";
     saved("GitHub and GitLab updated.");
+    closeFlow();
     await load();
     loadPullFolders();
   } catch (err) {
-    toast(err.message);
+    tellFlow(err.message);
   }
 });
 
@@ -1594,6 +1662,22 @@ $("mcp-tools").addEventListener("click", (e) => {
 window.addEventListener("focus", () => {
   if (waiting) checkSignedIn().catch((err) => toast(err.message));
   else if (refreshOnReturn) refreshServerAuth().catch(() => {});
+});
+
+$("forge-rows").addEventListener("click", (e) => {
+  const row = e.target.closest("[data-forge]");
+  if (row) openForge(row.dataset.forge);
+});
+
+$("conn-flow").addEventListener("click", (e) => {
+  if (!e.target.closest("[data-cancel-forge]")) return;
+  closeFlow();
+  renderPullRequests();
+});
+
+$("conn-flow").addEventListener("change", (e) => {
+  if (["use_github", "use_gitlab", "gitlab_via"].includes(e.target.name)) renderFolders();
+  if (["github_via", "gitlab_via"].includes(e.target.name)) showForgeFields();
 });
 
 $("server-rows").addEventListener("click", async (e) => {

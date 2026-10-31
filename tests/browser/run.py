@@ -2742,18 +2742,74 @@ class Suite:
         if "A new session" in b.js("document.querySelector('#pl-inspector').textContent"):
             raise Failure("the Session choice is still there")
 
+    def test_github_and_gitlab_connect_their_own_way(self):
+        b = self.b
+        before = self.api("GET", "/api/settings")["pull_requests"]["value"]
+        try:
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.querySelector('#forge-rows [data-forge=github]')", "GitHub among the connections")
+            if b.js("[...document.querySelectorAll('.settings-nav a')].some((a) => a.textContent === 'GitHub and GitLab')"):
+                raise Failure("GitHub and GitLab still have their own menu item")
+            if b.js("document.querySelector('#forge-rows [data-forge=github] .conn-type').textContent") != "gh":
+                raise Failure("GitHub should default to gh")
+            if b.js("document.querySelector('#forge-rows [data-forge=gitlab] .conn-type').textContent") != "Token":
+                raise Failure("GitLab should default to a token")
+
+            b.click("#forge-rows [data-forge=github]")
+            b.wait("!document.getElementById('forge-github').hidden", "the GitHub step")
+            if b.js("document.getElementById('conn-tabs').hidden") is not True:
+                raise Failure("the tabs belong to New connection")
+            if not b.js("document.getElementById('github-token-fields').hidden"):
+                raise Failure("gh needs no token fields")
+            b.js("document.querySelector('#forge-github [name=github_via][value=token]').click()")
+            b.wait("!document.getElementById('github-token-fields').hidden", "the token fields")
+            self.set_field("#forge-github [name=github_paste]", "ghp_BROWSER_VALUE")
+            b.click("#forge-github button[type=submit]")
+            b.wait("document.querySelector('#forge-rows [data-forge=github] .conn-type')?.textContent === 'Token' && !document.getElementById('conn-flow').open", "GitHub saved with a token")
+            with open(self.y.config) as f:
+                config = f.read()
+            for want in ("github_via: token", "${secret:github_pr}"):
+                if want not in config:
+                    raise Failure(f"yardbell.yml does not hold {want}")
+            if "ghp_BROWSER_VALUE" in config or "ghp_BROWSER_VALUE" in b.js("document.documentElement.outerHTML"):
+                raise Failure("the token's value was kept where it can be seen")
+
+            b.click("#forge-rows [data-forge=gitlab]")
+            b.wait("!document.getElementById('forge-gitlab').hidden", "the GitLab step")
+            b.js("document.querySelector('#forge-gitlab [name=gitlab_via][value=glab]').click()")
+            b.click("#pr-add-host")
+            b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
+            if b.js("document.querySelector('#pr-hosts [data-key=token]').offsetParent !== null"):
+                raise Failure("glab needs no token box")
+            self.set_field("#pr-hosts .row:last-child [data-key=host]", "git.example.com")
+            b.click("#forge-gitlab button[type=submit]")
+            b.wait("document.querySelector('#forge-rows [data-forge=gitlab] .conn-type')?.textContent === 'glab' && !document.getElementById('conn-flow').open", "GitLab saved with glab")
+            with open(self.y.config) as f:
+                config = f.read()
+            if "gitlab_via: glab" not in config or "host: git.example.com" not in config:
+                raise Failure(f"yardbell.yml does not hold the glab choice:\n{config}")
+            self.check_errors("how GitHub and GitLab connect")
+        finally:
+            b.js("document.getElementById('conn-flow')?.close()")
+            self.api("POST", "/api/settings/pull-requests", before)
+            self.api("POST", "/api/settings/secrets/delete", {"name": "github_pr"})
+
     def test_settings_pull_requests_section(self):
         b = self.b
         self.api("POST", "/api/settings/secrets", {"name": "gitlab", "value": "glpat-browser-test"})
+        b.goto(self.url("/"))
         b.goto(self.url("/settings#pull-requests"))
         b.wait("document.querySelector('#pr-form [name=enabled]')?.checked === true", "the Pull requests section")
+        self.set_field("#pr-form [name=poll_seconds]", "300")
+        b.click("#forge-rows [data-forge=gitlab]")
+        b.wait("!document.getElementById('forge-gitlab').hidden", "the GitLab step")
         b.click("#pr-add-host")
         b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
         self.set_field("#pr-hosts .row:last-child [data-key=host]", "git.example.com")
         self.set_field("#pr-hosts .row:last-child [data-key=token]", "${secret:gitlab}")
-        self.set_field("#pr-form [name=poll_seconds]", "300")
-        b.click("#pr-form button[type=submit]")
-        b.wait("!document.getElementById('undo-bar').hidden", "the section saved")
+        b.click("#forge-gitlab button[type=submit]")
+        b.wait("!document.getElementById('conn-flow').open && document.querySelector('#forge-rows [data-forge=gitlab]').textContent.includes('git.example.com')", "the section saved")
         with open(self.y.config) as f:
             config = f.read()
         for want in ("host: git.example.com", "poll_seconds: 300"):
@@ -3095,9 +3151,6 @@ class Suite:
         for part in ("New connection", "Sign in", "Test"):
             if part not in guide:
                 raise Failure(f"the guide does not mention {part}: {guide}")
-        empty = b.js("!connections.list.length")
-        if empty and b.js("document.getElementById('conn-none').hidden"):
-            raise Failure("an empty page does not say so")
         b.click("#conn-new")
         b.wait("document.querySelector('[data-sign-in=trello]')", "Trello under sign in")
         b.click("[data-another]")
@@ -3113,8 +3166,6 @@ class Suite:
             b.wait("document.getElementById('mcp-sign-in').textContent.includes('You will sign in at auth.example.com')", "the host, after picking Trello")
             if not b.js("data.mcp_servers.some((s) => s.name === 'trello' && s.url === 'https://mcp.trello.com/v1')"):
                 raise Failure("picking Trello did not add it")
-            if b.js("document.getElementById('conn-none').hidden") is not True:
-                raise Failure("the empty message stayed")
             self.check_errors("the one Connections page")
         finally:
             self.remove_mcp_servers()
@@ -3181,14 +3232,17 @@ class Suite:
         b = self.b
         cfg_before = self.api("GET", "/api/settings")["pull_requests"]["value"]
         self.api("POST", "/api/settings/pull-requests", {**cfg_before, "gitlab": []})
+        b.goto(self.url("/"))
         b.goto(self.url("/settings#pull-requests"))
         b.wait("document.querySelector('#pr-form [name=enabled]')?.checked === true", "the section")
-        said = b.js("document.getElementById('pull-requests').textContent")
+        said = b.js("document.getElementById('connections').textContent")
         for want in ("GitHub", "gh auth login", "GitLab", "read_api", "No GitLab hosts yet"):
             if want not in said:
                 raise Failure(f"the section does not say {want!r}:\n{said}")
         if "hp" not in b.js("document.getElementById('pr-github').textContent"):
             raise Failure("GitHub does not list the machines")
+        b.click("#forge-rows [data-forge=gitlab]")
+        b.wait("!document.getElementById('forge-gitlab').hidden", "the GitLab step")
         b.click("#pr-add-host")
         b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
         for width in (1280, 390):
@@ -3210,10 +3264,11 @@ class Suite:
         for want in ("Host", "Address", "Token", "Not checked yet"):
             if want not in row:
                 raise Failure(f"the host row does not say {want!r}: {row}")
-        if "No GitLab hosts yet" in b.js("document.getElementById('pull-requests').innerText"):
+        if "No GitLab hosts yet" in b.js("document.getElementById('forge-gitlab').innerText"):
             raise Failure("the empty note stayed after adding a host")
-        if not b.js("document.querySelector('#pull-requests a[href=\"#servers\"]')"):
+        if not b.js("document.querySelector('#forge-gitlab a[href=\"#servers\"]')"):
             raise Failure("no way to the saved secrets")
+        b.js("document.getElementById('conn-flow').close()")
         b.js("""window.__real = window.fetch; window.fetch = (u, o) => String(u).includes('/pull-requests/folders')
           ? Promise.resolve(new Response(JSON.stringify({ unreachable: [], folders: [
               { machine: 'hp', folder: 'web', host: 'github.com', project: 'acme/web', service: 'github' },
@@ -3231,12 +3286,15 @@ class Suite:
         hosts = b.js("document.querySelectorAll('#pr-hosts .row').length")
         b.click("#pr-folders [data-add-host]")
         b.wait(f"document.querySelectorAll('#pr-hosts .row').length === {hosts + 1}", "the host added")
+        b.wait("!document.getElementById('forge-gitlab').hidden", "the GitLab step for the new host")
         if b.js("document.querySelector('#pr-hosts .row:last-child [data-key=host]').value") != "gitlab.acme.org":
             raise Failure("the added host is not the folder's")
         if b.js("document.querySelector('#pr-folders [data-add-host]')"):
             raise Failure("the folder still asks to add a host now listed")
-        b.js("document.querySelector('#pr-form [name=use_github]').click()")
+        b.js("document.querySelector('#forge-github [name=use_github]').click()")
         b.wait("document.getElementById('pr-folders').textContent.includes('GitHub is switched off')", "GitHub off in the folder list")
+        b.js("document.querySelector('#forge-github [name=use_github]').click()")
+        b.js("document.getElementById('conn-flow').close()")
         b.js("window.fetch = window.__real")
         self.check_errors("the GitHub and GitLab section")
 

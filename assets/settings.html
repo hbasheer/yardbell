@@ -70,7 +70,6 @@
       <a href="#dispatch">Dispatch</a>
       <a href="#triggers">Triggers</a>
       <a href="#worktree-setup">Worktree setup</a>
-      <a href="#pull-requests">GitHub and GitLab</a>
       <a href="#connections">Connections</a>
       <a href="#mcp">Let agents use Yardbell</a>
       <p class="nav-label">General</p>
@@ -314,48 +313,6 @@
     </form>
   </section>
 
-  <section id="pull-requests">
-    <div class="section-head"><h2>GitHub and GitLab</h2></div>
-    <p class="help">A session shows its branch's pull or merge request next to the branch, with its state and CI.</p>
-    <form class="panel pr-panel" id="pr-form">
-      <div class="phone-switches">
-        <label class="choice"><input type="checkbox" name="enabled">Show pull and merge requests</label>
-        <label class="choice"><input type="checkbox" name="cards">Post a card in Dispatch when CI fails or a reviewer comments</label>
-        <label class="choice phone-wait">Check every <input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required> seconds</label>
-      </div>
-
-      <div class="pr-part">
-        <label class="choice"><input type="checkbox" name="use_github"><strong>GitHub</strong></label>
-        <p class="help">Nothing to enter here. Yardbell asks <code>gh</code> on each session's machine, so each machine needs it installed and signed in with <code>gh auth login</code>.</p>
-        <ul class="pr-status" id="pr-github"></ul>
-      </div>
-
-      <div class="pr-part">
-        <div class="pr-part-head">
-          <label class="choice"><input type="checkbox" name="use_gitlab"><strong>GitLab</strong></label>
-          <button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button>
-        </div>
-        <p class="help">Add each GitLab server your folders use. Yardbell asks its API with a personal access token that has the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Save the token as a secret first, under <a href="#servers">Connections, Secrets</a>.</p>
-        <p class="pr-none" id="pr-no-hosts">No GitLab hosts yet, so merge requests do not show.</p>
-        <ul class="rows pr-hosts" id="pr-hosts"></ul>
-      </div>
-
-      <div class="pr-part">
-        <div class="pr-part-head">
-          <strong>Your folders</strong>
-          <button class="btn small-link" type="button" id="pr-folders-refresh">Check again</button>
-        </div>
-        <p class="help">Read from each folder's <code>origin</code> remote.</p>
-        <ul class="pr-folders" id="pr-folders"></ul>
-      </div>
-
-      <div class="form-foot">
-        <p class="help" id="pr-note" role="status"></p>
-        <button class="btn primary" type="submit">Save</button>
-      </div>
-    </form>
-  </section>
-
   <section id="connections">
     <div class="section-head"><h2>Connections</h2><button class="btn primary small-link" type="button" id="conn-new">New connection</button></div>
     <div id="conn-home">
@@ -371,11 +328,36 @@
       </details>
       <div class="conn-all" id="conn-all">
         <div class="conn-head" aria-hidden="true"><span>Connection</span><span>Type</span><span>Status</span><span></span></div>
+        <ul class="rows" id="forge-rows"></ul>
         <ul class="rows" id="server-rows"></ul>
         <ul class="rows conn-rows" id="conn-rows"></ul>
       </div>
-      <div class="conn-none" id="conn-none"><h3>No connections yet</h3><p class="help">Connect the tools your pipelines and agent sessions use.</p></div>
 
+
+      <div id="pull-requests">
+        <div class="section-head sub-head"><h3>Pull and merge requests</h3></div>
+        <p class="help">A session shows its branch's pull or merge request next to the branch, with its state and CI.</p>
+        <form class="panel pr-panel" id="pr-form">
+      <div class="phone-switches">
+        <label class="choice"><input type="checkbox" name="enabled">Show pull and merge requests</label>
+        <label class="choice"><input type="checkbox" name="cards">Post a card in Dispatch when CI fails or a reviewer comments</label>
+        <label class="choice phone-wait">Check every <input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required> seconds</label>
+      </div>
+
+      <div class="pr-part">
+        <div class="pr-part-head">
+          <strong>Your folders</strong>
+          <button class="btn small-link" type="button" id="pr-folders-refresh">Check again</button>
+        </div>
+        <p class="help">Read from each folder's <code>origin</code> remote.</p>
+        <ul class="pr-folders" id="pr-folders"></ul>
+      </div>
+      <div class="form-foot">
+        <p class="help" id="pr-note" role="status"></p>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+        </form>
+      </div>
     <div id="servers">
     <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
     <p class="help">Tokens for connections that need one, kept in <code id="secrets-file">secrets.yml</code>, which only your account can read. A value is never shown again once it is saved. Refer to one as <code>${secret:NAME}</code> in a header, an environment variable or a URL, for example <code>Authorization=Bearer ${secret:linear}</code>.</p>
@@ -496,6 +478,32 @@
         <button class="btn primary" type="submit">Import</button>
       </div>
     </form>
+      <div class="conn-step" id="forge-github" hidden>
+        <label class="choice"><input type="checkbox" name="use_github" form="pr-form">Show GitHub pull requests on sessions</label>
+        <fieldset class="conn-via"><legend>How it connects</legend>
+          <label class="conn-via-option"><input type="radio" name="github_via" value="gh" form="pr-form"><span><strong>Local gh</strong><small>Yardbell asks <code>gh</code> on each session's machine. Each machine needs it installed and signed in with <code>gh auth login</code>.</small></span></label>
+          <label class="conn-via-option"><input type="radio" name="github_via" value="token" form="pr-form"><span><strong>A token</strong><small>Yardbell asks GitHub's API from here, so machines need nothing installed. For github.com only.</small></span></label>
+        </fieldset>
+        <div id="github-token-fields" hidden>
+              <label>Saved secret<select name="github_token" form="pr-form"></select></label>
+              <label>Or paste a new token<input type="password" name="github_paste" autocomplete="new-password" placeholder="Paste a token" autocapitalize="off" spellcheck="false"></label>
+              <p class="help">Saved as the secret <code>github_pr</code>. It needs read access to pull requests, checks and actions, and write access to pull requests if a pipeline opens drafts.</p>
+            </div>
+        <ul class="pr-status" id="pr-github"></ul>
+        <div class="form-foot"><button class="btn quiet" type="button" data-cancel-forge>Cancel</button><button class="btn primary" type="submit" form="pr-form">Save</button></div>
+      </div>
+      <div class="conn-step" id="forge-gitlab" hidden>
+        <label class="choice"><input type="checkbox" name="use_gitlab" form="pr-form">Show GitLab merge requests on sessions</label>
+        <fieldset class="conn-via"><legend>How it connects</legend>
+          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="token" form="pr-form"><span><strong>A token for each host</strong><small>Yardbell asks GitLab's API from here. The token needs the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Save the token as a secret first, under <a href="#servers">Connections, Secrets</a>.</small></span></label>
+          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="glab" form="pr-form"><span><strong>Local glab</strong><small>Yardbell asks <code>glab</code> on each session's machine. Each machine needs it installed and signed in with <code>glab auth login</code>.</small></span></label>
+        </fieldset>
+        <div class="pr-part-head"><strong>Hosts</strong><button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button></div>
+        <p class="help">Add each GitLab server your folders use.</p>
+        <p class="pr-none" id="pr-no-hosts">No GitLab hosts yet, so merge requests do not show.</p>
+        <ul class="rows pr-hosts" id="pr-hosts"></ul>
+        <div class="form-foot"><button class="btn quiet" type="button" data-cancel-forge>Cancel</button><button class="btn primary" type="submit" form="pr-form">Save</button></div>
+      </div>
       <div class="conn-step" id="mcp-sign-in" hidden></div>
       <div class="conn-step" id="mcp-tools" hidden></div>
       <div class="conn-step conn-output" id="conn-output" hidden></div>

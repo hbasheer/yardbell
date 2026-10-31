@@ -153,6 +153,36 @@ pub struct PullRequests {
     pub use_gitlab: bool,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub gitlab: Vec<GitLabHost>,
+    #[serde(skip_serializing_if = "is_gh")]
+    pub github_via: GithubVia,
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub github_token: String,
+    #[serde(skip_serializing_if = "is_token")]
+    pub gitlab_via: GitlabVia,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GithubVia {
+    #[default]
+    Gh,
+    Token,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum GitlabVia {
+    #[default]
+    Token,
+    Glab,
+}
+
+fn is_gh(via: &GithubVia) -> bool {
+    *via == GithubVia::Gh
+}
+
+fn is_token(via: &GitlabVia) -> bool {
+    *via == GitlabVia::Token
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -222,6 +252,9 @@ impl Default for PullRequests {
             use_github: true,
             use_gitlab: true,
             gitlab: Vec::new(),
+            github_via: GithubVia::Gh,
+            github_token: String::new(),
+            gitlab_via: GitlabVia::Token,
         }
     }
 }
@@ -232,6 +265,14 @@ impl PullRequests {
     }
 
     fn validate_gitlab(&self) -> Result<(), String> {
+        if self.github_via == GithubVia::Token && self.github_token.trim().is_empty() {
+            return Err("pull_requests.github_token is needed to read GitHub with a token".into());
+        }
+        let named = secrets::references(&self.github_token)
+            .map_err(|e| format!("pull_requests.github_token: {e}"))?;
+        if !self.github_token.trim().is_empty() && named.is_empty() {
+            return Err("pull_requests.github_token must name a saved secret".into());
+        }
         let mut seen = std::collections::HashSet::new();
         for (i, g) in self.gitlab.iter().enumerate() {
             let host = g.host.trim().to_ascii_lowercase();
@@ -247,7 +288,7 @@ impl PullRequests {
             if !seen.insert(host.clone()) {
                 return Err(format!("pull_requests.gitlab lists {host} twice"));
             }
-            if g.token.trim().is_empty() {
+            if self.gitlab_via == GitlabVia::Token && g.token.trim().is_empty() {
                 return Err(format!("pull_requests.gitlab {host} needs a token"));
             }
             if !g.url.is_empty() && !plain_url(&g.url) {

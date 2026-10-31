@@ -532,7 +532,7 @@ impl Pipelines {
                     feeds: feeds.as_ref(),
                     gitlab: &gitlab,
                     connectors: &feed,
-                    accesses: crate::pulls::accesses(&cfg.pull_requests, &secrets),
+                    accesses: crate::pulls::accesses_for(&cfg, &secrets),
                     linear_key: secrets.as_ref().map_err(Clone::clone).and_then(|s| {
                         s.get(crate::triggers::LINEAR_SECRET)
                             .map(str::to_string)

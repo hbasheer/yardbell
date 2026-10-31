@@ -236,8 +236,8 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
     let mut signed_in = Vec::new();
     if !cfg.pull_requests.gitlab.is_empty() {
         let secrets = crate::secrets::Secrets::for_config(path).map_err(|e| e.to_string());
-        let gitlab = crate::pulls::GitLab::new();
-        for access in crate::pulls::accesses(&cfg.pull_requests, &secrets) {
+        let gitlab = crate::pulls::GitLab::new().with_runner(runner.clone(), ssh.clone());
+        for access in crate::pulls::accesses_for(&cfg, &secrets) {
             let found = gitlab.whoami(&access).await;
             let (ok, text) = gitlab_line(&access.host, &found);
             line(ok, &text);

@@ -1122,7 +1122,7 @@ impl World for Live {
                 .cfg
                 .machine(&run.place.machine)
                 .ok_or_else(|| format!("{} is not a machine", run.place.machine))?;
-            let gitlab = crate::pulls::accesses(&self.cfg.pull_requests, &self.secrets);
+            let gitlab = crate::pulls::accesses_for(&self.cfg, &self.secrets);
             let body = if run.report.is_empty() {
                 comment(run)
             } else {
@@ -1133,7 +1133,21 @@ impl World for Live {
                 title: run.subject.label(),
                 body,
             };
-            self.forge.open_draft(m, path, &draft, &gitlab).await
+            let github = (self.cfg.pull_requests.github_via == crate::config::GithubVia::Token)
+                .then(|| {
+                    let api = crate::pulls::github_api::GitHubApi::new(self.forge.remotes());
+                    let token = match &self.secrets {
+                        Ok(s) => s
+                            .resolve(&self.cfg.pull_requests.github_token)
+                            .map_err(|e| e.to_string()),
+                        Err(e) => Err(e.clone()),
+                    };
+                    api.set_token(token);
+                    api
+                });
+            self.forge
+                .open_draft(m, path, &draft, &gitlab, github.as_ref())
+                .await
         })
     }
 

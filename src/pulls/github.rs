@@ -340,7 +340,7 @@ pub fn parse_view(json: &str) -> Result<Pull, String> {
     })
 }
 
-fn actions_url() -> &'static Regex {
+pub(crate) fn actions_url() -> &'static Regex {
     static RE: OnceLock<Regex> = OnceLock::new();
     RE.get_or_init(|| Regex::new(r"/actions/runs/(\d+)(?:/jobs?/(\d+))?").expect("static regex"))
 }
@@ -384,10 +384,14 @@ pub fn excerpt(log: &str) -> String {
     super::last_lines(&lines, super::LOG_LINES, super::LOG_BYTES)
 }
 
-pub fn review_comments_command(review: &str) -> String {
-    let query = format!(
+pub(crate) fn review_comments_query() -> String {
+    format!(
         "query($id: ID!) {{ node(id: $id) {{ ... on PullRequestReview {{ comments(first: {INLINE_MAX}) {{ nodes {{ id path line originalLine body url author {{ login }} }} }} }} }} }}"
-    );
+    )
+}
+
+pub fn review_comments_command(review: &str) -> String {
+    let query = review_comments_query();
     format!(
         "gh api graphql -f query={} -f id={}",
         quote(&query),
