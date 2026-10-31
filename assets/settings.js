@@ -285,8 +285,21 @@ async function refreshServerAuth() {
 }
 
 async function startSignIn(name, client) {
-  const out = await api("POST", serverPath(name, "sign-in"), client || {});
-  showSignIn(name, out);
+  signingIn = name;
+  const panel = $("mcp-sign-in");
+  if (!client) {
+    panel.hidden = false;
+    panel.innerHTML = `<h3>Sign in to ${esc(name)}</h3>
+      <p role="status">Finding where ${esc(name)} signs you in. This can take a few seconds.</p>
+      <div class="form-foot"><button class="btn quiet" type="button" data-cancel>Cancel</button></div>`;
+  }
+  try {
+    const out = await api("POST", serverPath(name, "sign-in"), client || {});
+    if (signingIn === name) showSignIn(name, out);
+  } catch (err) {
+    if (!client && signingIn === name) closeSignIn();
+    throw err;
+  }
 }
 
 function showTools(name, out) {
@@ -1282,6 +1295,7 @@ $("server-rows").addEventListener("click", async (e) => {
   const act = e.target.closest("[data-mcp-act]");
   if (act) {
     const name = act.dataset.name;
+    act.disabled = true;
     try {
       if (act.dataset.mcpAct === "sign-in") await startSignIn(name);
       if (act.dataset.mcpAct === "test") showTools(name, await api("POST", serverPath(name, "test")));
@@ -1292,6 +1306,8 @@ $("server-rows").addEventListener("click", async (e) => {
       }
     } catch (err) {
       toast(err.message);
+    } finally {
+      act.disabled = false;
     }
     return;
   }

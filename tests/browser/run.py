@@ -2774,6 +2774,26 @@ class Suite:
         finally:
             self.remove_mcp_servers()
 
+    def test_sign_in_says_it_is_working(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            self.stub_sign_in({"url": "https://auth.example.com/a", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+            b.js("""window.__held = new Promise((go) => { window.__release = go; });
+              const stubbed = window.fetch;
+              window.fetch = (u, o) => String(u).includes('/sign-in') ? window.__held.then(() => stubbed(u, o)) : stubbed(u, o)""")
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.querySelector('#mcp-sign-in [role=status]')?.textContent.includes('Finding where')", "word that it is working")
+            if not b.js("document.querySelector('[data-mcp-act=sign-in]').disabled"):
+                raise Failure("Sign in can be clicked again while it is working")
+            b.js("window.__release()")
+            b.wait("document.getElementById('mcp-sign-in').textContent.includes('You will sign in at auth.example.com')", "the host")
+            if b.js("document.querySelector('#mcp-sign-in [role=status]')"):
+                raise Failure("the working message stayed")
+            self.check_errors("waiting for a sign-in")
+        finally:
+            self.remove_mcp_servers()
+
     def test_sign_in_from_another_device(self):
         b = self.b
         self.add_mcp_server()
