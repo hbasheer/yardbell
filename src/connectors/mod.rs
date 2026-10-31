@@ -157,13 +157,29 @@ pub fn client_for(
 }
 
 pub fn templates() -> Vec<&'static str> {
-    vec!["trello"]
+    vec!["trello", "github", "gitlab", "jira", "asana"]
 }
 
 pub fn template(name: &str) -> Option<Connector> {
+    let text = match name {
+        "trello" => TRELLO,
+        "github" => include_str!("templates/github.yml"),
+        "gitlab" => include_str!("templates/gitlab.yml"),
+        "jira" => include_str!("templates/jira.yml"),
+        "asana" => include_str!("templates/asana.yml"),
+        _ => return None,
+    };
+    serde_yaml::from_str(text).ok()
+}
+
+pub fn blurb(name: &str) -> &'static str {
     match name {
-        "trello" => serde_yaml::from_str(TRELLO).ok(),
-        _ => None,
+        "trello" => "Cards on a board. Needs an API key and a token.",
+        "github" => "Open issues in a repository. Needs a personal access token.",
+        "gitlab" => "Open issues in a project. Needs a personal access token.",
+        "jira" => "Your open issues. Needs your site's address and an API token.",
+        "asana" => "Your tasks in a workspace. Needs a personal access token.",
+        _ => "",
     }
 }
 

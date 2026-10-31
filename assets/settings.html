@@ -361,11 +361,14 @@
     <div class="section-head"><h2>Connections</h2>
       <div class="conn-add">
         <button class="btn small-link" type="button" id="conn-import-open">Import</button>
-        <button class="btn small-link" type="button" id="conn-blank">Blank</button>
-        <button class="btn small-link" type="button" id="conn-trello">Add Trello</button>
+        <button class="btn primary small-link" type="button" id="conn-new" aria-expanded="false">New connection</button>
       </div>
     </div>
     <p class="help">Pipelines can take work from these tools and call their APIs. A connection needs a web API that takes a token you can paste in and replies in JSON. Save its token as a secret first, under <a href="#servers">MCP servers, Secrets</a>.</p>
+    <div class="panel conn-new-panel" id="conn-new-panel" hidden>
+      <p class="help">Start from an example, then press <strong>Test</strong> to check it against your account.</p>
+      <ul class="rows" id="conn-new-list"></ul>
+    </div>
     <ul class="rows conn-rows" id="conn-rows"></ul>
     <p class="pr-none" id="conn-none">No connections yet.</p>
     <form class="panel conn-form" id="conn-form" hidden>

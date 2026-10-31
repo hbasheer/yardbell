@@ -1412,6 +1412,7 @@ mod pipelines {
                 title: "Fix".into(),
                 url: String::new(),
                 description: String::new(),
+                fields: Default::default(),
             }),
             pr: None,
         }

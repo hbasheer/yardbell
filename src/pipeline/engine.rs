@@ -483,6 +483,7 @@ pub(crate) mod tests {
                     title: "Fix the login".into(),
                     url: "https://linear.app/acme/issue/COM-1".into(),
                     description: String::new(),
+                    fields: Default::default(),
                 }),
                 pr: None,
             },

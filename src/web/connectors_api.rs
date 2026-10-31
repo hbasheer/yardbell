@@ -64,7 +64,13 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
     let items: Vec<Value> = cfg.connectors.iter().map(|c| view(&app, c)).collect();
     let starters: BTreeMap<&str, Value> = templates()
         .into_iter()
-        .filter_map(|name| template(name).map(|c| (name, view(&app, &c))))
+        .filter_map(|name| {
+            template(name).map(|c| {
+                let mut shown = view(&app, &c);
+                shown["about"] = json!(crate::connectors::blurb(name));
+                (name, shown)
+            })
+        })
         .collect();
     Ok(Json(json!({
         "list": items,

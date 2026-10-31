@@ -61,7 +61,13 @@ pub struct Watch {
 }
 
 // The Linear identifier a pull or merge request names: in its branch first, then its title.
-pub fn item_subject(source: &str, item: &crate::connectors::client::Item) -> Subject {
+pub fn item_subject(
+    source: &str,
+    item: &crate::connectors::client::Item,
+    params: &BTreeMap<String, String>,
+) -> Subject {
+    let mut fields = params.clone();
+    fields.extend(item.fields.clone());
     Subject {
         ticket: Some(TicketRef {
             source: source.to_string(),
@@ -70,6 +76,7 @@ pub fn item_subject(source: &str, item: &crate::connectors::client::Item) -> Sub
             title: item.title.clone(),
             url: item.url.clone(),
             description: String::new(),
+            fields,
         }),
         pr: None,
     }
@@ -98,6 +105,7 @@ fn named(id: Option<String>, title: &str) -> Option<TicketRef> {
         title: title.to_string(),
         url: String::new(),
         description: String::new(),
+        fields: Default::default(),
     })
 }
 
@@ -174,7 +182,7 @@ impl Watch {
                     params,
                 } => {
                     match self
-                        .scheduled(def, schedule, state, connector, params, src, now)
+                        .scheduled(def, schedule, state, (connector, params), src, now)
                         .await
                     {
                         Some(subjects) => subjects,
@@ -239,8 +247,7 @@ impl Watch {
         def: &Definition,
         schedule: &str,
         state: &str,
-        connector: &str,
-        params: &BTreeMap<String, String>,
+        (connector, params): (&str, &BTreeMap<String, String>),
         src: &Sources<'_>,
         now: DateTime<Local>,
     ) -> Option<Vec<Subject>> {
@@ -275,7 +282,7 @@ impl Watch {
                 items
                     .iter()
                     .filter(|i| i.state.eq_ignore_ascii_case(state.trim()))
-                    .map(|i| item_subject(connector, i))
+                    .map(|i| item_subject(connector, i, params))
                     .collect(),
             );
         }
@@ -293,6 +300,7 @@ impl Watch {
                         title: t.title,
                         url: t.url,
                         description: String::new(),
+                        fields: Default::default(),
                     }),
                     pr: None,
                 })
@@ -329,7 +337,7 @@ impl Watch {
                         } else {
                             return None;
                         };
-                        Some((key, item_subject(connector, i)))
+                        Some((key, item_subject(connector, i, params)))
                     })
                     .collect())
             }
@@ -345,6 +353,7 @@ impl Watch {
                             title: t.title.clone(),
                             url: t.url.clone(),
                             description: String::new(),
+                            fields: Default::default(),
                         }),
                         pr: None,
                     };

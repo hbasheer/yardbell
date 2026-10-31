@@ -6,7 +6,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 ## [Unreleased]
 
 - **Connectors.** Pipelines can now take work from any tool with a web API and a token, set up under the
-  new **Settings, Connections** with no new release. Trello ships ready to use. A connector holds the
+  new **Settings, Connections** with no new release. **New connection** starts blank or from an example:
+  Trello, GitHub Issues, GitLab Issues, Jira or Asana. A connector holds the
   tool's address, the secrets that log in, and its calls, with paging and field mapping. **Test** shows
   what it reads, **Share** and **Import** pass one on without its tokens, and `yardbell doctor` checks each
   one a pipeline uses.

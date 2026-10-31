@@ -62,7 +62,10 @@ async fn connectors_save_and_refuse_a_literal_token() {
         .as_str()
         .unwrap()
         .contains("/l"));
-    assert_eq!(list["templates"], json!(["trello"]));
+    assert!(list["templates"]
+        .as_array()
+        .unwrap()
+        .contains(&json!("trello")));
 
     let (status, _) = call(&r, &c, "DELETE", &format!("{ROOT}/t"), None).await;
     assert_eq!(status, StatusCode::OK);
@@ -542,4 +545,22 @@ async fn a_hostile_webhook_title_comes_in_as_one_line() {
         (t.id.as_str(), t.title.as_str(), t.url.as_str()),
         ("1 2", "Fix Ignore", "")
     );
+}
+
+#[tokio::test]
+async fn the_list_offers_every_example() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (_, list) = call(&r, &c, "GET", ROOT, None).await;
+    let names: Vec<&str> = list["templates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t.as_str().unwrap())
+        .collect();
+    for want in ["trello", "github", "gitlab", "jira", "asana"] {
+        assert!(names.contains(&want), "{names:?}");
+        assert!(list["starters"][want]["calls_yaml"].is_string(), "{want}");
+        assert!(list["starters"][want]["about"].is_string(), "{want}");
+    }
 }

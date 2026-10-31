@@ -14,9 +14,18 @@ pub struct TicketRef {
     // Only a source with nothing to read it back from, such as a webhook, keeps it here.
     #[serde(skip_serializing_if = "String::is_empty")]
     pub description: String,
+    // What a later call on this item needs, such as the repository it was found in.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
 }
 
 impl TicketRef {
+    pub fn vars(&self) -> crate::connectors::client::Vars {
+        let mut vars = self.fields.clone();
+        vars.insert("item_id".to_string(), self.item_id.clone());
+        crate::connectors::client::Vars(vars)
+    }
+
     pub fn is_linear(&self) -> bool {
         self.source.is_empty() || self.source == "linear"
     }

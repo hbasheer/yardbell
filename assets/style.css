@@ -1934,6 +1934,13 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 #conn-header-add { justify-self: start; }
 #conn-none { color: var(--muted); }
 .conn-rows { margin-top: 12px; }
+.conn-new-panel { margin-top: 12px; }
+.conn-new-panel[hidden] { display: none; }
+#conn-new-list { margin-top: 10px; }
+#conn-new-list .row { padding: 0; }
+.conn-starter { display: grid; gap: 2px; width: 100%; padding: 10px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.conn-starter:hover { background: var(--hover); }
+.conn-starter small { color: var(--muted); }
 .conn-rows[hidden], .conn-form[hidden], .conn-output[hidden], #conn-none[hidden] { display: none; }
 .conn-row { flex-wrap: wrap; justify-content: space-between; }
 .conn-name { display: grid; gap: 2px; min-width: 0; }

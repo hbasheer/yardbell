@@ -416,7 +416,8 @@ fn call_vars(
     params: &std::collections::BTreeMap<String, String>,
 ) -> Result<crate::connectors::client::Vars, String> {
     let ticket = run.subject.ticket.clone().unwrap_or_default();
-    let mut vars = crate::connectors::client::Vars(
+    let mut vars = ticket.vars();
+    vars.0.extend(
         [
             ("item_id", ticket.item_id),
             ("ticket", ticket.id),
@@ -426,8 +427,7 @@ fn call_vars(
             ("report", prompts::last_report(run)),
         ]
         .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect(),
+        .map(|(k, v)| (k.to_string(), v)),
     );
     for (name, text) in params {
         let value = crate::connectors::client::render_text(text, &vars)?;
@@ -923,10 +923,7 @@ impl World for Live {
                     &self.secrets,
                     crate::mcp_read::saved_values(&self.app),
                 )?;
-                let vars = crate::connectors::client::Vars(
-                    [("item_id".to_string(), ticket.item_id.clone())].into(),
-                );
-                let item = client.read(&vars).await?;
+                let item = client.read(&ticket.vars()).await?;
                 let text = TicketText {
                     description: item.description,
                     comments: Vec::new(),

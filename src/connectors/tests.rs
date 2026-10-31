@@ -979,3 +979,60 @@ async fn defaults_fill_a_missing_choice_from_its_list() {
     let kept = cl.with_defaults(&vars(&[("board", "B2")])).await;
     assert_eq!(kept.0["board"], "B2");
 }
+
+#[test]
+fn every_example_is_valid_and_reads_its_items() {
+    let rows = [
+        (
+            "trello",
+            serde_json::json!({ "id": "c1", "idShort": 7, "name": "Card", "shortUrl": "https://trello.com/c/x", "desc": "D", "idList": "L", "idBoard": "B" }),
+            "7",
+        ),
+        (
+            "github",
+            serde_json::json!({ "number": 12, "title": "Bug", "html_url": "https://github.com/a/b/issues/12", "body": "D", "state": "open" }),
+            "12",
+        ),
+        (
+            "gitlab",
+            serde_json::json!({ "iid": 3, "title": "Bug", "web_url": "https://gitlab.com/a/b/-/issues/3", "description": "D", "state": "opened" }),
+            "3",
+        ),
+        (
+            "jira",
+            serde_json::json!({ "id": "100", "key": "COM-1", "fields": { "summary": "Bug", "status": { "name": "To Do" } } }),
+            "COM-1",
+        ),
+        (
+            "asana",
+            serde_json::json!({ "gid": "55", "name": "Task", "permalink_url": "https://app.asana.com/0/1/55", "notes": "D" }),
+            "55",
+        ),
+    ];
+    assert_eq!(templates().len(), rows.len());
+    for (name, row, id) in rows {
+        let c = template(name).unwrap_or_else(|| panic!("{name}"));
+        assert_eq!(validate(std::slice::from_ref(&c)), Ok(()), "{name}");
+        let item = Client::item_of(&c.calls["list"], &row).unwrap();
+        assert_eq!(item.id, id, "{name}");
+        assert!(!item.title.is_empty(), "{name}");
+        assert!(c.calls.contains_key("read"), "{name}");
+        assert_eq!(c.calls["comment"].kind(), CallKind::Change, "{name}");
+        assert!(!c.headers.is_empty(), "{name}");
+        assert!(!blurb(name).is_empty(), "{name}");
+    }
+}
+
+#[test]
+fn a_chosen_value_stays_with_its_item() {
+    let c = template("github").unwrap();
+    let row = serde_json::json!({ "number": 12, "title": "Bug" });
+    let item = Client::item_of(&c.calls["list"], &row).unwrap();
+    let params = [("repo".to_string(), "a/b".to_string())].into();
+    let subject = crate::pipeline::triggers::item_subject("github-issues", &item, &params);
+    let t = subject.ticket.unwrap();
+    assert_eq!(t.fields["repo"], "a/b");
+    let vars = t.vars();
+    assert_eq!(vars.0["repo"], "a/b");
+    assert_eq!(vars.0["item_id"], "12");
+}

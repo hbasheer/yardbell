@@ -694,8 +694,26 @@ function showConnOutput(html) {
   out.innerHTML = html;
 }
 
-$("conn-trello").addEventListener("click", () => openConnection(connections.starters.trello, ""));
-$("conn-blank").addEventListener("click", () => openConnection({ enabled: true, headers: {} }, ""));
+$("conn-new").addEventListener("click", () => {
+  const panel = $("conn-new-panel");
+  panel.hidden = !panel.hidden;
+  $("conn-new").setAttribute("aria-expanded", panel.hidden ? "false" : "true");
+  $("conn-new-list").innerHTML = [
+    `<li class="row"><button class="conn-starter" type="button" data-starter=""><strong>Start blank</strong><small>Any tool with a web API.</small></button></li>`,
+    ...connections.templates.map((name) => {
+      const c = connections.starters[name];
+      return `<li class="row"><button class="conn-starter" type="button" data-starter="${esc(name)}"><strong>${esc(c.name)}</strong><small>${esc(c.about)}</small></button></li>`;
+    }),
+  ].join("");
+});
+$("conn-new-list").addEventListener("click", (e) => {
+  const button = e.target.closest("[data-starter]");
+  if (!button) return;
+  $("conn-new-panel").hidden = true;
+  $("conn-new").setAttribute("aria-expanded", "false");
+  const name = button.dataset.starter;
+  openConnection(name ? connections.starters[name] : { enabled: true, headers: {} }, "");
+});
 $("conn-cancel").addEventListener("click", () => { $("conn-form").hidden = true; });
 $("conn-header-add").addEventListener("click", () => {
   connHeaders.push({ name: "", value: "" });

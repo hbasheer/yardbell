@@ -10,6 +10,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -341,6 +342,7 @@ struct StartReq {
 async fn connector_subjects(
     app: &AppState,
     connector: &str,
+    params: &BTreeMap<String, String>,
     tickets: &[String],
 ) -> Result<Vec<Subject>, ApiError> {
     let cfg = app.config()?;
@@ -361,8 +363,9 @@ async fn connector_subjects(
             .take(if given.contains("://") { 2 } else { 1 });
         let first = tries.next().unwrap_or(given);
         let read = |id: &str| {
-            let vars =
-                crate::connectors::client::Vars([("item_id".to_string(), id.to_string())].into());
+            let mut vars = params.clone();
+            vars.insert("item_id".to_string(), id.to_string());
+            let vars = crate::connectors::client::Vars(vars);
             let client = &client;
             async move { client.read(&vars).await }
         };
@@ -371,7 +374,9 @@ async fn connector_subjects(
             (Err(e), None) => return Err(bad(format!("{given}: {e}"))),
             (Err(e), Some(id)) => read(id).await.map_err(|_| bad(format!("{given}: {e}")))?,
         };
-        out.push(crate::pipeline::triggers::item_subject(connector, &item));
+        out.push(crate::pipeline::triggers::item_subject(
+            connector, &item, params,
+        ));
     }
     Ok(out)
 }
@@ -383,13 +388,17 @@ pub(crate) async fn subjects(
     prs: &[String],
 ) -> Result<Vec<Subject>, ApiError> {
     let connector = match &def.trigger {
-        Trigger::Connector { connector, .. } => Some(connector),
-        Trigger::Schedule { connector, .. } if !connector.is_empty() => Some(connector),
+        Trigger::Connector {
+            connector, params, ..
+        } => Some((connector, params)),
+        Trigger::Schedule {
+            connector, params, ..
+        } if !connector.is_empty() => Some((connector, params)),
         _ => None,
     };
     let mut out = Vec::new();
-    if let (Some(connector), false) = (connector, tickets.is_empty()) {
-        out = connector_subjects(app, connector, tickets).await?;
+    if let (Some((connector, params)), false) = (connector, tickets.is_empty()) {
+        out = connector_subjects(app, connector, params, tickets).await?;
     } else if !tickets.is_empty() {
         let open = open(app).await?;
         for id in tickets {
@@ -405,6 +414,7 @@ pub(crate) async fn subjects(
                     title: t.title.clone(),
                     url: t.url.clone(),
                     description: String::new(),
+                    fields: Default::default(),
                 }),
                 pr: None,
             });
@@ -617,6 +627,7 @@ fn hook_subject(def: &Definition, body: &Value) -> Result<Subject, String> {
             title: crate::pipeline::prompts::one_line(&title),
             url: crate::connectors::map::clean_url(&field("url")),
             description: field("description"),
+            fields: Default::default(),
         }),
         pr: None,
     })

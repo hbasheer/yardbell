@@ -2734,8 +2734,24 @@ class Suite:
     def test_connections_section(self):
         b = self.b
         b.goto(self.url("/settings#connections"))
-        b.wait("document.getElementById('conn-trello')", "the section")
-        b.click("#conn-trello")
+        b.wait("document.getElementById('conn-new')", "the section")
+        if b.js("document.getElementById('conn-trello')"):
+            raise Failure("the page still has a button for one tool")
+        b.click("#conn-new")
+        b.wait("document.querySelector('#conn-new-list [data-starter=trello]')", "the examples")
+        said = b.js("document.getElementById('conn-new-list').textContent")
+        for want in ("Start blank", "Trello", "GitHub Issues", "GitLab Issues", "Jira", "Asana"):
+            if want not in said:
+                raise Failure(f"the list does not offer {want!r}: {said}")
+        b.click("#conn-new-list [data-starter=jira]")
+        b.wait("document.querySelector('#conn-form [name=base_url]')?.value.includes('atlassian.net')", "the Jira example")
+        b.click("#conn-cancel")
+        b.click("#conn-new")
+        b.click("#conn-new-list [data-starter='']")
+        b.wait("document.querySelector('#conn-form [name=base_url]')?.value === ''", "a blank form")
+        b.click("#conn-cancel")
+        b.click("#conn-new")
+        b.click("#conn-new-list [data-starter=trello]")
         b.wait("document.querySelector('#conn-form [name=base_url]')?.value === 'https://api.trello.com/1'", "the Trello template")
         if "secret:trello_token" not in b.js("document.querySelector('#conn-headers [data-key=value]').value"):
             raise Failure("the template's header is not a secret reference")
