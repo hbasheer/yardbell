@@ -1,6 +1,7 @@
 pub mod runs;
 #[cfg(test)]
 mod tests;
+pub mod work;
 
 use crate::snapshot::{Activity, Snapshot};
 use chrono::{DateTime, FixedOffset, Local};
@@ -87,6 +88,8 @@ pub struct Record {
     pub agent: String,
     #[serde(default)]
     pub folder: String,
+    #[serde(default)]
+    pub cwd: String,
     #[serde(default)]
     pub branch: String,
     pub marks: Vec<Mark>,
@@ -208,9 +211,12 @@ impl Insights {
                 screens.remove(&id);
                 changed = true;
             }
-            if (&rec.agent, &rec.folder, &rec.branch) != (&s.agent, &s.folder, &s.branch) {
+            if (&rec.agent, &rec.folder, &rec.cwd, &rec.branch)
+                != (&s.agent, &s.folder, &s.cwd, &s.branch)
+            {
                 rec.agent = s.agent.clone();
                 rec.folder = s.folder.clone();
+                rec.cwd = s.cwd.clone();
                 rec.branch = s.branch.clone();
                 changed = true;
             }

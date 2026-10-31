@@ -1902,6 +1902,13 @@ dialog.ins-dialog:not([open]) { display: none; }
 .ins-empty p { margin: 0; color: var(--ink-2); font-size: 13px; }
 .ins-empty .ins-empty-title { color: var(--ink); font-size: 14px; font-weight: 600; }
 .ins-task { margin: 0 0 8px; padding: 10px 12px; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--side); color: var(--ink); font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.ins-work-title { margin: 0 0 8px; font-size: 13px; font-weight: 550; color: var(--ink); overflow-wrap: anywhere; }
+.ins-said { display: grid; gap: 10px; margin: 0; }
+.ins-said dt { color: var(--muted); font-size: 12px; }
+.ins-said dd { margin: 2px 0 0; font-size: 13px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
+.ins-sub-head { margin: 14px 0 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
+.ins-actions, .ins-files { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
+.ins-files code { font: 12.5px/1.5 var(--mono); }
 dialog.ins-dialog .dialog-foot { flex-wrap: wrap; }
 @media (max-width: 900px) {
   .ins-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }

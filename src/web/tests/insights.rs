@@ -210,3 +210,141 @@ async fn insights_carry_the_sessions_pull_request() {
     assert_eq!(body["pull"]["forge"], "gitlab");
     assert_eq!(body["pull"]["review"], "approved");
 }
+
+fn transcript(prompt: &str, command: &str) -> String {
+    let user = json!({ "type": "user", "message": { "content": prompt } });
+    let tool = json!({ "type": "assistant", "message": { "content": [
+        { "type": "tool_use", "name": "Bash", "input": { "command": command } },
+        { "type": "tool_use", "name": "Edit", "input": { "file_path": "/r/src/inbox.rs" } },
+        { "type": "text", "text": "Working on the inbox filter." },
+    ] } });
+    format!("100\n{user}\n--- latest ---\n{tool}\n")
+}
+
+fn stub_screen(r: &Rig) {
+    r.fake.stub(
+        "capture-pane",
+        Output::ok_with("line one\n\nlast line on screen\n"),
+    );
+}
+
+fn set_agent(r: &Rig, agent: &str) {
+    let mut snap = r.app.state.snapshot("hp").unwrap();
+    for s in snap.sessions.iter_mut() {
+        s.agent = agent.to_string();
+    }
+    set_snapshot(r, snap);
+}
+
+fn set_snapshot(r: &Rig, snap: crate::snapshot::Snapshot) {
+    r.app.state.update(MachineStatus {
+        name: "hp".into(),
+        up: true,
+        reason: None,
+        snapshot: Some(snap),
+        checked_at: chrono::Local::now(),
+    });
+}
+
+#[tokio::test]
+async fn insights_say_what_the_agent_is_working_on() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    set_agent(&r, "claude");
+    stub_screen(&r);
+    r.fake.stub(
+        "/projects/",
+        Output::ok_with(&transcript("Fix the inbox filter", "cargo test")),
+    );
+    let (status, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let work = &body["work"];
+    assert_eq!(work["first_prompt"], "Fix the inbox filter");
+    assert_eq!(work["message"], "Working on the inbox filter.");
+    assert_eq!(work["actions"][1]["what"], "Ran cargo test");
+    assert!(work["files"][0].as_str().unwrap().ends_with("src/inbox.rs"));
+    assert_eq!(work["screen"], "");
+}
+
+#[tokio::test]
+async fn saved_secrets_stay_out_of_what_it_is_working_on() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    set_agent(&r, "claude");
+    stub_screen(&r);
+    r.app.settings.set_secret("tok", "shh-secret-1").unwrap();
+    r.fake.stub(
+        "/projects/",
+        Output::ok_with(&transcript("Use shh-secret-1", "curl shh-secret-1")),
+    );
+    let (_, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
+    assert!(body["work"]["first_prompt"].is_string());
+    assert!(!body["work"].to_string().contains("shh-secret-1"), "{body}");
+}
+
+#[tokio::test]
+async fn another_agent_shows_the_end_of_its_terminal() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    set_agent(&r, "codex");
+    stub_screen(&r);
+    let (_, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
+    assert_eq!(body["work"]["screen"], "line one\n\nlast line on screen");
+    let asked = r
+        .fake
+        .calls()
+        .iter()
+        .any(|c| c.join(" ").contains("/projects/"));
+    assert!(!asked, "it has no Claude transcript to read");
+}
+
+#[tokio::test]
+async fn claude_with_no_transcript_falls_back_to_its_terminal() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    set_agent(&r, "claude");
+    stub_screen(&r);
+    r.fake.stub("/projects/", Output::ok_with(""));
+    let (_, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
+    assert_eq!(body["work"]["screen"], "line one\n\nlast line on screen");
+}
+
+#[tokio::test]
+async fn sessions_sharing_a_folder_say_so() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let mut snap = r.app.state.snapshot("hp").unwrap();
+    let mut other = snap.sessions[0].clone();
+    other.tmux = Some("hp-other".into());
+    other.pid += 1;
+    snap.sessions.push(other);
+    for s in snap.sessions.iter_mut() {
+        s.agent = "claude".into();
+    }
+    set_snapshot(&r, snap);
+    stub_screen(&r);
+    r.fake
+        .stub("/projects/", Output::ok_with(&transcript("Go", "ls")));
+    let (_, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
+    assert_eq!(body["work"]["shared"], true);
+}
+
+#[tokio::test]
+async fn an_ended_session_still_finds_its_transcript() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    set_agent(&r, "claude");
+    observe(&r, Activity::Active, "", 30);
+    let mut snap = r.app.state.snapshot("hp").unwrap();
+    snap.sessions.clear();
+    set_snapshot(&r, snap.clone());
+    r.app.insights.observe("hp", &snap, chrono::Local::now());
+    r.fake.stub(
+        "/projects/",
+        Output::ok_with(&transcript("Fix the inbox filter", "ls")),
+    );
+    let (status, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["live"], false);
+    assert_eq!(body["work"]["first_prompt"], "Fix the inbox filter");
+}

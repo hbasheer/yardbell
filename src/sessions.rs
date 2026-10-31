@@ -46,6 +46,23 @@ pub fn transcript_lines_command(path: &str, needle: &str) -> String {
     )
 }
 
+// Its size, the start of the newest transcript and then its latest part. A transcript also holds
+// copies of whole API requests, which are skipped, as is any one line too long to send back.
+pub fn work_lines_command(path: &str) -> String {
+    format!(
+        "d=\"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/projects/$(printf %s {} | sed 's/[^a-zA-Z0-9]/-/g')\"; \
+         cd \"$d\" 2>/dev/null || exit 0; \
+         f=$(ls -t -- *.jsonl 2>/dev/null | head -n 1); [ -n \"$f\" ] || exit 0; \
+         wc -c < \"$f\" | tr -d ' '; \
+         head -c 1048576 -- \"$f\" | grep -E '\"type\":\"user\"' | awk 'length($0) < 100000' | head -n 5; \
+         echo {}; \
+         tail -c {} -- \"$f\" | grep -E '\"type\":\"(user|assistant|ai-title)\"' | awk 'length($0) < 100000' | tail -n 150; true",
+        quote(path),
+        quote(crate::insights::work::LATEST_MARK),
+        crate::insights::work::READ_WHOLE,
+    )
+}
+
 #[derive(Clone, Copy)]
 pub enum Start<'a> {
     New,
@@ -298,6 +315,10 @@ impl Sessions {
             .ok()
     }
 
+    pub async fn work_lines(&self, m: &Machine, path: &str) -> Option<String> {
+        self.output(m, &work_lines_command(path)).await.ok()
+    }
+
     pub async fn send(&self, m: &Machine, name: &str, text: &str) -> Result<(), String> {
         self.output_with_input(m, &send_script(name), Some(text.to_string()))
             .await
@@ -459,6 +480,58 @@ mod tests {
 
     fn sessions(fake: Arc<FakeRunner>) -> Sessions {
         Sessions::new(fake, Ssh::new(tempfile::tempdir().unwrap().keep()))
+    }
+
+    #[test]
+    fn the_newest_transcript_gives_its_start_and_its_latest_part() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/projects/-r-app");
+        std::fs::create_dir_all(&dir).unwrap();
+        let line = |kind: &str, n: usize| format!("{{\"type\":\"{kind}\",\"n\":{n}}}\n");
+        let mut text = line("user", 0);
+        text.push_str(&line("api-request-blob", 1));
+        text.push_str(&format!(
+            "{{\"type\":\"assistant\",\"huge\":\"{}\"}}\n",
+            "x".repeat(300_000)
+        ));
+        for n in 2..300 {
+            text.push_str(&line("assistant", n));
+        }
+        std::fs::write(dir.join("old.jsonl"), line("user", 99)).unwrap();
+        std::process::Command::new("touch")
+            .args(["-t", "202601010000"])
+            .arg(dir.join("old.jsonl"))
+            .status()
+            .unwrap();
+        std::fs::write(dir.join("new.jsonl"), &text).unwrap();
+        let out = std::process::Command::new("sh")
+            .args(["-c", &work_lines_command("/r/app")])
+            .env("HOME", home.path())
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .output()
+            .unwrap();
+        let said = String::from_utf8_lossy(&out.stdout).into_owned();
+        let lines: Vec<&str> = said.lines().collect();
+        assert_eq!(lines[0], text.len().to_string());
+        assert_eq!(lines[1], "{\"type\":\"user\",\"n\":0}");
+        assert!(lines.contains(&crate::insights::work::LATEST_MARK));
+        assert_eq!(*lines.last().unwrap(), "{\"type\":\"assistant\",\"n\":299}");
+        assert!(
+            !said.contains("api-request-blob"),
+            "request copies are skipped"
+        );
+        assert!(!said.contains("xxxx"), "a line too long to keep is skipped");
+        assert!(!said.contains("\"n\":99"), "only the newest transcript");
+        assert!(lines.len() < 200);
+
+        let nothing = std::process::Command::new("sh")
+            .args(["-c", &work_lines_command("/r/none")])
+            .env("HOME", home.path())
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .output()
+            .unwrap();
+        assert!(nothing.status.success());
+        assert_eq!(String::from_utf8_lossy(&nothing.stdout), "");
     }
 
     #[test]

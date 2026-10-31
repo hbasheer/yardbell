@@ -1,4 +1,5 @@
 use super::{asset, find_machine, ApiError, AppState};
+use crate::insights::work::{self, Work};
 use crate::insights::{runs::runs, suggest_message, Ask};
 use axum::extract::{Path as UrlPath, State as AxState};
 use axum::http::StatusCode;
@@ -11,11 +12,52 @@ use std::sync::Arc;
 
 // How far back the scrollback is read for runs from before Yardbell recorded them.
 const SCROLLBACK: u32 = 2000;
+const SCREEN_END_LINES: usize = 30;
 
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/insights.js", get(|| async { asset("insights.js") }))
         .route("/sessions/{machine}/{name}/insights", get(insights_route))
+}
+
+fn screen_end(text: &str) -> String {
+    let lines: Vec<&str> = text.trim_end().lines().collect();
+    let from = lines.len().saturating_sub(SCREEN_END_LINES);
+    lines[from..].join("\n")
+}
+
+async fn work_of(
+    app: &AppState,
+    m: &crate::config::Machine,
+    name: &str,
+    live: Option<&crate::snapshot::Session>,
+    screen: String,
+) -> Option<Work> {
+    let record = app.insights.record(&m.name, name);
+    let (agent, cwd) = match (live, &record) {
+        (Some(s), _) => (s.agent.clone(), s.cwd.clone()),
+        (None, Some(r)) => (r.agent.clone(), r.cwd.clone()),
+        (None, None) => return None,
+    };
+    let read = if agent.contains("claude") && !cwd.is_empty() {
+        let lines = app.sessions.work_lines(m, &cwd).await;
+        lines.and_then(|text| work::of_transcript(&text, &cwd))
+    } else {
+        None
+    };
+    let mut found = read.or_else(|| {
+        (!screen.trim().is_empty()).then(|| Work {
+            screen,
+            ..Work::default()
+        })
+    })?;
+    found.shared = found.screen.is_empty()
+        && app
+            .state
+            .snapshot(&m.name)
+            .is_some_and(|snap| snap.sessions.iter().filter(|s| s.cwd == cwd).count() > 1);
+    work::scrub(&mut found, &crate::mcp_read::saved_values(app));
+    Some(found)
 }
 
 async fn insights_route(
@@ -41,9 +83,11 @@ async fn insights_route(
         ));
     }
     let attachable = live.as_ref().is_some_and(|s| s.attachable());
+    let mut screen = String::new();
     let (earlier, scrollback) = if attachable {
         match app.sessions.read(&m, &name, SCROLLBACK).await {
             Ok(text) => {
+                screen = screen_end(&text);
                 let recorded: HashSet<&str> = timeline
                     .iter()
                     .flat_map(|t| t.runs.iter().map(|r| r.text.as_str()))
@@ -60,6 +104,7 @@ async fn insights_route(
     } else {
         (Vec::new(), None)
     };
+    let work = work_of(&app, &m, &name, live.as_ref(), screen).await;
     let pull = live
         .as_ref()
         .map(|s| (s.folder.clone(), s.branch.clone()))
@@ -98,6 +143,7 @@ async fn insights_route(
         "live": live.is_some(),
         "attachable": attachable,
         "activity": live.as_ref().map(|s| s.activity),
+        "work": work,
         "timeline": timeline,
         "earlier": earlier,
         "scrollback_error": scrollback,
