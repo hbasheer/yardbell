@@ -1369,12 +1369,12 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-more-body .help { margin: 0; }
 .conn-secrets { display: grid; gap: 14px; }
 .conn-error { color: var(--bad-text, var(--bad)); flex: 1; margin: 0; min-height: 1.5em; }
-.conn-card { display: flex; align-items: center; gap: 12px; cursor: pointer; }
+.rows .conn-card { display: flex; align-items: center; gap: 12px; padding: 10px 14px; cursor: pointer; }
 .conn-card:hover { background: var(--hover); }
 .conn-starter-text small { color: var(--muted); }
-.conn-head, .conn-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 124px 118px; align-items: center; gap: 12px; }
+.conn-head, .rows .conn-row { display: grid; grid-template-columns: minmax(0, 1fr) 72px 124px 118px; align-items: center; gap: 12px; }
 .conn-head { padding: 8px 14px; border-bottom: 1px solid var(--line); background: var(--side, var(--hover)); border-radius: var(--radius) var(--radius) 0 0; color: var(--muted); font-size: 12px; font-weight: 500; }
-.conn-row { cursor: pointer; flex-wrap: nowrap; }
+.rows .conn-row { cursor: pointer; padding: 10px 14px; }
 .conn-row:hover { background: var(--hover); }
 .conn-type { color: var(--muted); font-size: 13px; }
 .conn-detail { color: var(--bad-text) !important; overflow-wrap: anywhere; }
@@ -1393,7 +1393,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-badge.bad { background: color-mix(in srgb, var(--bad) 13%, transparent); color: var(--bad-text); }
 @media (max-width: 760px) {
   .conn-head, .conn-type { display: none; }
-  .conn-row { grid-template-columns: minmax(0, 1fr) auto; }
+  .rows .conn-row { grid-template-columns: minmax(0, 1fr) auto; }
   .conn-status { grid-column: 1; grid-row: 2; }
   .conn-actions { grid-column: 2; grid-row: 1 / span 2; }
 }
@@ -2012,7 +2012,6 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 #conn-header-add { justify-self: start; }
 #conn-none { color: var(--muted); }
 #conn-new-list { margin-top: 10px; }
-#conn-new-list .row, #conn-sign-in-list .row { padding: 0; }
 .conn-starter { width: 100%; padding: 10px 14px; border: 0; background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
 .conn-starter:hover { background: var(--hover); }
 .conn-starter small { color: var(--muted); }

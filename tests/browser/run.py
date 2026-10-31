@@ -2760,6 +2760,12 @@ class Suite:
             if head != "Connection Type Status":
                 raise Failure(f"the columns are {head!r}")
             row = "#server-rows .conn-row"
+            drift = b.js(f"""Math.abs(document.querySelector('{row} .conn-status').getBoundingClientRect().left - document.querySelectorAll('.conn-head span')[2].getBoundingClientRect().left)""")
+            if drift > 1:
+                raise Failure(f"the status sits {drift}px off its column")
+            pad = b.js("(() => { document.getElementById('conn-new').click(); const v = getComputedStyle(document.querySelector('#conn-sign-in-list .conn-card')).paddingLeft; document.getElementById('conn-flow').close(); return v; })()")
+            if pad == "0px":
+                raise Failure("the picker rows have no padding")
             if "Not signed in" not in b.js(f"document.querySelector('{row} .conn-badge').textContent"):
                 raise Failure("the status is not a badge")
             if b.js(f"document.querySelector('{row} [data-mcp-act=test]').offsetParent !== null"):
