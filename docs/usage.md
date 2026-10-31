@@ -70,6 +70,11 @@ test runs its screen showed, such as Claude Code's `Bash(cargo test)` or Codex's
 with **Passed** or **Failed** for a test runner's summary line. Runs still in the scrollback from
 before Yardbell recorded them are listed under **Earlier, from the scrollback**, without times.
 
+Its first section, **What it's working on**, says what a Claude Code session was asked, its latest
+instruction and message, its last few actions and the files it touched, read from the session's
+transcript on its machine, with saved secrets removed. Other agents show the end of their terminal.
+When two sessions run in one folder, Insights says the detail may be from the other one.
+
 When the session's branch has a pull request or a GitLab merge request, Insights shows it under the
 facts: its number and title as a link, the same state as the badge, and where CI and the review
 stand. Its timeline also says what happened to it while the session ran: when it was opened (or

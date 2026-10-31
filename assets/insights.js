@@ -181,6 +181,31 @@
       <ol class="ins-list">${data.earlier.map((r) => runRow(r, "")).join("")}</ol>`;
   }
 
+  function working(data) {
+    const w = data.work;
+    if (!w) return "";
+    const head = `<h3 class="ins-head">What it's working on</h3>`;
+    if (w.screen) {
+      return `<div class="ins-work">${head}<p class="help ins-note">The end of its terminal. Yardbell can only read more detail from Claude Code's sessions.</p>
+        <pre class="ins-task">${esc(w.screen)}</pre></div>`;
+    }
+    const notes = [
+      w.shared ? "Another session runs in this folder, so this may be from that session." : "",
+      w.partial ? "This is a long session, so actions and files come from its latest part." : "",
+    ].filter(Boolean);
+    const said = (label, text) => (text ? `<div><dt>${label}</dt><dd>${esc(text)}</dd></div>` : "");
+    const actions = w.actions?.length
+      ? `<h4 class="ins-sub-head">Latest actions</h4><ol class="ins-actions">${w.actions.map((a) => `<li>${esc(a.what)}</li>`).join("")}</ol>`
+      : "";
+    const files = w.files?.length
+      ? `<h4 class="ins-sub-head">Files touched</h4><ul class="ins-files">${w.files.map((f) => `<li><code>${esc(f)}</code></li>`).join("")}</ul>`
+      : "";
+    return `<div class="ins-work">${head}<p class="help ins-note">From this session's transcript.${notes.length ? ` ${esc(notes.join(" "))}` : ""}</p>
+      ${w.title ? `<p class="ins-work-title">${esc(w.title)}</p>` : ""}
+      <dl class="ins-said">${said("Asked", data.task ? "" : w.first_prompt)}${said("Latest instruction", w.last_prompt)}${said("Now", w.message)}</dl>
+      ${actions}${files}</div>`;
+  }
+
   function task(data) {
     const from = data.from
       ? `<p class="help ins-note">From the task <strong>${esc(data.from.name)}</strong>, version ${data.from.version}${data.from.current !== data.from.version ? `. It is at version ${data.from.current} now` : ""}.</p>`
@@ -193,7 +218,7 @@
     const t = data.timeline;
     const record = t ? `${spent(t)}${rows(data, all)}` : empty(data);
     return `<div class="ins-top"><h2>Insights for ${esc(data.name)}</h2><p class="ins-where">What Yardbell saw of this session while it watched it.</p></div>
-      <div class="ins-body">${facts(data)}${record}${earlier(data)}${task(data)}</div>
+      <div class="ins-body">${facts(data)}${working(data)}${record}${earlier(data)}${task(data)}</div>
       <div class="dialog-foot">
         <p class="where">Asks Dispatch to read this session and propose a clearer prompt for next time.</p>
         <button class="btn quiet" type="button" data-ins="close">Close</button>

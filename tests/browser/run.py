@@ -1784,6 +1784,42 @@ class Suite:
         if mine["version"] != 3:
             raise Failure(f"the task is at version {mine['version']}")
 
+    def test_insights_say_what_it_is_working_on(self):
+        b = self.b
+        if not self.session:
+            path = os.path.join(self.y.root, "demo-app")
+            self.session = self.api("POST", "/sessions", {"machine": MACHINE, "path": path, "wait": True})["name"]
+        row = f".s-row [data-act=insights][data-name={json.dumps(self.session)}]"
+        b.goto(self.url("/"))
+        b.wait(f"document.querySelector('{row}')", "Insights on a session row", timeout=15)
+        work = {"title": "Fix the login", "first_prompt": "Fix the login bug", "last_prompt": "Now add a test <img src=x onerror=window.__bad=1>",
+                "message": "The tests pass now.", "actions": [{"tool": "Bash", "what": "Ran the tests"}, {"tool": "Edit", "what": "Edited src/login.rs"}],
+                "files": ["src/login.rs"], "partial": True, "shared": True, "screen": ""}
+        b.js("""window.__ins_real = window.fetch; window.__work = %s; window.fetch = (u, o) => String(u).endsWith('/insights')
+          ? window.__ins_real(u, o).then((r) => r.json()).then((d) => { d.work = window.__work; d.task = ''; return new Response(JSON.stringify(d), { headers: { 'content-type': 'application/json' } }); })
+          : window.__ins_real(u, o)""" % json.dumps(work))
+        try:
+            b.click(row)
+            b.wait("document.querySelector('.ins-dialog .ins-work')", "the section")
+            said = b.js("document.querySelector('.ins-work').textContent")
+            for want in ("What it's working on", "Fix the login", "Fix the login bug", "Now add a test <img", "The tests pass now.", "Ran the tests", "Edited src/login.rs", "src/login.rs", "Another session", "latest part"):
+                if want not in said:
+                    raise Failure(f"the section does not say {want!r}: {said}")
+            if b.js("window.__bad || document.querySelector('.ins-work img')"):
+                raise Failure("text from the transcript was not escaped")
+            first = b.js("document.querySelector('.ins-body h3').textContent")
+            if first != "What it's working on":
+                raise Failure(f"the first section is {first}")
+            b.click(".ins-dialog [data-ins=close]")
+            b.wait("!document.querySelector('.ins-dialog')", "the dialog to close")
+            b.js("window.__work = { actions: [], files: [], screen: 'last line on screen' }")
+            b.click(row)
+            b.wait("document.querySelector('.ins-work pre')?.textContent.includes('last line on screen')", "the end of the terminal")
+            b.click(".ins-dialog [data-ins=close]")
+            self.check_errors("what it is working on")
+        finally:
+            b.js("window.fetch = window.__ins_real")
+
     def test_insights_timeline_and_a_better_prompt(self):
         b = self.b
         if not self.session:
