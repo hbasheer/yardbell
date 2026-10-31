@@ -423,6 +423,8 @@
     <div class="section-head"><h2>MCP servers for sessions</h2><button class="btn small-link" type="button" id="server-add">Add server</button></div>
     <p class="help">Claude Code sessions that Yardbell starts get these servers, in a file only your account can read on that machine. Keep tokens in the secrets below and write <code>${secret:NAME}</code> where they go.</p>
     <ul class="rows" id="server-rows"></ul>
+    <div class="panel mcp-panel" id="mcp-sign-in" hidden></div>
+    <div class="panel mcp-panel" id="mcp-tools" hidden></div>
     <form class="panel" id="server-form" hidden>
       <div class="grid2">
         <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" placeholder="github" autocapitalize="off" spellcheck="false" required></label>
@@ -432,6 +434,10 @@
       </div>
       <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
       <label data-kind="url">URL <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
+      <div data-kind="url">
+        <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
+        <p class="help">Only for a server you run yourself on this machine or your mesh. Sign-in stops being limited to HTTPS for this server.</p>
+      </div>
       <label><span id="server-pairs-label">Environment variables</span>
         <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=${secret:github}" autocapitalize="off" spellcheck="false"></textarea>
       </label>

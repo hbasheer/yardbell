@@ -57,6 +57,7 @@ pub struct Meta {
     pub resource: String,
     pub scope: String,
     pub failed: bool,
+    pub server_url: String,
 }
 
 struct Pending {
@@ -69,6 +70,7 @@ struct Pending {
     found: Found,
     redirect: String,
     allow_private: bool,
+    server_url: String,
 }
 
 // Sign-ins under way, newest per server, and one lock per server so a token is refreshed once.
@@ -452,6 +454,7 @@ impl Auth {
                 found,
                 redirect: redirect.to_string(),
                 allow_private: server.allow_private,
+                server_url: server.url.clone(),
             },
         );
         Ok(Started {
@@ -518,6 +521,7 @@ impl Auth {
             resource: pending.found.resource.clone(),
             scope: pending.found.scope.clone().unwrap_or_default(),
             failed: false,
+            server_url: pending.server_url.clone(),
         };
         save(
             store,
@@ -571,7 +575,9 @@ impl Auth {
         }
         let fresh =
             |meta: &Meta| meta.expires_at == 0 || meta.expires_at > now() + REFRESH_EARLY_SECONDS;
-        let meta = read_meta(&secrets, &server.name).ok_or_else(lost)?;
+        let meta = read_meta(&secrets, &server.name)
+            .filter(|m| m.server_url == server.url)
+            .ok_or_else(lost)?;
         if meta.failed {
             return Err(lost());
         }
@@ -583,7 +589,9 @@ impl Auth {
         let lock = self.lock_for(&server.name);
         let _held = lock.lock().await;
         let secrets = store.secrets().map_err(other)?;
-        let mut meta = read_meta(&secrets, &server.name).ok_or_else(lost)?;
+        let mut meta = read_meta(&secrets, &server.name)
+            .filter(|m| m.server_url == server.url)
+            .ok_or_else(lost)?;
         if meta.failed {
             return Err(lost());
         }
@@ -665,7 +673,12 @@ impl Auth {
         }
         match read_meta(secrets, &server.name) {
             Some(meta) if meta.failed => "sign_in_again",
-            Some(_) if secrets.get(&name_of(&server.name, "access")).is_some() => "signed_in",
+            Some(meta)
+                if meta.server_url == server.url
+                    && secrets.get(&name_of(&server.name, "access")).is_some() =>
+            {
+                "signed_in"
+            }
             _ => "not_signed_in",
         }
     }

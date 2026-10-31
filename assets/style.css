@@ -1331,6 +1331,16 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
   .step-card-actions .btn, .steps-bar .btn, .group-child-actions .btn { height: 38px; }
 }
 
+.mcp-panel { margin-top: 12px; }
+.mcp-panel h3 { margin: 0 0 8px; }
+.mcp-panel code { overflow-wrap: anywhere; }
+.mcp-panel label { display: block; margin-top: 12px; }
+#server-rows .row-actions { flex-wrap: wrap; }
+@media (max-width: 760px) {
+  #server-rows .row { flex-wrap: wrap; }
+  #server-rows .row-main { flex-basis: 100%; }
+}
+.mcp-tools { list-style: none; margin: 0 0 12px; padding: 0; display: grid; gap: 6px; }
 .rows { list-style: none; margin: 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); }
 .row { display: flex; align-items: center; gap: 12px; padding: 10px 14px; }
 .row + .row { border-top: 1px solid var(--line); }

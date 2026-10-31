@@ -1,5 +1,7 @@
 use super::{error, find_machine, now_secs, ApiError, AppState, COOKIE, COOKIE_TTL_SECS};
 use crate::config::MeshProvider;
+use crate::mcp_client::oauth::Auth;
+use crate::mcp_client::{holds_own_token, is_own_server};
 use crate::secrets::Secrets;
 use crate::settings::{propose, AgentEdit, MachineEdit, PhoneEdit};
 use axum::extract::{Path as UrlPath, State as AxState};
@@ -60,6 +62,15 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         })
         .collect();
     let phone = &cfg.phone_notifications;
+    let mcp_auth: BTreeMap<&str, &str> = app.secrets().map_or_else(
+        |_| BTreeMap::new(),
+        |store| {
+            cfg.mcp_servers
+                .iter()
+                .map(|s| (s.name.as_str(), Auth::status(s, &store)))
+                .collect()
+        },
+    );
     let (secrets, token) = match app.secrets() {
         Ok(store) => {
             let token = cfg.mcp_token(&store).unwrap_or_else(|e| {
@@ -89,6 +100,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             "proposals": phone.proposals,
         },
         "mcp_servers": cfg.mcp_servers,
+        "mcp_auth": mcp_auth,
         "secrets": secrets,
         "dispatch": cfg.dispatch,
         "codex_models": app.dispatch.codex_models(),
@@ -393,7 +405,29 @@ async fn mcp_servers(
     AxState(app): AxState<Arc<AppState>>,
     Json(req): Json<McpServersReq>,
 ) -> Result<Response, ApiError> {
-    app.settings.set_mcp_servers(req.servers).map_err(bad)?;
+    let cfg = app.config()?;
+    let secrets = app.secrets()?;
+    if let Some(own) = req.servers.iter().find(|s| {
+        !s.url.is_empty() && (is_own_server(&s.url, &cfg) || holds_own_token(s, &cfg, &secrets))
+    }) {
+        return Err(bad(super::mcp_auth_api::own_server_error(&own.name)));
+    }
+    app.settings
+        .set_mcp_servers(req.servers.clone())
+        .map_err(bad)?;
+    for old in cfg.mcp_servers.iter().filter(|old| !old.url.is_empty()) {
+        if req
+            .servers
+            .iter()
+            .any(|s| s.name == old.name && s.url == old.url)
+        {
+            continue;
+        }
+        let forgot = app.pipelines.mcp_auth().sign_out(old, &app.settings).await;
+        if let Err(e) = forgot {
+            tracing::warn!(error = %e, server = %old.name, "could not forget a sign-in");
+        }
+    }
     Ok(Json(json!({ "ok": true })).into_response())
 }
 

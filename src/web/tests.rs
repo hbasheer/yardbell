@@ -13,6 +13,7 @@ use tower::ServiceExt;
 
 mod connectors;
 mod insights;
+mod mcp_auth;
 mod mcp_change;
 mod mcp_pipeline;
 mod mcp_read;

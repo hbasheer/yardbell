@@ -43,6 +43,36 @@ pub enum Failure {
     Other(String),
 }
 
+pub(crate) fn is_own_server(url: &str, cfg: &crate::config::Config) -> bool {
+    let Ok(parsed) = reqwest::Url::parse(url) else {
+        return false;
+    };
+    if parsed.port_or_known_default() != Some(cfg.port) {
+        return false;
+    }
+    let Some(host) = parsed.host_str() else {
+        return false;
+    };
+    let host = host.trim_matches(['[', ']']);
+    let local = ["localhost", "127.0.0.1", "::1", "0.0.0.0", "::"];
+    local.contains(&host) || cfg.bind_addresses().iter().any(|a| a == host)
+}
+
+pub(crate) fn holds_own_token(
+    server: &crate::config::McpServer,
+    cfg: &crate::config::Config,
+    secrets: &crate::secrets::Secrets,
+) -> bool {
+    let Ok(Some(token)) = cfg.mcp_token(secrets) else {
+        return false;
+    };
+    server.headers.values().any(|value| {
+        secrets
+            .resolve(value)
+            .is_ok_and(|resolved| resolved.contains(&token))
+    })
+}
+
 pub(crate) fn tool_of(value: &Value) -> Option<Tool> {
     Some(Tool {
         name: value["name"].as_str()?.to_string(),

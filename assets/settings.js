@@ -214,13 +214,89 @@ function serverTarget(srv) {
   return srv.url || srv.command;
 }
 
+const AUTH_LABELS = { signed_in: "Signed in", sign_in_again: "Sign in again", not_signed_in: "Not signed in" };
+
+function serverAuth(srv) {
+  return srv.url ? AUTH_LABELS[data.mcp_auth?.[srv.name]] || "" : "";
+}
+
+function serverActions(srv) {
+  if (!srv.url) return "";
+  const status = data.mcp_auth?.[srv.name];
+  const act = (name, label) => `<button class="btn" type="button" data-mcp-act="${name}" data-name="${esc(srv.name)}">${label}</button>`;
+  const signIn = status === "not_signed_in" ? act("sign-in", "Sign in") : status === "sign_in_again" ? act("sign-in", "Sign in again") : "";
+  const signOut = status === "signed_in" || status === "sign_in_again" ? act("sign-out", "Sign out") : "";
+  return `${signIn}${signOut}${act("test", "Test")}`;
+}
+
 function renderServers() {
   const servers = data.mcp_servers || [];
   $("server-rows").hidden = !servers.length;
   $("server-rows").innerHTML = servers.map((srv, i) => `<li class="row">
-    <div class="row-main"><div class="row-title"><span class="folder">${esc(srv.name)}</span></div>
+    <div class="row-main"><div class="row-title"><span class="folder">${esc(srv.name)}</span>${serverAuth(srv) ? `<span class="note">${serverAuth(srv)}</span>` : ""}</div>
       <p class="help">${esc(serverTarget(srv))} · ${srv.machines?.length ? esc(srv.machines.join(", ")) : "every machine"}</p></div>
-    <div class="row-actions"><button class="btn" type="button" data-edit="${i}">Edit</button><button class="btn quiet danger" type="button" data-remove="${i}">Remove</button></div></li>`).join("");
+    <div class="row-actions">${serverActions(srv)}<button class="btn" type="button" data-edit="${i}">Edit</button><button class="btn quiet danger" type="button" data-remove="${i}">Remove</button></div></li>`).join("");
+}
+
+let signingIn = null;
+
+function serverPath(name, action) {
+  return `/api/settings/mcp/servers/${encodeURIComponent(name)}/${action}`;
+}
+
+function signsInHere() {
+  return ["127.0.0.1", "localhost"].includes(location.hostname);
+}
+
+function closeSignIn() {
+  signingIn = null;
+  $("mcp-sign-in").hidden = true;
+  $("mcp-sign-in").innerHTML = "";
+}
+
+function showSignIn(name, out) {
+  const panel = $("mcp-sign-in");
+  signingIn = name;
+  panel.hidden = false;
+  const cancel = `<button class="btn quiet" type="button" data-cancel>Cancel</button>`;
+  if (out.needs_client) {
+    panel.innerHTML = `<h3>Sign in to ${esc(name)}</h3>
+      <p class="help">${esc(out.sign_in_host)} does not let Yardbell register itself. Make an app in its developer console with this redirect address, then enter what it gives you.</p>
+      <p><code>${esc(out.redirect)}</code></p>
+      <div class="grid2">
+        <label>Client ID <input type="text" name="client_id" autocapitalize="off" spellcheck="false"></label>
+        <label>Client secret <input type="password" name="client_secret" autocomplete="new-password" autocapitalize="off" spellcheck="false"></label>
+      </div>
+      <div class="form-foot">${cancel}<button class="btn primary" type="button" data-client>Continue</button></div>`;
+    return;
+  }
+  const paste = signsInHere() ? "" : `
+      <p class="help">You are on another device. ${esc(out.sign_in_host)} sends you back to 127.0.0.1, which on this device is not Yardbell, so that page will not load. Copy its address and paste it here.</p>
+      <label>Address of the page that did not load <input type="text" name="address" inputmode="url" autocapitalize="off" spellcheck="false"></label>`;
+  panel.innerHTML = `<h3>Sign in to ${esc(name)}</h3>
+      <p>You will sign in at ${esc(out.sign_in_host)}</p>${paste}
+      <div class="form-foot">${cancel}<a class="btn${paste ? "" : " primary"}" data-continue target="_blank" rel="noopener" href="${esc(out.url)}">Continue</a>${paste ? `<button class="btn primary" type="button" data-finish>Finish signing in</button>` : ""}</div>`;
+}
+
+async function refreshServerAuth() {
+  const fresh = await api("GET", "/api/settings");
+  data.mcp_auth = fresh.mcp_auth;
+  renderServers();
+}
+
+async function startSignIn(name, client) {
+  const out = await api("POST", serverPath(name, "sign-in"), client || {});
+  showSignIn(name, out);
+}
+
+function showTools(name, out) {
+  const panel = $("mcp-tools");
+  panel.hidden = false;
+  const tools = out.tools.map((t) => `<li><code>${esc(t.name)}</code> ${esc(t.description)}</li>`).join("");
+  panel.innerHTML = `<h3>${esc(name)} answered</h3>
+    <p class="help">${out.tools.length} ${out.tools.length === 1 ? "tool" : "tools"}, protocol ${esc(out.version)}. None were called.</p>
+    <ul class="mcp-tools">${tools}</ul>
+    <div class="form-foot"><button class="btn quiet" type="button" data-close-tools>Close</button></div>`;
 }
 
 function day(stamp) {
@@ -318,13 +394,14 @@ function showKind(kind) {
 
 function openServerForm(index) {
   editing = index;
-  const srv = index === null ? { name: "", command: "", url: "", env: {}, headers: {}, machines: [] } : data.mcp_servers[index];
+  const srv = index === null ? { name: "", command: "", url: "", env: {}, headers: {}, machines: [], allow_private: false } : data.mcp_servers[index];
   const f = $("server-form");
   const kind = srv.url ? "url" : "command";
   f.elements.name.value = srv.name;
   f.elements.kind.value = kind;
   f.elements.command.value = srv.command || "";
   f.elements.url.value = srv.url || "";
+  f.elements.allow_private.checked = !!srv.allow_private;
   f.elements.pairs.value = Object.entries((kind === "url" ? srv.headers : srv.env) || {}).map(([k, v]) => `${k}=${v}`).join("\n");
   $("server-machines").innerHTML = data.machines.map((m) => `<label class="choice"><input type="checkbox" value="${esc(m.name)}"${srv.machines?.includes(m.name) ? " checked" : ""}>${esc(m.name)}</label>`).join("");
   showKind(kind);
@@ -1164,7 +1241,60 @@ $("server-add").addEventListener("click", () => openServerForm(null));
 $("server-cancel").addEventListener("click", () => { $("server-form").hidden = true; });
 $("server-form").elements.kind.addEventListener("change", (e) => showKind(e.target.value));
 
+$("mcp-sign-in").addEventListener("click", async (e) => {
+  const panel = $("mcp-sign-in");
+  const name = signingIn;
+  if (e.target.closest("[data-cancel]")) { closeSignIn(); return; }
+  try {
+    if (e.target.closest("[data-client]")) {
+      const field = (key) => panel.querySelector(`[name=${key}]`).value;
+      await startSignIn(name, { client_id: field("client_id"), client_secret: field("client_secret") });
+    } else if (e.target.closest("[data-finish]")) {
+      await api("POST", serverPath(name, "finish"), { address: panel.querySelector("[name=address]").value });
+      closeSignIn();
+      saved(`Signed in to ${name}.`);
+      await refreshServerAuth();
+    }
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
+$("mcp-tools").addEventListener("click", (e) => {
+  if (e.target.closest("[data-close-tools]")) $("mcp-tools").hidden = true;
+});
+
+window.addEventListener("focus", async () => {
+  if (!signingIn) return;
+  const name = signingIn;
+  try {
+    await refreshServerAuth();
+    if (data.mcp_auth?.[name] === "signed_in") {
+      closeSignIn();
+      saved(`Signed in to ${name}.`);
+    }
+  } catch (err) {
+    toast(err.message);
+  }
+});
+
 $("server-rows").addEventListener("click", async (e) => {
+  const act = e.target.closest("[data-mcp-act]");
+  if (act) {
+    const name = act.dataset.name;
+    try {
+      if (act.dataset.mcpAct === "sign-in") await startSignIn(name);
+      if (act.dataset.mcpAct === "test") showTools(name, await api("POST", serverPath(name, "test")));
+      if (act.dataset.mcpAct === "sign-out") {
+        await api("POST", serverPath(name, "sign-out"));
+        saved(`Signed out of ${name}.`);
+        await refreshServerAuth();
+      }
+    } catch (err) {
+      toast(err.message);
+    }
+    return;
+  }
   const edit = e.target.closest("[data-edit]");
   if (edit) { openServerForm(Number(edit.dataset.edit)); return; }
   const remove = e.target.closest("[data-remove]");
@@ -1191,6 +1321,7 @@ $("server-form").addEventListener("submit", async (e) => {
       env: url ? {} : pairs,
       headers: url ? pairs : {},
       machines: [...$("server-machines").querySelectorAll("input:checked")].map((c) => c.value),
+      allow_private: url && f.elements.allow_private.checked,
     };
     const servers = [...(data.mcp_servers || [])];
     if (editing === null) servers.push(srv); else servers[editing] = srv;

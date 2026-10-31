@@ -1467,6 +1467,7 @@ class Suite:
         b = self.b
         b.goto(self.url("/settings#triggers"))
         # An MCP server whose secret is missing stops a triggered run, as it stops a typed one.
+        self.b.js("if (window.__real) { window.fetch = window.__real; delete window.__real; }")
         self.api("POST", "/api/settings/mcp/servers", {"servers": []})
         b.goto(self.url("/settings#triggers"))
         b.wait("!document.getElementById('triggers-empty').hidden", "the empty trigger list")
@@ -2730,6 +2731,79 @@ class Suite:
         if "glpat-browser-test" in config:
             raise Failure("the token's value reached yardbell.yml")
         self.check_errors("the Pull requests section")
+
+    def stub_sign_in(self, reply):
+        self.b.js("""window.__real = window.__real || window.fetch; window.__posted = []; window.fetch = (u, o) => {
+          if (String(u).includes('/sign-in') || String(u).endsWith('/finish')) {
+            window.__posted.push(String(u) + ' ' + (o && o.body));
+            return Promise.resolve(new Response(JSON.stringify(%s), { headers: { 'content-type': 'application/json' } }));
+          }
+          return window.__real(u, o);
+        }""" % json.dumps(reply))
+
+    def add_mcp_server(self):
+        self.api("POST", "/api/settings/mcp/servers", {"servers": [{"name": "tool", "url": "https://mcp.example.com/mcp"}]})
+        self.b.goto(self.url("/"))
+        self.b.goto(self.url("/settings#servers"))
+        self.b.wait("document.querySelector('[data-mcp-act=sign-in]')", "the Sign in button")
+
+    def remove_mcp_servers(self):
+        self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+
+    def test_server_sign_in_flow(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            if "Not signed in" not in b.js("document.getElementById('server-rows').textContent"):
+                raise Failure("the row does not say it is not signed in")
+            self.stub_sign_in({"url": "https://auth.example.com/authorize?x=1", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.getElementById('mcp-sign-in')?.textContent.includes('You will sign in at auth.example.com')", "the host, before leaving")
+            link = b.js("document.querySelector('#mcp-sign-in a[data-continue]').getAttribute('href')")
+            if link != "https://auth.example.com/authorize?x=1":
+                raise Failure(f"Continue goes to {link}")
+            b.viewport(390, 844)
+            try:
+                b.wait("window.innerWidth === 390", "the phone width")
+                wide = b.js("""Math.max(...[...document.querySelectorAll('#server-rows button')].map((el) => el.getBoundingClientRect().right)) - window.innerWidth""")
+                if wide > 0:
+                    raise Failure(f"the server buttons run {wide}px past the phone screen")
+            finally:
+                b.viewport(1280, 900)
+            self.check_errors("signing in")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_sign_in_from_another_device(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            self.stub_sign_in({"url": "https://auth.example.com/a", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+            b.js("window.signsInHere = () => false")
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.querySelector('#mcp-sign-in [name=address]')", "the box to paste into")
+            said = b.js("document.getElementById('mcp-sign-in').textContent")
+            if "another device" not in said:
+                raise Failure(f"it does not explain: {said}")
+            self.set_field("#mcp-sign-in [name=address]", "http://127.0.0.1:1/oauth/mcp/callback?code=c&state=s")
+            b.click("#mcp-sign-in [data-finish]")
+            b.wait("window.__posted.some((p) => p.includes('/finish') && p.includes('code=c'))", "the address sent")
+            self.check_errors("signing in from another device")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_sign_in_needs_a_client(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            self.stub_sign_in({"needs_client": True, "sign_in_host": "app.asana.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback"})
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.querySelector('#mcp-sign-in [name=client_id]')", "the client fields")
+            if "http://127.0.0.1:1/oauth/mcp/callback" not in b.js("document.getElementById('mcp-sign-in').textContent"):
+                raise Failure("the redirect address is not shown")
+            self.check_errors("a server that needs a client")
+        finally:
+            self.remove_mcp_servers()
 
     def test_connections_section(self):
         b = self.b

@@ -81,6 +81,19 @@ fn connectors_of(def: &Definition) -> Vec<String> {
     .collect()
 }
 
+pub fn mcp_sign_in_lines(cfg: &Config, secrets: &crate::secrets::Secrets) -> Vec<(bool, String)> {
+    cfg.mcp_servers
+        .iter()
+        .filter(|s| crate::mcp_client::oauth::Auth::status(s, secrets) == "sign_in_again")
+        .map(|s| {
+            (
+                false,
+                format!("{}: sign in again under Settings, MCP servers", s.name),
+            )
+        })
+        .collect()
+}
+
 pub fn pipelines_lines(
     cfg: &Config,
     defs: &[Definition],
@@ -285,6 +298,11 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
         for (ok, text) in pipelines_lines(&cfg, &defs, &linear, &gh, &signed_in, &up, &connectors) {
             line(ok, &text);
         }
+        if let Ok(secrets) = &secrets {
+            for (ok, text) in mcp_sign_in_lines(&cfg, secrets) {
+                line(ok, &text);
+            }
+        }
     }
     if in_docker() {
         println!("  running inside Docker: the host machine is reached over ssh like any other");
@@ -342,6 +360,32 @@ mod tests {
                 false,
                 "git.commslayer.com: the secret gitlab is not set".into()
             )
+        );
+    }
+
+    #[test]
+    fn doctor_says_sign_in_again_without_a_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.yml");
+        let meta = r#"{"failed":true}"#;
+        std::fs::write(
+            &path,
+            format!("mcp_oauth_tool_access: a-value\nmcp_oauth_tool_meta: '{meta}'\n"),
+        )
+        .unwrap();
+        let secrets = crate::secrets::Secrets::load(&path).unwrap();
+        let mut cfg = crate::pipeline::definition::tests::cfg();
+        cfg.mcp_servers = vec![serde_json::from_value(
+            serde_json::json!({ "name": "tool", "url": "https://x.example/mcp" }),
+        )
+        .unwrap()];
+        let lines = mcp_sign_in_lines(&cfg, &secrets);
+        assert_eq!(
+            lines,
+            vec![(
+                false,
+                "tool: sign in again under Settings, MCP servers".to_string()
+            )]
         );
     }
 
