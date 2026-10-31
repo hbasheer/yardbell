@@ -213,6 +213,33 @@ Every key is optional. The values above are the defaults. Older configs may stil
 | `pipeline_finished` | `true` | Notify with the first line of a pipeline run's report. |
 | `proposals` | `true` | Notify when a proposal waits in the Proposals inbox. |
 
+### `connectors` (optional)
+
+Outside tools pipelines can take work from and call. **Settings, Connections** edits them, and
+[Connectors](automation.md#connectors) explains each key with examples.
+
+```yaml
+connectors:
+  - id: tracker                       # used in pipelines
+    name: Tracker
+    enabled: true                     # default true
+    base_url: https://api.example.com/1  # https, or http with allow_private
+    allow_private: false              # may reach private and mesh addresses
+    headers:
+      Authorization: 'Bearer ${secret:tracker}'  # a login header must use a secret
+    params:
+      - { name: board, label: Board, options: boards }  # a choice in the builder
+    calls:
+      list:
+        request: { method: GET, path: /items, query: { open: 'true' } }
+        map: { item_id: id, title: name, state: status }
+        page: { style: number, param: page, size: 50, max_pages: 20 }
+```
+
+Plain header values are allowed only for `accept`, `content-type`, `user-agent` and names ending
+`-version`. Paths must start with `/`. A call may have at most 3 `before` requests, and `max_pages` runs
+from 1 to 100.
+
 ### `mcp_servers` (optional)
 
 Other MCP servers that Claude Code sessions started by Yardbell get, through `--mcp-config`. The

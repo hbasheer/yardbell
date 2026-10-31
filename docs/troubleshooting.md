@@ -39,6 +39,15 @@ Start with `yardbell doctor`. Common cases:
   result is read from its transcript, so with other agents make the terminal bigger and keep it
   scrolled to the bottom. A run that was going when you upgraded asks for the new `step:` line, so it
   can stop here once.
+- **A connection says its list was cut off.** It reached 20 pages, its `max_pages`, or 5,000 items, or the
+  server repeated a page. Raise `max_pages` up to 100, or narrow the `list` call. Items past the limit do
+  not start runs.
+- **A connection says an address is private.** Its host resolves to a private or mesh address. Tick
+  **Allow private addresses** on the connection if that is your own tool.
+- **Test says only a call that reads can run.** A POST counts as a change. If `list` only reads, as a
+  GraphQL query does, add `kind: lookup` to it.
+- **A webhook never arrives.** Yardbell listens on this machine and your mesh, so an outside service needs a
+  tunnel you set up. A 404 means the address is wrong or replaced, or the pipeline is not saved and on.
 - **A pipeline's teardown did not run.** The run page says why when another session or run was using
   the folder. It also does not run in a worktree the run did not create, see
   [Teardown](automation.md#teardown).

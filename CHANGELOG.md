@@ -5,6 +5,20 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Connectors.** Pipelines can now take work from any tool with a web API and a token, set up under the
+  new **Settings, Connections** with no new release. Trello ships ready to use. A connector holds the
+  tool's address, the secrets that log in, and its calls, with paging and field mapping. **Test** shows
+  what it reads, **Share** and **Import** pass one on without its tokens, and `yardbell doctor` checks each
+  one a pipeline uses.
+- **A connected tool as a trigger.** A pipeline can start from a new item, or one that reaches a state, and
+  **Run now** takes item ids or links. A schedule can read a connected tool too.
+- **Call API step.** Reads from or changes a connected tool during a run. Changes are the rule action
+  `call_connector`, so your Dispatch rules can refuse them.
+- **Webhook trigger.** Another system can start a run by calling an address with its own token. Yardbell
+  listens on this machine and your mesh, so an outside service needs a tunnel you set up.
+- **Dispatch can propose a connection** with `save_connector`. It always waits for you, arrives switched
+  off, and cannot carry a token or turn on private addresses.
+
 ## [0.9.2] - 2026-10-30
 
 - Fixed: a Claude Code step could finish with a good result and the run still said it ended without

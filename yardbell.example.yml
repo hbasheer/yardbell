@@ -27,6 +27,18 @@ default_agent: claude            # preselected in New session; built in: claude,
 #   machines: true               # notify when a machine goes down or comes back
 #   memory: true                 # notify when a machine's memory reaches 95%
 
+# Outside tools pipelines can take work from. Settings, Connections adds Trello in one click.
+# connectors:
+#   - id: tracker
+#     name: Tracker
+#     base_url: https://api.example.com/1
+#     headers:
+#       Authorization: 'Bearer ${secret:tracker}'
+#     calls:
+#       list:
+#         request: { method: GET, path: /items }
+#         map: { item_id: id, title: name, state: status }
+
 machines:
   - name: studio                 # the machine Yardbell runs on
     local: true

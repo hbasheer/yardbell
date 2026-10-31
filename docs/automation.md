@@ -1,4 +1,4 @@
-# Triggers, worktree setup, rules and pipelines
+# Triggers, worktree setup, rules, pipelines and connectors
 
 How to let Yardbell start work for you, prepare and clear every worktree, decide what Dispatch may do
 without asking, and carry tickets and merge requests through pipelines of steps you define. Each part has
@@ -7,8 +7,9 @@ what it is, when it helps, and examples you can copy.
 The settings themselves are listed in [Configuration](configuration.md): see
 [`triggers`](configuration.md#triggers-optional),
 [`worktree_setup`](configuration.md#worktree_setup-optional) and
-[`dispatch`](configuration.md#dispatch-optional) and
-[`pipelines`](configuration.md#pipelines-optional).
+[`dispatch`](configuration.md#dispatch-optional),
+[`pipelines`](configuration.md#pipelines-optional) and
+[`connectors`](configuration.md#connectors-optional).
 
 ## How they fit together
 
@@ -465,8 +466,8 @@ A pipeline is a set of steps that Yardbell carries a ticket, a pull or merge req
 all through on its own, stopping only when it needs you. You build one on the
 **Pipelines** page's canvas, from nothing or from a template. Each pipeline has:
 
-- a **trigger** that starts runs: by hand, a schedule, a Linear ticket, a GitHub review request, or
-  a GitLab merge request that adds you as reviewer;
+- a **trigger** that starts runs: by hand, a schedule, a Linear ticket, a [connected tool](#connectors),
+  a [webhook](#webhooks), a GitHub review request, or a GitLab merge request that adds you as reviewer;
 - **steps**, each with three lines out of it: where to go when it **passed**, **failed** or **needs
   you**. A line goes to another step, to **End the run**, or to **Wait for me**. A line back to an
   earlier step makes a loop, such as Review failing back to Fix;
@@ -562,6 +563,7 @@ reviewer afresh.
 | Plan | Dispatch reads the ticket and its comments and picks the machine, folder and branch, from all machines or the ones you tick. Unclear tickets come back to you as questions. |
 | Push and draft PR | Pushes the run's branch (with the secret check, never forced) and opens a draft pull or merge request. |
 | Linear | Moves the ticket to a state, or drafts a comment that you post yourself. |
+| Call API | Calls a [connector](#connectors): reads from or changes an outside tool. Its reply goes on the pass line and an error on the fail line. |
 | Report to me | Dispatch writes what the run did and found, and your phone gets the first line. |
 | Wait for me | Stops with your message until you continue it. |
 
@@ -648,3 +650,134 @@ pipelines:
 - An agent step reports through its result block. One that ends without it gets one more try, then
   waits for you. Only Claude Code's result is also read from its transcript; other agents' results
   must fit on the terminal's screen.
+
+## Connectors
+
+### What a connector is
+
+A connector tells Yardbell how to talk to one outside tool, saved as data rather than code, so
+adding a tool needs no new release. It holds the tool's address, which saved secrets log in, and its
+calls: how to list items, read one, move one, or anything else its API does. Trello ships ready to
+use.
+
+With a connector, a pipeline can:
+
+- start a run when a new item appears, or one reaches a state;
+- give the agent the item's title and description;
+- change the tool during a run with a **Call API** step, such as moving a card or adding a comment.
+
+### What a connector can reach
+
+It needs a web API that takes a token you can paste in and replies in JSON. Most ticket tools do.
+
+| Works | Does not work |
+|---|---|
+| REST and GraphQL APIs | A service that only signs in through a browser (OAuth) |
+| A token in a header | Requests that must be cryptographically signed, like AWS |
+| Paged lists | Replies that are not JSON, such as XML |
+| A tool on your mesh, with **Allow private addresses** | A tool with no web API |
+
+Comments on an item are not read, only its title and description.
+
+### Connect Trello
+
+1. In Trello, make an API key and a token: [Trello's guide](https://developer.atlassian.com/cloud/trello/guides/rest-api/authorization/).
+2. In Yardbell, save them as the secrets `trello_key` and `trello_token`, under **Settings, MCP servers,
+   Secrets**.
+3. Under **Settings, Connections**, press **Add Trello**, then **Save**.
+4. Press **Test**. It shows your cards and every field you could map.
+5. On a pipeline's **Build** tab, pick **A connected tool** under **Start when**, then the board and lists.
+
+A template's **Linear** step cannot run on a Trello card. Use a **Call API** step with `move` or
+`comment`, and give its `value` the list id or the comment's text.
+
+### Add another tool
+
+Press **Blank** under **Settings, Connections**, or ask Dispatch: "connect my Jira". Dispatch's version
+waits for you as a proposal and arrives switched off. A connector looks like this:
+
+```yaml
+connectors:
+  - id: jira
+    name: Jira
+    base_url: https://acme.atlassian.net/rest/api/3
+    headers:
+      Authorization: 'Basic ${secret:jira_basic}'
+    calls:
+      list:
+        request: { method: GET, path: /search, query: { jql: 'assignee = currentUser()' } }
+        items: issues
+        map: { item_id: id, id: key, title: fields.summary, url: self, state: fields.status.name }
+        page: { style: offset, param: startAt, size: 50 }
+      read:
+        request: { method: GET, path: '/issue/{{item_id}}' }
+        map: { title: fields.summary, description: fields.description, state: fields.status.name }
+      comment:
+        request: { method: POST, path: '/issue/{{item_id}}/comment', body: { body: '{{value}}' } }
+```
+
+This example has not been run against Jira, so press **Test** and adjust it to your API. **Share** copies
+a connector as text with its secret names but no values, and **Import** adds one switched off, naming
+the host it can reach and the secrets it needs.
+
+Each call has:
+
+| Key | What it does |
+|---|---|
+| `request` | `method`, `path`, and optional `query` and `body`. `{{name}}` fills in a value |
+| `items` | Where the list is in the reply, when it is not the top level |
+| `map` | Which reply field is the `item_id`, `id`, `title`, `url`, `description`, `state` and `closed` |
+| `before` | Up to 3 requests to run first, used as `{{steps.name.path}}` |
+| `error` | A field that means failure even in a 200 reply, as GraphQL's `errors` does |
+| `kind` | `lookup` or `change`. GET is `lookup` and the rest `change` unless you say so. A POST that only reads, like a GraphQL list, needs `kind: lookup` |
+| `page` | How to read the next page, see below |
+
+`list` and `read` make a connector a source of work. `states` and any call named by `params` fill the
+builder's lists with names. Only mapped fields are kept: the rest of a reply is never stored.
+
+### Paging
+
+```yaml
+page:
+  style: cursor                    # cursor, number, offset or link
+  param: after                     # the query field to send; a GraphQL body uses {{cursor}}
+  next: pageInfo.endCursor         # cursor only: where the next value is
+  has_more: pageInfo.hasNextPage   # optional: stop when this is false
+  size: 100                        # number and offset: stop on a page shorter than this
+```
+
+At most 20 pages, or `max_pages` up to 100, and 5,000 items. Reaching a limit keeps what was read, and
+the connection's status says the list was cut off. A page that fails fails the whole check, and the next
+check starts again. Nothing already seen starts a second run.
+
+### Safety
+
+- Tokens stay in Secrets. A header holding a literal credential is refused.
+- Every request stays on the connector's host, and redirects are not followed.
+- Private addresses are refused unless you tick **Allow private addresses** in Settings. An agent, a
+  proposal or an import cannot turn that on, and a connector proposed with a new host loses it.
+- Item text reaches agents quoted as data, so a card cannot give an agent orders. A title stays one line.
+- A call that changes something is the Dispatch rule action `call_connector`, so a rule can refuse it.
+  Rules match the action, not one connector. Starting a run is the approval, so add a **Wait for me** step
+  before a change you want to check.
+- A connector is added only by you, or by a proposal you approve.
+
+### Webhooks
+
+A pipeline whose trigger is **A webhook** starts a run when something POSTs to its address.
+
+**Yardbell listens on this machine and your mesh, so an outside service such as Trello cannot reach it
+without a tunnel you set up.** This is why connectors poll every 3 minutes by default. Webhooks suit
+systems on your mesh.
+
+Press **New address** in the builder. It is shown once, works when the pipeline is saved and switched on,
+and replaces any earlier one. The body is JSON:
+
+```json
+{ "id": "T-9", "title": "Fix the export", "url": "https://...", "description": "..." }
+```
+
+`id` and `title` are required. If yours differs, name where each one is, like `action.data.card.id`. An
+`id` that already has a run starts nothing. A body is limited to 1 MB, and a pipeline to 30 requests a
+minute. `HEAD` answers 200 for tools that check an address first. A vendor's own signature is not
+checked: the address's token is the check.

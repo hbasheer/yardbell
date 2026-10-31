@@ -218,6 +218,8 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 - **Worktree setup:** a command to run in each new worktree, and one to clear it when a pipeline run
   ends, see [Worktree setup](automation.md#worktree-setup).
 - **GitHub and GitLab:** see [below](#github-and-gitlab).
+- **Connections:** the outside tools pipelines can use, such as Trello, with **Test**, **Share** and
+  **Import**, see [Connectors](automation.md#connectors).
 - **Agent tools (MCP)** and **MCP servers:** turn on Yardbell's MCP server and list other MCP
   servers for the sessions it starts, see [Agent tools (MCP)](agents.md#agent-tools-mcp). Their
   tokens go in **Secrets** under the list: add, replace or delete one by name, and refer to it as
@@ -286,7 +288,7 @@ A pipeline opens full screen (the button beside **Delete** puts it back in the p
   the run (pass) or waiting for you. **Undo**, **Redo** and **Tidy** (lines the steps up along
   their pass line) sit at the top left; arrows nudge a card, and Ctrl+S saves. **Save** lists what
   the checks find over the canvas and rings each step it names.
-- **Runs**: its runs, newest first. The chosen run shows on the same canvas: steps done in green,
+- **Runs**: its runs, newest first. **Run now** on a connected tool takes item ids or links. The chosen run shows on the same canvas: steps done in green,
   the current one outlined (amber when it waits for you), and the rest faded, with lines coloured
   by outcome. Beside it are links to the ticket, the pull or merge request, the draft and the
   conversation; the waiting box with **Send answer**, **Retry step**, **Continue on pass**,
