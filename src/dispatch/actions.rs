@@ -3,7 +3,8 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 17] = [
+const CHANGING: [&str; 18] = [
+    "save_connector",
     "start_session",
     "send_to_session",
     "stop_session",

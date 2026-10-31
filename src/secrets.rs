@@ -38,6 +38,11 @@ pub fn is_own(name: &str) -> bool {
     OWN.contains(&name)
 }
 
+// Yardbell's own stored values: hidden from the Secrets list, and written only by Yardbell.
+pub fn is_reserved(name: &str) -> bool {
+    name.starts_with("mcp_oauth_") || name.starts_with("pipeline_hook_")
+}
+
 pub fn check_name(name: &str) -> Result<(), String> {
     if name.len() > NAME_MAX || !NAME_RE.is_match(name) {
         return Err(format!(
@@ -226,6 +231,9 @@ impl Secrets {
                 SecretsError::Invalid("a ${secret: reference is not closed".into())
             })?;
             let name = &after[..end];
+            if is_reserved(name) {
+                return Err(SecretsError::Missing(name.to_string()));
+            }
             let value = self
                 .get(name)
                 .ok_or_else(|| SecretsError::Missing(name.to_string()))?;

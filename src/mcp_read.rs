@@ -3,7 +3,7 @@ use crate::web::{ApiError, AppState};
 use axum::http::StatusCode;
 use serde_json::{json, Map, Value};
 
-pub const AREAS: [&str; 11] = [
+pub const AREAS: [&str; 12] = [
     "dispatch",
     "triggers",
     "worktree_setup",
@@ -13,6 +13,7 @@ pub const AREAS: [&str; 11] = [
     "machines",
     "pipelines",
     "pull_requests",
+    "connectors",
     "security",
     "about",
 ];
@@ -34,7 +35,7 @@ pub fn tools() -> Vec<Value> {
         "read_settings",
         "One area of Yardbell's settings as Settings shows it, with what it may be set to. Areas: \
 dispatch, triggers, worktree_setup, agents, session_mcp_servers, phone, machines, pipelines, \
-pull_requests, security, about. Secrets are never shown: a setting that uses one shows \
+pull_requests, connectors, security, about. Secrets are never shown: a setting that uses one shows \
 ${secret:name}, and any other credential shows (hidden).",
         json!({ "area": { "type": "string", "enum": AREAS } }),
         &["area"],
@@ -151,7 +152,7 @@ async fn answer(app: &AppState, name: &str, args: &Value) -> Option<Result<Value
     }
 }
 
-fn credential(key: &str) -> bool {
+pub(crate) fn credential(key: &str) -> bool {
     let key = key.to_lowercase();
     [
         "token", "secret", "password", "passcode", "auth", "cookie", "key",
@@ -390,6 +391,7 @@ fn value_of(cfg: &Config, area: &str) -> Value {
         "machines" => machines_of(cfg),
         "pipelines" => shown(&cfg.pipelines),
         "pull_requests" => shown(&cfg.pull_requests),
+        "connectors" => shown(&cfg.connectors),
         _ => Value::Null,
     }
 }

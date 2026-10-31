@@ -7,7 +7,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 const RESULT_PREVIEW: usize = 4000;
-pub(super) const TOOLS: [&str; 34] = [
+pub(super) const TOOLS: [&str; 35] = [
+    "save_connector",
     "list_machines",
     "list_sessions",
     "list_folders",

@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
 pub const REMEMBER: &str = "remember";
-const ACTIONS: [&str; 17] = [
+pub(crate) const ACTIONS: [&str; 20] = [
     "start_session",
     "stop_session",
     "send_to_session",
@@ -21,11 +21,15 @@ const ACTIONS: [&str; 17] = [
     "set_pipeline_enabled",
     "run_pipeline",
     "answer_run",
+    "call_connector",
+    "call_tool",
+    "save_connector",
     REMEMBER,
 ];
 
 // Steps that change Yardbell itself rather than a machine, so a rule for them names neither.
-const UNPLACED: [&str; 7] = [
+const UNPLACED: [&str; 8] = [
+    "save_connector",
     "change_settings",
     "save_task",
     "run_trigger",
@@ -336,6 +340,11 @@ mod tests {
     }
 
     #[test]
+    fn call_connector_is_a_rule_action() {
+        assert!(ACTIONS.contains(&"call_connector"));
+    }
+
+    #[test]
     fn without_rules_the_default_decides() {
         for default in [Approval::Prompt, Approval::Allow, Approval::Deny] {
             assert_eq!(
@@ -488,7 +497,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, save_pipeline, set_pipeline_enabled, run_pipeline, answer_run, remember, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, save_pipeline, set_pipeline_enabled, run_pipeline, answer_run, call_connector, call_tool, save_connector, remember, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],

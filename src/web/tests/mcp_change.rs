@@ -208,6 +208,7 @@ async fn a_hidden_value_survives_a_change_and_never_reaches_the_card() {
             env: [("TOKEN".to_string(), "sk-planted-real".to_string())].into(),
             headers: Default::default(),
             machines: vec![],
+            allow_private: false,
         }])
         .unwrap();
     let read = dispatch_tool(

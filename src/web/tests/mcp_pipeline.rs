@@ -1,7 +1,7 @@
 use super::*;
 use crate::pipeline::definition::{Definition, Trigger};
 
-const IMPLEMENT: &str = "Implement my Linear tickets";
+const IMPLEMENT: &str = "Implement my tickets";
 const REVIEW: &str = "Review my merge requests";
 
 fn text(result: &serde_json::Value) -> String {
@@ -316,6 +316,7 @@ fn waiting_run(r: &Rig, kind: crate::pipeline::record::WaitKind, conversation: &
         step: "implement".into(),
         reason: "Which docker stack should it use?".into(),
         screen: String::new(),
+        tool_hash: String::new(),
     });
     let id = run.id.clone();
     r.app.pipelines.put(run);
@@ -500,6 +501,7 @@ async fn an_answer_for_an_earlier_wait_is_refused() {
         step: "review".into(),
         reason: "Review failed".into(),
         screen: String::new(),
+        tool_hash: String::new(),
     });
     r.app.pipelines.put(later);
     let done = approve(&r, &c, &id, &step).await;

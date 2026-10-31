@@ -225,9 +225,7 @@ mod tests {
     #[test]
     fn saving_bumps_the_version_and_keeps_history() {
         let (lib, _dir) = library();
-        let mut def = lib
-            .copy_template("Implement my Linear tickets", &cfg())
-            .unwrap();
+        let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
         assert_eq!(def.version, 1);
         def.steps[1].name = "Build it".into();
         let saved = lib.save(def, &cfg()).unwrap();
@@ -240,9 +238,7 @@ mod tests {
     #[test]
     fn restore_brings_back_an_old_version() {
         let (lib, _dir) = library();
-        let mut def = lib
-            .copy_template("Implement my Linear tickets", &cfg())
-            .unwrap();
+        let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
         def.steps[1].name = "Build it".into();
         let id = lib.save(def, &cfg()).unwrap().id;
         let restored = lib.restore(&id, 1, &cfg()).unwrap();
@@ -255,9 +251,7 @@ mod tests {
     #[test]
     fn a_definition_that_fails_is_not_saved() {
         let (lib, _dir) = library();
-        let mut def = lib
-            .copy_template("Implement my Linear tickets", &cfg())
-            .unwrap();
+        let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
         def.steps[1].next.pass = "nowhere".into();
         let problems = lib.save(def.clone(), &cfg()).unwrap_err();
         assert!(
@@ -296,18 +290,14 @@ mod tests {
         let (lib, _dir) = library();
         let mut setup = cfg();
         setup.machines.retain(|m| m.name != "devbox");
-        let def = lib
-            .copy_template("Implement my Linear tickets", &setup)
-            .unwrap();
+        let def = lib.copy_template("Implement my tickets", &setup).unwrap();
         let qa = def.step("qa").unwrap();
         assert!(
             matches!(&qa.kind, StepKind::Agent { machine: MachineChoice::SameAs(s), .. } if s == "implement"),
             "{:?}",
             qa.kind
         );
-        let kept = lib
-            .copy_template("Implement my Linear tickets", &cfg())
-            .unwrap();
+        let kept = lib.copy_template("Implement my tickets", &cfg()).unwrap();
         assert!(matches!(
             &kept.step("qa").unwrap().kind,
             StepKind::Agent { machine: MachineChoice::Name(m), .. } if m == "devbox"
@@ -333,9 +323,7 @@ mod tests {
     #[test]
     fn switching_on_and_off_adds_no_version_and_restore_keeps_it() {
         let (lib, _dir) = library();
-        let mut def = lib
-            .copy_template("Implement my Linear tickets", &cfg())
-            .unwrap();
+        let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
         def.steps[1].name = "Build it".into();
         lib.save(def.clone(), &cfg()).unwrap();
         let on = lib.set_enabled(&def.id, true, &cfg()).unwrap();

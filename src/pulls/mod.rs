@@ -1,9 +1,13 @@
 mod github;
+pub mod github_api;
+#[cfg(test)]
+mod github_api_tests;
 mod gitlab;
 mod remote;
 
 pub use github::GitHub;
-pub use gitlab::{accesses, Answer, GitLab, GitLabAccess, Mr};
+pub use gitlab::{accesses, accesses_for, Answer, GitLab, GitLabAccess, Mr};
+pub(crate) use gitlab::{glab_error, run_glab};
 pub use remote::{folder_remotes_command, parse_folder_remotes, service_of, Remotes, Repo};
 
 use crate::config::{Config, Machine};
@@ -141,6 +145,18 @@ pub trait Forge: Send + Sync {
         path: &'a str,
         review: &'a Note,
     ) -> BoxFuture<'a, Vec<Note>>;
+    fn configure(
+        &self,
+        _cfg: &crate::config::PullRequests,
+        _secrets: &Result<crate::secrets::Secrets, String>,
+    ) {
+    }
+    fn problem(&self) -> Option<String> {
+        None
+    }
+    fn checked(&self) -> bool {
+        false
+    }
 }
 
 pub type Key = (String, String, String);
@@ -595,6 +611,8 @@ struct Entry {
 pub struct PullHealth {
     pub machines: BTreeMap<String, Option<String>>,
     pub hosts: BTreeMap<String, Option<String>>,
+    pub github_checked: bool,
+    pub github_problem: Option<String>,
 }
 
 fn no_gh(machine: &str) -> String {
@@ -758,19 +776,19 @@ impl Pulls {
 
     // Only a host listed under pull_requests.gitlab goes to GitLab, so without one no remote is
     // read and GitHub is asked exactly as before.
-    async fn on_gitlab<'a>(
+    async fn on_gitlab(
         &self,
         m: &Machine,
         t: &Target,
-        hosts: &'a [GitLabAccess],
+        hosts: &[GitLabAccess],
         now: Instant,
-    ) -> Option<(&'a GitLabAccess, Repo)> {
+    ) -> Option<(GitLabAccess, Repo)> {
         if hosts.is_empty() {
             return None;
         }
         let repo = self.repo(m, t, now).await?;
         let access = hosts.iter().find(|a| a.host == repo.host)?;
-        Some((access, repo))
+        Some((access.on(m), repo))
     }
 
     fn gitlab_place<'a>(
@@ -826,7 +844,7 @@ impl Pulls {
                                 continue;
                             }
                             let got =
-                                match self.gitlab.fetch(access, &repo.project, &t.branch).await {
+                                match self.gitlab.fetch(&access, &repo.project, &t.branch).await {
                                     Answer::Pull(pull) => Got::Fetched(Fetched::Found(pull)),
                                     Answer::Partial(pull) => Got::Partial(pull),
                                     Answer::NoPull => Got::Fetched(Fetched::NoPull),
@@ -995,7 +1013,7 @@ impl Pulls {
                 for c in with_logs.iter_mut().take(LOGS_PER_CARD) {
                     c.log = match (&place, gitlab) {
                         (Some((access, project)), _) => {
-                            self.gitlab.failure_log(access, project, c).await
+                            self.gitlab.failure_log(&access.on(m), project, c).await
                         }
                         (None, true) => String::new(),
                         (None, false) => self.github.failure_log(m, &n.path, c).await,
@@ -1038,12 +1056,18 @@ impl Pulls {
             state.set_pull_status(HashMap::new(), PullHealth::default());
             return;
         }
+        self.github.configure(&cfg.pull_requests, secrets);
         let hosts = match cfg.pull_requests.use_gitlab {
-            true => accesses(&cfg.pull_requests, secrets),
+            true => accesses_for(cfg, secrets),
             false => Vec::new(),
         };
         let targets = targets(cfg, state);
         let notices = self.poll(cfg, &hosts, &targets, now).await;
+        {
+            let mut inner = self.lock();
+            inner.health.github_checked = self.github.checked();
+            inner.health.github_problem = self.github.problem();
+        }
         state.set_pulls(self.views());
         state.set_pull_status(self.whys(&targets), self.health());
         if !cfg.pull_requests.cards {

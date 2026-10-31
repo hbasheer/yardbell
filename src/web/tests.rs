@@ -11,7 +11,9 @@ use http_body_util::BodyExt;
 use std::path::Path;
 use tower::ServiceExt;
 
+mod connectors;
 mod insights;
+mod mcp_auth;
 mod mcp_change;
 mod mcp_pipeline;
 mod mcp_read;
@@ -146,11 +148,11 @@ fn rig() -> Rig {
             fake.clone(),
             Ssh::new(dir.path().join("state3")),
         ),
-        settings: crate::settings::Settings::new(
+        settings: Arc::new(crate::settings::Settings::new(
             cfg_path.clone(),
             dir.path().join("ssh_config"),
             Arc::new(chrono::Local::now),
-        ),
+        )),
         phone: Arc::new(Phone::default()),
         dispatch: Arc::new(crate::dispatch::Dispatch::new(
             fake.clone(),
@@ -1624,6 +1626,7 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "change_settings",
             "save_task",
             "run_trigger",
+            "save_connector",
             "save_pipeline",
             "set_pipeline_enabled",
             "run_pipeline",

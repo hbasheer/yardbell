@@ -1,0 +1,24 @@
+id: gitlab-issues
+name: GitLab Issues
+base_url: https://gitlab.com/api/v4
+headers:
+  PRIVATE-TOKEN: '${secret:gitlab}'
+params:
+  - { name: project, label: Project, options: projects }
+calls:
+  projects:
+    request: { method: GET, path: /projects, query: { membership: 'true', per_page: '100', order_by: last_activity_at } }
+    map: { id: id, name: path_with_namespace }
+  list:
+    request: { method: GET, path: '/projects/{{project}}/issues', query: { state: opened, per_page: '100' } }
+    map: { item_id: iid, id: iid, title: title, url: web_url, description: description, state: state }
+    page: { style: link, max_pages: 5 }
+  read:
+    request: { method: GET, path: '/projects/{{project}}/issues/{{item_id}}' }
+    map: { title: title, url: web_url, description: description, state: state }
+  comment:
+    kind: change
+    request: { method: POST, path: '/projects/{{project}}/issues/{{item_id}}/notes', body: { body: '{{value}}' } }
+  close:
+    kind: change
+    request: { method: PUT, path: '/projects/{{project}}/issues/{{item_id}}', body: { state_event: close } }

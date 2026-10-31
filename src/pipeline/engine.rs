@@ -58,6 +58,7 @@ fn wait(
         step: step.to_string(),
         reason,
         screen: tail(screen, SCREEN_LINES),
+        tool_hash: String::new(),
     });
     (run, vec![Effect::Notify { text }])
 }
@@ -116,8 +117,10 @@ fn enter(mut run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Ru
         }
         StepKind::Plan { .. } => Effect::Plan { step: id.into() },
         StepKind::Push => Effect::Push { step: id.into() },
-        StepKind::Linear { .. } => Effect::Linear { step: id.into() },
+        StepKind::Update { .. } => Effect::Linear { step: id.into() },
         StepKind::Report => Effect::Report { step: id.into() },
+        StepKind::Call { .. } => Effect::Call { step: id.into() },
+        StepKind::Tool { .. } => Effect::Tool { step: id.into() },
     };
     let st = run.state_of(id);
     st.runs += 1;
@@ -288,6 +291,22 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.slot = None;
             (run, vec![Effect::StopSessions])
         }
+        Seen::AcceptTool if waiting => {
+            let Some(w) = run.waiting.take() else {
+                return (run, vec![]);
+            };
+            if let Some(def) = run.definition.as_mut() {
+                let saved = def.steps.iter_mut().find(|s| s.id == w.step);
+                if let Some(Step {
+                    kind: StepKind::Tool { schema_hash, .. },
+                    ..
+                }) = saved
+                {
+                    schema_hash.clone_from(&w.tool_hash);
+                }
+            }
+            enter(run, &w.step, now, true)
+        }
         Seen::Retry if waiting => {
             let at = run.waiting.take().map_or(id, |w| w.step);
             enter(run, &at, now, true)
@@ -321,6 +340,17 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             wait(run, WaitKind::Closed, &id, reason, "")
         }
         Seen::Refused(reason) => wait(run, WaitKind::Refused, &id, reason, ""),
+        Seen::ToolChanged {
+            hash,
+            reason,
+            shown,
+        } => {
+            let (mut run, effects) = wait(run, WaitKind::ToolChanged, &id, reason, &shown);
+            if let Some(w) = run.waiting.as_mut() {
+                w.tool_hash = hash;
+            }
+            (run, effects)
+        }
         Seen::Planned(Ok(plan)) if !plan.questions.is_empty() => {
             let at = now.to_rfc3339();
             run.questions
@@ -402,6 +432,14 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.notes.push(format!("Linear: {e}"));
             follow(run, Outcome::Fail, now)
         }
+        Seen::Called(result) | Seen::ToolDone(result) => {
+            let (outcome, report) = match result {
+                Ok(report) => (Outcome::Pass, report),
+                Err(e) => (Outcome::Fail, e),
+            };
+            run.state_of(&id).report = report;
+            follow(run, outcome, now)
+        }
         Seen::Reported(written) => {
             match written {
                 Ok(text) => run.report = text,
@@ -468,10 +506,13 @@ pub(crate) mod tests {
             definition: Some(def),
             subject: Subject {
                 ticket: Some(TicketRef {
-                    linear_id: "u-1".into(),
+                    source: String::new(),
+                    item_id: "u-1".into(),
                     id: "COM-1".into(),
                     title: "Fix the login".into(),
                     url: "https://linear.app/acme/issue/COM-1".into(),
+                    description: String::new(),
+                    fields: Default::default(),
                 }),
                 pr: None,
             },
@@ -522,7 +563,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_implement_template_walks_to_done() {
-        let (run, did) = start(run_of("Implement my Linear tickets"), at(0));
+        let (run, did) = start(run_of("Implement my tickets"), at(0));
         assert_eq!(
             did,
             vec![Effect::Plan {
@@ -651,8 +692,89 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn accepting_a_changed_tool_saves_the_new_hash_and_runs_it_again() {
+        let mut run = run_of("Implement my tickets");
+        run.definition.as_mut().unwrap().steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "tool", "name": "T", "kind": "tool", "server": "s", "tool": "x", "schema_hash": "h1",
+                "next": { "pass": "qa", "fail": "report", "needs_you": "wait" },
+            }))
+            .unwrap(),
+        );
+        run.step = "tool".into();
+        let seen = Seen::ToolChanged {
+            hash: "h2".into(),
+            reason: "x changed".into(),
+            shown: "now".into(),
+        };
+        let (run, effects) = step(run, seen, &cfg(), at(5));
+        let (kind, at_step, reason) = waiting(&run);
+        assert_eq!(kind, WaitKind::ToolChanged);
+        assert_eq!(at_step, "tool");
+        assert!(reason.contains("x changed"));
+        assert_eq!(effects.len(), 1, "one notification");
+        let (run, effects) = step(run, Seen::AcceptTool, &cfg(), at(6));
+        assert_eq!(
+            effects,
+            vec![Effect::Tool {
+                step: "tool".into()
+            }]
+        );
+        let saved = run.def().step("tool").unwrap().kind.clone();
+        assert!(matches!(saved, StepKind::Tool { schema_hash, .. } if schema_hash == "h2"));
+    }
+
+    fn with_call(run: &mut Run) {
+        let def = run.definition.as_mut().unwrap();
+        def.steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "update", "name": "Update Trello", "kind": "call",
+                "connector": "trello", "call": "move", "params": { "value": "L2" },
+                "next": { "pass": "qa", "fail": "report", "needs_you": "wait" },
+            }))
+            .unwrap(),
+        );
+        run.step = "update".into();
+        run.state = RunState::Running;
+    }
+
+    #[test]
+    fn a_call_step_passes_with_its_report() {
+        let mut run = run_of("Implement my tickets");
+        with_call(&mut run);
+        let (run, _) = step(run, Seen::Called(Ok("moved".into())), &cfg(), at(5));
+        assert_eq!(run.steps["update"].report, "moved");
+        assert_eq!(run.steps["update"].outcome, Some(Outcome::Pass));
+        assert_eq!(run.step, "qa");
+    }
+
+    #[test]
+    fn a_failed_call_goes_down_the_fail_line() {
+        let mut run = run_of("Implement my tickets");
+        with_call(&mut run);
+        let (run, _) = step(run, Seen::Called(Err("answered 401".into())), &cfg(), at(5));
+        assert_eq!(run.steps["update"].report, "answered 401");
+        assert_eq!(run.steps["update"].outcome, Some(Outcome::Fail));
+        assert_eq!(run.step, "report");
+    }
+
+    #[test]
+    fn entering_a_call_step_calls() {
+        let mut run = run_of("Implement my tickets");
+        with_call(&mut run);
+        run.state_of("implement").outcome = None;
+        let (_, did) = enter(run, "update", &at(5), false);
+        assert_eq!(
+            did,
+            vec![Effect::Call {
+                step: "update".into()
+            }]
+        );
+    }
+
+    #[test]
     fn a_loop_stops_at_its_run_limit() {
-        let mut run = at_step("Implement my Linear tickets", "review");
+        let mut run = at_step("Implement my tickets", "review");
         run.state_of("fix").runs = 2;
         let (run, did) = step(run, ended("review", Outcome::Fail), &cfg(), at(5));
         assert_eq!(
@@ -664,7 +786,7 @@ pub(crate) mod tests {
 
     #[test]
     fn needs_you_waits_with_the_report() {
-        let run = at_step("Implement my Linear tickets", "implement");
+        let run = at_step("Implement my tickets", "implement");
         let (run, _) = step(
             run,
             Seen::Ended {
@@ -684,7 +806,7 @@ pub(crate) mod tests {
 
     #[test]
     fn no_result_does_not_say_it_needs_an_answer() {
-        let mut run = at_step("Implement my Linear tickets", "fix");
+        let mut run = at_step("Implement my tickets", "fix");
         run.retried = true;
         let (_, did) = step(
             run,
@@ -706,7 +828,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_second_try_gets_its_own_grace() {
-        let run = at_step("Implement my Linear tickets", "fix");
+        let run = at_step("Implement my tickets", "fix");
         let (run, _) = step(
             run,
             Seen::NoResult {
@@ -721,7 +843,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_person_stopping_the_session_makes_the_step_wait() {
-        let mut run = at_step("Implement my Linear tickets", "fix");
+        let mut run = at_step("Implement my tickets", "fix");
         run.state_of("fix").session = "hp-main".into();
         let (same, did) = step(
             run.clone(),
@@ -743,7 +865,7 @@ pub(crate) mod tests {
 
     #[test]
     fn stop_line_waits_with_the_outcome() {
-        let run = at_step("Implement my Linear tickets", "implement");
+        let run = at_step("Implement my tickets", "implement");
         let (run, _) = step(run, ended("implement", Outcome::Fail), &cfg(), at(5));
         assert_eq!(
             waiting(&run),
@@ -757,7 +879,7 @@ pub(crate) mod tests {
 
     #[test]
     fn continue_on_pass_and_fail_follow_their_lines() {
-        let run = at_step("Implement my Linear tickets", "implement");
+        let run = at_step("Implement my tickets", "implement");
         let (run, _) = step(run, ended("implement", Outcome::Fail), &cfg(), at(5));
         let (on_pass, _) = step(run.clone(), Seen::Continue(Outcome::Pass), &cfg(), at(6));
         assert_eq!(
@@ -774,7 +896,7 @@ pub(crate) mod tests {
 
     #[test]
     fn retry_runs_the_step_again_past_its_limit_once() {
-        let mut run = at_step("Implement my Linear tickets", "review");
+        let mut run = at_step("Implement my tickets", "review");
         run.state_of("fix").runs = 2;
         let (run, _) = step(run, ended("review", Outcome::Fail), &cfg(), at(5));
         let (run, _) = step(run, Seen::Retry, &cfg(), at(6));
@@ -786,7 +908,7 @@ pub(crate) mod tests {
 
     #[test]
     fn an_answer_reenters_the_step_with_it() {
-        let run = at_step("Implement my Linear tickets", "implement");
+        let run = at_step("Implement my tickets", "implement");
         let (run, _) = step(
             run,
             Seen::Ended {
@@ -808,7 +930,7 @@ pub(crate) mod tests {
 
     #[test]
     fn an_answer_to_a_waiting_session_is_typed() {
-        let run = at_step("Implement my Linear tickets", "implement");
+        let run = at_step("Implement my tickets", "implement");
         let (run, _) = step(
             run,
             Seen::Waiting {
@@ -832,7 +954,7 @@ pub(crate) mod tests {
 
     #[test]
     fn plan_questions_wait_and_an_answer_plans_again() {
-        let (run, _) = start(run_of("Implement my Linear tickets"), at(0));
+        let (run, _) = start(run_of("Implement my tickets"), at(0));
         let mut asks = plan();
         asks.questions = vec!["Which page?".into()];
         let (run, _) = step(run, Seen::Planned(Ok(asks)), &cfg(), at(1));
@@ -856,7 +978,7 @@ pub(crate) mod tests {
 
     #[test]
     fn no_result_runs_once_more_then_waits() {
-        let run = at_step("Implement my Linear tickets", "implement");
+        let run = at_step("Implement my tickets", "implement");
         let (run, did) = step(
             run,
             Seen::NoResult {
@@ -883,7 +1005,7 @@ pub(crate) mod tests {
 
     #[test]
     fn the_time_limit_counts_from_when_a_step_starts_working() {
-        let mut run = at_step("Implement my Linear tickets", "implement");
+        let mut run = at_step("Implement my tickets", "implement");
         run.state = RunState::Queued;
         let later = at(0) + chrono::Duration::minutes(150);
         let (run, _) = step(run, Seen::Admitted, &cfg(), later);
@@ -900,6 +1022,7 @@ pub(crate) mod tests {
             step: "implement".into(),
             reason: "The agent is asking something".into(),
             screen: String::new(),
+            tool_hash: String::new(),
         });
         let next_day = later + chrono::Duration::hours(20);
         let (run, _) = step(run, Seen::Answer("yes".into()), &cfg(), next_day);
@@ -922,7 +1045,7 @@ pub(crate) mod tests {
 
     #[test]
     fn time_limit_waits() {
-        let mut run = at_step("Implement my Linear tickets", "implement");
+        let mut run = at_step("Implement my tickets", "implement");
         run.step_since = at(0).to_rfc3339();
         let (run, _) = step(
             run,
@@ -964,7 +1087,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_wait_step_continues_on_pass() {
-        let mut run = run_of("Implement my Linear tickets");
+        let mut run = run_of("Implement my tickets");
         let def = run.definition.as_mut().unwrap();
         let look = Step {
             kind: StepKind::Wait {
@@ -1008,7 +1131,7 @@ pub(crate) mod tests {
 
     #[test]
     fn drop_stops_the_sessions() {
-        let run = at_step("Implement my Linear tickets", "implement");
+        let run = at_step("Implement my tickets", "implement");
         let (run, did) = step(run, Seen::Drop, &cfg(), at(5));
         assert_eq!(
             (run.state, did),

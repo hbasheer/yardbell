@@ -27,16 +27,20 @@ plain HTML UI, plus apps for macOS, Linux and Android.
   branch; other branches get their own git worktree.
 - **Ports, already tunnelled.** Docker Compose ports from each session's folder, forwarded to the
   host with live status.
-- **Pipelines.** Steps you draw on a canvas, from a trigger (by hand, a schedule, a Linear ticket, or
-  a review request on GitHub or GitLab) to a report. A run uses one agent session, plus a read-only
+- **Pipelines.** Steps you draw on a canvas, from a trigger (by hand, a schedule, a Linear ticket, a
+  connected tool like Trello, a webhook, or a review request on GitHub or GitLab) to a report. A run uses one agent session, plus a read-only
   one for reviews, shows its live terminal, and waits for you only when it must.
 - **Dispatch.** Describe a task and Yardbell picks the machine with the repository and the most room,
   then starts an agent there. It can also read and change Yardbell itself, and build and run
   pipelines, with your rules deciding what waits for you. It sits beside your terminals in the
   Workspace, and hides with one click.
+- **Connections.** Sign in to Trello, Jira and other tools from your browser, with no token to paste, or
+  connect any MCP server by its address. Trello can start pipeline runs, and a **Use a connected tool** step
+  does one action in any connected tool with no agent. A tool with no MCP server connects with a token, and a token
+  you paste is saved as a secret by itself.
 - **Proposals.** Changes asked for by other MCP clients, such as Claude Code with Yardbell added, wait
   in one inbox until you approve, edit or reject them.
-- **GitHub and GitLab.** Each session shows its branch's pull or merge request with its state and CI.
+- **GitHub and GitLab.** Each session shows its branch's pull or merge request with its state and CI, through local `gh` or `glab`, or a token.
   Settings says which service each of your folders uses and whether `gh` and each GitLab token work.
 - **Phone notifications.** The Android app says when an agent waits for you, a session ends, a
   machine goes down, memory runs low, a pipeline needs you or finishes, or a proposal waits, with no
@@ -58,8 +62,8 @@ plain HTML UI, plus apps for macOS, Linux and Android.
 
 ![A pipeline run waiting for an answer at its Root cause step](docs/screenshots/pipeline.png)
 
-1. **Something starts a run:** **Run now**, a schedule, a Linear ticket assigned to you, or a review
-   request. **Plan** can pick the machine, folder and branch for it.
+1. **Something starts a run:** **Run now**, a schedule, a Linear ticket assigned to you, an item in a
+   connected tool, a webhook, or a review request. **Plan** can pick the machine, folder and branch for it.
 2. **The steps share one session.** An agent works in one worktree, and each step's task is typed into
    the same session when the agent is idle, so a run holds far less memory than one session per step.
 3. **A review gets its own session.** A step marked as a review starts a read-only agent that cannot
@@ -72,7 +76,7 @@ plain HTML UI, plus apps for macOS, Linux and Android.
 6. **When the run ends,** every session stops and the worktree and branch stay. A teardown command,
    such as `docker compose down`, can clear what the worktree started.
 
-Two templates are ready to copy: **Implement my Linear tickets** and **Review my merge requests**.
+Two templates are ready to copy: **Implement my tickets** and **Review my merge requests**.
 [Pipelines](docs/automation.md#pipelines) explains every step and setting.
 
 ## Download
@@ -122,9 +126,9 @@ Then add the other machines from **Add machine** in the UI, or list them in `yar
   server.
 - [Running Yardbell](docs/running.md): how it works, requirements, mesh VPNs, ports, commands,
   Docker and security.
-- [Triggers, worktree setup, rules and pipelines](docs/automation.md): start Dispatch tasks on a
-  schedule or for new tickets, prepare and clear each worktree, decide what Dispatch may do, and
-  build pipelines, with examples.
+- [Triggers, worktree setup, rules, pipelines and connectors](docs/automation.md): start Dispatch
+  tasks on a schedule or for new tickets, prepare and clear each worktree, decide what Dispatch may
+  do, build pipelines, and connect outside tools, with examples.
 - [Configuration](docs/configuration.md): every setting in `yardbell.yml`.
 - [Troubleshooting](docs/troubleshooting.md) and [Development](docs/development.md).
 

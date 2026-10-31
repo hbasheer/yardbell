@@ -1477,3 +1477,140 @@ async fn a_refused_token_is_the_reason_and_the_hosts_status() {
         .expect("the host's problem");
     assert!(!why.contains("glpat-bad"), "{why}");
 }
+
+mod through_glab {
+    use super::super::gitlab::{accesses_for, glab_problem, GitLab, GitLabAccess};
+    use super::super::Answer;
+    use crate::config::Machine;
+    use crate::shell::Output;
+    use crate::ssh::Ssh;
+    use crate::testing::FakeRunner;
+    use std::sync::Arc;
+
+    fn machine() -> Machine {
+        serde_yaml::from_str("name: hp\nlocal: true\nroot: /r\n").unwrap()
+    }
+
+    fn access() -> GitLabAccess {
+        GitLabAccess {
+            host: "git.example.com".into(),
+            api: "https://git.example.com/api/v4".into(),
+            secret: String::new(),
+            token: Ok(String::new()),
+            glab: true,
+            machine: Some(machine()),
+        }
+    }
+
+    fn with_runner(fake: &Arc<FakeRunner>) -> GitLab {
+        GitLab::new().with_runner(fake.clone(), Ssh::new(std::path::PathBuf::from("/tmp/ssh")))
+    }
+
+    #[tokio::test]
+    async fn glab_asks_on_the_machine_with_no_token() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub("glab api", Output::ok_with(r#"{"username":"me"}"#));
+        let who = with_runner(&fake).whoami(&access()).await;
+        assert_eq!(who.as_deref(), Ok("me"));
+        let call = fake.calls().concat().join(" ");
+        assert!(call.contains("--hostname 'git.example.com'"), "{call}");
+        assert!(
+            call.contains("api user") || call.contains("'user'"),
+            "{call}"
+        );
+        assert!(!call.contains("PRIVATE-TOKEN"), "{call}");
+    }
+
+    #[tokio::test]
+    async fn glab_encodes_a_project_as_one_part_of_the_path() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub("glab api", Output::ok_with("[]"));
+        let got = with_runner(&fake)
+            .fetch(&access(), "group/app", "fix-1")
+            .await;
+        assert!(matches!(got, Answer::NoPull), "{got:?}");
+        let call = fake.calls().concat().join(" ");
+        assert!(
+            call.contains("projects/group%2Fapp/merge_requests"),
+            "{call}"
+        );
+        assert!(call.contains("source_branch=fix-1"), "{call}");
+    }
+
+    #[test]
+    fn glab_errors_say_what_to_do() {
+        let refused = glab_problem(Some(1), "glab: 401 Unauthorized (HTTP 401)", "g.io", "hp");
+        assert!(
+            matches!(&refused, super::super::gitlab::Problem::Refused(m) if m.contains("glab auth login") && m.contains("hp"))
+        );
+        let missing = glab_problem(Some(127), "", "g.io", "hp");
+        assert!(
+            matches!(&missing, super::super::gitlab::Problem::Refused(m) if m.contains("not installed") && m.contains("hp"))
+        );
+        assert!(matches!(
+            glab_problem(Some(1), "glab: 404 Not Found (HTTP 404)", "g.io", "hp"),
+            super::super::gitlab::Problem::NotFound
+        ));
+        assert!(matches!(
+            glab_problem(Some(1), "glab: 403 Forbidden (HTTP 403)", "g.io", "hp"),
+            super::super::gitlab::Problem::Forbidden
+        ));
+        assert!(matches!(
+            glab_problem(Some(1), "something else", "g.io", "hp"),
+            super::super::gitlab::Problem::Failed(_)
+        ));
+    }
+
+    #[test]
+    fn hosts_need_a_token_only_when_read_with_one() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        let text = |via: &str, token: &str| {
+            format!(
+            "port: 4000\nmachines:\n  - {{ name: hp, local: true, root: /tmp }}\npull_requests:\n  gitlab_via: {via}\n  gitlab:\n    - {{ host: git.example.com{token} }}\n"
+        )
+        };
+        std::fs::write(&path, text("glab", "")).unwrap();
+        let cfg = crate::config::Config::load(&path).unwrap();
+        let secrets = Err("none".to_string());
+        let list = accesses_for(&cfg, &secrets);
+        assert!(list[0].glab);
+        assert_eq!(list[0].machine.as_ref().unwrap().name, "hp");
+        assert!(list[0].token.is_ok());
+        std::fs::write(&path, text("token", "")).unwrap();
+        let wrong = crate::config::Config::load(&path)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(wrong.contains("needs a token"), "{wrong}");
+    }
+
+    #[test]
+    fn a_github_token_must_name_a_saved_secret() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        let text = |rest: &str| {
+            format!(
+            "port: 4000\nmachines:\n  - {{ name: hp, local: true, root: /tmp }}\npull_requests:\n  github_via: token\n{rest}"
+        )
+        };
+        std::fs::write(&path, text("")).unwrap();
+        let wrong = crate::config::Config::load(&path)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(wrong.contains("github_token"), "{wrong}");
+        std::fs::write(&path, text("  github_token: ghp_typed_in\n")).unwrap();
+        let wrong = crate::config::Config::load(&path)
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(
+            wrong.contains("saved secret") && !wrong.contains("ghp_typed_in"),
+            "{wrong}"
+        );
+        std::fs::write(&path, text("  github_token: ${secret:github_pr}\n")).unwrap();
+        let cfg = crate::config::Config::load(&path).unwrap();
+        assert_eq!(cfg.pull_requests.github_token, "${secret:github_pr}");
+    }
+}

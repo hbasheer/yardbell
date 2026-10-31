@@ -72,7 +72,7 @@ pub struct AppState {
     pub onboarding: Arc<Onboarding>,
     pub host_mesh: HostMesh,
     pub folders: Folders,
-    pub settings: Settings,
+    pub settings: Arc<Settings>,
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
     pub triggers: Arc<crate::triggers::Triggers>,
@@ -106,7 +106,7 @@ pub struct Services {
     pub onboarding: Arc<Onboarding>,
     pub host_mesh: HostMesh,
     pub folders: Folders,
-    pub settings: Settings,
+    pub settings: Arc<Settings>,
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
     pub triggers: Arc<crate::triggers::Triggers>,
@@ -330,6 +330,14 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
         }
         return next.run(req).await;
     }
+    // A webhook comes from another system with its own token, checked by its handler.
+    if req.uri().path().starts_with("/hooks/pipeline/") {
+        return next.run(req).await;
+    }
+    // A sign-in comes back here from another site; the handler checks its state.
+    if req.method() == Method::GET && req.uri().path() == "/oauth/mcp/callback" {
+        return next.run(req).await;
+    }
     if req.method() != Method::GET && !term::origin_ok(req.headers()) {
         return error(
             StatusCode::FORBIDDEN,
@@ -529,6 +537,8 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(worktrees_api::routes())
         .merge(insights_api::routes())
         .merge(pipeline_api::routes())
+        .merge(connectors_api::routes())
+        .merge(mcp_auth_api::routes())
         .merge(proposals_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
@@ -2147,7 +2157,9 @@ async fn remove_machine(
     Json(app.onboarding.remove(&name).await).into_response()
 }
 
+mod connectors_api;
 mod insights_api;
+mod mcp_auth_api;
 pub(crate) mod pipeline_api;
 mod proposals_api;
 mod pulls_api;

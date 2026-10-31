@@ -1,8 +1,8 @@
-use super::definition::{LinearAction, Outcome, Step, StepKind, Workspace};
+use super::definition::{Outcome, Step, StepKind, UpdateAction, Workspace};
 use super::forge::{Draft, Forge};
 use super::linear::Linear;
 use super::prompts::{self, TicketText};
-use super::record::{Effect, PullRef, Run, Seen, StepState};
+use super::record::{Effect, PullRef, Run, Seen, StepState, TicketRef};
 use crate::config::{Approval, Config, Pipelines as Cfg};
 use crate::dispatch::{By, ReviewOf};
 use crate::phone::Push;
@@ -42,11 +42,11 @@ pub trait World: Send + Sync {
     ) -> BoxFuture<'a, Result<String, String>>;
     fn ticket<'a>(
         &'a self,
-        linear_id: &'a str,
+        ticket: &'a TicketRef,
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>>;
     fn move_ticket<'a>(
         &'a self,
-        linear_id: &'a str,
+        ticket: &'a TicketRef,
         state: &'a str,
     ) -> BoxFuture<'a, Result<(), String>>;
     fn open_draft<'a>(
@@ -55,6 +55,28 @@ pub trait World: Send + Sync {
         path: &'a str,
     ) -> BoxFuture<'a, Result<PullRef, String>>;
     fn notify(&self, kind: Note, text: &str, run: &Run);
+    fn connector_call_kind(
+        &self,
+        connector: &str,
+        call: &str,
+    ) -> Result<crate::connectors::CallKind, String>;
+    fn call_connector<'a>(
+        &'a self,
+        connector: &'a str,
+        call: &'a str,
+        vars: crate::connectors::client::Vars,
+    ) -> BoxFuture<'a, Result<Value, String>>;
+    fn tool_schema_hash<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+    ) -> BoxFuture<'a, Result<(String, String), crate::mcp_client::Failure>>;
+    fn call_tool<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+        arguments: Value,
+    ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>>;
     fn written_result<'a>(
         &'a self,
         machine: &'a str,
@@ -146,7 +168,7 @@ async fn ticket_text(world: &dyn World, run: &Run) -> Result<TicketText, Seen> {
     let Some(t) = &run.subject.ticket else {
         return Ok(TicketText::default());
     };
-    match world.ticket(&t.linear_id).await {
+    match world.ticket(t).await {
         Ok((_, true)) => Err(Seen::Closed("closed".into())),
         Ok((text, false)) => Ok(text),
         // A pull request's ticket is only a name found in its branch or title, so one Linear
@@ -392,8 +414,183 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
 
 async fn closed(world: &dyn World, run: &Run) -> bool {
     match &run.subject.ticket {
-        Some(t) => matches!(world.ticket(&t.linear_id).await, Ok((_, true))),
+        Some(t) => matches!(world.ticket(t).await, Ok((_, true))),
         None => false,
+    }
+}
+
+pub const WEBHOOK_SOURCE: &str = "webhook";
+const CALL_REPORT_MAX: usize = 4000;
+const TOOL_REPORT_MAX: usize = 20_000;
+const TOOL_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
+
+fn call_vars(
+    run: &Run,
+    params: &std::collections::BTreeMap<String, String>,
+) -> Result<crate::connectors::client::Vars, String> {
+    let ticket = run.subject.ticket.clone().unwrap_or_default();
+    let mut vars = ticket.vars();
+    vars.0.extend(
+        [
+            ("item_id", ticket.item_id),
+            ("ticket", ticket.id),
+            ("title", ticket.title),
+            ("url", ticket.url),
+            ("branch", branch(run)),
+            ("report", prompts::last_report(run)),
+        ]
+        .into_iter()
+        .map(|(k, v)| (k.to_string(), v)),
+    );
+    for (name, text) in params {
+        let value = crate::connectors::client::render_text(text, &vars)?;
+        vars.0.insert(name.clone(), value);
+    }
+    Ok(vars)
+}
+
+async fn call_step(
+    world: &dyn World,
+    run: &Run,
+    connector: &str,
+    call: &str,
+    params: &std::collections::BTreeMap<String, String>,
+) -> Seen {
+    let kind = match world.connector_call_kind(connector, call) {
+        Ok(kind) => kind,
+        Err(reason) => return Seen::Refused(reason),
+    };
+    let input = json!({ "connector": connector, "call": call, "params": params });
+    if kind == crate::connectors::CallKind::Change {
+        if let Some(reason) = world.refused("call_connector", &input) {
+            return Seen::Refused(reason);
+        }
+    }
+    let vars = match call_vars(run, params) {
+        Ok(vars) => vars,
+        Err(e) => return Seen::Called(Err(e)),
+    };
+    let out = world.call_connector(connector, call, vars).await;
+    world.record(
+        &run.conversation,
+        "call_connector",
+        input,
+        None,
+        &out,
+        &run.started,
+    );
+    Seen::Called(out.map(|value| {
+        match value {
+            Value::Null => format!("{connector} {call}: done"),
+            value => serde_json::to_string_pretty(&value)
+                .unwrap_or_default()
+                .chars()
+                .take(CALL_REPORT_MAX)
+                .collect(),
+        }
+    }))
+}
+
+fn filled(value: &Value, vars: &crate::connectors::client::Vars) -> Result<Value, String> {
+    Ok(match value {
+        Value::String(text) => Value::String(crate::connectors::client::render_text(text, vars)?),
+        Value::Array(list) => Value::Array(
+            list.iter()
+                .map(|v| filled(v, vars))
+                .collect::<Result<_, _>>()?,
+        ),
+        Value::Object(map) => Value::Object(
+            map.iter()
+                .map(|(k, v)| filled(v, vars).map(|v| (k.clone(), v)))
+                .collect::<Result<_, String>>()?,
+        ),
+        other => other.clone(),
+    })
+}
+
+fn capped(text: &str) -> String {
+    text.chars().take(TOOL_REPORT_MAX).collect()
+}
+
+fn tool_failure(server: &str, failure: crate::mcp_client::Failure) -> Seen {
+    use crate::mcp_client::Failure;
+    match failure {
+        Failure::NeedsSignIn(_) => Seen::Refused(format!(
+            "{server}: sign in again under Settings, Connections"
+        )),
+        Failure::NeedsScope(challenge) => Seen::Refused(format!(
+            "{server} wants more access ({}). Sign in again under Settings, Connections",
+            challenge.scope.as_deref().unwrap_or("no scope named")
+        )),
+        Failure::NotAllowed(reason) => Seen::Refused(reason),
+        Failure::Other(reason) => Seen::ToolDone(Err(capped(&reason))),
+    }
+}
+
+struct ToolCall<'a> {
+    server: &'a str,
+    tool: &'a str,
+    arguments: &'a Value,
+    call_kind: crate::connectors::CallKind,
+    schema_hash: &'a str,
+}
+
+async fn tool_step(world: &dyn World, run: &Run, call: ToolCall<'_>) -> Seen {
+    let ToolCall {
+        server,
+        tool,
+        arguments,
+        call_kind,
+        schema_hash,
+    } = call;
+    let input = json!({ "server": server, "tool": tool, "arguments": arguments });
+    if call_kind == crate::connectors::CallKind::Change {
+        if let Some(reason) = world.refused("call_tool", &input) {
+            return Seen::Refused(reason);
+        }
+    }
+    let (hash, shown) = match world.tool_schema_hash(server, tool).await {
+        Ok(now) => now,
+        Err(failure) => return tool_failure(server, failure),
+    };
+    if hash != schema_hash {
+        let reason = if schema_hash.is_empty() {
+            format!("{server} {tool} has not been accepted yet. Read what it does, then accept it")
+        } else {
+            format!("{server} changed {tool} since this step was saved. Read it, then accept it")
+        };
+        return Seen::ToolChanged {
+            hash,
+            reason,
+            shown,
+        };
+    }
+    let vars = match call_vars(run, &Default::default()) {
+        Ok(vars) => vars,
+        Err(e) => return Seen::ToolDone(Err(e)),
+    };
+    let arguments = match filled(arguments, &vars) {
+        Ok(arguments) => arguments,
+        Err(e) => return Seen::ToolDone(Err(e)),
+    };
+    let out = world.call_tool(server, tool, arguments).await;
+    let recorded = match &out {
+        Ok(reply) if reply.is_error => Err(capped(&reply.text)),
+        Ok(reply) => Ok(json!(capped(&reply.text))),
+        Err(_) => Err("the call did not finish".to_string()),
+    };
+    world.record(
+        &run.conversation,
+        "call_tool",
+        input,
+        None,
+        &recorded,
+        &run.started,
+    );
+    match out {
+        Ok(reply) if reply.is_error => Seen::ToolDone(Err(capped(&reply.text))),
+        Ok(reply) => Seen::ToolDone(Ok(capped(&reply.text))),
+        Err(failure) => tool_failure(server, failure),
     }
 }
 
@@ -454,19 +651,30 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             None => vec![Seen::Opened(Err("no step made a worktree".into()))],
         },
         Effect::Linear { step } => {
-            let Some(StepKind::Linear { action, state }) = step_of(step).map(|s| s.kind) else {
+            let Some(StepKind::Update { action, state }) = step_of(step).map(|s| s.kind) else {
                 return vec![];
             };
             let Some(ticket) = &run.subject.ticket else {
-                return vec![Seen::Linear(Err("this run has no Linear ticket".into()))];
+                return vec![Seen::Linear(Err("this run has no ticket to update".into()))];
             };
+            if ticket.source == WEBHOOK_SOURCE {
+                return vec![Seen::Linear(Err(
+                    "this item came from a webhook, so there is nowhere to update it".into(),
+                ))];
+            }
+            if !ticket.is_linear() {
+                let (call, value) = match action {
+                    UpdateAction::Move => ("move", state),
+                    UpdateAction::Comment => ("comment", "{{report}}".to_string()),
+                };
+                let params = std::collections::BTreeMap::from([("value".to_string(), value)]);
+                return vec![call_step(world, run, &ticket.source, call, &params).await];
+            }
             match action {
-                LinearAction::Move => {
-                    vec![Seen::Linear(
-                        world.move_ticket(&ticket.linear_id, &state).await,
-                    )]
+                UpdateAction::Move => {
+                    vec![Seen::Linear(world.move_ticket(ticket, &state).await)]
                 }
-                LinearAction::Comment => vec![Seen::Ended {
+                UpdateAction::Comment => vec![Seen::Ended {
                     step: step.clone(),
                     outcome: Outcome::Pass,
                     report: comment(run),
@@ -474,6 +682,33 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 }],
             }
         }
+        Effect::Call { step } => match step_of(step).map(|s| s.kind) {
+            Some(StepKind::Call {
+                connector,
+                call,
+                params,
+            }) => vec![call_step(world, run, &connector, &call, &params).await],
+            _ => vec![],
+        },
+        Effect::Tool { step } => match step_of(step).map(|s| s.kind) {
+            Some(StepKind::Tool {
+                server,
+                tool,
+                arguments,
+                call_kind,
+                schema_hash,
+            }) => {
+                let call = ToolCall {
+                    server: &server,
+                    tool: &tool,
+                    arguments: &arguments,
+                    call_kind,
+                    schema_hash: &schema_hash,
+                };
+                vec![tool_step(world, run, call).await]
+            }
+            _ => vec![],
+        },
         Effect::Report { .. } => {
             let reply = world.ask(&run.conversation, &prompts::report(run)).await;
             let written = reply.and_then(|t| prompts::parse_report(&t));
@@ -567,6 +802,121 @@ fn comment(run: &Run) -> String {
     lines.join("\n")
 }
 
+// Lists a connector for a trigger, and keeps what it found for Settings to show.
+// Calls a tool on one of Settings' servers, with its sign-in, as a connector over MCP needs.
+pub struct AppTools {
+    settings: Arc<crate::settings::Settings>,
+    pipelines: Arc<super::Pipelines>,
+}
+
+impl AppTools {
+    pub fn of(app: &AppState) -> Arc<dyn crate::connectors::ToolCaller> {
+        Arc::new(AppTools {
+            settings: app.settings.clone(),
+            pipelines: app.pipelines.clone(),
+        })
+    }
+}
+
+impl crate::connectors::ToolCaller for AppTools {
+    fn call<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+        arguments: Value,
+    ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>> {
+        Box::pin(async move {
+            use crate::mcp_client::Failure;
+            let cfg = self.settings.load().map_err(Failure::Other)?;
+            let secrets = self.settings.secrets().map_err(Failure::Other)?;
+            let found = cfg
+                .mcp_servers
+                .iter()
+                .find(|s| s.name == server)
+                .ok_or_else(|| {
+                    Failure::NotAllowed(format!("{server} is not in Settings, Connections"))
+                })?;
+            let saved = secrets.values().map(|(_, v)| v.to_string()).collect();
+            let mut client = crate::mcp_client::client_for(
+                found,
+                &cfg,
+                &secrets,
+                self.pipelines.mcp_auth(),
+                &self.settings,
+                saved,
+                TOOL_TIMEOUT,
+            )
+            .await?;
+            let auth = self.pipelines.mcp_auth();
+            crate::mcp_client::noting_refusal(client.connect().await, found, auth, &self.settings)
+                .await?;
+            let reply = client.call_tool(tool, arguments).await;
+            client.close().await;
+            crate::mcp_client::noting_refusal(reply, found, auth, &self.settings).await
+        })
+    }
+}
+
+pub struct ConfigFeed<'a> {
+    pub connectors: &'a [crate::connectors::Connector],
+    pub secrets: &'a Result<Secrets, String>,
+    pub saved: Vec<String>,
+    pub tools: Option<Arc<dyn crate::connectors::ToolCaller>>,
+    pub health: &'a crate::connectors::Health,
+}
+
+pub fn status_of(found: &Result<crate::connectors::Listed, String>) -> crate::connectors::Status {
+    let (ok, message) = match found {
+        Ok(listed) => {
+            let mut said = format!("{} items", listed.items.len());
+            if !listed.skipped.is_empty() {
+                said = format!(
+                    "{said}, {} skipped: {}",
+                    listed.skipped.len(),
+                    listed.skipped[0]
+                );
+            }
+            if let Some(cut) = &listed.cut_off {
+                said = format!("{said}; {cut}");
+            }
+            (true, said)
+        }
+        Err(e) => (false, e.clone()),
+    };
+    crate::connectors::Status {
+        ok,
+        at: chrono::Local::now().to_rfc3339(),
+        message,
+    }
+}
+
+impl super::triggers::ConnectorFeed for ConfigFeed<'_> {
+    fn list<'a>(
+        &'a self,
+        id: &'a str,
+        params: &'a std::collections::BTreeMap<String, String>,
+    ) -> BoxFuture<'a, Result<crate::connectors::Listed, String>> {
+        Box::pin(async move {
+            let found = match crate::connectors::client_for(
+                self.connectors,
+                id,
+                self.secrets,
+                self.saved.clone(),
+                self.tools.clone(),
+            ) {
+                Ok(client) => {
+                    client
+                        .list(&crate::connectors::client::Vars(params.clone()))
+                        .await
+                }
+                Err(e) => Err(e),
+            };
+            self.health.set(id, status_of(&found));
+            found
+        })
+    }
+}
+
 // The pipelines' view of the running server, built afresh each round with that round's config.
 pub struct Live {
     app: Arc<AppState>,
@@ -595,6 +945,56 @@ impl Live {
                 "Linear: the secret {LINEAR_SECRET} is not set. Add your Linear API key under Settings, MCP servers, Secrets"
             )
         })
+    }
+}
+
+impl Live {
+    async fn noting<T>(
+        &self,
+        server: &str,
+        result: Result<T, crate::mcp_client::Failure>,
+    ) -> Result<T, crate::mcp_client::Failure> {
+        match self.cfg.mcp_servers.iter().find(|s| s.name == server) {
+            Some(found) => {
+                crate::mcp_client::noting_refusal(
+                    result,
+                    found,
+                    self.app.pipelines.mcp_auth(),
+                    &self.app.settings,
+                )
+                .await
+            }
+            None => result,
+        }
+    }
+
+    async fn tool_client(
+        &self,
+        server: &str,
+    ) -> Result<crate::mcp_client::Client, crate::mcp_client::Failure> {
+        use crate::mcp_client::Failure;
+        let found = self
+            .cfg
+            .mcp_servers
+            .iter()
+            .find(|s| s.name == server)
+            .ok_or_else(|| {
+                Failure::NotAllowed(format!("{server} is not in Settings, Connections"))
+            })?;
+        let secrets = self
+            .secrets
+            .as_ref()
+            .map_err(|e| Failure::Other(e.clone()))?;
+        crate::mcp_client::client_for(
+            found,
+            &self.cfg,
+            secrets,
+            self.app.pipelines.mcp_auth(),
+            &self.app.settings,
+            crate::mcp_read::saved_values(&self.app),
+            TOOL_TIMEOUT,
+        )
+        .await
     }
 }
 
@@ -754,17 +1154,45 @@ impl World for Live {
 
     fn ticket<'a>(
         &'a self,
-        linear_id: &'a str,
+        ticket: &'a TicketRef,
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>> {
-        Box::pin(async move { self.linear.ticket(self.key()?, linear_id).await })
+        Box::pin(async move {
+            if ticket.source == WEBHOOK_SOURCE {
+                let text = TicketText {
+                    description: ticket.description.clone(),
+                    comments: Vec::new(),
+                };
+                return Ok((text, false));
+            }
+            if !ticket.is_linear() {
+                let client = crate::connectors::client_for(
+                    &self.cfg.connectors,
+                    &ticket.source,
+                    &self.secrets,
+                    crate::mcp_read::saved_values(&self.app),
+                    Some(AppTools::of(&self.app)),
+                )?;
+                let item = client.read(&ticket.vars()).await?;
+                let text = TicketText {
+                    description: item.description,
+                    comments: Vec::new(),
+                };
+                return Ok((text, item.closed));
+            }
+            self.linear.ticket(self.key()?, &ticket.item_id).await
+        })
     }
 
     fn move_ticket<'a>(
         &'a self,
-        linear_id: &'a str,
+        ticket: &'a TicketRef,
         state: &'a str,
     ) -> BoxFuture<'a, Result<(), String>> {
-        Box::pin(async move { self.linear.move_to(self.key()?, linear_id, state).await })
+        Box::pin(async move {
+            self.linear
+                .move_to(self.key()?, &ticket.item_id, state)
+                .await
+        })
     }
 
     fn open_draft<'a>(
@@ -777,7 +1205,7 @@ impl World for Live {
                 .cfg
                 .machine(&run.place.machine)
                 .ok_or_else(|| format!("{} is not a machine", run.place.machine))?;
-            let gitlab = crate::pulls::accesses(&self.cfg.pull_requests, &self.secrets);
+            let gitlab = crate::pulls::accesses_for(&self.cfg, &self.secrets);
             let body = if run.report.is_empty() {
                 comment(run)
             } else {
@@ -788,7 +1216,21 @@ impl World for Live {
                 title: run.subject.label(),
                 body,
             };
-            self.forge.open_draft(m, path, &draft, &gitlab).await
+            let github = (self.cfg.pull_requests.github_via == crate::config::GithubVia::Token)
+                .then(|| {
+                    let api = crate::pulls::github_api::GitHubApi::new(self.forge.remotes());
+                    let token = match &self.secrets {
+                        Ok(s) => s
+                            .resolve(&self.cfg.pull_requests.github_token)
+                            .map_err(|e| e.to_string()),
+                        Err(e) => Err(e.clone()),
+                    };
+                    api.set_token(token);
+                    api
+                });
+            self.forge
+                .open_draft(m, path, &draft, &gitlab, github.as_ref())
+                .await
         })
     }
 
@@ -808,6 +1250,85 @@ impl World for Live {
             let m = self.cfg.machine(machine)?;
             let lines = self.app.sessions.transcript_lines(m, path, marker).await?;
             prompts::written_result(&lines, marker)
+        })
+    }
+
+    fn connector_call_kind(
+        &self,
+        connector: &str,
+        call: &str,
+    ) -> Result<crate::connectors::CallKind, String> {
+        let c = self
+            .cfg
+            .connectors
+            .iter()
+            .find(|c| c.id == connector)
+            .ok_or_else(|| format!("there is no connector {connector}"))?;
+        if !c.enabled {
+            return Err(format!("{} is switched off", c.name));
+        }
+        c.calls
+            .get(call)
+            .map(crate::connectors::Call::kind)
+            .ok_or_else(|| format!("{} has no call {call}", c.name))
+    }
+
+    fn tool_schema_hash<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+    ) -> BoxFuture<'a, Result<(String, String), crate::mcp_client::Failure>> {
+        Box::pin(async move {
+            let mut client = self.tool_client(server).await?;
+            self.noting(server, client.connect().await).await?;
+            let tools = client.list_tools().await;
+            client.close().await;
+            let found = tools?.into_iter().find(|t| t.name == tool).ok_or_else(|| {
+                crate::mcp_client::Failure::Other(format!("{server} has no tool {tool}"))
+            })?;
+            let shown = format!(
+                "{}\n{}",
+                found.description,
+                serde_json::to_string_pretty(&found.input_schema).unwrap_or_default()
+            );
+            Ok((crate::mcp_client::schema_hash(&found), shown))
+        })
+    }
+
+    fn call_tool<'a>(
+        &'a self,
+        server: &'a str,
+        tool: &'a str,
+        arguments: Value,
+    ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>> {
+        Box::pin(async move {
+            let mut client = self.tool_client(server).await?;
+            self.noting(server, client.connect().await).await?;
+            let reply = client.call_tool(tool, arguments).await;
+            client.close().await;
+            self.noting(server, reply).await
+        })
+    }
+
+    fn call_connector<'a>(
+        &'a self,
+        connector: &'a str,
+        call: &'a str,
+        vars: crate::connectors::client::Vars,
+    ) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async move {
+            let client = crate::connectors::client_for(
+                &self.cfg.connectors,
+                connector,
+                &self.secrets,
+                crate::mcp_read::saved_values(&self.app),
+                Some(AppTools::of(&self.app)),
+            )?;
+            let reply = client.call(call, &vars).await?;
+            let named = client.call_named(call)?;
+            Ok(crate::connectors::client::Client::mapped_reply(
+                named, &reply,
+            ))
         })
     }
 

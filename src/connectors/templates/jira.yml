@@ -1,0 +1,34 @@
+id: jira
+name: Jira
+base_url: https://your-site.atlassian.net/rest/api/3
+headers:
+  Authorization: 'Basic ${secret:jira_basic}'
+  Accept: application/json
+calls:
+  list:
+    request:
+      method: GET
+      path: /search/jql
+      query:
+        jql: 'assignee = currentUser() AND statusCategory != Done'
+        fields: 'summary,status,description'
+        maxResults: '100'
+    items: issues
+    map: { item_id: id, id: key, title: fields.summary, description: fields.description, state: fields.status.name }
+    page: { style: cursor, param: nextPageToken, next: nextPageToken }
+  read:
+    request: { method: GET, path: '/issue/{{item_id}}', query: { fields: 'summary,status,description' } }
+    map: { title: fields.summary, description: fields.description, state: fields.status.name }
+  comment:
+    kind: change
+    request:
+      method: POST
+      path: '/issue/{{item_id}}/comment'
+      body:
+        body:
+          type: doc
+          version: 1
+          content:
+            - type: paragraph
+              content:
+                - { type: text, text: '{{value}}' }

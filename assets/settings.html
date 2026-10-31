@@ -70,9 +70,8 @@
       <a href="#dispatch">Dispatch</a>
       <a href="#triggers">Triggers</a>
       <a href="#worktree-setup">Worktree setup</a>
-      <a href="#pull-requests">GitHub and GitLab</a>
-      <a href="#mcp">Agent tools (MCP)</a>
-      <a href="#servers">MCP servers</a>
+      <a href="#connections">Connections</a>
+      <a href="#mcp">Let agents use Yardbell</a>
       <p class="nav-label">General</p>
       <a href="#appearance">Appearance</a>
       <a href="#security">Security</a>
@@ -254,7 +253,7 @@
     <p class="help" id="triggers-empty">No triggers yet.</p>
     <form class="panel" id="trigger-form" hidden>
       <div class="grid2">
-        <label>Name <input type="text" name="name" maxlength="60" placeholder="Morning summary" autocomplete="off" required></label>
+        <label>Name<input type="text" name="name" maxlength="60" placeholder="Morning summary" autocomplete="off" required></label>
         <label>Task <select name="task" required></select></label>
       </div>
       <label>Start it
@@ -284,7 +283,7 @@
       <div data-kind="linear" class="trigger-watch">
         <label class="choice"><input type="checkbox" name="linear_assigned">A ticket is assigned to me</label>
         <label>Or one of my tickets moves to <input type="text" name="states" placeholder="In Progress, Ready for dev" autocomplete="off"></label>
-        <p class="help trigger-help">Yardbell reads your open Linear tickets every 3 minutes with the API key saved as the secret <code>linear</code>, under MCP servers, Secrets. Separate states with commas.</p>
+        <p class="help trigger-help">Yardbell reads your open Linear tickets every 3 minutes with the API key saved as the secret <code>linear</code>, under Connections, Secrets. Separate states with commas.</p>
       </div>
       <div data-kind="github" class="trigger-watch">
         <label class="choice"><input type="checkbox" name="gh_assigned">An issue is assigned to me</label>
@@ -314,50 +313,231 @@
     </form>
   </section>
 
-  <section id="pull-requests">
-    <div class="section-head"><h2>GitHub and GitLab</h2></div>
-    <p class="help">A session shows its branch's pull or merge request next to the branch, with its state and CI.</p>
-    <form class="panel pr-panel" id="pr-form">
-      <div class="phone-switches">
-        <label class="choice"><input type="checkbox" name="enabled">Show pull and merge requests</label>
-        <label class="choice"><input type="checkbox" name="cards">Post a card in Dispatch when CI fails or a reviewer comments</label>
-        <label class="choice phone-wait">Check every <input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required> seconds</label>
+  <datalist id="conn-reply-fields">
+    <option value="item_id"><option value="id"><option value="name"><option value="title"><option value="url"><option value="description"><option value="state"><option value="closed">
+  </datalist>
+  <section id="connections">
+    <div class="section-head"><h2>Connections</h2><button class="btn primary small-link" type="button" id="conn-new">New connection</button></div>
+    <div id="conn-home">
+      <p class="help">The tools your pipelines and agent sessions can reach.</p>
+      <details class="conn-guide" id="conn-guide">
+        <summary>How connecting works</summary>
+        <ol>
+          <li><strong>Press New connection and pick your tool.</strong> If it is not listed, add it with the address of its MCP server. The tool's docs give the address.</li>
+          <li><strong>Sign in with your account.</strong> Your browser opens the tool's own page, where you approve what Yardbell may do. There is no token to create or paste.</li>
+          <li><strong>That is it.</strong> Yardbell checks the connection and lists what it can do. Press <strong>Test</strong> to check again at any time. It changes nothing.</li>
+        </ol>
+        <p class="help">Pipelines use a connection in a trigger or a step. Agent sessions get every MCP connection too, and sign in to it themselves on their own machine. Use a token only for a tool with no MCP server.</p>
+      </details>
+      <div class="conn-all" id="conn-all">
+        <div class="conn-head" aria-hidden="true"><span>Connection</span><span>Type</span><span>Status</span><span></span></div>
+        <ul class="rows" id="forge-rows"></ul>
+        <ul class="rows" id="server-rows"></ul>
+        <ul class="rows conn-rows" id="conn-rows"></ul>
       </div>
 
-      <div class="pr-part">
-        <label class="choice"><input type="checkbox" name="use_github"><strong>GitHub</strong></label>
-        <p class="help">Nothing to enter here. Yardbell asks <code>gh</code> on each session's machine, so each machine needs it installed and signed in with <code>gh auth login</code>.</p>
-        <ul class="pr-status" id="pr-github"></ul>
-      </div>
 
-      <div class="pr-part">
-        <div class="pr-part-head">
-          <label class="choice"><input type="checkbox" name="use_gitlab"><strong>GitLab</strong></label>
-          <button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button>
+      <div id="pull-requests">
+        <div class="section-head sub-head"><h3>Pull and merge requests</h3></div>
+        <form class="conn-settings" id="pr-form">
+          <label class="conn-setting"><span><strong>Show them on sessions</strong><small>A session shows its branch's pull or merge request, with its state and CI.</small></span><input type="checkbox" class="switch" name="enabled"></label>
+          <label class="conn-setting"><span><strong>Post a card in Dispatch</strong><small>When CI fails or a reviewer comments.</small></span><input type="checkbox" class="switch" name="cards"></label>
+          <label class="conn-setting"><span><strong>Check every</strong><small>How often Yardbell asks about each branch.</small></span><span class="conn-seconds"><input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required>seconds</span></label>
+          <div class="conn-settings-foot" id="pr-save" hidden>
+            <p class="help" id="pr-note" role="status"></p>
+            <button class="btn primary" type="submit">Save</button>
+          </div>
+        </form>
+        <div class="section-head sub-head"><h3>Your folders</h3><button class="btn small-link" type="button" id="pr-folders-refresh">Check again</button></div>
+        <p class="help">Which service each folder's <code>origin</code> remote is on.</p>
+        <div class="conn-all">
+          <div class="conn-head pr-folder-head" aria-hidden="true"><span>Folder</span><span>Service</span><span>Status</span><span></span></div>
+          <ul class="pr-folders" id="pr-folders"></ul>
         </div>
-        <p class="help">Add each GitLab server your folders use. Yardbell asks its API with a personal access token that has the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Save the token as a secret first, under <a href="#servers">MCP servers, Secrets</a>.</p>
-        <p class="pr-none" id="pr-no-hosts">No GitLab hosts yet, so merge requests do not show.</p>
-        <ul class="rows pr-hosts" id="pr-hosts"></ul>
       </div>
-
-      <div class="pr-part">
-        <div class="pr-part-head">
-          <strong>Your folders</strong>
-          <button class="btn small-link" type="button" id="pr-folders-refresh">Check again</button>
+    <div id="servers">
+      <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
+      <p class="help">Tokens are saved here by themselves when you paste one into a connection. A value is never shown again, and only your account can read <code id="secrets-file">secrets.yml</code>.</p>
+      <div class="banner" id="secrets-missing" hidden>
+      <div class="banner-text"><strong>A secret is not set</strong><span id="secrets-missing-text"></span></div>
+    </div>
+      <div class="banner warn" id="secrets-inline" hidden>
+      <div class="banner-text">
+        <strong>Some values are written in yardbell.yml itself</strong>
+        <span>Move them into secrets so yardbell.yml holds none. Tick the ones that are secret. Each is read back from secrets before it leaves yardbell.yml. Older <code>yardbell.yml.bak-</code> copies still hold them, so delete those afterwards.</span>
+        <div class="inline-picks" id="inline-picks"></div>
+      </div>
+      <button class="btn primary" type="button" id="secrets-move">Move to secrets</button>
+    </div>
+      <div class="conn-all secret-all" id="secret-all">
+        <div class="conn-head secret-head" aria-hidden="true"><span>Name</span><span>Used by</span><span>Saved</span><span></span></div>
+        <ul class="rows" id="secret-rows" hidden></ul>
+      </div>
+      <p class="help" id="secrets-empty">No secrets yet.</p>
+    </div>
+  <dialog class="conn-dialog" id="conn-flow" aria-labelledby="conn-dialog-title">
+      <div class="conn-dialog-head">
+        <h3 id="conn-dialog-title">New connection</h3>
+        <button class="conn-close" type="button" id="conn-close" aria-label="Close"><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 6l12 12M18 6L6 18"/></svg></button>
+      </div>
+      <div class="segmented conn-tabs" id="conn-tabs" role="tablist" aria-label="How to connect">
+        <button type="button" role="tab" data-tab="conn-new-panel" aria-selected="true">Sign in</button>
+        <button type="button" role="tab" data-tab="server-form" aria-selected="false">MCP server</button>
+        <button type="button" role="tab" data-tab="conn-tab-token" aria-selected="false">Token</button>
+      </div>
+      <div class="conn-dialog-body">
+      <button class="conn-back" type="button" id="conn-back" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span>Back</span></button>
+      <div class="conn-step" id="conn-new-panel" role="tabpanel" hidden>
+        <p class="help">Sign in with your account in your browser, with no token to create. Trello and Jira are tested with real accounts. The others answer as MCP servers but have not been tried yet, so some may refuse Yardbell when you sign in.</p>
+        <label class="visually-hidden" for="conn-sign-in-search">Find a tool</label>
+        <input type="search" id="conn-sign-in-search" placeholder="Find a tool" autocomplete="off" spellcheck="false">
+        <ul class="conn-grid" id="conn-sign-in-list"></ul>
+        <p class="conn-empty" id="conn-sign-in-none" hidden>No tool by that name. You can add its MCP server by address.</p>
+        <p class="help">Not listed? <button class="conn-link" type="button" data-another>Add its MCP server</button>, or use a token if it has none.</p>
+      </div>
+      <div class="conn-step" id="conn-tab-token" role="tabpanel" hidden>
+        <p class="help">For a tool with no MCP server. You paste its token in the next step.</p>
+        <ul class="conn-grid" id="conn-new-list"></ul>
+        <p class="help">Someone shared one with you? <button class="conn-link" type="button" id="conn-import-open">Paste it here</button>.</p>
+      </div>
+    <form class="conn-step" id="server-form" hidden novalidate>
+      <p class="help" data-kind="url">Paste the address from the tool's docs. You will sign in next if it needs it.</p>
+      <p class="help" data-kind="command">Yardbell starts this command on the machine, and passes it the environment below.</p>
+      <label data-kind="url">Address <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
+      <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
+      <details class="conn-more" id="server-more">
+        <summary>More options</summary>
+        <div class="conn-more-body">
+          <div class="grid2">
+            <label>Name<input type="text" name="name" placeholder="Taken from the address" autocapitalize="off" spellcheck="false"></label>
+            <label>How it runs
+              <select name="kind"><option value="url">At a web address</option><option value="command">As a command on the machine</option></select>
+            </label>
+          </div>
+          <div data-kind="url">
+            <label>Token<input type="password" name="token" autocomplete="new-password" placeholder="Only if the tool gave you one" autocapitalize="off" spellcheck="false"></label>
+            <p class="help">Leave this empty to sign in through your browser. A token is saved as a secret, and sent as <code>Authorization: Bearer</code>.</p>
+          </div>
+          <label><span id="server-pairs-label">Environment variables</span>
+            <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=paste it here" autocapitalize="off" spellcheck="false"></textarea>
+          </label>
+          <p class="help">One per line, as <code>NAME=value</code>. A token here is saved as a secret by itself.</p>
+          <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">Agent sessions on these machines get this connection. None picked means every machine.</p></fieldset>
+          <div data-kind="url">
+            <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
+            <p class="help">Only for a server you run yourself on this machine or your mesh. Sign-in stops being limited to HTTPS for this server.</p>
+          </div>
         </div>
-        <p class="help">Read from each folder's <code>origin</code> remote.</p>
-        <ul class="pr-folders" id="pr-folders"></ul>
-      </div>
-
+      </details>
       <div class="form-foot">
-        <p class="help" id="pr-note" role="status"></p>
+        <p class="help conn-error" id="server-note" role="status"></p>
+        <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
+        <button class="btn primary" type="submit" id="server-save">Continue</button>
+      </div>
+    </form>
+    <form class="conn-step conn-form" id="conn-form" hidden novalidate>
+      <p class="help" id="conn-about"></p>
+      <label>Name<input type="text" name="name" autocomplete="off"></label>
+      <label>Address, with its API path <input type="text" name="base_url" placeholder="https://api.example.com/1" autocapitalize="off" spellcheck="false"></label>
+      <div class="conn-secrets" id="conn-secrets"></div>
+      <details class="conn-more" id="conn-more">
+        <summary>More options</summary>
+        <div class="conn-more-body">
+          <div class="segmented conn-more-tabs" id="conn-more-tabs" role="tablist" aria-label="More options">
+            <button type="button" role="tab" data-more="conn-actions" aria-selected="true">Actions</button>
+            <button type="button" role="tab" data-more="conn-login" aria-selected="false">Login headers</button>
+            <button type="button" role="tab" data-more="conn-choices" aria-selected="false">Choices</button>
+            <button type="button" role="tab" data-more="conn-settings" aria-selected="false">Settings</button>
+          </div>
+          <div class="conn-more-tab" id="conn-actions" role="tabpanel">
+            <p class="help">What Yardbell can ask this tool to do. A pipeline starts runs from <strong>list</strong>, and reads one item with <strong>read</strong>.</p>
+            <div class="conn-call-list" id="conn-call-list"></div>
+            <button class="btn small-link" type="button" id="conn-action-add">Add action</button>
+          </div>
+          <div class="conn-more-tab" id="conn-login" role="tabpanel" hidden>
+            <p class="help">Sent with every request. Paste a token in a value and it is saved as a secret by itself.</p>
+            <div class="conn-pair-head" aria-hidden="true"><span>Header</span><span>Value</span></div>
+            <ul class="conn-headers" id="conn-headers"></ul>
+            <button class="btn small-link" type="button" id="conn-header-add">Add header</button>
+          </div>
+          <div class="conn-more-tab" id="conn-choices" role="tabpanel" hidden>
+            <p class="help">What a pipeline asks you when it uses this connection, such as which board. Options can come from one of its actions.</p>
+            <div class="conn-choice-head" aria-hidden="true"><span>Name</span><span>Label</span><span>Options from</span></div>
+            <ul class="conn-choices" id="conn-choice-list"></ul>
+            <button class="btn small-link" type="button" id="conn-choice-add">Add choice</button>
+          </div>
+          <div class="conn-more-tab" id="conn-settings" role="tabpanel" hidden>
+            <label>Id, used in pipelines<input type="text" name="id" placeholder="Taken from the name" autocapitalize="off" spellcheck="false"></label>
+            <label class="choice"><input type="checkbox" name="enabled">Switched on</label>
+            <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
+            <p class="help">Only for a tool on your own network or mesh. Public tools never need this.</p>
+          </div>
+        </div>
+      </details>
+      <div class="form-foot">
+        <p class="help conn-error" id="conn-note" role="status"></p>
+        <button class="btn quiet" type="button" id="conn-cancel">Cancel</button>
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
+    <form class="conn-step conn-form" id="conn-import" hidden>
+      <label class="conn-yaml">Paste a shared connection<textarea name="text" rows="10" spellcheck="false"></textarea></label>
+      <p class="help">It arrives switched off. Nothing runs until you have read it and switched it on.</p>
+      <div class="form-foot">
+        <button class="btn quiet" type="button" id="conn-import-cancel">Cancel</button>
+        <button class="btn primary" type="submit">Import</button>
+      </div>
+    </form>
+      <div class="conn-step" id="forge-github" hidden>
+        <label class="choice"><input type="checkbox" name="use_github" form="pr-form">Show GitHub pull requests on sessions</label>
+        <fieldset class="conn-via"><legend>How it connects</legend>
+          <label class="conn-via-option"><input type="radio" name="github_via" value="gh" form="pr-form"><span><strong>Local gh</strong><small>Yardbell asks <code>gh</code> on each session's machine. Each machine needs it installed and signed in with <code>gh auth login</code>.</small></span></label>
+          <label class="conn-via-option"><input type="radio" name="github_via" value="token" form="pr-form"><span><strong>A token</strong><small>Yardbell asks GitHub's API from here, so machines need nothing installed. For github.com only.</small></span></label>
+        </fieldset>
+        <div id="github-token-fields" hidden>
+              <label>Saved secret<select name="github_token" form="pr-form"></select></label>
+              <label>Or paste a new token<input type="password" name="github_paste" autocomplete="new-password" placeholder="Paste a token" autocapitalize="off" spellcheck="false"></label>
+              <p class="help">Saved as the secret <code>github_pr</code>. It needs read access to pull requests, checks and actions, and write access to pull requests if a pipeline opens drafts.</p>
+            </div>
+        <ul class="pr-status" id="pr-github"></ul>
+        <div class="form-foot"><button class="btn quiet" type="button" data-cancel-forge>Cancel</button><button class="btn primary" type="submit" form="pr-form">Save</button></div>
+      </div>
+      <form class="conn-step" id="forge-linear" hidden>
+        <p class="help">Pipelines read and move Linear tickets with a personal API key. Make one in Linear under Settings, Security and access. It is saved as the secret <code>linear</code>.</p>
+        <label>API key<input type="password" name="linear_key" autocomplete="new-password" placeholder="Paste it here" autocapitalize="off" spellcheck="false" required></label>
+        <div class="form-foot"><button class="btn quiet" type="button" data-cancel-forge>Cancel</button><button class="btn primary" type="submit">Save</button></div>
+      </form>
+      <div class="conn-step" id="forge-gitlab" hidden>
+        <label class="choice"><input type="checkbox" name="use_gitlab" form="pr-form">Show GitLab merge requests on sessions</label>
+        <fieldset class="conn-via"><legend>How it connects</legend>
+          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="token" form="pr-form"><span><strong>A token for each host</strong><small>Yardbell asks GitLab's API from here. The token needs the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Paste it on the host below, and it is saved as a secret.</small></span></label>
+          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="glab" form="pr-form"><span><strong>Local glab</strong><small>Yardbell asks <code>glab</code> on each session's machine. Each machine needs it installed and signed in with <code>glab auth login</code>.</small></span></label>
+        </fieldset>
+        <div class="pr-part-head"><strong>Hosts</strong><button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button></div>
+        <p class="help">Add each GitLab server your folders use.</p>
+        <p class="pr-none" id="pr-no-hosts">No GitLab hosts yet, so merge requests do not show.</p>
+        <ul class="rows pr-hosts" id="pr-hosts"></ul>
+        <div class="form-foot"><button class="btn quiet" type="button" data-cancel-forge>Cancel</button><button class="btn primary" type="submit" form="pr-form">Save</button></div>
+      </div>
+      <form class="conn-step" id="secret-form" hidden>
+        <label>Name<input type="text" name="name" pattern="[A-Za-z0-9_\-]+" maxlength="64" placeholder="linear" autocapitalize="off" spellcheck="false" required></label>
+        <label>Value<input type="password" name="value" autocomplete="new-password" autocapitalize="off" spellcheck="false" required></label>
+        <p class="help" id="secret-form-help"></p>
+        <div class="form-foot">
+          <button class="btn quiet" type="button" id="secret-cancel">Cancel</button>
+          <button class="btn primary" type="submit">Save secret</button>
+        </div>
+      </form>
+      <div class="conn-step" id="mcp-sign-in" hidden></div>
+      <div class="conn-step" id="mcp-tools" hidden></div>
+      <div class="conn-step conn-output" id="conn-output" hidden></div>
+      <p class="help conn-error" id="conn-flow-error" role="alert"></p>
+      </div>
+    </dialog>
   </section>
 
   <section id="mcp">
-    <div class="section-head"><h2>Agent tools (MCP)</h2><button class="btn quiet danger small-link" type="button" id="mcp-turn-off" hidden>Turn off</button></div>
+    <div class="section-head"><h2>Let agents use Yardbell</h2><button class="btn quiet danger small-link" type="button" id="mcp-turn-off" hidden>Turn off</button></div>
     <div class="panel phone-intro" id="mcp-intro" hidden>
       <p>Let AI agents see your machines and sessions, and start, read and answer sessions, through an MCP server built into Yardbell.</p>
       <button class="btn primary" type="button" id="mcp-on">Turn on</button>
@@ -371,56 +551,6 @@
     </div>
   </section>
 
-  <section id="servers">
-    <div class="section-head"><h2>MCP servers for sessions</h2><button class="btn small-link" type="button" id="server-add">Add server</button></div>
-    <p class="help">Claude Code sessions that Yardbell starts get these servers, in a file only your account can read on that machine. Keep tokens in the secrets below and write <code>${secret:NAME}</code> where they go.</p>
-    <ul class="rows" id="server-rows"></ul>
-    <form class="panel" id="server-form" hidden>
-      <div class="grid2">
-        <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" placeholder="github" autocapitalize="off" spellcheck="false" required></label>
-        <label>Kind
-          <select name="kind"><option value="command">Command (runs on the machine)</option><option value="url">URL (HTTP server)</option></select>
-        </label>
-      </div>
-      <label data-kind="command">Command <input type="text" name="command" placeholder="npx -y @modelcontextprotocol/server-github" autocapitalize="off" spellcheck="false"></label>
-      <label data-kind="url">URL <input type="text" name="url" inputmode="url" placeholder="https://mcp.linear.app/mcp" autocapitalize="off" spellcheck="false"></label>
-      <label><span id="server-pairs-label">Environment variables</span>
-        <textarea name="pairs" rows="3" placeholder="GITHUB_TOKEN=${secret:github}" autocapitalize="off" spellcheck="false"></textarea>
-      </label>
-      <fieldset class="server-machines"><legend>Machines</legend><div id="server-machines"></div><p class="help">None picked means every machine.</p></fieldset>
-      <div class="form-foot">
-        <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Save server</button>
-      </div>
-    </form>
-
-    <div class="section-head sub-head"><h3>Secrets</h3><button class="btn small-link" type="button" id="secret-add">Add secret</button></div>
-    <p class="help">Tokens for the servers above, kept in <code id="secrets-file">secrets.yml</code>, which only your account can read. A value is never shown again once it is saved. Refer to one as <code>${secret:NAME}</code> in a header, an environment variable or a URL, for example <code>Authorization=Bearer ${secret:linear}</code>.</p>
-    <div class="banner" id="secrets-missing" hidden>
-      <div class="banner-text"><strong>A secret is not set</strong><span id="secrets-missing-text"></span></div>
-    </div>
-    <div class="banner warn" id="secrets-inline" hidden>
-      <div class="banner-text">
-        <strong>Some values are written in yardbell.yml itself</strong>
-        <span>Move them into secrets so yardbell.yml holds none. Tick the ones that are secret. Each is read back from secrets before it leaves yardbell.yml. Older <code>yardbell.yml.bak-</code> copies still hold them, so delete those afterwards.</span>
-        <div class="inline-picks" id="inline-picks"></div>
-      </div>
-      <button class="btn primary" type="button" id="secrets-move">Move to secrets</button>
-    </div>
-    <ul class="rows" id="secret-rows" hidden></ul>
-    <p class="help" id="secrets-empty">No secrets yet.</p>
-    <form class="panel" id="secret-form" hidden>
-      <div class="grid2">
-        <label>Name <input type="text" name="name" pattern="[A-Za-z0-9_\-]+" maxlength="64" placeholder="linear" autocapitalize="off" spellcheck="false" required></label>
-        <label>Value <input type="password" name="value" autocomplete="new-password" autocapitalize="off" spellcheck="false" required></label>
-      </div>
-      <div class="form-foot">
-        <p class="help" id="secret-form-help">Letters, digits, - and _ in the name. New sessions get the value; running ones keep the one they started with.</p>
-        <button class="btn quiet" type="button" id="secret-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Save secret</button>
-      </div>
-    </form>
-  </section>
 
   <section id="security">
     <div class="section-head"><h2>Security</h2></div>

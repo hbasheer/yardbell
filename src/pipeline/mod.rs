@@ -24,6 +24,10 @@ use std::sync::{Arc, Mutex};
 use store::Store;
 use tokio::task::JoinHandle;
 
+const HOOKS_PER_MINUTE: u32 = 30;
+// A connector can take minutes to give up, and pipelines keep stepping only after this round's
+// triggers are read. What was not reached is asked again on the next round.
+const DUE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 const TICK: std::time::Duration = std::time::Duration::from_secs(10);
 pub const KEEP_FINISHED: usize = 50;
 
@@ -38,6 +42,10 @@ pub struct Pipelines {
     linear: Mutex<Arc<linear::Linear>>,
     // Sessions of runs that went with a deleted pipeline, stopped on the next round.
     orphans: Mutex<Vec<(String, String)>>,
+    connector_health: crate::connectors::Health,
+    mcp_auth: crate::mcp_client::oauth::Auth,
+    due_limit: Mutex<std::time::Duration>,
+    hook_window: Mutex<std::collections::HashMap<String, (chrono::DateTime<chrono::Local>, u32)>>,
 }
 
 fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
@@ -64,11 +72,46 @@ impl Pipelines {
             ticking: tokio::sync::Mutex::new(()),
             linear: Mutex::new(Arc::new(linear::Linear::new())),
             orphans: Mutex::new(Vec::new()),
+            connector_health: Default::default(),
+            mcp_auth: Default::default(),
+            due_limit: Mutex::new(DUE_LIMIT),
+            hook_window: Mutex::new(Default::default()),
         }
     }
 
     pub fn library(&self) -> &Library {
         &self.library
+    }
+
+    // At most HOOKS_PER_MINUTE requests a pipeline, counted over a fixed minute.
+    pub fn hook_allowed(&self, id: &str, now: chrono::DateTime<chrono::Local>) -> bool {
+        let mut all = self.hook_window.lock().expect("pipelines hooks");
+        let entry = all.entry(id.to_string()).or_insert((now, 0));
+        if (now - entry.0).num_seconds() >= 60 {
+            *entry = (now, 0);
+        }
+        entry.1 += 1;
+        entry.1 <= HOOKS_PER_MINUTE
+    }
+
+    pub fn has_run_for(&self, pipeline: &str, key: &str) -> bool {
+        self.store
+            .all()
+            .iter()
+            .any(|r| r.pipeline == pipeline && r.key == key)
+    }
+
+    #[cfg(test)]
+    pub fn set_due_limit(&self, limit: std::time::Duration) {
+        *self.due_limit.lock().expect("pipelines due limit") = limit;
+    }
+
+    pub fn mcp_auth(&self) -> &crate::mcp_client::oauth::Auth {
+        &self.mcp_auth
+    }
+
+    pub fn connector_health(&self) -> &crate::connectors::Health {
+        &self.connector_health
     }
 
     pub fn watch(&self) -> &triggers::Watch {
@@ -236,6 +279,19 @@ impl Pipelines {
         self.person(id, Seen::Retry, Self::waiting)
     }
 
+    pub fn accept_tool(&self, id: &str) -> Result<Run, String> {
+        let at_tool = |r: &Run| match &r.waiting {
+            Some(w) if r.state == RunState::Waiting && w.kind == record::WaitKind::ToolChanged => {
+                Ok(())
+            }
+            _ => Err(format!(
+                "{} is not waiting on a changed tool",
+                r.subject.label()
+            )),
+        };
+        self.person(id, Seen::AcceptTool, at_tool)
+    }
+
     pub fn continue_on(&self, id: &str, outcome: Outcome) -> Result<Run, String> {
         self.person(id, Seen::Continue(outcome), Self::waiting)
     }
@@ -296,7 +352,16 @@ impl Pipelines {
         };
         *self.cfg.lock().expect("pipelines cfg") = cfg.clone();
         if let Some(src) = sources {
-            for (pipeline, subject) in self.watch.due(&self.library.list(), src, now).await {
+            let limit = *self.due_limit.lock().expect("pipelines due limit");
+            let defs = self.library.list();
+            let found = self.watch.due(&defs, src, now);
+            let found = tokio::time::timeout(limit, found)
+                .await
+                .unwrap_or_else(|_| {
+                    tracing::warn!("reading the pipeline triggers took too long; carrying on");
+                    Vec::new()
+                });
+            for (pipeline, subject) in found {
                 if let Err(e) = self.start(&pipeline, vec![subject], "a trigger") {
                     tracing::debug!(error = %e, "a trigger found an item already in a run");
                 }
@@ -456,10 +521,19 @@ impl Pipelines {
                 };
                 let secrets =
                     crate::secrets::Secrets::for_config(&app.cfg_path).map_err(|e| e.to_string());
+                let connectors = cfg.connectors.clone();
+                let feed = run::ConfigFeed {
+                    connectors: &connectors,
+                    secrets: &secrets,
+                    saved: crate::mcp_read::saved_values(&app),
+                    tools: Some(run::AppTools::of(&app)),
+                    health: self.connector_health(),
+                };
                 let sources = triggers::Sources {
                     feeds: feeds.as_ref(),
                     gitlab: &gitlab,
-                    accesses: crate::pulls::accesses(&cfg.pull_requests, &secrets),
+                    connectors: &feed,
+                    accesses: crate::pulls::accesses_for(&cfg, &secrets),
                     linear_key: secrets.as_ref().map_err(Clone::clone).and_then(|s| {
                         s.get(crate::triggers::LINEAR_SECRET)
                             .map(str::to_string)

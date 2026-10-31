@@ -179,10 +179,13 @@ mod tests {
     fn ticket(id: &str) -> Subject {
         Subject {
             ticket: Some(TicketRef {
-                linear_id: format!("u-{id}"),
+                source: String::new(),
+                item_id: format!("u-{id}"),
                 id: id.into(),
                 title: "Fix the webhook dedup".into(),
                 url: format!("https://linear.app/acme/issue/{id}"),
+                description: String::new(),
+                fields: Default::default(),
             }),
             pr: None,
         }
@@ -207,8 +210,7 @@ mod tests {
     fn setup() -> (Store, Library, tempfile::TempDir) {
         let dir = tempfile::tempdir().unwrap();
         let lib = Library::load(dir.path().join("pipelines"));
-        lib.copy_template("Implement my Linear tickets", &cfg())
-            .unwrap();
+        lib.copy_template("Implement my tickets", &cfg()).unwrap();
         lib.copy_template("Review my merge requests", &cfg())
             .unwrap();
         (Store::load(dir.path().join("runs.json")), lib, dir)
@@ -229,11 +231,11 @@ mod tests {
     #[test]
     fn runs_survive_a_reload() {
         let (store, lib, dir) = setup();
-        let def = lib.get("implement-my-linear-tickets").unwrap();
+        let def = lib.get("implement-my-tickets").unwrap();
         let run = store.add(&def, ticket("COM-1"), "you", NOW).unwrap();
         assert_eq!(run.state, RunState::Queued);
-        assert_eq!(run.pipeline, "implement-my-linear-tickets");
-        assert_eq!(run.pipeline_name, "Implement my Linear tickets");
+        assert_eq!(run.pipeline, "implement-my-tickets");
+        assert_eq!(run.pipeline_name, "Implement my tickets");
         let mut changed = store.get(&run.id).unwrap();
         changed.step = "implement".into();
         store.put(changed);
@@ -245,7 +247,7 @@ mod tests {
     fn an_item_in_a_run_of_this_pipeline_is_refused() {
         let (store, lib, _dir) = setup();
         let review = lib.get("review-my-merge-requests").unwrap();
-        let implement = lib.get("implement-my-linear-tickets").unwrap();
+        let implement = lib.get("implement-my-tickets").unwrap();
         let first = store.add(&review, mr(), "trigger", NOW).unwrap();
         let err = store.add(&review, mr(), "trigger", NOW).unwrap_err();
         assert_eq!(
@@ -262,7 +264,7 @@ mod tests {
     #[test]
     fn a_run_keeps_its_version() {
         let (store, lib, _dir) = setup();
-        let def = lib.get("implement-my-linear-tickets").unwrap();
+        let def = lib.get("implement-my-tickets").unwrap();
         let run = store.add(&def, ticket("COM-1"), "you", NOW).unwrap();
         let mut changed = def.clone();
         changed.steps.retain(|s| s.id != "fix-after-qa");

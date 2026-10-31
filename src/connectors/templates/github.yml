@@ -1,0 +1,25 @@
+id: github-issues
+name: GitHub Issues
+base_url: https://api.github.com
+headers:
+  Authorization: 'Bearer ${secret:github_token}'
+  Accept: application/vnd.github+json
+params:
+  - { name: repo, label: Repository, options: repos }
+calls:
+  repos:
+    request: { method: GET, path: /user/repos, query: { per_page: '100', sort: updated } }
+    map: { id: full_name, name: full_name }
+  list:
+    request: { method: GET, path: '/repos/{{repo}}/issues', query: { state: open, per_page: '100' } }
+    map: { item_id: number, id: number, title: title, url: html_url, description: body, state: state }
+    page: { style: link, max_pages: 5 }
+  read:
+    request: { method: GET, path: '/repos/{{repo}}/issues/{{item_id}}' }
+    map: { title: title, url: html_url, description: body, state: state }
+  comment:
+    kind: change
+    request: { method: POST, path: '/repos/{{repo}}/issues/{{item_id}}/comments', body: { body: '{{value}}' } }
+  close:
+    kind: change
+    request: { method: PATCH, path: '/repos/{{repo}}/issues/{{item_id}}', body: { state: closed } }

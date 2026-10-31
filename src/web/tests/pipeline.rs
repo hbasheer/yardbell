@@ -62,7 +62,7 @@ async fn copy(r: &Rig, c: &str, template: &str) -> String {
     body["id"].as_str().unwrap().to_string()
 }
 
-const IMPLEMENT: &str = "Implement my Linear tickets";
+const IMPLEMENT: &str = "Implement my tickets";
 const REVIEW: &str = "Review my merge requests";
 
 #[tokio::test]
@@ -284,14 +284,14 @@ async fn starting_by_tickets_and_a_ticket_already_running() {
     };
     let (status, body) = start(json!(["COM-1"])).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["runs"][0]["subject"]["ticket"]["linear_id"], "u-1");
+    assert_eq!(body["runs"][0]["subject"]["ticket"]["item_id"], "u-1");
     let (status, body) = start(json!(["COM-1"])).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(
         body["error"]
             .as_str()
             .unwrap()
-            .contains("is already in a run of Implement my Linear tickets"),
+            .contains("is already in a run of Implement my tickets"),
         "{body}"
     );
     let (status, tickets) = call(&r, &c, "GET", "/api/pipelines/tickets", None).await;
@@ -327,6 +327,7 @@ async fn run_actions() {
         step: "implement".into(),
         reason: "Implement failed".into(),
         screen: String::new(),
+        tool_hash: String::new(),
     });
     let run_id = run.id.clone();
     r.app.pipelines.put(run);
@@ -435,6 +436,259 @@ async fn an_empty_pipeline_is_created_and_cannot_run() {
             .contains("New pipeline has no steps yet"),
         "{body}"
     );
+}
+
+async fn hook_call(
+    r: &Rig,
+    method: &str,
+    url: &str,
+    body: Vec<u8>,
+) -> (StatusCode, serde_json::Value) {
+    let req = Request::builder()
+        .method(method)
+        .uri(url)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    let (status, _, text) = send(&r.app, req).await;
+    (status, serde_json::from_str(&text).unwrap_or(json!(text)))
+}
+
+async fn webhook_pipeline(r: &Rig, c: &str, map: serde_json::Value) -> (String, String) {
+    let id = copy(r, c, REVIEW).await;
+    let mut def = r.app.pipelines.library().get(&id).unwrap();
+    def.trigger = serde_json::from_value(json!({ "kind": "webhook", "map": map })).unwrap();
+    let path = format!("/api/pipelines/{id}");
+    let (status, body) = call(r, c, "PUT", &path, Some(json!(def))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let path = format!("/api/pipelines/{id}/enabled");
+    let (status, body) = call(r, c, "POST", &path, Some(json!({ "enabled": true }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let path = format!("/api/pipelines/{id}/webhook-token");
+    let (status, body) = call(r, c, "POST", &path, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(
+        body["url"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("/hooks/pipeline/")
+            || body["url"].is_null(),
+        "{body}"
+    );
+    let token = body["token"].as_str().unwrap().to_string();
+    assert_eq!(token.len(), 64, "32 random bytes");
+    (id, token)
+}
+
+#[tokio::test]
+async fn a_webhook_starts_a_run() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, token) = webhook_pipeline(&r, &c, json!({})).await;
+    let url = format!("/hooks/pipeline/{id}/{token}");
+    let body =
+        json!({ "id": "T-9", "title": "Fix it", "url": "https://x/9", "description": "Long" });
+    let (status, out) = hook_call(&r, "POST", &url, body.to_string().into_bytes()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{out}");
+    assert_eq!(out["started"], true);
+    let runs = r.app.pipelines.runs();
+    let t = runs[0].subject.ticket.as_ref().unwrap();
+    assert_eq!(
+        (
+            t.source.as_str(),
+            t.item_id.as_str(),
+            t.title.as_str(),
+            t.description.as_str()
+        ),
+        ("webhook", "T-9", "Fix it", "Long")
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_token_gets_404() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, _) = webhook_pipeline(&r, &c, json!({})).await;
+    let body = json!({ "id": "1", "title": "t" }).to_string().into_bytes();
+    let (status, _) = hook_call(
+        &r,
+        "POST",
+        &format!("/hooks/pipeline/{id}/nope"),
+        body.clone(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = hook_call(&r, "POST", "/hooks/pipeline/nothing/nope", body).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(r.app.pipelines.runs().is_empty());
+}
+
+#[tokio::test]
+async fn a_switched_off_pipeline_gets_404() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, token) = webhook_pipeline(&r, &c, json!({})).await;
+    let path = format!("/api/pipelines/{id}/enabled");
+    call(&r, &c, "POST", &path, Some(json!({ "enabled": false }))).await;
+    let body = json!({ "id": "1", "title": "t" }).to_string().into_bytes();
+    let (status, _) = hook_call(&r, "POST", &format!("/hooks/pipeline/{id}/{token}"), body).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn a_repeated_id_starts_one_run() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, token) = webhook_pipeline(&r, &c, json!({})).await;
+    let url = format!("/hooks/pipeline/{id}/{token}");
+    let body = json!({ "id": "1", "title": "t" }).to_string().into_bytes();
+    let (status, _) = hook_call(&r, "POST", &url, body.clone()).await;
+    assert_eq!(status, StatusCode::ACCEPTED);
+    let mut run = r.app.pipelines.runs().remove(0);
+    run.state = RunState::Done;
+    run.pending = None;
+    r.app.pipelines.put(run);
+    let (status, out) = hook_call(&r, "POST", &url, body).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["started"], false);
+    assert_eq!(r.app.pipelines.runs().len(), 1);
+}
+
+#[tokio::test]
+async fn head_answers_200_only_with_the_right_token() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, token) = webhook_pipeline(&r, &c, json!({})).await;
+    let (status, _) = hook_call(&r, "HEAD", &format!("/hooks/pipeline/{id}/{token}"), vec![]).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = hook_call(&r, "HEAD", &format!("/hooks/pipeline/{id}/nope"), vec![]).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn too_many_requests_get_429() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, token) = webhook_pipeline(&r, &c, json!({})).await;
+    let url = format!("/hooks/pipeline/{id}/{token}");
+    for i in 0..30 {
+        let body = json!({ "id": i.to_string(), "title": "t" })
+            .to_string()
+            .into_bytes();
+        let (status, _) = hook_call(&r, "POST", &url, body).await;
+        assert_ne!(status, StatusCode::TOO_MANY_REQUESTS, "request {i}");
+    }
+    let body = json!({ "id": "31", "title": "t" }).to_string().into_bytes();
+    let (status, _) = hook_call(&r, "POST", &url, body).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[tokio::test]
+async fn a_big_body_gets_413() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, token) = webhook_pipeline(&r, &c, json!({})).await;
+    let url = format!("/hooks/pipeline/{id}/{token}");
+    let (status, _) = hook_call(&r, "POST", &url, vec![b' '; 1024 * 1024 + 1]).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+}
+
+#[tokio::test]
+async fn a_body_without_an_id_or_title_gets_400() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, token) = webhook_pipeline(&r, &c, json!({})).await;
+    let url = format!("/hooks/pipeline/{id}/{token}");
+    let (status, out) = hook_call(
+        &r,
+        "POST",
+        &url,
+        json!({ "title": "t" }).to_string().into_bytes(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(out["error"].as_str().unwrap().contains("id"), "{out}");
+    let (status, out) = hook_call(
+        &r,
+        "POST",
+        &url,
+        json!({ "id": "1" }).to_string().into_bytes(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(out["error"].as_str().unwrap().contains("title"), "{out}");
+    let (status, _) = hook_call(&r, "POST", &url, b"<xml>".to_vec()).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn a_map_reads_other_shapes() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let map = json!({ "id": "action.data.card.id", "title": "action.data.card.name" });
+    let (id, token) = webhook_pipeline(&r, &c, map).await;
+    let url = format!("/hooks/pipeline/{id}/{token}");
+    let body = json!({ "action": { "data": { "card": { "id": "c1", "name": "Card" } } } });
+    let (status, out) = hook_call(&r, "POST", &url, body.to_string().into_bytes()).await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{out}");
+    let runs = r.app.pipelines.runs();
+    assert_eq!(runs[0].subject.ticket.as_ref().unwrap().title, "Card");
+}
+
+#[tokio::test]
+async fn the_token_is_not_shown_by_read_settings() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (id, token) = webhook_pipeline(&r, &c, json!({})).await;
+    let (_, shown) = call(&r, &c, "GET", &format!("/api/pipelines/{id}"), None).await;
+    assert!(!shown.to_string().contains(&token), "{shown}");
+    let (_, shown) = call(&r, &c, "GET", "/api/settings", None).await;
+    assert!(!shown.to_string().contains(&token));
+}
+
+#[tokio::test]
+async fn run_now_takes_a_connector_item() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let s = crate::connectors::tests::stub().await;
+    s.answer(
+        "/cards/abc",
+        200,
+        r#"{"name":"Fix it","url":"https://t/abc"}"#,
+    );
+    s.answer("/cards/gone", 404, r#"{"message":"gone"}"#);
+    let tool = crate::connectors::tests::connector(
+        &s.base,
+        "  read:\n    request: { method: GET, path: '/cards/{{item_id}}' }\n    map: { title: name, url: url }\n",
+    );
+    let mut cfg = r.app.config().unwrap();
+    let mut tool = tool;
+    tool.headers.clear();
+    cfg.connectors = vec![tool];
+    cfg.save(&r.app.cfg_path).unwrap();
+    let id = copy(&r, &c, "Review my merge requests").await;
+    let mut def = r.app.pipelines.library().get(&id).unwrap();
+    def.trigger = crate::pipeline::definition::Trigger::Connector {
+        connector: "t".into(),
+        params: Default::default(),
+        states: vec![],
+    };
+    let path = format!("/api/pipelines/{id}");
+    let (status, body) = call(&r, &c, "PUT", &path, Some(json!(def))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let runs = format!("/api/pipelines/{id}/runs");
+    let (status, body) = call(&r, &c, "POST", &runs, Some(json!({ "tickets": ["gone"] }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body["error"].as_str().unwrap().contains("gone"), "{body}");
+    let long = json!({ "tickets": ["https://trello.com/c/abc/12-fix-it"] });
+    let (status, body) = call(&r, &c, "POST", &runs, Some(long)).await;
+    assert_eq!(status, StatusCode::OK, "a link from the browser: {body}");
+    assert_eq!(body["runs"][0]["subject"]["ticket"]["item_id"], "abc");
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let t = &body["runs"][0]["subject"]["ticket"];
+    assert_eq!(t["source"], "t");
+    assert_eq!(t["item_id"], "abc");
+    assert_eq!(t["title"], "Fix it");
 }
 
 #[tokio::test]

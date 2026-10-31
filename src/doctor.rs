@@ -65,6 +65,35 @@ fn machines_of(cfg: &Config, def: &Definition) -> Vec<String> {
         .collect()
 }
 
+fn connectors_of(def: &Definition) -> Vec<String> {
+    match &def.trigger {
+        Trigger::Connector { connector, .. } => vec![connector.clone()],
+        Trigger::Schedule { connector, .. } if !connector.is_empty() => vec![connector.clone()],
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .chain(def.steps.iter().filter_map(|s| match &s.kind {
+        StepKind::Call { connector, .. } => Some(connector.clone()),
+        _ => None,
+    }))
+    .collect::<std::collections::BTreeSet<_>>()
+    .into_iter()
+    .collect()
+}
+
+pub fn mcp_sign_in_lines(cfg: &Config, secrets: &crate::secrets::Secrets) -> Vec<(bool, String)> {
+    cfg.mcp_servers
+        .iter()
+        .filter(|s| crate::mcp_client::oauth::Auth::status(s, secrets) == "sign_in_again")
+        .map(|s| {
+            (
+                false,
+                format!("{}: sign in again under Settings, Connections", s.name),
+            )
+        })
+        .collect()
+}
+
 pub fn pipelines_lines(
     cfg: &Config,
     defs: &[Definition],
@@ -72,17 +101,26 @@ pub fn pipelines_lines(
     gh: &[(String, bool)],
     gitlab: &[(String, Result<String, String>)],
     up: &[(String, bool)],
+    connectors: &[(String, Result<usize, String>)],
 ) -> Vec<(bool, String)> {
     let mut lines = Vec::new();
     for def in defs.iter().filter(|d| d.enabled) {
         let name = &def.name;
+        for id in connectors_of(def) {
+            match connectors.iter().find(|(c, _)| c == &id) {
+                Some((_, Ok(n))) => lines.push((true, format!("{name}: {id} answers, {n} items"))),
+                Some((_, Err(e))) => lines.push((false, format!("{name}: {e}"))),
+                None => lines.push((false, format!("{name}: {id} was not checked"))),
+            }
+        }
         let machines = machines_of(cfg, def);
         let uses_linear = matches!(&def.trigger, Trigger::Linear { .. })
             || matches!(&def.trigger, Trigger::Schedule { state, .. } if !state.trim().is_empty())
-            || def
-                .steps
-                .iter()
-                .any(|s| matches!(s.kind, StepKind::Linear { .. }));
+            || (matches!(&def.trigger, Trigger::Manual)
+                && def
+                    .steps
+                    .iter()
+                    .any(|s| matches!(s.kind, StepKind::Update { .. })));
         if uses_linear {
             match linear {
                 Some(Ok(n)) => lines.push((
@@ -199,8 +237,8 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
     let mut signed_in = Vec::new();
     if !cfg.pull_requests.gitlab.is_empty() {
         let secrets = crate::secrets::Secrets::for_config(path).map_err(|e| e.to_string());
-        let gitlab = crate::pulls::GitLab::new();
-        for access in crate::pulls::accesses(&cfg.pull_requests, &secrets) {
+        let gitlab = crate::pulls::GitLab::new().with_runner(runner.clone(), ssh.clone());
+        for access in crate::pulls::accesses_for(&cfg, &secrets) {
             let found = gitlab.whoami(&access).await;
             let (ok, text) = gitlab_line(&access.host, &found);
             line(ok, &text);
@@ -236,8 +274,43 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
                 .await;
             gh.push((m.name.clone(), out.ok()));
         }
-        for (ok, text) in pipelines_lines(&cfg, &defs, &linear, &gh, &signed_in, &up) {
+        let secrets = crate::secrets::Secrets::for_config(path).map_err(|e| e.to_string());
+        let mut connectors: Vec<(String, Result<usize, String>)> = Vec::new();
+        let wanted: std::collections::BTreeSet<String> = defs
+            .iter()
+            .filter(|d| d.enabled)
+            .flat_map(connectors_of)
+            .collect();
+        for id in wanted {
+            if cfg
+                .connectors
+                .iter()
+                .any(|c| c.id == id && !c.server.is_empty())
+            {
+                continue;
+            }
+            let saved = secrets
+                .as_ref()
+                .map(|s| s.values().map(|(_, v)| v.to_string()).collect())
+                .unwrap_or_default();
+            let found =
+                match crate::connectors::client_for(&cfg.connectors, &id, &secrets, saved, None) {
+                    Ok(client) if client.call_named("list").is_err() => Ok(0),
+                    Ok(client) => {
+                        let vars = client.with_defaults(&Default::default()).await;
+                        client.list(&vars).await.map(|l| l.items.len())
+                    }
+                    Err(e) => Err(e),
+                };
+            connectors.push((id, found));
+        }
+        for (ok, text) in pipelines_lines(&cfg, &defs, &linear, &gh, &signed_in, &up, &connectors) {
             line(ok, &text);
+        }
+        if let Ok(secrets) = &secrets {
+            for (ok, text) in mcp_sign_in_lines(&cfg, secrets) {
+                line(ok, &text);
+            }
         }
     }
     if in_docker() {
@@ -300,6 +373,62 @@ mod tests {
     }
 
     #[test]
+    fn doctor_says_sign_in_again_without_a_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("secrets.yml");
+        let meta = r#"{"failed":true}"#;
+        std::fs::write(
+            &path,
+            format!("mcp_oauth_tool_access: a-value\nmcp_oauth_tool_meta: '{meta}'\n"),
+        )
+        .unwrap();
+        let secrets = crate::secrets::Secrets::load(&path).unwrap();
+        let mut cfg = crate::pipeline::definition::tests::cfg();
+        cfg.mcp_servers = vec![serde_json::from_value(
+            serde_json::json!({ "name": "tool", "url": "https://x.example/mcp" }),
+        )
+        .unwrap()];
+        let lines = mcp_sign_in_lines(&cfg, &secrets);
+        assert_eq!(
+            lines,
+            vec![(
+                false,
+                "tool: sign in again under Settings, Connections".to_string()
+            )]
+        );
+    }
+
+    #[test]
+    fn doctor_names_a_connector_that_fails() {
+        let cfg = crate::pipeline::definition::tests::cfg();
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = crate::pipeline::definition::Trigger::Connector {
+            connector: "trello".into(),
+            params: Default::default(),
+            states: vec![],
+        };
+        let lines = pipelines_lines(
+            &cfg,
+            std::slice::from_ref(&def),
+            &None,
+            &[],
+            &[],
+            &[],
+            &[(
+                "trello".to_string(),
+                Err("Trello: the secret t is not set".to_string()),
+            )],
+        );
+        assert!(
+            lines
+                .iter()
+                .any(|(ok, t)| !ok && t.contains("the secret t is not set")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn the_pipelines_lines_name_what_each_trigger_needs() {
         use crate::pipeline::templates;
         let cfg = crate::pipeline::definition::tests::cfg();
@@ -327,13 +456,14 @@ mod tests {
                 ("mini".into(), true),
                 ("devbox".into(), false),
             ],
+            &[],
         );
         assert_eq!(
             lines,
             vec![
-                (false, "Implement my Linear tickets: Linear refused the API key in the secret linear".into()),
-                (false, "Implement my Linear tickets: gh is not logged in on mini, so draft GitHub pull requests cannot be opened there (run gh auth login on mini)".into()),
-                (false, "Implement my Linear tickets: devbox is not reachable".into()),
+                (false, "Implement my tickets: Linear refused the API key in the secret linear".into()),
+                (false, "Implement my tickets: gh is not logged in on mini, so draft GitHub pull requests cannot be opened there (run gh auth login on mini)".into()),
+                (false, "Implement my tickets: devbox is not reachable".into()),
                 (true, "Review my merge requests: signed in to git.commslayer.com as hbasheer".into()),
                 (false, "Review my merge requests: devbox is not reachable".into()),
             ]
@@ -353,25 +483,26 @@ mod tests {
                 ("mini".into(), true),
                 ("devbox".into(), true),
             ],
+            &[],
         );
         assert_eq!(
             ok,
             vec![
                 (
                     true,
-                    "Implement my Linear tickets: Linear answers, 3 open tickets are yours".into()
+                    "Implement my tickets: Linear answers, 3 open tickets are yours".into()
                 ),
                 (
                     true,
-                    "Implement my Linear tickets: gh is logged in on hp, mini, devbox".into()
+                    "Implement my tickets: gh is logged in on hp, mini, devbox".into()
                 ),
                 (
                     true,
-                    "Implement my Linear tickets: hp, mini, devbox are reachable".into()
+                    "Implement my tickets: hp, mini, devbox are reachable".into()
                 ),
             ]
         );
-        let missing = pipelines_lines(&cfg, &[review], &None, &[], &[], &[]);
+        let missing = pipelines_lines(&cfg, &[review], &None, &[], &[], &[], &[]);
         assert_eq!(
             missing[0],
             (false, "Review my merge requests: git.commslayer.com was not checked; add it under pull_requests.gitlab".into())

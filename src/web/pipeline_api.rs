@@ -1,5 +1,5 @@
 use super::{ApiError, AppState};
-use crate::pipeline::definition::{Definition, Outcome};
+use crate::pipeline::definition::{Definition, Outcome, Trigger};
 use crate::pipeline::linear::Ticket;
 use crate::pipeline::record::{PrRef, Run, RunState, Subject, TicketRef};
 use crate::triggers::LINEAR_SECRET;
@@ -10,6 +10,7 @@ use axum::routing::{get, post, put};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -22,10 +23,13 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/pipelines/{id}/history", get(history))
         .route("/api/pipelines/{id}/restore", post(restore))
         .route("/api/pipelines/{id}/runs", get(runs).post(start))
+        .route("/api/pipelines/{id}/webhook-token", post(webhook_token))
+        .route("/hooks/pipeline/{id}/{token}", post(hook).head(hook_head))
         .route("/api/runs", get(all_runs))
         .route("/api/runs/{id}", axum::routing::delete(delete_run))
         .route("/api/runs/{id}/answer", post(answer))
         .route("/api/runs/{id}/retry", post(retry))
+        .route("/api/runs/{id}/accept-tool", post(accept_tool))
         .route("/api/runs/{id}/continue", post(continue_on))
         .route("/api/runs/{id}/drop", post(drop_run))
         .route("/api/runs/{id}/stop-session", post(stop_session))
@@ -110,6 +114,17 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "agents": agents,
         "mcp_servers": mcp_servers,
         "gitlab_hosts": gitlab_hosts,
+        "connectors": cfg.connectors.iter().map(|c| json!({
+            "id": c.id,
+            "name": c.name,
+            "enabled": c.enabled,
+            "params": c.params,
+            "calls": c.calls.iter().map(|(name, call)| json!({
+                "name": name,
+                "kind": call.kind(),
+                "needs": crate::connectors::client::needs_of(call),
+            })).collect::<Vec<_>>(),
+        })).collect::<Vec<_>>(),
     }))
     .into_response())
 }
@@ -325,13 +340,68 @@ struct StartReq {
     prs: Vec<String>,
 }
 
+async fn connector_subjects(
+    app: &AppState,
+    connector: &str,
+    params: &BTreeMap<String, String>,
+    tickets: &[String],
+) -> Result<Vec<Subject>, ApiError> {
+    let cfg = app.config()?;
+    let secrets = crate::secrets::Secrets::for_config(&app.cfg_path).map_err(|e| e.to_string());
+    let client = crate::connectors::client_for(
+        &cfg.connectors,
+        connector,
+        &secrets,
+        crate::mcp_read::saved_values(app),
+        Some(crate::pipeline::run::AppTools::of(app)),
+    )
+    .map_err(bad)?;
+    let mut out = Vec::new();
+    for given in tickets {
+        let given = given.trim().trim_end_matches('/');
+        // A link copied from a browser can end in a readable name after the id.
+        let mut tries = given
+            .rsplit('/')
+            .take(if given.contains("://") { 2 } else { 1 });
+        let first = tries.next().unwrap_or(given);
+        let read = |id: &str| {
+            let mut vars = params.clone();
+            vars.insert("item_id".to_string(), id.to_string());
+            let vars = crate::connectors::client::Vars(vars);
+            let client = &client;
+            async move { client.read(&vars).await }
+        };
+        let item = match (read(first).await, tries.next()) {
+            (Ok(item), _) => item,
+            (Err(e), None) => return Err(bad(format!("{given}: {e}"))),
+            (Err(e), Some(id)) => read(id).await.map_err(|_| bad(format!("{given}: {e}")))?,
+        };
+        out.push(crate::pipeline::triggers::item_subject(
+            connector, &item, params,
+        ));
+    }
+    Ok(out)
+}
+
 pub(crate) async fn subjects(
     app: &AppState,
+    def: &Definition,
     tickets: &[String],
     prs: &[String],
 ) -> Result<Vec<Subject>, ApiError> {
+    let connector = match &def.trigger {
+        Trigger::Connector {
+            connector, params, ..
+        } => Some((connector, params)),
+        Trigger::Schedule {
+            connector, params, ..
+        } if !connector.is_empty() => Some((connector, params)),
+        _ => None,
+    };
     let mut out = Vec::new();
-    if !tickets.is_empty() {
+    if let (Some((connector, params)), false) = (connector, tickets.is_empty()) {
+        out = connector_subjects(app, connector, params, tickets).await?;
+    } else if !tickets.is_empty() {
         let open = open(app).await?;
         for id in tickets {
             let t = open
@@ -340,10 +410,13 @@ pub(crate) async fn subjects(
                 .ok_or_else(|| bad(format!("{id} is not one of your open tickets in Linear")))?;
             out.push(Subject {
                 ticket: Some(TicketRef {
-                    linear_id: t.linear_id.clone(),
+                    source: String::new(),
+                    item_id: t.linear_id.clone(),
                     id: t.id.clone(),
                     title: t.title.clone(),
                     url: t.url.clone(),
+                    description: String::new(),
+                    fields: Default::default(),
                 }),
                 pr: None,
             });
@@ -379,7 +452,7 @@ async fn start(
         tickets: Vec::new(),
         prs: Vec::new(),
     });
-    let subjects = subjects(&app, &req.tickets, &req.prs).await?;
+    let subjects = subjects(&app, &def, &req.tickets, &req.prs).await?;
     let runs = app
         .pipelines
         .start(&id, subjects, "you")
@@ -412,6 +485,56 @@ async fn answer(
     Json(req): Json<AnswerReq>,
 ) -> Result<Response, ApiError> {
     acted(&app, app.pipelines.answer(&id, &req.text))
+}
+
+async fn accept_tool(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let waiting = app.pipelines.run(&id).and_then(|r| r.waiting);
+    let result = app.pipelines.accept_tool(&id);
+    if let (Ok(run), Some(w)) = (&result, waiting) {
+        keep_accepted_hash(&app, run, &w)?;
+    }
+    acted(&app, result)
+}
+
+fn keep_accepted_hash(
+    app: &AppState,
+    run: &crate::pipeline::record::Run,
+    w: &crate::pipeline::record::Waiting,
+) -> Result<(), ApiError> {
+    use crate::pipeline::definition::StepKind;
+    let Some(mut def) = app.pipelines.library().get(&run.def().id) else {
+        return Ok(());
+    };
+    let ran = run.def().step(&w.step).map(|s| s.kind.clone());
+    let saved = def.steps.iter_mut().find(|s| s.id == w.step);
+    if let (
+        Some(StepKind::Tool {
+            server: s, tool: t, ..
+        }),
+        Some(step),
+    ) = (ran, saved)
+    {
+        if let StepKind::Tool {
+            server,
+            tool,
+            schema_hash,
+            ..
+        } = &mut step.kind
+        {
+            if *server == s && *tool == t {
+                schema_hash.clone_from(&w.tool_hash);
+                let cfg = app.config()?;
+                app.pipelines
+                    .library()
+                    .save(def, &cfg)
+                    .map_err(|e| bad(e.join("; ")))?;
+            }
+        }
+    }
+    Ok(())
 }
 
 async fn retry(
@@ -481,6 +604,121 @@ async fn stop_session(
     app.recheck(&m.name);
     app.state.touch();
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+const HOOK_BODY_MAX: usize = 1024 * 1024;
+
+fn hook_secret(id: &str) -> String {
+    format!("pipeline_hook_{id}")
+}
+
+async fn webhook_token(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    let def = found(&app, &id)?;
+    use rand::Rng;
+    let bytes: [u8; 32] = rand::thread_rng().gen();
+    let token: String = bytes.iter().map(|b| format!("{b:02x}")).collect();
+    app.settings
+        .set_reserved_secrets(&[(hook_secret(&def.id), token.clone())])
+        .map_err(bad)?;
+    let cfg = app.config()?;
+    let url = crate::phone::base_url(&cfg)
+        .map(|base| format!("{base}/hooks/pipeline/{}/{token}", def.id));
+    Ok(Json(json!({ "url": url, "token": token })).into_response())
+}
+
+fn hook_error(status: StatusCode, error: String) -> Response {
+    (status, Json(json!({ "error": error }))).into_response()
+}
+
+// One answer for every way in that is not allowed, so a wrong token says nothing about a pipeline.
+fn hook_pipeline(app: &AppState, id: &str, token: &str) -> Option<Definition> {
+    let def = app.pipelines.library().get(id)?;
+    if !def.enabled || !matches!(def.trigger, Trigger::Webhook { .. }) {
+        return None;
+    }
+    let store = app.secrets().ok()?;
+    let saved = store.get(&hook_secret(id))?;
+    crate::connectors::net::same(saved, token).then_some(def)
+}
+
+async fn hook_head(
+    AxState(app): AxState<Arc<AppState>>,
+    Path((id, token)): Path<(String, String)>,
+) -> StatusCode {
+    match hook_pipeline(&app, &id, &token) {
+        Some(_) => StatusCode::OK,
+        None => StatusCode::NOT_FOUND,
+    }
+}
+
+fn hook_subject(def: &Definition, body: &Value) -> Result<Subject, String> {
+    let Trigger::Webhook { map } = &def.trigger else {
+        return Err("this pipeline does not take webhooks".into());
+    };
+    let field = |name: &str| {
+        let at = map.get(name).map_or(name, String::as_str);
+        crate::connectors::map::path(body, at)
+            .map(|v| crate::connectors::map::text_of(&v))
+            .unwrap_or_default()
+    };
+    let (id, title) = (field("id"), field("title"));
+    if id.trim().is_empty() {
+        return Err("the body has no id".into());
+    }
+    if title.trim().is_empty() {
+        return Err("the body has no title".into());
+    }
+    Ok(Subject {
+        ticket: Some(TicketRef {
+            source: crate::pipeline::run::WEBHOOK_SOURCE.to_string(),
+            item_id: crate::pipeline::prompts::one_line(&id),
+            id: crate::pipeline::prompts::one_line(&id),
+            title: crate::pipeline::prompts::one_line(&title),
+            url: crate::connectors::map::clean_url(&field("url")),
+            description: field("description"),
+            fields: Default::default(),
+        }),
+        pr: None,
+    })
+}
+
+async fn hook(
+    AxState(app): AxState<Arc<AppState>>,
+    Path((id, token)): Path<(String, String)>,
+    body: axum::body::Bytes,
+) -> Response {
+    let Some(def) = hook_pipeline(&app, &id, &token) else {
+        return hook_error(StatusCode::NOT_FOUND, "there is no such address".into());
+    };
+    if !app.pipelines.hook_allowed(&id, chrono::Local::now()) {
+        return hook_error(StatusCode::TOO_MANY_REQUESTS, "too many requests".into());
+    }
+    if body.len() > HOOK_BODY_MAX {
+        return hook_error(
+            StatusCode::PAYLOAD_TOO_LARGE,
+            "the body is over 1 MB".into(),
+        );
+    }
+    let Ok(value) = serde_json::from_slice::<Value>(&body) else {
+        return hook_error(StatusCode::BAD_REQUEST, "the body is not JSON".into());
+    };
+    let subject = match hook_subject(&def, &value) {
+        Ok(subject) => subject,
+        Err(e) => return hook_error(StatusCode::BAD_REQUEST, e),
+    };
+    if app.pipelines.has_run_for(&id, &subject.key()) {
+        return Json(json!({ "started": false })).into_response();
+    }
+    match app.pipelines.start(&id, vec![subject], "a webhook") {
+        Ok(_) => {
+            app.state.touch();
+            (StatusCode::ACCEPTED, Json(json!({ "started": true }))).into_response()
+        }
+        Err(e) => hook_error(StatusCode::CONFLICT, e),
+    }
 }
 
 async fn settings(

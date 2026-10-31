@@ -1,0 +1,26 @@
+id: asana
+name: Asana
+base_url: https://app.asana.com/api/1.0
+headers:
+  Authorization: 'Bearer ${secret:asana_token}'
+params:
+  - { name: workspace, label: Workspace, options: workspaces }
+calls:
+  workspaces:
+    request: { method: GET, path: /workspaces }
+    items: data
+    map: { id: gid, name: name }
+  list:
+    request:
+      method: GET
+      path: /tasks
+      query: { assignee: me, workspace: '{{workspace}}', completed_since: now, limit: '100', opt_fields: 'name,notes,permalink_url,completed' }
+    items: data
+    map: { item_id: gid, title: name, url: permalink_url, description: notes }
+    page: { style: cursor, param: offset, next: next_page.offset }
+  read:
+    request: { method: GET, path: '/tasks/{{item_id}}', query: { opt_fields: 'name,notes,permalink_url,completed' } }
+    map: { title: data.name, url: data.permalink_url, description: data.notes, closed: data.completed }
+  comment:
+    kind: change
+    request: { method: POST, path: '/tasks/{{item_id}}/stories', body: { data: { text: '{{value}}' } } }

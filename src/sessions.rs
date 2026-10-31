@@ -1185,7 +1185,7 @@ mod tests {
             .unwrap();
         assert_eq!(
             fake.calls().pop().unwrap().last().unwrap(),
-            r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"; export PATH; tmux kill-session -t '=hp-app'"#
+            r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/snap/bin:$HOME/.local/bin"; export PATH; tmux kill-session -t '=hp-app'"#
         );
     }
 
@@ -1259,7 +1259,7 @@ mod tests {
         assert_eq!(remote[1], "-t");
         assert_eq!(
             remote.last().unwrap(),
-            r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:$HOME/.local/bin"; export PATH; tmux -u -T clipboard attach -t '=hp-app' \; set-option -w window-size latest"#
+            r#"PATH="$PATH:/opt/homebrew/bin:/usr/local/bin:/snap/bin:$HOME/.local/bin"; export PATH; tmux -u -T clipboard attach -t '=hp-app' \; set-option -w window-size latest"#
         );
         assert_eq!(
             s.attach_argv(&machine(true), "hp-app"),

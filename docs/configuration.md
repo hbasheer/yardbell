@@ -213,14 +213,61 @@ Every key is optional. The values above are the defaults. Older configs may stil
 | `pipeline_finished` | `true` | Notify with the first line of a pipeline run's report. |
 | `proposals` | `true` | Notify when a proposal waits in the Proposals inbox. |
 
+### `connectors` (optional)
+
+Outside tools pipelines can take work from and call. **Settings, Connections** edits them, and
+[Connectors](automation.md#connectors) explains each key with examples.
+
+```yaml
+connectors:
+  - id: tracker                       # used in pipelines
+    name: Tracker
+    enabled: true                     # default true
+    base_url: https://api.example.com/1  # https, or http with allow_private
+    allow_private: false              # may reach private and mesh addresses
+    headers:
+      Authorization: 'Bearer ${secret:tracker}'  # a login header must use a secret
+    params:
+      - { name: board, label: Board, options: boards }  # a choice in the builder
+    calls:
+      list:
+        request: { method: GET, path: /items, query: { open: 'true' } }
+        map: { item_id: id, title: name, state: status }
+        page: { style: number, param: page, size: 50, max_pages: 20 }
+```
+
+Plain header values are allowed only for `accept`, `content-type`, `user-agent` and names ending
+`-version`. Paths must start with `/`. A call may have at most 3 `before` requests, and `max_pages` runs
+from 1 to 100.
+
+A connector may go through a server under `mcp_servers` instead of an address. It then has `server`
+in place of `base_url` and no `headers`, and each call has `tool` and `arguments` in place of
+`request`. Mark a call that only reads with `kind: lookup`. A call with no `kind` counts as a change.
+`items: lists[].cards` reads rows grouped under a parent, and `_parent.id` in a `map` reads from that
+parent.
+
+```yaml
+connectors:
+  - id: cards
+    server: tracker
+    calls:
+      list:
+        tool: readCards
+        kind: lookup
+        arguments: { board: '{{board}}' }
+        items: lists[].cards
+        map: { item_id: id, title: name, state: _parent.id }
+```
+
 ### `mcp_servers` (optional)
 
 Other MCP servers that Claude Code sessions started by Yardbell get, through `--mcp-config`. The
-**MCP servers for sessions** section of the Settings page edits this list.
+**Connections** section of the Settings page edits this list.
 
 ```yaml
 mcp_servers:
   - name: github                                       # letters, digits, - and _
+    # allow_private: true    only for your own server: lets sign-in and calls reach a private address
     command: npx -y @modelcontextprotocol/server-github  # runs on the machine; split on spaces
     env: {GITHUB_PERSONAL_ACCESS_TOKEN: '${secret:github}'}
   - name: linear
@@ -245,7 +292,7 @@ and files left by an older list are removed after 30 days.
 
 Named secrets live in `secrets.yml`, in the same folder as `yardbell.yml`
 (`~/.config/yardbell/secrets.yml` by default). Yardbell saves it readable only by your account
-(mode 600) and makes that folder private (mode 700). The **Secrets** list under **MCP servers** in
+(mode 600) and makes that folder private (mode 700). The **Secrets** list under **Connections** in
 Settings adds, replaces and deletes them. A value is write-only there: once saved it is never
 shown again, only its name, the date it was set and the servers that use it.
 
@@ -421,6 +468,8 @@ on, so only that machine needs to reach GitLab. Any other host goes to `gh` as a
 Enterprise keeps working, and a GitLab host that is not listed shows no badge.
 
 ```yaml
+# github_via: gh or token. token needs github_token, naming a saved secret.
+# gitlab_via: token or glab. glab needs no token on its hosts.
 pull_requests:
   enabled: true        # false: no badges, no cards, gh and GitLab are never asked
   poll_seconds: 120    # how often each branch is asked, at least 30
@@ -634,6 +683,8 @@ Yardbell refuses to start or save an invalid file and says why:
 | `pull_requests.gitlab entry 1 needs a host` | add `host:` |
 | `pull_requests.gitlab host "https://x/y" must be a host name only, like git.example.com` | drop the scheme and the path |
 | `pull_requests.gitlab lists git.example.com twice` | keep one entry per host |
+| `pull_requests.github_token is needed to read GitHub with a token` | add one, or set `github_via: gh` |
+| `pull_requests.github_token must name a saved secret` | save the token as a secret and write `${secret:NAME}` |
 | `pull_requests.gitlab git.example.com needs a token` | add `token: '${secret:NAME}'` |
 | `pull_requests.gitlab git.example.com: url must start with https:// or http:// and have no path` | write `url` as `https://host` or `https://host:port` |
 | `trigger "x" needs exactly one of schedule, linear or github` | give each trigger one source |

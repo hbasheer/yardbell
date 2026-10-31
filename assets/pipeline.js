@@ -1,5 +1,5 @@
 import { html, render, nothing } from "/vendor/lit-html/lit-html.js";
-import { canvas, settle, nodeState, triggerWords, icon, toWorld, centreOf, NODE_W, KINDS, WORDS } from "/pipeline-canvas.js";
+import { canvas, settle, nodeState, triggerWords, setConnectors, icon, toWorld, centreOf, NODE_W, KINDS, WORDS } from "/pipeline-canvas.js";
 
 const $ = (id) => document.getElementById(id);
 const OUTCOMES = [["pass", "On pass"], ["fail", "On fail"], ["needs_you", "On needs you"]];
@@ -153,7 +153,7 @@ function card(p) {
 }
 
 const TEMPLATE_HINTS = {
-  "Implement my Linear tickets": "Plan, implement, review and fix, QA, push a draft, move the ticket, report",
+  "Implement my tickets": "Plan, implement, review and fix, QA, push a draft, move the ticket, report",
   "Review my merge requests": "Understand, root cause, security, test on devbox, report",
 };
 
@@ -297,7 +297,7 @@ function needBox(run, d) {
       <textarea id="pl-answer" rows="3" placeholder="Your answer" .value=${text} @input=${(e) => { answers.set(run.id, e.target.value); draw(); }}></textarea>` : nothing}
     <div class="pl-need-actions">
       <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Drop</button>
-      <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>Retry step</button>
+      ${w.kind === "tool_changed" ? html`<button class="btn primary" type="button" ?disabled=${busy} @click=${() => act(run, "accept-tool")}>Accept and run</button>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>Retry step</button>`}
       <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "fail" })}>Continue on fail</button>
       <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "pass" })}>Continue on pass</button>
       ${answerable ? html`<button class="btn primary" type="button" ?disabled=${busy || !text.trim()} @click=${() => act(run, "answer", { text })}>Send answer</button>` : nothing}
@@ -454,20 +454,218 @@ function agentFields(step, others, redraw) {
       ${ws.kind === "copy" ? field("Copy of", stepSelect(ws.from, others, (v) => { step.workspace = { kind: "copy", from: v }; redraw(); })) : nothing}
     </div>
     <label class="check"><input type="checkbox" name="read_only" .checked=${!!step.read_only} @change=${(e) => { step.read_only = e.target.checked; redraw(); }}>Review: new read-only session. Other steps share the run's one session.</label>
-    ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "Saved with the step; agents do not get them yet.") : nothing}`;
+    ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "An agent signs in to a server itself, on its own machine. Signing in here is for Yardbell's own steps. Saved with the step; agents do not get them yet.") : nothing}`;
+}
+
+// What a connection's lists hold, kept per address so a redraw does not ask again.
+const connectorChoices = new Map();
+
+function choicesFor(id, call, params = {}) {
+  const query = new URLSearchParams(Object.entries(params).filter(([, v]) => v)).toString();
+  const url = `/api/settings/connectors/${encodeURIComponent(id)}/options/${encodeURIComponent(call)}${query ? `?${query}` : ""}`;
+  if (!connectorChoices.has(url)) {
+    connectorChoices.set(url, { loading: true });
+    api("GET", url)
+      .then((list) => connectorChoices.set(url, { list }), (err) => connectorChoices.set(url, { error: err.message }))
+      .finally(draw);
+  }
+  return connectorChoices.get(url);
+}
+
+const NO_CONNECTIONS = html`<p class="help">No connections yet. Add one under <a href="/settings#connections">Settings, Connections</a>.</p>`;
+
+function connectionField(step, redraw) {
+  const value = step.kind === "tool" ? `server:${step.server}` : `connector:${step.connector}`;
+  const pick = (chosen) => {
+    const [kind, name] = [chosen.slice(0, chosen.indexOf(":")), chosen.slice(chosen.indexOf(":") + 1)];
+    for (const key of ["connector", "call", "params", "server", "tool", "arguments", "call_kind", "schema_hash"]) delete step[key];
+    if (kind === "server") Object.assign(step, { kind: "tool", server: name, tool: "", arguments: {}, call_kind: "change", schema_hash: "" });
+    else Object.assign(step, { kind: "call", connector: name, call: "", params: {} });
+    redraw();
+  };
+  return field("Connection", html`<select name="connection" @change=${(e) => pick(e.target.value)}>
+    ${data.connectors.length ? html`<optgroup label="Actions you set up">${data.connectors.map((c) => html`<option value=${`connector:${c.id}`} ?selected=${value === `connector:${c.id}`}>${c.name}</option>`)}</optgroup>` : nothing}
+    ${data.mcp_servers.length ? html`<optgroup label="Any tool on a signed-in server">${data.mcp_servers.map((m) => html`<option value=${`server:${m}`} ?selected=${value === `server:${m}`}>${m}</option>`)}</optgroup>` : nothing}
+  </select>`);
+}
+
+function updateFields(step, redraw) {
+  const t = draft.trigger;
+  const from = t.kind === "connector" || (t.kind === "schedule" && t.connector) ? data.connectors.find((c) => c.id === t.connector) : null;
+  const typed = field("To the state", html`<input name="state" .value=${step.state || ""} @input=${(e) => { step.state = e.target.value; redraw(); }}>`, "The state's name in Linear, or its id in another tool.");
+  let target = typed;
+  if (from?.calls.some((c) => c.name === "states")) {
+    const found = choicesFor(from.id, "states", t.params);
+    if (found.list) {
+      target = field("To the state", html`<select name="state" @change=${(e) => { step.state = e.target.value; redraw(); }}>
+        <option value="" ?selected=${!step.state}>Pick a state</option>
+        ${found.list.map((s) => html`<option value=${s.id} ?selected=${s.id === step.state}>${s.name}</option>`)}
+      </select>`);
+    }
+  }
+  return html`<div class="pl-fields">
+    ${field("Action", html`<select name="action" @change=${(e) => { step.action = e.target.value; redraw(); }}>
+      <option value="move" ?selected=${step.action === "move"}>Move the ticket</option>
+      <option value="comment" ?selected=${step.action === "comment"}>Comment with the run's report</option>
+    </select>`, "It uses whichever connection started the run. In Linear, a comment is drafted for you to post.")}
+    ${step.action === "move" ? target : nothing}
+  </div>`;
+}
+
+function connectorSelect(value, change) {
+  return html`<select name="connector" @change=${(e) => change(e.target.value)}>
+    ${value && !data.connectors.some((c) => c.id === value) ? html`<option value=${value} selected>${value}</option>` : nothing}
+    ${data.connectors.map((c) => html`<option value=${c.id} ?selected=${c.id === value}>${c.name}${c.enabled ? "" : " (switched off)"}</option>`)}
+  </select>`;
+}
+
+function statePicks(t, connector, redraw) {
+  const setStates = (list) => { t.states = list; redraw(); };
+  const typed = field("In the states", html`<input name="states" placeholder="Empty means every item" .value=${(t.states || []).join(", ")}
+    @change=${(e) => setStates(e.target.value.split(",").map((x) => x.trim()).filter(Boolean))}>`, "Empty means every item.");
+  if (!connector.calls.some((c) => c.name === "states")) return typed;
+  const found = choicesFor(connector.id, "states", t.params);
+  if (found.loading) return html`<p class="help">Reading ${connector.name}...</p>`;
+  if (found.error) return html`${typed}<p class="help">The choices could not be read. Pick the other options first, or type the ids here.</p>`;
+  const chosen = t.states || [];
+  return field("In the states", html`<div class="pl-state-list">${found.list.map((s) => html`<label class="check pl-state-pick"><input type="checkbox" value=${s.id} .checked=${chosen.includes(s.id)}
+    @change=${(e) => setStates(e.target.checked ? [...chosen, s.id] : chosen.filter((x) => x !== s.id))}>${s.name}</label>`)}</div>`, "None ticked means every item.");
+}
+
+function connectorFields(t, redraw) {
+  if (!data.connectors.length) return NO_CONNECTIONS;
+  const connector = data.connectors.find((c) => c.id === t.connector);
+  const params = t.params || (t.params = {});
+  const setParam = (name, value) => {
+    if (value) params[name] = value;
+    else delete params[name];
+    t.states = [];
+    redraw();
+  };
+  return html`
+    ${paramFields(connector, params, setParam)}
+    ${connector ? statePicks(t, connector, redraw) : nothing}`;
+}
+
+function paramFields(connector, params, setParam) {
+  const needed = connector?.calls?.find((c) => c.name === "list")?.needs || [];
+  return html`${(connector?.params || []).map((p) => {
+      if (!p.options) {
+        return field(p.label || p.name, html`<input name=${`param-${p.name}`} .value=${params[p.name] || ""} @change=${(e) => setParam(p.name, e.target.value.trim())}>`);
+      }
+      const found = choicesFor(connector.id, p.options);
+      return field(p.label || p.name, html`<select name=${`param-${p.name}`} @change=${(e) => setParam(p.name, e.target.value)}>
+        <option value="" ?selected=${!params[p.name]}>${needed.includes(p.name) ? "Pick one" : "Any"}</option>
+        ${params[p.name] && !found.list?.some((o) => o.id === params[p.name]) ? html`<option value=${params[p.name]} selected>${params[p.name]}</option>` : nothing}
+        ${(found.list || []).map((o) => html`<option value=${o.id} ?selected=${o.id === params[p.name]}>${o.name}</option>`)}
+      </select>`, found.error ? "The choices could not be read. Test the connection in Settings." : "");
+    })}`;
+}
+
+let hookAddress = null;
+
+function newHookAddress(d) {
+  doing(async () => {
+    hookAddress = await api("POST", `/api/pipelines/${encodeURIComponent(d.id)}/webhook-token`);
+  });
+}
+
+function webhookFields(d, redraw) {
+  const t = d.trigger;
+  const map = t.map || (t.map = {});
+  const address = hookAddress?.url || (hookAddress ? `/hooks/pipeline/${d.id}/${hookAddress.token}` : "");
+  return html`<p class="help">Yardbell listens on this machine and your mesh. An outside service cannot reach this address without a tunnel you set up.</p>
+    ${address ? html`<p class="pl-hook-address"><code>${address}</code></p><p class="help">Copy it now: it is shown only this once. It works once this is saved and switched on.</p>` : nothing}
+    <button class="btn" type="button" id="pl-hook-new" ?disabled=${busy} @click=${() => newHookAddress(d)}>New address</button>
+    <p class="help">A new address replaces the old one. The body is JSON with <code>id</code> and <code>title</code>, and optional <code>url</code> and <code>description</code>. If yours differs, name where each one is:</p>
+    ${["id", "title", "url", "description"].map((name) => field(name, html`<input name=${`map-${name}`} placeholder=${name} .value=${map[name] || ""} autocapitalize="off" spellcheck="false"
+      @change=${(e) => { if (e.target.value.trim()) map[name] = e.target.value.trim(); else delete map[name]; redraw(); }}>`))}`;
+}
+
+function callFields(step, redraw) {
+  if (!data.connectors.length && !data.mcp_servers.length) return NO_CONNECTIONS;
+  const connector = data.connectors.find((c) => c.id === step.connector);
+  const call = connector?.calls.find((c) => c.name === step.call);
+  const params = step.params || (step.params = {});
+  return html`<div class="pl-fields">
+    ${field("Call", html`<select name="call" @change=${(e) => { step.call = e.target.value; redraw(); }}>
+      <option value="" ?selected=${!step.call}>Pick a call</option>
+      ${(connector?.calls || []).map((c) => html`<option value=${c.name} ?selected=${c.name === step.call}>${c.name}, ${c.kind === "lookup" ? "reads" : "changes"}</option>`)}
+    </select>`, call?.kind === "change" ? "It changes something in the tool, and your Dispatch rules can refuse it." : "")}
+    ${(call?.needs || []).map((name) => field(name, html`<input name=${`param-${name}`} .value=${params[name] || ""} @input=${(e) => { params[name] = e.target.value; redraw(); }}>`, "You can use {{ticket}}, {{title}}, {{url}}, {{branch}} and {{report}}."))}
+  </div>`;
+}
+
+// What each server offers, kept per name so a redraw does not ask again.
+const serverTools = new Map();
+
+function toolsOf(server, redraw) {
+  if (!server) return { tools: [] };
+  if (!serverTools.has(server)) {
+    serverTools.set(server, { loading: true, tools: [] });
+    api("GET", `/api/settings/mcp/servers/${encodeURIComponent(server)}/tools`)
+      .then((out) => serverTools.set(server, { tools: out.tools }))
+      .catch((err) => serverTools.set(server, { error: err.message, tools: [] }))
+      .finally(redraw);
+  }
+  return serverTools.get(server);
+}
+
+function argumentField(step, name, schema, required, redraw) {
+  const args = step.arguments || (step.arguments = {});
+  const hint = [required ? "Required." : "", schema.description || ""].filter(Boolean).join(" ");
+  if (schema.type === "string" && !schema.enum) {
+    return field(name, html`<input name=${`arg-${name}`} .value=${args[name] ?? ""} placeholder="{{ticket}} fills in from the run" @input=${(e) => {
+      if (e.target.value) args[name] = e.target.value;
+      else delete args[name];
+    }}>`, hint);
+  }
+  const shown = args[name] === undefined ? "" : JSON.stringify(args[name], null, 2);
+  return field(`${name} (JSON)`, html`<textarea name=${`arg-${name}`} rows="3" spellcheck="false" .value=${shown} @change=${(e) => {
+    const text = e.target.value.trim();
+    if (!text) { delete args[name]; return; }
+    try {
+      args[name] = JSON.parse(text);
+      e.target.setCustomValidity("");
+    } catch {
+      e.target.setCustomValidity("This is not valid JSON");
+      e.target.reportValidity();
+    }
+  }}></textarea>`, hint);
+}
+
+function toolFields(step, redraw) {
+  const listed = toolsOf(step.server, redraw);
+  const tool = listed.tools.find((t) => t.name === step.tool);
+  const properties = tool?.input_schema?.properties || {};
+  const required = tool?.input_schema?.required || [];
+  const choose = (name) => {
+    const picked = listed.tools.find((t) => t.name === name);
+    step.tool = name;
+    step.arguments = {};
+    step.schema_hash = picked?.schema_hash || "";
+    step.call_kind = picked?.read_only_hint ? "lookup" : "change";
+    redraw();
+  };
+  return html`<div class="pl-fields">
+    ${listed.error || listed.loading ? html`<p class="help">${listed.error || "Asking the server for its tools."}</p>` : nothing}
+    ${field("Tool", html`<select name="tool" @change=${(e) => choose(e.target.value)}>
+      <option value="" ?selected=${!step.tool}>Pick a tool</option>
+      ${listed.tools.map((t) => html`<option value=${t.name} ?selected=${t.name === step.tool}>${t.name}</option>`)}
+    </select>`, tool?.description || "")}
+    ${tool ? Object.entries(properties).map(([name, schema]) => argumentField(step, name, schema, required.includes(name), redraw)) : nothing}
+    ${tool ? html`<label class="check"><input type="checkbox" name="only_reads" .checked=${step.call_kind === "lookup"} @change=${(e) => { step.call_kind = e.target.checked ? "lookup" : "change"; redraw(); }}>Only reads</label>
+      <small class="help">A tool's own label is only a hint, so check it. A step that changes things can be refused by your Dispatch rules.</small>` : nothing}
+  </div>`;
 }
 
 function kindFields(step, others, redraw) {
   switch (step.kind) {
+    case "call": return html`${connectionField(step, redraw)}${callFields(step, redraw)}`;
+    case "tool": return html`${connectionField(step, redraw)}${toolFields(step, redraw)}`;
     case "agent": return agentFields(step, others, redraw);
     case "plan": return field("Dispatch may pick from", picks(data.machines, step.machines || [], (list) => { step.machines = list; redraw(); }, "plan"), "None ticked means any machine.");
-    case "linear": return html`<div class="pl-fields">
-      ${field("Action", html`<select name="action" @change=${(e) => { step.action = e.target.value; redraw(); }}>
-        <option value="move" ?selected=${step.action === "move"}>Move the ticket</option>
-        <option value="comment" ?selected=${step.action === "comment"}>Draft a comment for me</option>
-      </select>`)}
-      ${step.action === "move" ? field("To the state", html`<input name="state" .value=${step.state || ""} @input=${(e) => { step.state = e.target.value; redraw(); }}>`) : nothing}
-    </div>`;
+    case "update": return updateFields(step, redraw);
     case "wait": return field("Message", html`<textarea name="message" rows="2" .value=${step.message || ""} @input=${(e) => { step.message = e.target.value; redraw(); }}></textarea>`);
     default: return nothing;
   }
@@ -503,18 +701,32 @@ function stepForm(step, d, redraw) {
 
 function triggerFields(d, redraw) {
   const t = d.trigger;
-  const kinds = [["manual", "By hand"], ["schedule", "On a schedule"], ["linear", "A Linear ticket"], ["github_review", "A GitHub review request"], ["gitlab_reviewer", "A GitLab merge request reviewer"]];
+  const kinds = [["manual", "By hand"], ["schedule", "On a schedule"], ["linear", "New ticket from a connection"], ["webhook", "A webhook"], ["github_review", "A GitHub review request"], ["gitlab_reviewer", "A GitLab merge request reviewer"]];
   const setKind = (k) => {
-    d.trigger = k === "schedule" ? { kind: k, schedule: "", state: "" } : k === "linear" ? { kind: k, assigned: true, states: [] } : k === "gitlab_reviewer" ? { kind: k, host: data.gitlab_hosts[0] || "" } : { kind: k };
+    d.trigger = newTrigger(k);
     redraw();
   };
   return html`<fieldset class="pl-step-form pl-trigger-form">
     <legend>Start when</legend>
     <div class="pl-fields">
-      ${field("Starts", html`<select name="trigger" @change=${(e) => setKind(e.target.value)}>${kinds.map(([k, l]) => html`<option value=${k} ?selected=${t.kind === k}>${l}</option>`)}</select>`)}
+      ${field("Starts", html`<select name="trigger" @change=${(e) => setKind(e.target.value)}>${kinds.map(([k, l]) => html`<option value=${k} ?selected=${t.kind === k || (k === "linear" && t.kind === "connector")}>${l}</option>`)}</select>`)}
+      ${t.kind === "linear" || t.kind === "connector" ? field("From", html`<select name="ticket-source" @change=${(e) => {
+        d.trigger = e.target.value === "linear" ? newTrigger("linear") : { kind: "connector", connector: e.target.value, params: {}, states: [] };
+        redraw();
+      }}>
+        <option value="linear" ?selected=${t.kind === "linear"}>Linear</option>
+        ${data.connectors.map((c) => html`<option value=${c.id} ?selected=${t.kind === "connector" && t.connector === c.id}>${c.name}</option>`)}
+      </select>`) : nothing}
       ${t.kind === "schedule" ? html`
         ${field("Schedule", html`<input name="schedule" placeholder="weekdays 02:00" .value=${t.schedule || ""} @input=${(e) => { t.schedule = e.target.value; redraw(); }}>`)}
         ${field("With my open tickets in", html`<input name="state" placeholder="Todo, or empty for none" .value=${t.state || ""} @input=${(e) => { t.state = e.target.value; redraw(); }}>`)}` : nothing}
+      ${t.kind === "schedule" && data.connectors.length ? field("Read them from", html`<select name="schedule-source" @change=${(e) => { t.connector = e.target.value; redraw(); }}>
+        <option value="" ?selected=${!t.connector}>Linear</option>
+        ${data.connectors.map((c) => html`<option value=${c.id} ?selected=${c.id === t.connector}>${c.name}</option>`)}
+      </select>`) : nothing}
+      ${t.kind === "schedule" && t.connector ? paramFields(data.connectors.find((c) => c.id === t.connector), t.params || (t.params = {}), (name, value) => { if (value) t.params[name] = value; else delete t.params[name]; redraw(); }) : nothing}
+      ${t.kind === "connector" ? connectorFields(t, redraw) : nothing}
+      ${t.kind === "webhook" ? webhookFields(d, redraw) : nothing}
       ${t.kind === "linear" ? field("In the states", html`<input name="states" placeholder="Todo, In Progress" .value=${(t.states || []).join(", ")}
         @change=${(e) => { t.states = e.target.value.split(",").map((x) => x.trim()).filter(Boolean); redraw(); }}>`, "Empty means when it is assigned to you.") : nothing}
       ${t.kind === "linear" ? html`<label class="check"><input type="checkbox" name="assigned" .checked=${!!t.assigned} @change=${(e) => { t.assigned = e.target.checked; redraw(); }}>Only tickets assigned to me</label>` : nothing}
@@ -544,9 +756,9 @@ function save() {
 }
 
 const LIBRARY = [
-  ["Start when", [["manual", "manual", "By hand", "From Run now"], ["schedule", "schedule", "Schedule", "Weekdays, every day, a time"], ["linear", "ticket", "Linear ticket", "Assigned to me, or a state"], ["github_review", "pull", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "pull", "GitLab reviewer", "An MR adds me as reviewer"]]],
+  ["Start when", [["manual", "manual", "By hand", "From Run now"], ["schedule", "schedule", "Schedule", "Weekdays, every day, a time"], ["linear", "ticket", "New ticket", "From Linear, Trello or any connection"], ["webhook", "call", "A webhook", "Another system calls an address"], ["github_review", "pull", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "pull", "GitLab reviewer", "An MR adds me as reviewer"]]],
   ["Agent", [["agent", "agent", "Agent step", "Your instructions, on a machine"], ["plan", "plan", "Plan", "Picks machine, folder and branch"]]],
-  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["linear", "linear", "Linear", "Move the ticket, or draft a comment"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
+  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["update", "update", "Update the ticket", "Move or comment, wherever it came from"], ["call", "call", "Use a connected tool", "Do one action in a tool, with no agent"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
   ["You", [["wait", "wait", "Wait for me", "Continues when you say"]]],
 ];
 
@@ -576,8 +788,17 @@ function select(id) {
   draw();
 }
 
+function newTrigger(kind) {
+  if (kind === "schedule") return { kind, schedule: "", state: "" };
+  if (kind === "linear") return { kind, assigned: true, states: [] };
+  if (kind === "gitlab_reviewer") return { kind, host: data.gitlab_hosts[0] || "" };
+  if (kind === "connector") return { kind, connector: data.connectors[0]?.id || "", params: {}, states: [] };
+  if (kind === "webhook") return { kind, map: {} };
+  return { kind };
+}
+
 function pickTrigger(kind) {
-  draft.trigger = kind === "schedule" ? { kind, schedule: "", state: "" } : kind === "linear" ? { kind, assigned: true, states: [] } : kind === "gitlab_reviewer" ? { kind, host: data.gitlab_hosts[0] || "" } : { kind };
+  draft.trigger = newTrigger(kind);
   select("@start");
 }
 
@@ -666,14 +887,17 @@ function slug(name, taken) {
   for (let n = 2; ; n++) if (!taken.includes(`${base}-${n}`)) return `${base}-${n}`;
 }
 
-function blank(kind) {
+function blank(wanted) {
+  const kind = wanted === "call" && !data.connectors.length && data.mcp_servers.length ? "tool" : wanted;
   const names = draft.steps.map((s) => s.name.toLowerCase());
   let name = KINDS[kind];
   for (let n = 2; names.includes(name.toLowerCase()); n++) name = `${KINDS[kind]} ${n}`;
   const fields = {
     agent: { instructions: "", agent: "", machine: { pick: [] }, workspace: { kind: "new_worktree" }, session: "new", read_only: false, mcp_servers: [] },
     plan: { machines: [] },
-    linear: { action: "move", state: "In Review" },
+    update: { action: "move", state: "In Review" },
+    call: { connector: data.connectors[0]?.id || "", call: "", params: {} },
+    tool: { server: data.mcp_servers[0] || "", tool: "", arguments: {}, call_kind: "change", schema_hash: "" },
     wait: { message: "" },
   }[kind] || {};
   return { id: slug(name, draft.steps.map((s) => s.id)), name, kind, ...fields, max_runs: 2, minutes: null, next: { pass: "end", fail: "wait", needs_you: "wait" }, x: 0, y: 0 };
@@ -1008,10 +1232,14 @@ function runNow(d) {
 
 function runNowPanel(d) {
   const linear = d.trigger.kind === "linear";
-  const optional = d.trigger.kind === "manual";
+  const tool = d.trigger.kind === "connector";
+  const hook = d.trigger.kind === "webhook";
+  const optional = d.trigger.kind === "manual" || hook;
   const start = () => doing(async () => {
     const items = subjects.split(/[\s,]+/).map((x) => x.trim()).filter(Boolean);
-    const body = { tickets: items.filter((x) => !x.startsWith("https://")), prs: items.filter((x) => x.startsWith("https://")) };
+    const body = tool
+      ? { tickets: items, prs: [] }
+      : { tickets: items.filter((x) => !x.startsWith("https://")), prs: items.filter((x) => x.startsWith("https://")) };
     const out = await api("POST", `/api/pipelines/${encodeURIComponent(d.id)}/runs`, body);
     subjects = "";
     show.runNow = false;
@@ -1019,7 +1247,8 @@ function runNowPanel(d) {
     await load();
   });
   return html`<div class="pl-panel" id="pl-run-now-panel">
-    ${field(optional ? "Ticket ids or links (optional)" : linear ? "Ticket ids" : "Merge or pull request links", html`<textarea rows="2" id="pl-subjects" placeholder=${linear || optional ? "COM-1234 COM-1240" : "https://gitlab.example.com/group/app/-/merge_requests/87"}
+    ${hook ? html`<p class="help">Starts one run with no item.</p>` : tool ? field("Item ids or links", html`<textarea rows="2" id="pl-subjects" placeholder="abc123"
+      .value=${subjects} @input=${(e) => { subjects = e.target.value; draw(); }}></textarea>`, "One run each.") : field(optional ? "Ticket ids or links (optional)" : linear ? "Ticket ids" : "Merge or pull request links", html`<textarea rows="2" id="pl-subjects" placeholder=${linear || optional ? "COM-1234 COM-1240" : "https://gitlab.example.com/group/app/-/merge_requests/87"}
       .value=${subjects} @input=${(e) => { subjects = e.target.value; draw(); }}></textarea>`, optional ? "One run each, or leave it empty for one run with no ticket." : "One run each. Ticket ids and links can be mixed.")}
     <div class="pl-panel-actions">
       <button class="btn quiet" type="button" @click=${() => { show.runNow = false; draw(); }}>Cancel</button>
@@ -1193,6 +1422,7 @@ async function load() {
   const asked = params().get("proposal");
   const [list, runs] = await Promise.all([api("GET", "/api/pipelines"), api("GET", "/api/runs")]);
   data = list;
+  setConnectors(list.connectors);
   allRuns = runs.runs;
   if (asked) {
     if (proposal?.key !== asked) await loadProposal(asked);

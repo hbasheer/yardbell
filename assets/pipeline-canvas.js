@@ -16,7 +16,9 @@ export const KINDS = {
   agent: "Agent step",
   plan: "Plan",
   push: "Push and draft PR",
-  linear: "Linear",
+  update: "Update the ticket",
+  call: "Use a connected tool",
+  tool: "Use a connected tool",
   report: "Report to me",
   wait: "Wait for me",
 };
@@ -30,7 +32,9 @@ const ICONS = {
   agent: "M2.5 3.5h11v9h-11z M5 6.5l2 1.5-2 1.5 M8.5 10h2.5",
   plan: "M8 2.5v11 M3.5 4.5h6.5l2 1.75-2 1.75H3.5z",
   push: "M8 13V3.5 M4.5 7 8 3.5 11.5 7",
-  linear: "M3 3.5h10v9H3z M5.5 8l1.75 1.75L10.5 6.5",
+  update: "M3 3.5h10v9H3z M5.5 8l1.75 1.75L10.5 6.5",
+  call: "M2.5 8h8 M8 5l3 3-3 3 M13.5 3v10",
+  tool: "M9.5 3.5a3 3 0 0 0-3.8 3.8L2.5 10.5l3 3 3.2-3.2a3 3 0 0 0 3.8-3.8l-2 2-2-2z",
   report: "M2.5 4h11v8h-11z M2.5 4 8 8.5 13.5 4",
   wait: "M6 4v8 M10 4v8",
 };
@@ -339,9 +343,19 @@ function minimap(d, lay, run) {
   </svg>`;
 }
 
+let connectors = [];
+export function setConnectors(list) {
+  connectors = list || [];
+}
+
+const connectorOf = (id) => connectors.find((c) => c.id === id);
+const connectorName = (id) => connectorOf(id)?.name || id || "a connected tool";
+
 export function triggerWords(t) {
   switch (t?.kind) {
-    case "schedule": return `On the schedule ${t.schedule || "(not set)"}${t.state ? `, my open tickets in ${t.state}` : ""}`;
+    case "schedule": return `On the schedule ${t.schedule || "(not set)"}${t.state ? `, my open ${t.connector ? `${connectorName(t.connector)} items` : "tickets"} in ${t.state}` : ""}`;
+    case "connector": return `When ${connectorName(t.connector)} has a new item${t.states?.length ? " in the states you picked" : ""}`;
+    case "webhook": return "When another system calls this pipeline's web address";
     case "linear":
       if (t.states?.length) return `When a Linear ticket${t.assigned ? " of mine" : ""} moves to ${t.states.join(" or ")}`;
       return "When a Linear ticket is assigned to me";
@@ -351,7 +365,7 @@ export function triggerWords(t) {
   }
 }
 
-const TRIGGER_TAGS = { manual: "by hand", schedule: "schedule", linear: "Linear", github_review: "GitHub", gitlab_reviewer: "GitLab" };
+const TRIGGER_TAGS = { manual: "by hand", schedule: "schedule", linear: "Linear", github_review: "GitHub", gitlab_reviewer: "GitLab", webhook: "webhook", connector: "connected tool" };
 
 // Every card says the same four things in the same places: what it is, who does it, what it does
 // (or how far the run got) and where.
@@ -360,7 +374,12 @@ export function describe(s) {
     case "agent": return { who: s.read_only ? "Agent · read only" : "Agent", does: s.instructions || "No instructions yet", tags: [machineWord(s), workspaceWord(s)] };
     case "plan": return { who: "Agent · Dispatch", does: "Picks the machine, folder and branch, or asks you", tags: [s.machines?.length ? s.machines.join(" or ") : "any machine"] };
     case "push": return { who: "Yardbell", does: "Pushes the branch and opens a draft pull or merge request", tags: ["secret check", "never forced"] };
-    case "linear": return { who: "Yardbell · Linear", does: s.action === "move" ? `Moves the ticket to ${s.state || "a state you pick"}` : "Drafts a comment for you to post", tags: [s.action === "move" ? "move" : "comment draft"] };
+    case "update": return { who: "Yardbell · the ticket's tool", does: s.action === "move" ? `Moves the ticket to ${s.state || "a state you pick"}` : "Comments on the ticket, or drafts it for Linear", tags: [s.action === "move" ? "move" : "comment"] };
+    case "call": {
+      const call = connectorOf(s.connector)?.calls?.find((c) => c.name === s.call);
+      return { who: `Yardbell · ${connectorName(s.connector)}`, does: s.call ? `Calls ${s.call}` : "Pick a call", tags: [call?.kind === "lookup" ? "Reads" : "Changes"] };
+    }
+    case "tool": return { who: `Yardbell · ${s.server || "MCP"}`, does: s.tool ? `Calls ${s.tool}` : "Pick a tool", tags: [s.call_kind === "lookup" ? "Reads" : "Changes"] };
     case "report": return { who: "Yardbell · Dispatch", does: "Writes what the run found and tells you", tags: ["phone notification"] };
     case "wait": return { who: "You", does: s.message || "Waits until you continue it", tags: ["needs you"] };
     default: return { who: "", does: "", tags: [] };

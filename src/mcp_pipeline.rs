@@ -1,4 +1,5 @@
 use crate::config::Config;
+use crate::connectors::Connector;
 use crate::dispatch::diff::words;
 use crate::mcp::tool;
 use crate::pipeline::definition::{
@@ -10,12 +11,45 @@ use axum::http::StatusCode;
 use serde::Deserialize;
 use serde_json::{json, Value};
 
-pub const TOOLS: [&str; 4] = [
+pub const TOOLS: [&str; 5] = [
+    "save_connector",
     "save_pipeline",
     "set_pipeline_enabled",
     "run_pipeline",
     "answer_run",
 ];
+
+// The hash and whether a step only reads record what a person chose, so what an agent sends for
+// them never counts.
+pub(crate) fn keep_tool_hashes(def: &mut Definition, before: Option<&Definition>) {
+    for step in &mut def.steps {
+        let StepKind::Tool {
+            server,
+            tool,
+            schema_hash,
+            call_kind,
+            ..
+        } = &mut step.kind
+        else {
+            continue;
+        };
+        let kept = before
+            .and_then(|b| b.step(&step.id))
+            .and_then(|old| match &old.kind {
+                StepKind::Tool {
+                    server: s,
+                    tool: t,
+                    schema_hash: h,
+                    call_kind: k,
+                    ..
+                } if s == server && t == tool => Some((h.clone(), *k)),
+                _ => None,
+            });
+        let (hash, kind) = kept.unwrap_or((String::new(), crate::connectors::CallKind::Change));
+        *schema_hash = hash;
+        *call_kind = kind;
+    }
+}
 
 pub fn owns(tool: &str) -> bool {
     TOOLS.contains(&tool)
@@ -23,6 +57,12 @@ pub fn owns(tool: &str) -> bool {
 
 pub fn tools() -> Vec<Value> {
     vec![
+        tool(
+            "save_connector",
+            "Propose a new connection to an outside tool, or a change to one: its address, headers and calls, as read_settings shows under connectors. Headers may only name saved secrets, like ${secret:name}: never send a token. It always waits for the user, and a new one arrives switched off for the user to check, add its secrets and switch on. allow_private can only be set in Settings.",
+            json!({ "connector": { "type": "object", "description": "The whole connection: id, name, base_url, headers, params, calls" } }),
+            &["connector"],
+        ),
         tool(
             "save_pipeline",
             "Propose a new pipeline, or a change to one. For a change, read it first with read_pipeline and send the whole definition back with your edits, keeping its id; for a new one leave id empty. The pipeline is checked as the builder checks it, and any problem comes back to you to correct. It always waits for the user, who can approve it, finish it in the builder, or reject it; from a client other than Dispatch it waits in the user's Proposals inbox. A new pipeline is saved switched off.",
@@ -76,6 +116,37 @@ fn problems(list: Vec<String>) -> ApiError {
         "Not proposed, correct this and send the whole pipeline again: {}",
         list.join("; ")
     ))
+}
+
+#[derive(Deserialize)]
+struct SaveConnector {
+    connector: Connector,
+}
+
+// What may come from an agent is the connection's calls. Whether it is on, and whether it may reach
+// a private address, stay what the person chose, and a new address gives up private reach.
+fn connector_as_saved(cfg: &Config, mut c: Connector) -> Result<Connector, ApiError> {
+    let existing = cfg.connectors.iter().find(|o| o.id == c.id);
+    let same_host = existing.is_some_and(|o| {
+        crate::connectors::host_of(&o.base_url) == crate::connectors::host_of(&c.base_url)
+    });
+    let kept_private = same_host && existing.is_some_and(|o| o.allow_private);
+    if c.allow_private && !kept_private {
+        return Err(bad("allow_private can only be set in Settings".into()));
+    }
+    c.allow_private = kept_private;
+    c.enabled = existing.is_some_and(|o| o.enabled);
+    if c.name.trim().is_empty() {
+        c.name = c.id.clone();
+    }
+    if !c.server.is_empty() && !cfg.mcp_servers.iter().any(|s| s.name == c.server) {
+        return Err(bad(format!(
+            "{} is not in Settings, Connections, and only a person can add a server",
+            c.server
+        )));
+    }
+    crate::connectors::validate(std::slice::from_ref(&c)).map_err(bad)?;
+    Ok(c)
 }
 
 #[derive(Deserialize)]
@@ -233,10 +304,21 @@ fn aligned(app: &AppState, s: &mut SavePipeline) -> Result<Option<Definition>, A
 
 pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Value, ApiError> {
     match tool {
+        "save_connector" => {
+            let SaveConnector { connector } = arg(args)?;
+            let connector = connector_as_saved(cfg, connector)?;
+            let before = cfg.connectors.iter().find(|c| c.id == connector.id);
+            Ok(json!({
+                "connector": connector,
+                "host": crate::connectors::host_of(&connector.base_url),
+                "before": before,
+            }))
+        }
         "save_pipeline" => {
             let SavePipeline { mut definition, .. } = arg(args)?;
             let before = existing(app, &definition.id);
             definition.enabled = before.as_ref().is_some_and(|b| b.enabled);
+            keep_tool_hashes(&mut definition, before.as_ref());
             check_definition(&definition, cfg).map_err(problems)?;
             let changes = changes(before.as_ref(), &definition);
             Ok(json!({ "definition": definition, "before": before, "changes": changes }))
@@ -265,6 +347,10 @@ pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Val
 
 pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<(), ApiError> {
     match tool {
+        "save_connector" => {
+            let SaveConnector { connector } = arg(input.clone())?;
+            connector_as_saved(cfg, connector).map(|_| ())
+        }
         "save_pipeline" => {
             let mut s: SavePipeline = arg(input.clone())?;
             aligned(app, &mut s)?;
@@ -281,6 +367,18 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
     let cfg = app.config()?;
     let library = app.pipelines.library();
     let out = match tool {
+        "save_connector" => {
+            let SaveConnector { connector } = arg(input)?;
+            let connector = connector_as_saved(&cfg, connector)?;
+            let id = connector.id.clone();
+            let mut all = cfg.connectors.clone();
+            match all.iter().position(|c| c.id == id) {
+                Some(i) => all[i] = connector,
+                None => all.push(connector),
+            }
+            app.settings.set_connectors(all).map_err(bad)?;
+            json!({ "saved": id })
+        }
         "save_pipeline" => {
             let mut s: SavePipeline = arg(input)?;
             let current = aligned(app, &mut s)?;
@@ -288,6 +386,7 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
                 mut definition,
                 before,
             } = s;
+            keep_tool_hashes(&mut definition, current.as_ref());
             match current {
                 Some(current) => {
                     let saved = library.save(definition, &cfg).map_err(not_saved)?;
@@ -319,7 +418,14 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
         "run_pipeline" => {
             let r: RunPipeline = arg(input)?;
             runnable(app, &r)?;
-            let subjects = crate::web::pipeline_api::subjects(app, &r.tickets, &r.prs).await?;
+            let def = app.pipelines.library().get(&r.id).ok_or_else(|| {
+                ApiError(
+                    StatusCode::NOT_FOUND,
+                    format!("there is no pipeline {}", r.id),
+                )
+            })?;
+            let subjects =
+                crate::web::pipeline_api::subjects(app, &def, &r.tickets, &r.prs).await?;
             let runs = app
                 .pipelines
                 .start(&r.id, subjects, "dispatch")

@@ -86,6 +86,22 @@ async fn an_outside_change_becomes_a_proposal() {
 }
 
 #[tokio::test]
+async fn save_connector_from_a_client_is_a_proposal() {
+    let r = rig();
+    mcp_on(&r);
+    let args = json!({ "connector": {
+        "id": "jira",
+        "name": "Jira",
+        "base_url": "https://jira.example.com",
+        "calls": {},
+    } });
+    let result = propose(&r, "save_connector", args).await;
+    assert_ne!(result["isError"], true, "{result}");
+    assert_eq!(r.app.proposals.list().len(), 1, "{result}");
+    assert!(saved(&r).connectors.is_empty(), "it waits for a person");
+}
+
+#[tokio::test]
 async fn a_client_without_a_name_is_an_mcp_client() {
     let r = rig();
     mcp_on(&r);
@@ -300,9 +316,7 @@ async fn a_proposal_that_no_longer_passes_fails_on_its_card() {
     let c = cookie(&r.app).await;
     let cfg = r.app.config().unwrap();
     let library = r.app.pipelines.library();
-    let mut def = library
-        .copy_template("Implement my Linear tickets", &cfg)
-        .unwrap();
+    let mut def = library.copy_template("Implement my tickets", &cfg).unwrap();
     def.trigger = crate::pipeline::definition::Trigger::Manual;
     let def = library.save(def, &cfg).unwrap();
     let mut run = r
@@ -318,6 +332,7 @@ async fn a_proposal_that_no_longer_passes_fails_on_its_card() {
         step: "implement".into(),
         reason: "Implement failed".into(),
         screen: String::new(),
+        tool_hash: String::new(),
     });
     let run_id = run.id.clone();
     r.app.pipelines.put(run);

@@ -1434,7 +1434,7 @@ class Suite:
         b.click("#secret-form button[type=submit]")
         b.wait("document.querySelector('#secret-rows [data-replace=github]') && document.getElementById('secrets-missing').hidden", "github set and the warning gone")
 
-        b.click("#secret-rows [data-replace=github]")
+        self.row_action("[data-secret-row=github]", "[data-replace=github]")
         b.wait("document.querySelector('#secret-form input[name=name]').readOnly && !document.querySelector('#secret-form input[name=value]').value", "the replace form, with the name fixed and no value")
         b.click("#secret-form input[name=value]")
         b.type(values[2])
@@ -1458,7 +1458,7 @@ class Suite:
         if values[0] not in stored or values[2] not in stored or values[1] in stored:
             raise Failure("secrets.yml does not hold the moved and the replaced values")
 
-        b.click("#secret-rows [data-delete=github]")
+        self.row_action("[data-secret-row=github]", "[data-delete=github]")
         b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('github uses it')", "the delete confirmation naming its server")
         b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("!document.querySelector('#secret-rows [data-replace=github]') && !document.getElementById('secrets-missing').hidden", "github deleted and missing again")
@@ -1467,6 +1467,7 @@ class Suite:
         b = self.b
         b.goto(self.url("/settings#triggers"))
         # An MCP server whose secret is missing stops a triggered run, as it stops a typed one.
+        self.b.js("if (window.__real) { window.fetch = window.__real; delete window.__real; }")
         self.api("POST", "/api/settings/mcp/servers", {"servers": []})
         b.goto(self.url("/settings#triggers"))
         b.wait("!document.getElementById('triggers-empty').hidden", "the empty trigger list")
@@ -1931,9 +1932,9 @@ class Suite:
         b.goto(self.url("/pipeline"))
         b.click("#pl-new")
         b.wait("document.querySelector('#pl-templates button')", "the templates")
-        b.js("[...document.querySelectorAll('#pl-templates button')].find((x) => x.textContent.includes('Implement my Linear tickets')).click()")
-        b.wait("new URLSearchParams(location.search).get('p') === 'implement-my-linear-tickets'", "the new pipeline opened")
-        b.wait("document.querySelector('.pl-title-name')?.value === 'Implement my Linear tickets'", "its name")
+        b.js("[...document.querySelectorAll('#pl-templates button')].find((x) => x.textContent.includes('Implement my tickets')).click()")
+        b.wait("new URLSearchParams(location.search).get('p') === 'implement-my-tickets'", "the new pipeline opened")
+        b.wait("document.querySelector('.pl-title-name')?.value === 'Implement my tickets'", "its name")
         b.click("#pl-back")
         b.wait("document.querySelectorAll('.pl-card[data-id]').length === 2", "two pipeline cards")
 
@@ -2014,6 +2015,7 @@ class Suite:
         b = self.b
         self.open_builder()
         spot = self.empty_spot()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"wait\"]').scrollIntoView({ block: 'center' })")
         b.drag('.pl-lib-item[data-kind="wait"]', tuple(spot), steps=10)
         b.wait("document.querySelector('.pl-node.kind-wait')", "a Wait for me card where it was dropped")
         if not b.js("document.querySelector('.pl-node.kind-wait').classList.contains('selected')"):
@@ -2228,7 +2230,7 @@ class Suite:
 
     def test_builder_switching_on_survives_a_save(self):
         b = self.b
-        made = self.api("POST", "/api/pipelines", {"template": "Implement my Linear tickets"})
+        made = self.api("POST", "/api/pipelines", {"template": "Implement my tickets"})
         b.js("localStorage.setItem('yb-pipeline-full', '1')")
         b.goto(self.url(f"/pipeline?p={made['id']}&tab=build"))
         b.wait("document.querySelector('.pl-node')", "the builder")
@@ -2650,6 +2652,121 @@ class Suite:
         if b.js("document.querySelector('.pl-terminal iframe')"):
             raise Failure("a terminal with no session")
 
+    def add_connector(self):
+        template = self.api("GET", "/api/settings/connectors")["starters"]["trello"]
+        self.api("POST", "/api/settings/connectors", {**template, "was": ""})
+
+    def remove_connector(self):
+        self.api("DELETE", "/api/settings/connectors/trello")
+
+    def test_builder_connector_trigger_shows_names(self):
+        b = self.b
+        self.add_connector()
+        try:
+            self.open_builder()
+            b.js("""(() => {
+              const real = window.fetch;
+              window.fetch = (u, o) => {
+                const url = String(u);
+                const json = (v) => Promise.resolve(new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } }));
+                if (url.includes('/options/boards')) return json([{ id: 'B1', name: 'Main board' }]);
+                if (url.includes('/options/states')) return json([{ id: 'L1', name: 'Todo' }, { id: 'L2', name: 'Done' }]);
+                return real(u, o);
+              };
+            })()""")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"linear\"][data-group=\"Start when\"]').click()")
+            b.wait("document.querySelector('#pl-inspector select[name=ticket-source]')", "where tickets come from")
+            self.set_field("#pl-inspector select[name=ticket-source]", "trello")
+            b.wait("document.querySelector('#pl-inspector select[name=param-board]')?.textContent.includes('Main board')", "the board by name")
+            self.set_field("#pl-inspector select[name=param-board]", "B1")
+            b.wait("[...document.querySelectorAll('#pl-inspector .pl-state-pick')].some((x) => x.textContent.includes('Todo'))", "the list by name")
+            b.js("[...document.querySelectorAll('#pl-inspector .pl-state-pick')].find((x) => x.textContent.includes('Todo')).querySelector('input').click()")
+            b.wait("[...document.querySelectorAll('#pl-inspector .pl-state-pick input')].find((x) => x.value === 'L1')?.checked", "the list ticked, stored by id")
+            if b.js("document.querySelector('#pl-inspector select[name=param-board]').value") != "B1":
+                raise Failure("the board is not stored by id")
+            if "Trello" not in b.js("document.querySelector('.pl-canvas').textContent"):
+                raise Failure("the Start when card does not name the tool")
+        finally:
+            self.remove_connector()
+        self.check_errors("the connector trigger")
+
+    def test_builder_tool_step(self):
+        b = self.b
+        self.api("POST", "/api/settings/mcp/servers", {"servers": [{"name": "tools", "url": "https://mcp.example.com/mcp"}]})
+        try:
+            self.open_builder()
+            b.js("""window.__tools_real = window.fetch; window.fetch = (u, o) => String(u).includes('/mcp/servers/tools/tools')
+              ? Promise.resolve(new Response(JSON.stringify({ tools: [
+                  { name: 'readCard', description: 'Reads a card', read_only_hint: true, schema_hash: 'hash-read', input_schema: { type: 'object', required: ['card'], properties: { card: { type: 'string', description: 'The card id' }, deep: { type: 'object' } } } },
+                  { name: 'moveCard', description: 'Moves a card', read_only_hint: false, schema_hash: 'hash-move', input_schema: { type: 'object', properties: { list: { type: 'string' } } } },
+                ] }), { headers: { 'content-type': 'application/json' } }))
+              : window.__tools_real(u, o)""")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"call\"]').click()")
+            b.wait("document.querySelector('.pl-node.kind-tool')", "the step")
+            b.wait("document.querySelector('#pl-inspector select[name=tool]')", "the tool picker")
+            b.wait("document.querySelector('#pl-inspector select[name=tool] option[value=moveCard]')", "the tools listed")
+            self.set_field("#pl-inspector select[name=tool]", "moveCard")
+            b.wait("document.querySelector('#pl-inspector input[name=\"arg-list\"]')", "a field from the schema")
+            if b.js("document.querySelector('#pl-inspector input[name=only_reads]').checked"):
+                raise Failure("a tool should default to changing things")
+            b.wait("document.querySelector('.pl-node.kind-tool')?.textContent.includes('Changes')", "the card saying it changes")
+            self.set_field("#pl-inspector select[name=tool]", "readCard")
+            b.wait("document.querySelector('#pl-inspector input[name=\"arg-card\"]')", "the string field")
+            if not b.js("document.querySelector('#pl-inspector textarea[name=\"arg-deep\"]')"):
+                raise Failure("a nested argument should fall back to JSON")
+            if not b.js("document.querySelector('#pl-inspector input[name=only_reads]').checked"):
+                raise Failure("a read-only hint should pre-tick Only reads")
+            self.check_errors("a Call MCP tool step")
+        finally:
+            b.js("if (window.__tools_real) window.fetch = window.__tools_real")
+            self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+
+    def test_builder_call_step_shows_its_kind(self):
+        b = self.b
+        self.add_connector()
+        try:
+            self.open_builder()
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"call\"]').click()")
+            b.wait("document.querySelector('.pl-node.kind-call')", "the step")
+            b.wait("document.querySelector('#pl-inspector select[name=call]')", "the call picker")
+            self.set_field("#pl-inspector select[name=call]", "move")
+            b.wait("document.querySelector('.pl-node.kind-call')?.textContent.includes('Changes')", "the card saying it changes")
+            b.wait("document.querySelector('#pl-inspector input[name=param-value]')", "the value the call needs")
+            self.set_field("#pl-inspector select[name=call]", "read")
+            b.wait("document.querySelector('.pl-node.kind-call')?.textContent.includes('Reads')", "the card saying it reads")
+        finally:
+            self.remove_connector()
+        self.check_errors("a Call API step")
+
+    def test_builder_webhook_says_who_can_reach_it(self):
+        b = self.b
+        self.open_builder()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"webhook\"]').click()")
+        b.wait("document.querySelector('#pl-inspector #pl-hook-new')", "the address button")
+        said = b.js("document.querySelector('#pl-inspector').textContent")
+        if "cannot reach this address without a tunnel" not in said:
+            raise Failure(f"the trigger does not say who can reach it: {said}")
+        self.check_errors("the webhook trigger")
+
+    def test_a_hostile_item_title_is_escaped(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-detail')", "the run")
+        b.js("""(() => {
+          const real = window.fetch;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (!String(url).startsWith('/api/runs')) return res;
+            const body = await res.json();
+            for (const r of body.runs) if (r.id === 'run-a') r.subject.ticket.title = '<img src=x onerror="window.__hit=1">';
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          };
+        })()""")
+        b.wait("document.querySelector('.pl-detail')?.textContent.includes('<img src=x')", "the title shown as text")
+        if b.js("!!document.querySelector('.pl-detail img, .pl-run-list img') || !!window.__hit"):
+            raise Failure("a title ran as HTML")
+        self.check_errors("a hostile title")
+
     def test_builder_review_switch(self):
         b = self.b
         self.open_builder()
@@ -2662,18 +2779,74 @@ class Suite:
         if "A new session" in b.js("document.querySelector('#pl-inspector').textContent"):
             raise Failure("the Session choice is still there")
 
+    def test_github_and_gitlab_connect_their_own_way(self):
+        b = self.b
+        before = self.api("GET", "/api/settings")["pull_requests"]["value"]
+        try:
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.querySelector('#forge-rows [data-forge=github]')", "GitHub among the connections")
+            if b.js("[...document.querySelectorAll('.settings-nav a')].some((a) => a.textContent === 'GitHub and GitLab')"):
+                raise Failure("GitHub and GitLab still have their own menu item")
+            if b.js("document.querySelector('#forge-rows [data-forge=github] .conn-type').textContent") != "gh":
+                raise Failure("GitHub should default to gh")
+            if b.js("document.querySelector('#forge-rows [data-forge=gitlab] .conn-type').textContent") != "Token":
+                raise Failure("GitLab should default to a token")
+
+            b.click("#forge-rows [data-forge=github]")
+            b.wait("!document.getElementById('forge-github').hidden", "the GitHub step")
+            if b.js("document.getElementById('conn-tabs').hidden") is not True:
+                raise Failure("the tabs belong to New connection")
+            if not b.js("document.getElementById('github-token-fields').hidden"):
+                raise Failure("gh needs no token fields")
+            b.js("document.querySelector('#forge-github [name=github_via][value=token]').click()")
+            b.wait("!document.getElementById('github-token-fields').hidden", "the token fields")
+            self.set_field("#forge-github [name=github_paste]", "ghp_BROWSER_VALUE")
+            b.click("#forge-github button[type=submit]")
+            b.wait("document.querySelector('#forge-rows [data-forge=github] .conn-type')?.textContent === 'Token' && !document.getElementById('conn-flow').open", "GitHub saved with a token")
+            with open(self.y.config) as f:
+                config = f.read()
+            for want in ("github_via: token", "${secret:github_pr}"):
+                if want not in config:
+                    raise Failure(f"yardbell.yml does not hold {want}")
+            if "ghp_BROWSER_VALUE" in config or "ghp_BROWSER_VALUE" in b.js("document.documentElement.outerHTML"):
+                raise Failure("the token's value was kept where it can be seen")
+
+            b.click("#forge-rows [data-forge=gitlab]")
+            b.wait("!document.getElementById('forge-gitlab').hidden", "the GitLab step")
+            b.js("document.querySelector('#forge-gitlab [name=gitlab_via][value=glab]').click()")
+            b.click("#pr-add-host")
+            b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
+            if b.js("document.querySelector('#pr-hosts [data-key=token]').offsetParent !== null"):
+                raise Failure("glab needs no token box")
+            self.set_field("#pr-hosts .row:last-child [data-key=host]", "git.example.com")
+            b.click("#forge-gitlab button[type=submit]")
+            b.wait("document.querySelector('#forge-rows [data-forge=gitlab] .conn-type')?.textContent === 'glab' && !document.getElementById('conn-flow').open", "GitLab saved with glab")
+            with open(self.y.config) as f:
+                config = f.read()
+            if "gitlab_via: glab" not in config or "host: git.example.com" not in config:
+                raise Failure(f"yardbell.yml does not hold the glab choice:\n{config}")
+            self.check_errors("how GitHub and GitLab connect")
+        finally:
+            b.js("document.getElementById('conn-flow')?.close()")
+            self.api("POST", "/api/settings/pull-requests", before)
+            self.api("POST", "/api/settings/secrets/delete", {"name": "github_pr"})
+
     def test_settings_pull_requests_section(self):
         b = self.b
         self.api("POST", "/api/settings/secrets", {"name": "gitlab", "value": "glpat-browser-test"})
+        b.goto(self.url("/"))
         b.goto(self.url("/settings#pull-requests"))
         b.wait("document.querySelector('#pr-form [name=enabled]')?.checked === true", "the Pull requests section")
+        self.set_field("#pr-form [name=poll_seconds]", "300")
+        b.click("#forge-rows [data-forge=gitlab]")
+        b.wait("!document.getElementById('forge-gitlab').hidden", "the GitLab step")
         b.click("#pr-add-host")
         b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
         self.set_field("#pr-hosts .row:last-child [data-key=host]", "git.example.com")
         self.set_field("#pr-hosts .row:last-child [data-key=token]", "${secret:gitlab}")
-        self.set_field("#pr-form [name=poll_seconds]", "300")
-        b.click("#pr-form button[type=submit]")
-        b.wait("!document.getElementById('undo-bar').hidden", "the section saved")
+        b.click("#forge-gitlab button[type=submit]")
+        b.wait("!document.getElementById('conn-flow').open && document.querySelector('#forge-rows [data-forge=gitlab]').textContent.includes('git.example.com')", "the section saved")
         with open(self.y.config) as f:
             config = f.read()
         for want in ("host: git.example.com", "poll_seconds: 300"):
@@ -2683,18 +2856,767 @@ class Suite:
             raise Failure("the token's value reached yardbell.yml")
         self.check_errors("the Pull requests section")
 
+    def stub_sign_in(self, reply):
+        self.b.js("""window.__real = window.__real || window.fetch; window.__posted = []; window.fetch = (u, o) => {
+          if (String(u).includes('/sign-in') || String(u).endsWith('/finish')) {
+            window.__posted.push(String(u) + ' ' + (o && o.body));
+            return Promise.resolve(new Response(JSON.stringify(%s), { headers: { 'content-type': 'application/json' } }));
+          }
+          return window.__real(u, o);
+        }""" % json.dumps(reply))
+
+    def add_mcp_server(self):
+        self.api("POST", "/api/settings/mcp/servers", {"servers": [{"name": "tool", "url": "https://mcp.example.com/mcp"}]})
+        self.b.goto(self.url("/"))
+        self.b.goto(self.url("/settings#connections"))
+        self.b.wait("document.querySelector('[data-mcp-act=sign-in]')", "the Sign in button")
+
+    def row_action(self, row, action):
+        self.b.click(f"{row} [data-row-menu]")
+        self.b.wait(f"!document.querySelector('{row} .menu').hidden", "the row's menu")
+        self.b.click(f"{row} {action}")
+
+    def test_connection_rows_follow_one_shape(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            head = b.js("[...document.querySelectorAll('#conn-all .conn-head span')].map((x) => x.textContent).filter(Boolean).join(' ')")
+            if head != "Connection Type Status":
+                raise Failure(f"the columns are {head!r}")
+            row = "#server-rows .conn-row"
+            drift = b.js(f"""Math.abs(document.querySelector('{row} .conn-status').getBoundingClientRect().left - document.querySelectorAll('#conn-all .conn-head span')[2].getBoundingClientRect().left)""")
+            if drift > 1:
+                raise Failure(f"the status sits {drift}px off its column")
+            pad = b.js("(() => { document.getElementById('conn-new').click(); const v = getComputedStyle(document.querySelector('#conn-sign-in-list .conn-card')).paddingLeft; document.getElementById('conn-flow').close(); return v; })()")
+            if pad == "0px":
+                raise Failure("the picker rows have no padding")
+            if "Not signed in" not in b.js(f"document.querySelector('{row} .conn-badge').textContent"):
+                raise Failure("the status is not a badge")
+            if b.js(f"document.querySelector('{row} [data-mcp-act=test]').offsetParent !== null"):
+                raise Failure("Test should sit in the row's menu")
+            b.click(f"{row} [data-row-menu]")
+            b.wait(f"!document.querySelector('{row} .menu').hidden", "the menu")
+            last = b.js(f"[...document.querySelectorAll('{row} .menu button')].pop().textContent")
+            if last != "Remove" or not b.js(f"[...document.querySelectorAll('{row} .menu button')].pop().classList.contains('danger')"):
+                raise Failure(f"the last item is {last}")
+            b.js("document.body.click()")
+            b.wait(f"document.querySelector('{row} .menu').hidden", "the menu to close")
+            b.click(f"{row} .conn-name")
+            b.wait("document.getElementById('conn-flow').open && !document.getElementById('server-form').hidden", "the row to open its edit form")
+            if b.js("document.getElementById('conn-dialog-title').textContent") != "Edit tool":
+                raise Failure("the row did not open its own edit")
+            self.check_errors("connection rows")
+        finally:
+            self.remove_mcp_servers()
+
+    def remove_mcp_servers(self):
+        self.b.js("document.getElementById('conn-flow')?.close()")
+        self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+
+    def test_server_sign_in_flow(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            if "Not signed in" not in b.js("document.getElementById('server-rows').textContent"):
+                raise Failure("the row does not say it is not signed in")
+            b.viewport(390, 844)
+            try:
+                b.wait("window.innerWidth === 390", "the phone width")
+                wide = b.js("""Math.max(...[...document.querySelectorAll('#server-rows button')].map((el) => el.getBoundingClientRect().right)) - window.innerWidth""")
+                if wide > 0:
+                    raise Failure(f"the server buttons run {wide}px past the phone screen")
+            finally:
+                b.viewport(1280, 900)
+            self.stub_sign_in({"url": "https://auth.example.com/authorize?x=1", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.getElementById('mcp-sign-in')?.textContent.includes('You will sign in at auth.example.com')", "the host, before leaving")
+            link = b.js("document.querySelector('#mcp-sign-in a[data-continue]').getAttribute('href')")
+            if link != "https://auth.example.com/authorize?x=1":
+                raise Failure(f"Continue goes to {link}")
+            self.check_errors("signing in")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_sign_in_says_it_is_working(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            self.stub_sign_in({"url": "https://auth.example.com/a", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+            b.js("""window.__held = new Promise((go) => { window.__release = go; });
+              const stubbed = window.fetch;
+              window.fetch = (u, o) => String(u).includes('/sign-in') ? window.__held.then(() => stubbed(u, o)) : stubbed(u, o)""")
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.querySelector('#mcp-sign-in [role=status]')?.textContent.includes('Finding where')", "word that it is working")
+            if not b.js("document.querySelector('[data-mcp-act=sign-in]').disabled"):
+                raise Failure("Sign in can be clicked again while it is working")
+            b.js("window.__release()")
+            b.wait("document.getElementById('mcp-sign-in').textContent.includes('You will sign in at auth.example.com')", "the host")
+            if b.js("document.querySelector('#mcp-sign-in [role=status]')"):
+                raise Failure("the working message stayed")
+            self.check_errors("waiting for a sign-in")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_sign_in_from_another_device(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            self.stub_sign_in({"url": "https://auth.example.com/a", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+            b.js("window.signsInHere = () => false")
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.querySelector('#mcp-sign-in [name=address]')", "the box to paste into")
+            said = b.js("document.getElementById('mcp-sign-in').textContent")
+            if "another device" not in said:
+                raise Failure(f"it does not explain: {said}")
+            self.set_field("#mcp-sign-in [name=address]", "http://127.0.0.1:1/oauth/mcp/callback?code=c&state=s")
+            b.click("#mcp-sign-in [data-finish]")
+            b.wait("window.__posted.some((p) => p.includes('/finish') && p.includes('code=c'))", "the address sent")
+            self.check_errors("signing in from another device")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_sign_in_needs_a_client(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            self.stub_sign_in({"needs_client": True, "sign_in_host": "app.asana.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback"})
+            b.click("[data-mcp-act=sign-in]")
+            b.wait("document.querySelector('#mcp-sign-in [name=client_id]')", "the client fields")
+            if "http://127.0.0.1:1/oauth/mcp/callback" not in b.js("document.getElementById('mcp-sign-in').textContent"):
+                raise Failure("the redirect address is not shown")
+            self.check_errors("a server that needs a client")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_connection_templates_are_a_grid(self):
+        b = self.b
+        lists = {"conn-new-panel": "conn-sign-in-list", "conn-tab-token": "conn-new-list"}
+        measure = """((list) => {
+          const tiles = [...document.getElementById(list).children];
+          const flow = document.getElementById('conn-flow').getBoundingClientRect();
+          const body = document.querySelector('.conn-dialog-body');
+          return {
+            tiles: tiles.length,
+            columns: new Set(tiles.map((t) => Math.round(t.getBoundingClientRect().left))).size,
+            logos: tiles.filter((t) => t.querySelector('.conn-logo')?.textContent.trim() || t.querySelector('svg')).length,
+            clipped: tiles.flatMap((t) => [...t.querySelectorAll('strong, small, button')]).filter((x) => x.scrollWidth > x.clientWidth + 1 && getComputedStyle(x).display !== 'inline').map((x) => x.textContent),
+            past: Math.max(...tiles.map((t) => t.getBoundingClientRect().right)) - flow.right,
+            sideways: body.scrollWidth - body.clientWidth,
+            page: document.documentElement.scrollWidth - innerWidth,
+            flowBottom: flow.bottom,
+            height: innerHeight,
+          };
+        })"""
+
+        def sizes(tab, list_id):
+            b.click(f"#conn-tabs [data-tab={tab}]")
+            b.wait(f"!document.getElementById('{tab}').hidden", f"the {tab} tab")
+            return b.js(f"{measure}('{list_id}')")
+
+        def check(seen, list_id, want):
+            if seen["tiles"] != want:
+                raise Failure(f"{list_id} has {seen['tiles']} tiles for {want} templates")
+            if seen["logos"] != want:
+                raise Failure(f"only {seen['logos']} of {want} tiles in {list_id} have an icon")
+            if seen["clipped"]:
+                raise Failure(f"clipped text in {list_id}: {seen['clipped']}")
+            if seen["sideways"] > 0 or seen["page"] > 0 or seen["past"] > 0:
+                raise Failure(f"{list_id} runs sideways: {seen}")
+            if seen["flowBottom"] > seen["height"]:
+                raise Failure(f"the modal runs past the window: {seen}")
+
+        def open_modal():
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+            b.click("#conn-new")
+            b.wait("document.getElementById('conn-flow').open", "the modal")
+            return {
+                "conn-sign-in-list": b.js("connections.sign_in.length"),
+                "conn-new-list": b.js("connections.templates.length") + 1,
+            }
+
+        try:
+            b.viewport(1280, 800)
+            want = open_modal()
+            for tab, list_id in lists.items():
+                seen = sizes(tab, list_id)
+                check(seen, list_id, want[list_id])
+                if seen["columns"] < 2:
+                    raise Failure(f"{list_id} lays out in {seen['columns']} column at desktop width")
+
+            b.viewport(390, 844, 3)
+            want = open_modal()
+            for tab, list_id in lists.items():
+                check(sizes(tab, list_id), list_id, want[list_id])
+
+            b.viewport(1280, 800)
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+            b.js("""(() => {
+              const tool = connections.sign_in.find((t) => t.id === 'jira');
+              data.mcp_servers = [{ name: tool.id, url: tool.url }];
+              data.mcp_auth = { [tool.id]: 'signed_in' };
+              document.getElementById('conn-new').click();
+            })()""")
+            b.wait("document.querySelector('#conn-sign-in-list .conn-badge')", "the Connected badge")
+            first = "document.querySelector('#conn-sign-in-list .conn-badge').closest('.conn-card')"
+            if b.js(f"{first}.hasAttribute('data-sign-in') || !{first}.querySelector('svg')"):
+                raise Failure("a connected tile should keep its icon and start no sign-in")
+            b.js("document.getElementById('conn-flow').close()")
+            self.check_errors("the template grid")
+        finally:
+            b.viewport(1280, 800)
+            b.goto(self.url("/"))
+
+    def test_sign_in_lists_common_tools_and_finds_one(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        b.js("document.getElementById('conn-new').click()")
+        b.wait("document.querySelector('[data-sign-in=linear]')", "more tools than Trello and Jira")
+        count = b.js("document.querySelectorAll('#conn-sign-in-list .conn-card').length")
+        if count < 20:
+            raise Failure(f"only {count} tools")
+        width = b.js("document.getElementById('conn-flow').getBoundingClientRect().width")
+        if width < 800:
+            raise Failure(f"the modal is only {width}px wide")
+        columns = b.js("getComputedStyle(document.getElementById('conn-sign-in-list')).gridTemplateColumns.split(' ').length")
+        if columns != 3:
+            raise Failure(f"{columns} columns")
+        self.set_field("#conn-sign-in-search", "sent")
+        b.wait("document.querySelector('[data-sign-in=sentry]') && !document.querySelector('[data-sign-in=sentry]').hidden && document.querySelector('[data-sign-in=linear]').hidden", "the search to narrow")
+        self.set_field("#conn-sign-in-search", "nothing like this")
+        b.wait("!document.getElementById('conn-sign-in-none').hidden", "word that nothing matched")
+        b.js("document.getElementById('conn-flow').close()")
+        self.check_errors("the sign-in list")
+
+    def test_new_connection_is_one_step_at_a_time(self):
+        b = self.b
+        self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        reply = {"url": "https://auth.example.com/a", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False}
+        self.stub_sign_in(reply)
+        try:
+            b.click("#conn-new")
+            b.wait("document.getElementById('conn-flow').open", "the modal")
+            tabs = b.js("[...document.querySelectorAll('#conn-tabs [data-tab]')].map((t) => t.textContent).join('|')")
+            if tabs != "Sign in|MCP server|Token":
+                raise Failure(f"the tabs are {tabs}")
+            if b.js("document.querySelector('#conn-tabs [aria-selected=true]').textContent") != "Sign in":
+                raise Failure("Sign in should be the first tab")
+
+            b.click("#conn-tabs [data-tab=server-form]")
+            b.wait("!document.getElementById('server-form').hidden", "the address step")
+            if b.js("document.querySelector('#conn-tabs [aria-selected=true]').textContent") != "MCP server":
+                raise Failure("the tab does not show where you are")
+            if b.js("document.getElementById('conn-new-panel').hidden") is not True:
+                raise Failure("the picker stayed under the form")
+            if b.js("document.getElementById('server-more').open"):
+                raise Failure("the extra options should be folded")
+            self.set_field("#server-form [name=url]", "not an address")
+            b.click("#server-form button[type=submit]")
+            b.wait("document.getElementById('server-note').textContent.includes('https://')", "word about the address")
+            self.set_field("#server-form [name=url]", "https://mcp.example.net/mcp")
+            b.click("#server-form button[type=submit]")
+            b.wait("document.getElementById('mcp-sign-in').textContent.includes('You will sign in at auth.example.com')", "the sign-in step")
+            if not b.js("data.mcp_servers.some((s) => s.name === 'example')"):
+                raise Failure(f"the name was not taken from the address: {b.js('JSON.stringify(data.mcp_servers)')}")
+
+            b.js("""document.addEventListener('click', (e) => { if (e.target.closest('a[data-continue]')) e.preventDefault(); }, true);
+              const stubbed = window.fetch;
+              window.fetch = (u, o) => {
+                const at = String(u);
+                if (at.endsWith('/test')) return Promise.resolve(new Response(JSON.stringify({ version: '2025-11-25', tools: [{ name: 'readCard', description: 'Reads a card' }] }), { headers: { 'content-type': 'application/json' } }));
+                if (at === '/api/settings' && window.__signed) return stubbed(u, o).then((r) => r.json()).then((d) => { d.mcp_auth = { example: 'signed_in' }; return new Response(JSON.stringify(d), { headers: { 'content-type': 'application/json' } }); });
+                return stubbed(u, o);
+              }""")
+            b.click("#mcp-sign-in a[data-continue]")
+            b.wait("document.getElementById('mcp-sign-in').textContent.includes('Finish signing in')", "the waiting step")
+            b.js("window.__signed = true")
+            b.wait("!document.getElementById('mcp-tools').hidden && document.getElementById('mcp-tools').textContent.includes('readCard')", "the tools, with no Test to press")
+            if "Connected to example" not in b.js("document.getElementById('conn-dialog-title').textContent"):
+                raise Failure("it does not say it connected")
+            b.click("[data-close-tools]")
+            b.wait("!document.getElementById('conn-flow').open && document.querySelector('#server-rows [data-mcp-act=test]')", "back on the list")
+            self.check_errors("adding by address")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_a_token_connection_takes_its_secret_in_the_form(self):
+        b = self.b
+        try:
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+            b.click("#conn-new")
+            b.click("#conn-tabs [data-tab=conn-tab-token]")
+            b.click("#conn-new-list [data-starter=asana]")
+            b.wait("!document.getElementById('conn-form').hidden && document.querySelector('#conn-secrets input[type=password]')", "a box for its secret")
+            if b.js("document.getElementById('conn-more').open"):
+                raise Failure("headers and calls should be folded for an example")
+            name = b.js("document.querySelector('#conn-secrets input').dataset.secret")
+            self.set_field("#conn-secrets input", "asana-value-BROWSER")
+            b.click("#conn-form button[type=submit]")
+            b.wait("document.querySelector('[data-conn=asana]')", "the saved connection")
+            if "Save the secret" in b.js("document.querySelector('[data-conn=asana]').textContent"):
+                raise Failure("the secret typed in the form was not saved")
+            if "asana-value-BROWSER" in b.js("document.documentElement.outerHTML"):
+                raise Failure("the secret stayed on the page")
+            self.row_action("[data-conn=asana]", "[data-conn-act=delete]")
+            b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait("!document.querySelector('[data-conn=asana]')", "the connection gone")
+            self.api("POST", "/api/settings/secrets/delete", {"name": name})
+            self.check_errors("a token connection")
+
+        finally:
+            b.js("document.getElementById('conn-flow')?.close(); fetch('/api/settings/connectors/asana', { method: 'DELETE' })")
+    def test_one_connections_page(self):
+        b = self.b
+        self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        nav = b.js("[...document.querySelectorAll('.settings-nav a')].map((a) => a.textContent).join('|')")
+        if "MCP servers" in nav:
+            raise Failure(f"the menu still splits them: {nav}")
+        if not b.js("document.querySelector('#connections #server-rows') && document.querySelector('#connections #conn-rows') && document.querySelector('#connections #secret-rows')"):
+            raise Failure("servers, connections and secrets are not all on the one page")
+        guide = b.js("document.querySelector('#connections .conn-guide').textContent")
+        for part in ("New connection", "Sign in", "Test"):
+            if part not in guide:
+                raise Failure(f"the guide does not mention {part}: {guide}")
+        b.click("#conn-new")
+        b.wait("document.querySelector('[data-sign-in=trello]')", "Trello under sign in")
+        b.click("[data-another]")
+        b.wait("!document.getElementById('server-form').hidden", "the server form")
+        if b.js("document.getElementById('server-form').elements.kind.value") != "url":
+            raise Failure("Another MCP server should ask for an address")
+        b.click("#server-cancel")
+        self.stub_sign_in({"url": "https://auth.example.com/a", "sign_in_host": "auth.example.com", "redirect": "http://127.0.0.1:1/oauth/mcp/callback", "needs_client": False})
+        try:
+            b.click("#conn-new")
+            b.wait("document.querySelector('[data-sign-in=trello]')", "Trello under sign in")
+            b.click("[data-sign-in=trello]")
+            b.wait("document.getElementById('mcp-sign-in').textContent.includes('You will sign in at auth.example.com')", "the host, after picking Trello")
+            if not b.js("data.mcp_servers.some((s) => s.name === 'trello' && s.url === 'https://mcp.trello.com/v1')"):
+                raise Failure("picking Trello did not add it")
+            self.check_errors("the one Connections page")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_tickets_come_from_any_connection(self):
+        b = self.b
+        self.api("POST", "/api/settings/connectors/connect", {"template": "trello"})
+        try:
+            made = self.api("POST", "/api/pipelines", {"template": "Implement my tickets"})
+            pid = made.get("id") or made["definition"]["id"]
+            b.js("localStorage.setItem('yb-pipeline-full', '1')")
+            b.goto(self.url(f"/pipeline?p={pid}&tab=build"))
+            b.wait("document.querySelector('.pl-node[data-step=\"plan\"]')", "the builder")
+            b.click(".pl-node.pl-start")
+            names = b.js("[...document.querySelectorAll('.pl-lib-item')].map((x) => x.textContent).join('|')")
+            for gone in ("A connected tool", "Linear ticket", "Call API", "Call MCP tool"):
+                if gone in names:
+                    raise Failure(f"the library still has {gone}: {names}")
+            for want in ("New ticket", "Update the ticket", "Use a connected tool"):
+                if want not in names:
+                    raise Failure(f"the library does not have {want}: {names}")
+            b.wait("document.querySelector('#pl-inspector select[name=ticket-source]')", "where tickets come from")
+            sources = b.js("[...document.querySelectorAll('#pl-inspector select[name=ticket-source] option')].map((o) => o.textContent).join('|')")
+            if not sources.startswith("Linear|") or "Trello" not in sources:
+                raise Failure(f"the sources are {sources}")
+            self.set_field("#pl-inspector select[name=ticket-source]", "trello")
+            b.wait("document.querySelector('.pl-canvas').textContent.includes('When Trello has a new item')", "the trigger on Trello")
+            if b.js("document.querySelector('#pl-inspector select[name=ticket-source]').value") != "trello":
+                raise Failure("the choice did not stay")
+            self.set_field("#pl-inspector select[name=ticket-source]", "linear")
+            b.wait("document.querySelector('.pl-canvas').textContent.includes('When a Linear ticket')", "the trigger back on Linear")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"call\"]').click()")
+            b.wait("document.querySelector('#pl-inspector select[name=connection]')", "the connection picker")
+            options = b.js("[...document.querySelectorAll('#pl-inspector select[name=connection] option')].map((o) => o.value).join('|')")
+            if "connector:trello" not in options or "server:trello" not in options:
+                raise Failure(f"the connections are {options}")
+            self.set_field("#pl-inspector select[name=connection]", "server:trello")
+            b.wait("document.querySelector('.pl-node.kind-tool')", "the step as a tool")
+            self.check_errors("tickets from any connection")
+        finally:
+            b.goto(self.url("/"))
+            b.js("fetch('/api/settings/connectors/trello', { method: 'DELETE' })")
+            self.remove_mcp_servers()
+
+    def test_linear_is_a_connection(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.querySelector('#forge-rows [data-forge=linear]')", "Linear among the connections")
+        b.click("#forge-rows [data-forge=linear]")
+        b.wait("!document.getElementById('forge-linear').hidden", "the Linear step")
+        self.set_field("#forge-linear [name=linear_key]", "lin_api_BROWSER_KEY")
+        b.click("#forge-linear button[type=submit]")
+        b.wait("!document.getElementById('conn-flow').open", "the key saved")
+        b.wait("document.querySelector('#forge-rows [data-forge=linear]').textContent.includes('Saved')", "the row saying so")
+        with open(self.y.config) as f:
+            if "lin_api_BROWSER_KEY" in f.read():
+                raise Failure("the key reached yardbell.yml")
+        if "lin_api_BROWSER_KEY" in b.js("document.documentElement.outerHTML"):
+            raise Failure("the key stayed on the page")
+        self.check_errors("Linear as a connection")
+
+    def test_connection_actions_are_fields(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        b.click("#conn-new")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.click("#conn-new-list [data-starter=trello]")
+        b.wait("!document.getElementById('conn-form').hidden", "the form")
+        b.js("document.getElementById('conn-more').open = true")
+        b.wait("document.querySelector('#conn-more-tabs [data-more=conn-actions]')", "the tabs")
+        tabs = b.js("[...document.querySelectorAll('#conn-more-tabs button')].map((t) => t.textContent).join('|')")
+        if tabs != "Actions|Login headers|Choices|Settings":
+            raise Failure(f"the tabs are {tabs}")
+        if b.js("[...document.querySelectorAll('#conn-form textarea')].some((t) => t.value.includes('request:'))"):
+            raise Failure("the form still shows YAML")
+        said = b.js("document.getElementById('conn-actions').textContent")
+        for want in ("Lists items", "Moves an item", "GET", "PUT", "Reads", "Changes"):
+            if want not in said:
+                raise Failure(f"the actions do not say {want!r}: {said}")
+        b.js("document.querySelector('[data-call-name=list]').open = true")
+        path = "[data-call-name=list] [data-field=path]"
+        if "/boards/" not in b.js(f"document.querySelector('{path}').value"):
+            raise Failure("the path is not in its own field")
+        self.set_field(path, "/boards/{{board}}/cards/open")
+        if not b.js("document.querySelector('[data-call-name=list] [data-pairs=map] [data-pair-key]')"):
+            raise Failure("the reply fields are not in their own rows")
+        b.click("#conn-action-add")
+        b.wait("document.querySelector('[data-call-name=\"\"]')", "a new action")
+        self.set_field("#conn-call-list [data-call]:last-child [data-field=name]", "archive")
+        self.set_field("#conn-call-list [data-call]:last-child [data-field=path]", "/cards/{{item_id}}/archive")
+        self.set_field("#conn-call-list [data-call]:last-child [data-field=method]", "POST")
+        b.js("document.querySelector('[data-call-name=comment] [data-remove-call]').click()")
+        b.click("#conn-more-tabs [data-more=conn-settings]")
+        b.wait("document.querySelector('#conn-settings [name=id]').offsetParent !== null", "the settings tab")
+        b.click("#conn-form button[type=submit]")
+        b.wait("document.querySelector('[data-conn=trello]') && !document.getElementById('conn-flow').open", "the saved connection")
+        saved = self.api("GET", "/api/settings/connectors")["list"]
+        trello = next(c for c in saved if c["id"] == "trello")
+        if trello["calls"]["list"]["request"]["path"] != "/boards/{{board}}/cards/open":
+            raise Failure(f"the path was not saved: {trello['calls']['list']}")
+        if trello["calls"]["list"]["map"].get("title") != "name":
+            raise Failure("the reply fields were lost")
+        if trello["calls"]["archive"]["request"]["method"] != "POST" or "comment" in trello["calls"]:
+            raise Failure(f"the added and removed actions: {list(trello['calls'])}")
+        if trello["params"][0]["name"] != "board":
+            raise Failure("the choices were lost")
+        self.row_action("[data-conn=trello]", "[data-conn-act=edit]")
+        b.wait("!document.getElementById('conn-form').hidden", "the edit form")
+        b.js("document.getElementById('conn-more').open = true")
+        b.js("document.querySelector('[data-call-name=archive]').open = true")
+        self.set_field("[data-call-name=archive] [data-field=body]", "{ not json")
+        b.click("#conn-form button[type=submit]")
+        b.wait("document.getElementById('conn-note').textContent.includes('archive')", "word about the bad body")
+        b.js("document.getElementById('conn-flow').close()")
+        self.row_action("[data-conn=trello]", "[data-conn-act=delete]")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("!document.querySelector('[data-conn=trello]')", "the connection gone")
+        self.check_errors("actions as fields")
+
+    def test_every_connection_input_looks_the_same(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        measure = """(() => {
+          const out = new Set();
+          for (const el of document.querySelectorAll('#conn-flow input:not([type=checkbox]):not([type=radio]), #conn-flow select')) {
+            if (!el.offsetParent) continue;
+            const c = getComputedStyle(el);
+            out.add([c.height, c.borderTopColor, c.borderRadius, c.fontSize, c.backgroundColor, c.paddingLeft].join(' '));
+          }
+          return [...out];
+        })()"""
+        seen = set()
+        b.click("#conn-new")
+        b.wait("document.getElementById('conn-flow').open", "the modal")
+        seen.update(b.js(measure))
+        b.click("#conn-tabs [data-tab=server-form]")
+        b.js("document.getElementById('server-more').open = true")
+        seen.update(b.js(measure))
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.click("#conn-new-list [data-starter=trello]")
+        b.js("document.getElementById('conn-more').open = true")
+        b.js("document.querySelector('[data-call-name=list]').open = true")
+        seen.update(b.js(measure))
+        b.click("#conn-more-tabs [data-more=conn-login]")
+        seen.update(b.js(measure))
+        b.click("#conn-more-tabs [data-more=conn-choices]")
+        seen.update(b.js(measure))
+        b.js("document.getElementById('conn-flow').close()")
+        b.click("#secret-add")
+        b.wait("document.getElementById('conn-flow').open && !document.getElementById('secret-form').hidden", "adding a secret in the modal")
+        seen.update(b.js(measure))
+        b.js("document.getElementById('conn-flow').close()")
+        if len(seen) != 1:
+            raise Failure(f"the inputs have {len(seen)} styles: {sorted(seen)}")
+
+    def test_closing_the_modal_during_a_check_keeps_it_closed(self):
+        b = self.b
+        self.add_mcp_server()
+        b.js("""window.__real = window.__real || window.fetch;
+          window.__held = new Promise((go) => { window.__release = go; });
+          window.fetch = (u, o) => String(u).endsWith('/test')
+            ? window.__held.then(() => new Response(JSON.stringify({ version: '1', tools: [] }), { headers: { 'content-type': 'application/json' } }))
+            : window.__real(u, o)""")
+        try:
+            b.js("void showConnected('tool')")
+            b.wait("document.getElementById('conn-flow').open && document.getElementById('mcp-tools').textContent.includes('Checking')", "the check")
+            b.click("#conn-close")
+            b.wait("!document.getElementById('conn-flow').open", "the modal closed")
+            b.js("window.__release()")
+            b.pump(0.3)
+            if b.js("document.getElementById('conn-flow').open"):
+                raise Failure("the finished check opened the modal again")
+            self.check_errors("closing during a check")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_a_signed_in_tool_shows_as_one_row(self):
+        b = self.b
+        self.api("POST", "/api/settings/connectors/connect", {"template": "trello"})
+        try:
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.querySelector('#server-rows .conn-row') && connections.templates", "the row")
+            if b.js("document.querySelector('#conn-rows [data-conn=trello]')"):
+                raise Failure("Trello shows twice")
+            b.click("#server-rows .conn-row [data-row-menu]")
+            b.wait("document.querySelector('#server-rows [data-conn-edit=trello]')?.offsetParent", "its actions in the menu")
+            b.click("#server-rows [data-conn-edit=trello]")
+            b.wait("!document.getElementById('conn-form').hidden", "the form")
+            if b.js("document.querySelector('#conn-form [name=base_url]').offsetParent"):
+                raise Failure("a server connection has no address to type")
+            b.js("document.getElementById('conn-more').open = true")
+            if "trelloReadCard" not in b.js("document.getElementById('conn-call-list').textContent"):
+                raise Failure("the actions do not name their tool")
+            b.js("document.getElementById('conn-flow').close()")
+            data = self.api("GET", "/api/pipelines")
+            if not any(c["id"] == "trello" for c in data["connectors"]):
+                raise Failure("the pipeline builder does not offer Trello")
+            b.click("#conn-new")
+            b.click("#conn-tabs [data-tab=conn-tab-token]")
+            b.click("#conn-new-list [data-starter=trello]")
+            b.wait("!document.getElementById('conn-form').hidden", "the token form")
+            b.click("#conn-form button[type=submit]")
+            b.wait("document.querySelector('[data-conn=trello-token]') && !document.getElementById('conn-flow').open", "a token Trello beside the signed-in one")
+            b.js("fetch('/api/settings/connectors/trello-token', { method: 'DELETE' })")
+            self.check_errors("a signed-in tool")
+        finally:
+            b.js("document.getElementById('conn-flow')?.close(); fetch('/api/settings/connectors/trello', { method: 'DELETE' })")
+            self.remove_mcp_servers()
+
+    def test_loading_again_does_not_redraw_unchanged_rows(self):
+        b = self.b
+        self.add_mcp_server()
+        try:
+            b.wait("connections.templates", "the connections")
+            b.js("window.__row = document.querySelector('#server-rows .conn-row'); window.__forge = document.querySelector('#forge-rows .conn-row')")
+            b.js("void loadConnections()")
+            b.pump(0.3)
+            b.js("void refreshServerAuth()")
+            b.pump(0.3)
+            if not b.js("window.__row.isConnected && window.__forge.isConnected"):
+                raise Failure("an unchanged row was redrawn, which can lose a click")
+            b.click("#server-rows .conn-row [data-row-menu]")
+            b.wait("!document.querySelector('#server-rows .menu').hidden", "the menu")
+            b.js("setRows('server-rows', document.getElementById('server-rows').innerHTML + '<li id=late-row></li>')")
+            if b.js("document.querySelector('#server-rows .menu').hidden"):
+                raise Failure("a change closed the open menu")
+            b.js("document.body.click()")
+            b.wait("document.getElementById('late-row')", "the change, once the menu closed")
+        finally:
+            self.remove_mcp_servers()
+
+    def test_a_pasted_token_never_replaces_a_secret(self):
+        b = self.b
+        self.api("POST", "/api/settings/secrets", {"name": "other_token", "value": "keep-me-BROWSER"})
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates && data.secrets", "the section")
+        made = b.js("keptAsSecret('other_token', 'new-value-BROWSER')")
+        if made != "${secret:other_token-2}":
+            raise Failure(f"it reused the name: {made}")
+        secrets_file = os.path.join(os.path.dirname(self.y.config), "secrets.yml")
+        with open(secrets_file) as f:
+            stored = f.read()
+        if "keep-me-BROWSER" not in stored:
+            raise Failure("the earlier secret was replaced")
+        for name in ("other_token", "other_token-2"):
+            self.api("POST", "/api/settings/secrets/delete", {"name": name})
+
+    def test_tokens_become_secrets_by_themselves(self):
+        b = self.b
+        before = self.api("GET", "/api/settings/pull-requests") if False else self.api("GET", "/api/settings")["pull_requests"]["value"]
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        b.js("""window.__real = window.__real || window.fetch; window.fetch = (u, o) => String(u).endsWith('/test')
+          ? Promise.resolve(new Response(JSON.stringify({ version: '1', tools: [] }), { headers: { 'content-type': 'application/json' } }))
+          : window.__real(u, o)""")
+        try:
+            b.click("#conn-new")
+            b.click("#conn-tabs [data-tab=server-form]")
+            self.set_field("#server-form [name=url]", "https://mcp.example.net/mcp")
+            b.js("document.getElementById('server-more').open = true")
+            self.set_field("#server-form [name=token]", "tok-BROWSER-ONE")
+            self.set_field("#server-form [name=pairs]", "X-Api-Key=tok-BROWSER-TWO")
+            b.click("#server-form button[type=submit]")
+            b.wait("data.mcp_servers.some((s) => s.name === 'example')", "the server saved")
+            b.js("document.getElementById('conn-flow').close()")
+            b.pump(0.3)
+            if b.js("document.getElementById('conn-flow').open"):
+                raise Failure("closing the modal during a save did not hold")
+            with open(self.y.config) as f:
+                config = f.read()
+            for value in ("tok-BROWSER-ONE", "tok-BROWSER-TWO"):
+                if value in config:
+                    raise Failure(f"{value} reached yardbell.yml")
+            if "Bearer ${secret:example_token}" not in config or "${secret:example_x-api-key}" not in config:
+                raise Failure(f"the headers do not name secrets:\n{config}")
+
+            b.click("#conn-new")
+            b.click("#conn-tabs [data-tab=conn-tab-token]")
+            b.click("#conn-new-list [data-starter=asana]")
+            b.wait("!document.getElementById('conn-form').hidden", "the form")
+            b.js("""connHeaders = [{ name: 'Authorization', value: 'Bearer tok-BROWSER-THREE' }]; renderConnHeaders()""")
+            b.click("#conn-form button[type=submit]")
+            b.wait("document.querySelector('[data-conn=asana]') && !document.getElementById('conn-flow').open", "the connection saved")
+            with open(self.y.config) as f:
+                config = f.read()
+            if "tok-BROWSER-THREE" in config or "Bearer ${secret:asana_authorization}" not in config:
+                raise Failure(f"the login header was not kept as a secret:\n{config}")
+
+            b.click("#forge-rows [data-forge=gitlab]")
+            b.click("#pr-add-host")
+            self.set_field("#pr-hosts .row:last-child [data-key=host]", "git-auto.example.com")
+            self.set_field("#pr-hosts .row:last-child [data-key=paste]", "glpat-BROWSER-FOUR")
+            b.click("#forge-gitlab button[type=submit]")
+            b.wait("!document.getElementById('conn-flow').open", "GitLab saved")
+            b.wait("document.querySelector('#forge-rows [data-forge=gitlab]').textContent.includes('git-auto.example.com')", "the host listed")
+            with open(self.y.config) as f:
+                config = f.read()
+            if "glpat-BROWSER-FOUR" in config or "${secret:gitlab_git-auto_example_com}" not in config:
+                raise Failure(f"the host's token was not kept as a secret:\n{config}")
+            page = b.js("document.documentElement.outerHTML")
+            for value in ("tok-BROWSER-ONE", "tok-BROWSER-TWO", "tok-BROWSER-THREE", "glpat-BROWSER-FOUR"):
+                if value in page:
+                    raise Failure(f"{value} is still on the page")
+            b.wait("document.querySelector('[data-secret-row=asana_authorization]')?.textContent.includes('Asana')", "the secret saying what uses it")
+            self.check_errors("tokens as secrets")
+        finally:
+            b.js("document.getElementById('conn-flow')?.close(); if (window.__real) { window.fetch = window.__real; delete window.__real; }")
+            self.api("POST", "/api/settings/mcp/servers", {"servers": []})
+            self.api("POST", "/api/settings/pull-requests", before)
+            b.js("fetch('/api/settings/connectors/asana', { method: 'DELETE' })")
+            for name in ("example_token", "example_x-api-key", "asana_authorization", "gitlab_git-auto_example_com"):
+                try:
+                    self.api("POST", "/api/settings/secrets/delete", {"name": name})
+                except Exception:
+                    pass
+
+    def test_folders_load_on_the_connections_page(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('pr-folders') && !document.getElementById('pr-folders').textContent.includes('Checking your folders')", "the folders to load")
+        head = b.js("[...document.querySelectorAll('#pull-requests .conn-head span')].map((x) => x.textContent).filter(Boolean).join(' ')")
+        if head != "Folder Service Status":
+            raise Failure(f"the folders' columns are {head!r}")
+        if not b.js("document.getElementById('pr-save').hidden"):
+            raise Failure("Save should wait for a change")
+        self.set_field("#pr-form [name=poll_seconds]", "180")
+        b.wait("!document.getElementById('pr-save').hidden", "Save after a change")
+
+    def test_connections_section(self):
+        b = self.b
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new')", "the section")
+        if b.js("document.getElementById('conn-trello')"):
+            raise Failure("the page still has a button for one tool")
+        b.click("#conn-new")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.wait("document.querySelector('#conn-new-list [data-starter=trello]')", "the examples")
+        said = b.js("document.getElementById('conn-new-list').textContent")
+        for want in ("Start blank", "Trello", "GitHub Issues", "GitLab Issues", "Jira", "Asana"):
+            if want not in said:
+                raise Failure(f"the list does not offer {want!r}: {said}")
+        b.click("#conn-new-list [data-starter=jira]")
+        b.wait("document.querySelector('#conn-form [name=base_url]')?.value.includes('atlassian.net')", "the Jira example")
+        b.click("#conn-cancel")
+        b.click("#conn-new")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.click("#conn-new-list [data-starter='']")
+        b.wait("document.querySelector('#conn-form [name=base_url]')?.value === ''", "a blank form")
+        b.click("#conn-cancel")
+        b.click("#conn-new")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.click("#conn-new-list [data-starter=trello]")
+        b.wait("document.querySelector('#conn-form [name=base_url]')?.value === 'https://api.trello.com/1'", "the Trello template")
+        b.js("document.getElementById('conn-more').open = true")
+        if "secret:trello_token" not in b.js("document.querySelector('#conn-headers [data-key=value]').value"):
+            raise Failure("the template's header is not a secret reference")
+        b.click("#conn-form button[type=submit]")
+        b.wait("document.querySelector('[data-conn=trello]')", "the saved connection")
+        row = b.js("document.querySelector('[data-conn=trello]').textContent")
+        for want in ("api.trello.com", "Save the secret", "trello_token"):
+            if want not in row:
+                raise Failure(f"the row does not say {want!r}: {row}")
+        self.row_action("[data-conn=trello]", "[data-conn-act=share]")
+        b.wait("document.getElementById('conn-share-text')", "the shared text")
+        text = b.js("document.getElementById('conn-share-text').value")
+        if "${secret:trello_token}" not in text:
+            raise Failure(f"share lost its reference: {text}")
+        b.click("[data-close-output]")
+        b.click("#conn-new")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.click("#conn-import-open")
+        self.set_field("#conn-import [name=text]", text.replace("id: trello", "id: copy"))
+        b.click("#conn-import button[type=submit]")
+        b.wait("document.querySelector('[data-conn=copy]')", "the imported connection")
+        if "Switched off" not in b.js("document.querySelector('[data-conn=copy]').textContent") and "Save the secret" not in b.js("document.querySelector('[data-conn=copy]').textContent"):
+            raise Failure("an import did not arrive switched off")
+        if "api.trello.com" not in b.js("document.getElementById('conn-output').textContent"):
+            raise Failure("the import does not name its host")
+        b.click("[data-close-output]")
+        for name in ("copy", "trello"):
+            self.row_action(f"[data-conn={name}]", "[data-conn-act=delete]")
+            b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait(f"!document.querySelector('[data-conn={name}]')", "the connection gone")
+        self.check_errors("the Connections section")
+
     def test_settings_explains_github_and_gitlab(self):
         b = self.b
         cfg_before = self.api("GET", "/api/settings")["pull_requests"]["value"]
         self.api("POST", "/api/settings/pull-requests", {**cfg_before, "gitlab": []})
+        b.goto(self.url("/"))
         b.goto(self.url("/settings#pull-requests"))
         b.wait("document.querySelector('#pr-form [name=enabled]')?.checked === true", "the section")
-        said = b.js("document.getElementById('pull-requests').textContent")
+        said = b.js("document.getElementById('connections').textContent")
         for want in ("GitHub", "gh auth login", "GitLab", "read_api", "No GitLab hosts yet"):
             if want not in said:
                 raise Failure(f"the section does not say {want!r}:\n{said}")
         if "hp" not in b.js("document.getElementById('pr-github').textContent"):
             raise Failure("GitHub does not list the machines")
+        b.click("#forge-rows [data-forge=gitlab]")
+        b.wait("!document.getElementById('forge-gitlab').hidden", "the GitLab step")
         b.click("#pr-add-host")
         b.wait("document.querySelector('#pr-hosts [data-key=host]')", "a host row")
         for width in (1280, 390):
@@ -2713,13 +3635,12 @@ class Suite:
                     raise Failure(f"the host's fields are not stacked on a phone: {lefts}")
         b.viewport(1280, 800)
         row = b.js("document.querySelector('#pr-hosts .row').textContent")
-        for want in ("Host", "Address", "Token", "Not checked yet"):
+        for want in ("Host", "Address", "Saved token", "Or paste a token", "Not checked yet"):
             if want not in row:
                 raise Failure(f"the host row does not say {want!r}: {row}")
-        if "No GitLab hosts yet" in b.js("document.getElementById('pull-requests').innerText"):
+        if "No GitLab hosts yet" in b.js("document.getElementById('forge-gitlab').innerText"):
             raise Failure("the empty note stayed after adding a host")
-        if not b.js("document.querySelector('#pull-requests a[href=\"#servers\"]')"):
-            raise Failure("no way to the saved secrets")
+        b.js("document.getElementById('conn-flow').close()")
         b.js("""window.__real = window.fetch; window.fetch = (u, o) => String(u).includes('/pull-requests/folders')
           ? Promise.resolve(new Response(JSON.stringify({ unreachable: [], folders: [
               { machine: 'hp', folder: 'web', host: 'github.com', project: 'acme/web', service: 'github' },
@@ -2737,12 +3658,15 @@ class Suite:
         hosts = b.js("document.querySelectorAll('#pr-hosts .row').length")
         b.click("#pr-folders [data-add-host]")
         b.wait(f"document.querySelectorAll('#pr-hosts .row').length === {hosts + 1}", "the host added")
+        b.wait("!document.getElementById('forge-gitlab').hidden", "the GitLab step for the new host")
         if b.js("document.querySelector('#pr-hosts .row:last-child [data-key=host]').value") != "gitlab.acme.org":
             raise Failure("the added host is not the folder's")
         if b.js("document.querySelector('#pr-folders [data-add-host]')"):
             raise Failure("the folder still asks to add a host now listed")
-        b.js("document.querySelector('#pr-form [name=use_github]').click()")
+        b.js("document.querySelector('#forge-github [name=use_github]').click()")
         b.wait("document.getElementById('pr-folders').textContent.includes('GitHub is switched off')", "GitHub off in the folder list")
+        b.js("document.querySelector('#forge-github [name=use_github]').click()")
+        b.js("document.getElementById('conn-flow').close()")
         b.js("window.fetch = window.__real")
         self.check_errors("the GitHub and GitLab section")
 

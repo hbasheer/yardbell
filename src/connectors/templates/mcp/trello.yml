@@ -1,0 +1,38 @@
+id: trello
+name: Trello
+server: trello
+params:
+  - { name: board, label: Board, options: boards }
+calls:
+  boards:
+    tool: trelloReadBoard
+    kind: lookup
+    arguments: { action: list, limit: 100 }
+    items: boards
+    map: { id: id, name: name }
+  states:
+    tool: trelloReadCard
+    kind: lookup
+    arguments: { action: list_by_board, boardIdOrUrl: '{{board}}' }
+    items: lists
+    map: { id: id, name: name }
+  list:
+    tool: trelloReadCard
+    kind: lookup
+    arguments: { action: list_by_board, boardIdOrUrl: '{{board}}', cursor: '{{cursor}}' }
+    items: lists[].cards
+    map: { item_id: id, id: shortUrl, title: name, url: url, description: description, state: _parent.id }
+    page: { style: cursor, param: '', next: nextCursor, has_more: hasNextPage }
+  read:
+    tool: trelloReadCard
+    kind: lookup
+    arguments: { action: get, cardIdOrUrl: '{{item_id}}' }
+    map: { title: name, url: url, description: description, closed: closed }
+  move:
+    tool: trelloWriteCard
+    kind: change
+    arguments: { action: move, cardId: '{{item_id}}', listId: '{{value}}' }
+  comment:
+    tool: trelloWriteCard
+    kind: change
+    arguments: { action: add_comment, cardId: '{{item_id}}', text: '{{value}}' }

@@ -1,6 +1,7 @@
 use crate::config::Config;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 pub const END: &str = "end";
@@ -85,7 +86,7 @@ pub enum SessionChoice {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
-pub enum LinearAction {
+pub enum UpdateAction {
     Move,
     Comment,
 }
@@ -110,16 +111,37 @@ pub enum StepKind {
         machines: Vec<String>,
     },
     Push,
-    Linear {
-        action: LinearAction,
+    #[serde(rename = "update", alias = "linear")]
+    Update {
+        action: UpdateAction,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         state: String,
     },
     Report,
+    Call {
+        connector: String,
+        call: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, String>,
+    },
+    Tool {
+        server: String,
+        tool: String,
+        #[serde(default)]
+        arguments: Value,
+        #[serde(default = "changes")]
+        call_kind: crate::connectors::CallKind,
+        #[serde(default)]
+        schema_hash: String,
+    },
     Wait {
         #[serde(default)]
         message: String,
     },
+}
+
+fn changes() -> crate::connectors::CallKind {
+    crate::connectors::CallKind::Change
 }
 
 fn two() -> u32 {
@@ -152,12 +174,27 @@ pub enum Trigger {
         schedule: String,
         #[serde(default, skip_serializing_if = "String::is_empty")]
         state: String,
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        connector: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, String>,
+    },
+    Connector {
+        connector: String,
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        params: BTreeMap<String, String>,
+        #[serde(default)]
+        states: Vec<String>,
     },
     Linear {
         #[serde(default)]
         assigned: bool,
         #[serde(default)]
         states: Vec<String>,
+    },
+    Webhook {
+        #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+        map: BTreeMap<String, String>,
     },
     GithubReview,
     GitlabReviewer {
@@ -265,7 +302,100 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         out.push("the pipeline needs a name".to_string());
     }
     let known = |name: &str| cfg.machine(name).is_some();
+    let source = match &def.trigger {
+        Trigger::Connector { connector, .. } => Some(connector.as_str()),
+        Trigger::Schedule { connector, .. } if !connector.is_empty() => Some(connector.as_str()),
+        _ => None,
+    };
+    let gives = match &def.trigger {
+        Trigger::Webhook { .. } => Some("webhook"),
+        _ => source,
+    };
+    if let Some(id) = gives {
+        for s in &def.steps {
+            let StepKind::Update { action, .. } = &s.kind else {
+                continue;
+            };
+            if id == "webhook" {
+                out.push(format!(
+                    "{} updates a ticket, and a webhook gives none to update",
+                    s.name
+                ));
+                continue;
+            }
+            let need = match action {
+                UpdateAction::Move => "move",
+                UpdateAction::Comment => "comment",
+            };
+            if let Some(c) = cfg.connectors.iter().find(|c| c.id == id) {
+                if !c.calls.contains_key(need) {
+                    out.push(format!(
+                        "{} needs the action {need}, which {} does not have",
+                        s.name, c.name
+                    ));
+                }
+            }
+        }
+    }
+    for s in &def.steps {
+        let StepKind::Tool { server, .. } = &s.kind else {
+            continue;
+        };
+        match cfg.mcp_servers.iter().find(|m| &m.name == server) {
+            Some(m) if crate::mcp_client::is_own_server(&m.url, cfg) => out.push(format!(
+                "{} calls {server}, which is Yardbell itself, and a pipeline must not call it",
+                s.name
+            )),
+            None if def.enabled => out.push(format!(
+                "{} names the server {server}, which is not in Settings, Connections",
+                s.name
+            )),
+            _ => {}
+        }
+    }
     if def.enabled {
+        for s in &def.steps {
+            let StepKind::Call {
+                connector, call, ..
+            } = &s.kind
+            else {
+                continue;
+            };
+            match cfg.connectors.iter().find(|c| &c.id == connector) {
+                None => out.push(format!(
+                    "{} names connector {connector}, which is not in Settings",
+                    s.name
+                )),
+                Some(c) if !c.calls.contains_key(call) => out.push(format!(
+                    "{} names the call {call}, which {connector} does not have",
+                    s.name
+                )),
+                Some(_) => {}
+            }
+        }
+        let chosen = match &def.trigger {
+            Trigger::Connector { params, .. } | Trigger::Schedule { params, .. } => Some(params),
+            _ => None,
+        };
+        let connector = source.and_then(|id| cfg.connectors.iter().find(|c| c.id == id));
+        if let (Some(c), Some(chosen)) = (connector, chosen) {
+            let needs = c.calls.get("list").map(crate::connectors::client::needs_of);
+            for p in &c.params {
+                let needed = needs.as_ref().is_some_and(|n| n.contains(&p.name));
+                if needed && !chosen.contains_key(&p.name) {
+                    out.push(format!("Pick a {} for the trigger", p.label));
+                }
+            }
+        }
+        match source.map(|id| (id, cfg.connectors.iter().find(|c| c.id == id))) {
+            Some((id, None)) => out.push(format!(
+                "the trigger names connector {id}, which is not in Settings"
+            )),
+            Some((id, Some(c))) if !c.enabled => {
+                out.push(format!("connector {id} is switched off"))
+            }
+            _ => {}
+        }
         match &def.trigger {
             Trigger::Schedule { schedule, .. } => {
                 if let Err(e) = crate::triggers::Schedule::parse(schedule) {
@@ -429,8 +559,8 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                     ));
                 }
             }
-            StepKind::Linear {
-                action: LinearAction::Move,
+            StepKind::Update {
+                action: UpdateAction::Move,
                 state,
             } if state.trim().is_empty() => {
                 out.push(format!(
@@ -495,6 +625,76 @@ pub(crate) mod tests {
 
     fn example() -> Definition {
         serde_json::from_str(EXAMPLE).unwrap()
+    }
+
+    #[test]
+    fn check_names_a_bad_call() {
+        let mut cfg = cfg();
+        cfg.connectors = vec![crate::connectors::template("trello").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "update", "name": "Update Trello", "kind": "call",
+                "connector": "trello", "call": "nope",
+            }))
+            .unwrap(),
+        );
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            problems.contains(
+                &"Update Trello names the call nope, which trello does not have".to_string()
+            ),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_trigger_must_pick_what_its_list_needs() {
+        let mut cfg = cfg();
+        cfg.connectors = vec![crate::connectors::template("trello").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = Trigger::Connector {
+            connector: "trello".into(),
+            params: Default::default(),
+            states: vec![],
+        };
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            problems.contains(&"Pick a Board for the trigger".to_string()),
+            "{problems:?}"
+        );
+        def.trigger = Trigger::Connector {
+            connector: "trello".into(),
+            params: [("board".to_string(), "B1".to_string())].into(),
+            states: vec![],
+        };
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            !problems.iter().any(|p| p.contains("Pick a")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn definition_check_knows_connectors() {
+        let mut cfg = cfg();
+        let mut def = crate::pipeline::templates::all().remove(0);
+        def.enabled = true;
+        def.trigger = Trigger::Connector {
+            connector: "x".into(),
+            params: Default::default(),
+            states: vec![],
+        };
+        let problems = |d: &Definition, c: &Config| check(d, c).err().unwrap_or_default();
+        assert!(problems(&def, &cfg)
+            .contains(&"the trigger names connector x, which is not in Settings".to_string()));
+        let mut trello = crate::connectors::template("trello").unwrap();
+        trello.id = "x".into();
+        trello.enabled = false;
+        cfg.connectors = vec![trello];
+        assert!(problems(&def, &cfg).contains(&"connector x is switched off".to_string()));
     }
 
     #[test]

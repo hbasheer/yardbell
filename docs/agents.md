@@ -82,7 +82,7 @@ that uses one shows its `${secret:NAME}` reference, and any other credential sho
 
 | Tool | What it does |
 |---|---|
-| `read_settings` | one area of Settings with what it may be set to: `dispatch`, `triggers`, `worktree_setup`, `agents`, `session_mcp_servers`, `phone`, `machines`, `pipelines`, `pull_requests`, `security` or `about` |
+| `read_settings` | one area of Settings with what it may be set to: `connectors`, `dispatch`, `triggers`, `worktree_setup`, `agents`, `session_mcp_servers`, `phone`, `machines`, `pipelines`, `pull_requests`, `security` or `about` |
 | `list_conversations`, `read_conversation` | Dispatch conversations and who started each; one conversation's newest 20 events, long text clipped, under about 30 000 characters |
 | `list_tasks`, `read_task` | saved Dispatch tasks and their versions |
 | `list_pipelines`, `read_pipeline` | pipelines with their run counts; one definition and its versions |
@@ -99,6 +99,7 @@ Dispatch also has tools that change things, each a step its approval setting and
 | `change_settings` | replaces one changeable area (every `read_settings` area except `security` and `about`) with an edited copy, checked as Settings checks it and saved so Settings' Undo reverses it; a `(hidden)` left as it is keeps the saved value; machines are never added or removed; text around a `(hidden)` cannot be edited, and an entry whose url, host or command changes loses its kept credentials; the `dispatch` area, and any change that adds a `${secret:NAME}` reference, always wait for you |
 | `save_task` | saves a new task, or a new version of one |
 | `run_trigger` | runs a trigger now, as Settings' Run now does |
+| `save_connector` | saves a connection to an outside tool, checked as Settings checks it; it always waits for you, a new one arrives switched off, tokens can only be named as secrets, and `allow_private` can only be set in Settings |
 | `save_pipeline` | saves a new pipeline (switched off) or a new version of one, checked as the builder checks it; it always waits for you, and its card opens in the builder |
 | `set_pipeline_enabled` | switches a pipeline on or off, after checking that its trigger can run |
 | `run_pipeline` | starts runs of a pipeline on Linear tickets or pull and merge request links |
@@ -111,7 +112,7 @@ there, whatever your approval setting or allow rules say (a rule that refuses th
 refuses it). The client's answer names the proposal. A pipeline run's own Dispatch turn cannot call
 any of them, whatever the rules say, so text in a ticket cannot answer the run it belongs to.
 
-**MCP servers for sessions** in Settings lists other MCP servers (a command such as
+**Connections** in Settings lists other MCP servers (a command such as
 `npx -y @modelcontextprotocol/server-github`, or a URL) and the machines they are for. Claude Code
 sessions that Yardbell starts get them through `--mcp-config`, without touching the agent's own
 settings. Keep their tokens in the **Secrets** list below them and write `${secret:NAME}` in the
@@ -120,6 +121,9 @@ header or variable, for example `Authorization=Bearer ${secret:linear}`, see
 list to a file only your account can read on that machine and gives Claude Code its path, see
 [`mcp_servers`](configuration.md#mcp_servers-optional). Other agents configure MCP their own way
 and do not get them.
+
+Signing in to a server under **Connections** is for Yardbell's own pipeline steps. An agent does not
+get that sign-in, and signs in to the server by itself on its own machine.
 
 ## Making every session openable
 

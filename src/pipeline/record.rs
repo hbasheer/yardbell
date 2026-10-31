@@ -5,10 +5,30 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct TicketRef {
-    pub linear_id: String,
+    pub source: String,
+    #[serde(alias = "linear_id")]
+    pub item_id: String,
     pub id: String,
     pub title: String,
     pub url: String,
+    // Only a source with nothing to read it back from, such as a webhook, keeps it here.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub description: String,
+    // What a later call on this item needs, such as the repository it was found in.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub fields: BTreeMap<String, String>,
+}
+
+impl TicketRef {
+    pub fn vars(&self) -> crate::connectors::client::Vars {
+        let mut vars = self.fields.clone();
+        vars.insert("item_id".to_string(), self.item_id.clone());
+        crate::connectors::client::Vars(vars)
+    }
+
+    pub fn is_linear(&self) -> bool {
+        self.source.is_empty() || self.source == "linear"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -61,7 +81,8 @@ impl Subject {
     pub fn key(&self) -> String {
         match (&self.pr, &self.ticket) {
             (Some(pr), _) => format!("pr:{}", pr.url),
-            (None, Some(t)) => format!("ticket:{}", t.id),
+            (None, Some(t)) if t.is_linear() => format!("ticket:{}", t.id),
+            (None, Some(t)) => format!("ticket:{}:{}", t.source, t.item_id),
             (None, None) => "none".into(),
         }
     }
@@ -147,6 +168,7 @@ pub enum WaitKind {
     WaitStep,
     Questions,
     Push,
+    ToolChanged,
 }
 
 impl WaitKind {
@@ -165,6 +187,8 @@ pub struct Waiting {
     pub reason: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub screen: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub tool_hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -276,6 +300,12 @@ pub enum Effect {
     Report {
         step: String,
     },
+    Call {
+        step: String,
+    },
+    Tool {
+        step: String,
+    },
     Notify {
         text: String,
     },
@@ -322,6 +352,14 @@ pub enum Seen {
     Opened(Result<PullRef, String>),
     Linear(Result<(), String>),
     Reported(Result<String, String>),
+    Called(Result<String, String>),
+    ToolDone(Result<String, String>),
+    ToolChanged {
+        hash: String,
+        reason: String,
+        shown: String,
+    },
+    AcceptTool,
     Answer(String),
     Retry,
     Continue(Outcome),
@@ -331,6 +369,38 @@ pub enum Seen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(source: &str, item_id: &str, id: &str) -> Subject {
+        Subject {
+            ticket: Some(TicketRef {
+                source: source.into(),
+                item_id: item_id.into(),
+                id: id.into(),
+                ..TicketRef::default()
+            }),
+            pr: None,
+        }
+    }
+
+    #[test]
+    fn a_saved_ticket_with_linear_id_still_loads() {
+        let t: TicketRef =
+            serde_json::from_str(r#"{"linear_id":"u-1","id":"COM-1","title":"t","url":"u"}"#)
+                .unwrap();
+        assert_eq!(t.item_id, "u-1");
+        assert!(t.is_linear());
+    }
+
+    #[test]
+    fn a_linear_ticket_keeps_its_key() {
+        assert_eq!(item("", "u-1", "COM-1").key(), "ticket:COM-1");
+        assert_eq!(item("linear", "u-1", "COM-1").key(), "ticket:COM-1");
+    }
+
+    #[test]
+    fn another_sources_key_names_the_source() {
+        assert_eq!(item("trello", "abc", "12").key(), "ticket:trello:abc");
+    }
 
     #[test]
     fn pull_request_links_are_read() {

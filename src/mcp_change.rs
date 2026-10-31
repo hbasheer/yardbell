@@ -349,7 +349,15 @@ fn put(cfg: &mut Config, area: &str, value: Value) -> Result<(), String> {
         }
         "session_mcp_servers" => {
             known::<crate::config::McpServer>(&value, area, &[])?;
-            cfg.mcp_servers = read(area, value)?;
+            let mut servers: Vec<crate::config::McpServer> = read(area, value)?;
+            // Reaching private addresses stays a person's choice, for the address they chose it for.
+            for s in &mut servers {
+                s.allow_private = cfg
+                    .mcp_servers
+                    .iter()
+                    .any(|old| old.name == s.name && old.url == s.url && old.allow_private);
+            }
+            cfg.mcp_servers = servers;
         }
         "phone" => {
             known::<crate::config::PhoneNotifications>(&value, area, &[])?;
@@ -643,6 +651,7 @@ mod tests {
             )]
             .into(),
             machines: vec![],
+            allow_private: false,
         }];
         cfg.pull_requests.gitlab = vec![crate::config::GitLabHost {
             host: "git.example.com".into(),
