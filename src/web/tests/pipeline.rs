@@ -284,7 +284,7 @@ async fn starting_by_tickets_and_a_ticket_already_running() {
     };
     let (status, body) = start(json!(["COM-1"])).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["runs"][0]["subject"]["ticket"]["linear_id"], "u-1");
+    assert_eq!(body["runs"][0]["subject"]["ticket"]["item_id"], "u-1");
     let (status, body) = start(json!(["COM-1"])).await;
     assert_eq!(status, StatusCode::CONFLICT);
     assert!(

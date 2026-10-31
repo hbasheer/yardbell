@@ -340,7 +340,8 @@ pub(crate) async fn subjects(
                 .ok_or_else(|| bad(format!("{id} is not one of your open tickets in Linear")))?;
             out.push(Subject {
                 ticket: Some(TicketRef {
-                    linear_id: t.linear_id.clone(),
+                    source: String::new(),
+                    item_id: t.linear_id.clone(),
                     id: t.id.clone(),
                     title: t.title.clone(),
                     url: t.url.clone(),

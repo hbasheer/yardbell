@@ -1,7 +1,7 @@
 use super::definition::{Outcome, SessionChoice, StepKind};
 use super::engine::{self, tests::run_of};
 use super::prompts::{marker, TicketText};
-use super::record::{Effect, PrRef, PullRef, Run, RunState, Seen, WaitKind};
+use super::record::{Effect, PrRef, PullRef, Run, RunState, Seen, TicketRef, WaitKind};
 use super::run::{act, needless_sessions, World};
 use super::watch;
 use crate::config::Pipelines;
@@ -209,7 +209,7 @@ impl World for Fake {
 
     fn ticket<'a>(
         &'a self,
-        _linear_id: &'a str,
+        _ticket: &'a TicketRef,
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>> {
         Box::pin(async move {
             if *self.ticket_fails.lock().unwrap() {
@@ -228,7 +228,7 @@ impl World for Fake {
 
     fn move_ticket<'a>(
         &'a self,
-        _linear_id: &'a str,
+        _ticket: &'a TicketRef,
         state: &'a str,
     ) -> BoxFuture<'a, Result<(), String>> {
         Box::pin(async move {
@@ -418,6 +418,23 @@ async fn a_report_notifies_as_finished() {
         *fake.note_kinds.lock().unwrap(),
         vec![Note::Finished, Note::Waiting]
     );
+}
+
+#[tokio::test]
+async fn a_linear_step_on_a_trello_item_fails_clearly() {
+    let fake = Fake::default();
+    let mut run = run_of("Implement my Linear tickets");
+    let ticket = run.subject.ticket.as_mut().unwrap();
+    ticket.source = "trello".into();
+    let effect = Effect::Linear {
+        step: "linear-move".into(),
+    };
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    match &seen[..] {
+        [Seen::Linear(Err(e))] => assert!(e.contains("is not a Linear ticket"), "{e}"),
+        other => panic!("{other:?}"),
+    }
+    assert!(fake.calls().is_empty());
 }
 
 #[test]
@@ -1195,7 +1212,8 @@ mod pipelines {
     fn ticket(id: &str) -> Subject {
         Subject {
             ticket: Some(TicketRef {
-                linear_id: format!("u-{id}"),
+                source: String::new(),
+                item_id: format!("u-{id}"),
                 id: id.into(),
                 title: "Fix".into(),
                 url: String::new(),

@@ -69,7 +69,8 @@ pub fn ticket_in(branch: &str, title: &str, pattern: Option<&Regex>) -> Option<S
 
 fn named(id: Option<String>, title: &str) -> Option<TicketRef> {
     id.map(|id| TicketRef {
-        linear_id: id.clone(),
+        source: String::new(),
+        item_id: id.clone(),
         id,
         title: title.to_string(),
         url: String::new(),
@@ -232,7 +233,8 @@ impl Watch {
                 .filter(|t| t.state.eq_ignore_ascii_case(state.trim()))
                 .map(|t| Subject {
                     ticket: Some(TicketRef {
-                        linear_id: t.id,
+                        source: String::new(),
+                        item_id: t.id,
                         id: t.ticket,
                         title: t.title,
                         url: t.url,
@@ -256,7 +258,8 @@ impl Watch {
                 for t in src.feeds.linear(&key).await? {
                     let subject = Subject {
                         ticket: Some(TicketRef {
-                            linear_id: t.id.clone(),
+                            source: String::new(),
+                            item_id: t.id.clone(),
                             id: t.ticket.clone(),
                             title: t.title.clone(),
                             url: t.url.clone(),
@@ -588,7 +591,7 @@ pub(crate) mod tests {
         assert_eq!(due[0].1.pr.as_ref().unwrap().number, 12);
         assert_eq!(due[0].1.ticket.as_ref().unwrap().id, "COM-6");
         assert_eq!(due[1].1.ticket.as_ref().unwrap().id, "COM-5");
-        assert_eq!(due[2].1.ticket.as_ref().unwrap().linear_id, "u-5");
+        assert_eq!(due[2].1.ticket.as_ref().unwrap().item_id, "u-5");
         let again = Watch::load(dir.path().join("watch.json"));
         assert!(
             again.due(&defs, &sources(&f), at(10, 5)).await.is_empty(),

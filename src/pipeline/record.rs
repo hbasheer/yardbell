@@ -5,10 +5,18 @@ use std::collections::BTreeMap;
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct TicketRef {
-    pub linear_id: String,
+    pub source: String,
+    #[serde(alias = "linear_id")]
+    pub item_id: String,
     pub id: String,
     pub title: String,
     pub url: String,
+}
+
+impl TicketRef {
+    pub fn is_linear(&self) -> bool {
+        self.source.is_empty() || self.source == "linear"
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -61,7 +69,8 @@ impl Subject {
     pub fn key(&self) -> String {
         match (&self.pr, &self.ticket) {
             (Some(pr), _) => format!("pr:{}", pr.url),
-            (None, Some(t)) => format!("ticket:{}", t.id),
+            (None, Some(t)) if t.is_linear() => format!("ticket:{}", t.id),
+            (None, Some(t)) => format!("ticket:{}:{}", t.source, t.item_id),
             (None, None) => "none".into(),
         }
     }
@@ -331,6 +340,38 @@ pub enum Seen {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn item(source: &str, item_id: &str, id: &str) -> Subject {
+        Subject {
+            ticket: Some(TicketRef {
+                source: source.into(),
+                item_id: item_id.into(),
+                id: id.into(),
+                ..TicketRef::default()
+            }),
+            pr: None,
+        }
+    }
+
+    #[test]
+    fn a_saved_ticket_with_linear_id_still_loads() {
+        let t: TicketRef =
+            serde_json::from_str(r#"{"linear_id":"u-1","id":"COM-1","title":"t","url":"u"}"#)
+                .unwrap();
+        assert_eq!(t.item_id, "u-1");
+        assert!(t.is_linear());
+    }
+
+    #[test]
+    fn a_linear_ticket_keeps_its_key() {
+        assert_eq!(item("", "u-1", "COM-1").key(), "ticket:COM-1");
+        assert_eq!(item("linear", "u-1", "COM-1").key(), "ticket:COM-1");
+    }
+
+    #[test]
+    fn another_sources_key_names_the_source() {
+        assert_eq!(item("trello", "abc", "12").key(), "ticket:trello:abc");
+    }
 
     #[test]
     fn pull_request_links_are_read() {

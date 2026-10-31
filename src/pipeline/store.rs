@@ -179,7 +179,8 @@ mod tests {
     fn ticket(id: &str) -> Subject {
         Subject {
             ticket: Some(TicketRef {
-                linear_id: format!("u-{id}"),
+                source: String::new(),
+                item_id: format!("u-{id}"),
                 id: id.into(),
                 title: "Fix the webhook dedup".into(),
                 url: format!("https://linear.app/acme/issue/{id}"),

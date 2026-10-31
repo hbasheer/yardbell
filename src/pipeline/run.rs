@@ -2,7 +2,7 @@ use super::definition::{LinearAction, Outcome, Step, StepKind, Workspace};
 use super::forge::{Draft, Forge};
 use super::linear::Linear;
 use super::prompts::{self, TicketText};
-use super::record::{Effect, PullRef, Run, Seen, StepState};
+use super::record::{Effect, PullRef, Run, Seen, StepState, TicketRef};
 use crate::config::{Approval, Config, Pipelines as Cfg};
 use crate::dispatch::{By, ReviewOf};
 use crate::phone::Push;
@@ -42,11 +42,11 @@ pub trait World: Send + Sync {
     ) -> BoxFuture<'a, Result<String, String>>;
     fn ticket<'a>(
         &'a self,
-        linear_id: &'a str,
+        ticket: &'a TicketRef,
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>>;
     fn move_ticket<'a>(
         &'a self,
-        linear_id: &'a str,
+        ticket: &'a TicketRef,
         state: &'a str,
     ) -> BoxFuture<'a, Result<(), String>>;
     fn open_draft<'a>(
@@ -146,7 +146,7 @@ async fn ticket_text(world: &dyn World, run: &Run) -> Result<TicketText, Seen> {
     let Some(t) = &run.subject.ticket else {
         return Ok(TicketText::default());
     };
-    match world.ticket(&t.linear_id).await {
+    match world.ticket(t).await {
         Ok((_, true)) => Err(Seen::Closed("closed".into())),
         Ok((text, false)) => Ok(text),
         // A pull request's ticket is only a name found in its branch or title, so one Linear
@@ -392,7 +392,7 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
 
 async fn closed(world: &dyn World, run: &Run) -> bool {
     match &run.subject.ticket {
-        Some(t) => matches!(world.ticket(&t.linear_id).await, Ok((_, true))),
+        Some(t) => matches!(world.ticket(t).await, Ok((_, true))),
         None => false,
     }
 }
@@ -460,11 +460,15 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             let Some(ticket) = &run.subject.ticket else {
                 return vec![Seen::Linear(Err("this run has no Linear ticket".into()))];
             };
+            if !ticket.is_linear() {
+                return vec![Seen::Linear(Err(format!(
+                    "{} is not a Linear ticket",
+                    ticket.id
+                )))];
+            }
             match action {
                 LinearAction::Move => {
-                    vec![Seen::Linear(
-                        world.move_ticket(&ticket.linear_id, &state).await,
-                    )]
+                    vec![Seen::Linear(world.move_ticket(ticket, &state).await)]
                 }
                 LinearAction::Comment => vec![Seen::Ended {
                     step: step.clone(),
@@ -754,17 +758,26 @@ impl World for Live {
 
     fn ticket<'a>(
         &'a self,
-        linear_id: &'a str,
+        ticket: &'a TicketRef,
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>> {
-        Box::pin(async move { self.linear.ticket(self.key()?, linear_id).await })
+        Box::pin(async move {
+            if !ticket.is_linear() {
+                return Err(format!("no connector for {}", ticket.source));
+            }
+            self.linear.ticket(self.key()?, &ticket.item_id).await
+        })
     }
 
     fn move_ticket<'a>(
         &'a self,
-        linear_id: &'a str,
+        ticket: &'a TicketRef,
         state: &'a str,
     ) -> BoxFuture<'a, Result<(), String>> {
-        Box::pin(async move { self.linear.move_to(self.key()?, linear_id, state).await })
+        Box::pin(async move {
+            self.linear
+                .move_to(self.key()?, &ticket.item_id, state)
+                .await
+        })
     }
 
     fn open_draft<'a>(

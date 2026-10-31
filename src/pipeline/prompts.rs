@@ -185,8 +185,12 @@ pub fn plan(run: &Run, t: &TicketText, machines: &[String]) -> String {
         ),
         None => {
             let ticket = run.subject.ticket.clone().unwrap_or_default();
+            let kind = match ticket.is_linear() {
+                true => "Linear ticket".to_string(),
+                false => format!("{} item", ticket.source),
+            };
             format!(
-                "the Linear ticket {} \"{}\" ({})",
+                "the {kind} {} \"{}\" ({})",
                 ticket.id, ticket.title, ticket.url
             )
         }
@@ -514,6 +518,17 @@ mod tests {
             outcome("YARDBELL RESULT\nstatus: pass\nEND RESULT", &m),
             None
         );
+    }
+
+    #[test]
+    fn prompts_name_the_source() {
+        let mut run = run_of("Implement my Linear tickets");
+        let linear = plan(&run, &ticket(), &["hp".to_string()]);
+        assert!(linear.contains("the Linear ticket COM-1"), "{linear}");
+        run.subject.ticket.as_mut().unwrap().source = "trello".into();
+        let other = plan(&run, &ticket(), &["hp".to_string()]);
+        assert!(!other.contains("Linear ticket"), "{other}");
+        assert!(other.contains("the trello item COM-1"), "{other}");
     }
 
     #[test]

@@ -468,7 +468,8 @@ pub(crate) mod tests {
             definition: Some(def),
             subject: Subject {
                 ticket: Some(TicketRef {
-                    linear_id: "u-1".into(),
+                    source: String::new(),
+                    item_id: "u-1".into(),
                     id: "COM-1".into(),
                     title: "Fix the login".into(),
                     url: "https://linear.app/acme/issue/COM-1".into(),
