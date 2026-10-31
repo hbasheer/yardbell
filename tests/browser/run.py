@@ -3170,6 +3170,67 @@ class Suite:
         finally:
             self.remove_mcp_servers()
 
+    def test_connection_actions_are_fields(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
+        b.click("#conn-new")
+        b.click("#conn-tabs [data-tab=conn-tab-token]")
+        b.click("#conn-new-list [data-starter=trello]")
+        b.wait("!document.getElementById('conn-form').hidden", "the form")
+        b.js("document.getElementById('conn-more').open = true")
+        b.wait("document.querySelector('#conn-more-tabs [data-more=conn-actions]')", "the tabs")
+        tabs = b.js("[...document.querySelectorAll('#conn-more-tabs button')].map((t) => t.textContent).join('|')")
+        if tabs != "Actions|Login headers|Choices|Settings":
+            raise Failure(f"the tabs are {tabs}")
+        if b.js("[...document.querySelectorAll('#conn-form textarea')].some((t) => t.value.includes('request:'))"):
+            raise Failure("the form still shows YAML")
+        said = b.js("document.getElementById('conn-actions').textContent")
+        for want in ("Lists items", "Moves an item", "GET", "PUT", "Reads", "Changes"):
+            if want not in said:
+                raise Failure(f"the actions do not say {want!r}: {said}")
+        b.js("document.querySelector('[data-call-name=list]').open = true")
+        path = "[data-call-name=list] [data-field=path]"
+        if "/boards/" not in b.js(f"document.querySelector('{path}').value"):
+            raise Failure("the path is not in its own field")
+        self.set_field(path, "/boards/{{board}}/cards/open")
+        if not b.js("document.querySelector('[data-call-name=list] [data-pairs=map] [data-pair-key]')"):
+            raise Failure("the reply fields are not in their own rows")
+        b.click("#conn-action-add")
+        b.wait("document.querySelector('[data-call-name=\"\"]')", "a new action")
+        self.set_field("#conn-call-list [data-call]:last-child [data-field=name]", "archive")
+        self.set_field("#conn-call-list [data-call]:last-child [data-field=path]", "/cards/{{item_id}}/archive")
+        self.set_field("#conn-call-list [data-call]:last-child [data-field=method]", "POST")
+        b.js("document.querySelector('[data-call-name=comment] [data-remove-call]').click()")
+        b.click("#conn-more-tabs [data-more=conn-settings]")
+        b.wait("document.querySelector('#conn-settings [name=id]').offsetParent !== null", "the settings tab")
+        b.click("#conn-form button[type=submit]")
+        b.wait("document.querySelector('[data-conn=trello]') && !document.getElementById('conn-flow').open", "the saved connection")
+        saved = self.api("GET", "/api/settings/connectors")["list"]
+        trello = next(c for c in saved if c["id"] == "trello")
+        if trello["calls"]["list"]["request"]["path"] != "/boards/{{board}}/cards/open":
+            raise Failure(f"the path was not saved: {trello['calls']['list']}")
+        if trello["calls"]["list"]["map"].get("title") != "name":
+            raise Failure("the reply fields were lost")
+        if trello["calls"]["archive"]["request"]["method"] != "POST" or "comment" in trello["calls"]:
+            raise Failure(f"the added and removed actions: {list(trello['calls'])}")
+        if trello["params"][0]["name"] != "board":
+            raise Failure("the choices were lost")
+        self.row_action("[data-conn=trello]", "[data-conn-act=edit]")
+        b.wait("!document.getElementById('conn-form').hidden", "the edit form")
+        b.js("document.getElementById('conn-more').open = true")
+        b.js("document.querySelector('[data-call-name=archive]').open = true")
+        self.set_field("[data-call-name=archive] [data-field=body]", "{ not json")
+        b.click("#conn-form button[type=submit]")
+        b.wait("document.getElementById('conn-note').textContent.includes('archive')", "word about the bad body")
+        b.js("document.getElementById('conn-flow').close()")
+        self.row_action("[data-conn=trello]", "[data-conn-act=delete]")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("!document.querySelector('[data-conn=trello]')", "the connection gone")
+        self.check_errors("actions as fields")
+
     def test_connections_section(self):
         b = self.b
         b.goto(self.url("/settings#connections"))

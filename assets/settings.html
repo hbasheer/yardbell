@@ -313,6 +313,9 @@
     </form>
   </section>
 
+  <datalist id="conn-reply-fields">
+    <option value="item_id"><option value="id"><option value="name"><option value="title"><option value="url"><option value="description"><option value="state"><option value="closed">
+  </datalist>
   <section id="connections">
     <div class="section-head"><h2>Connections</h2><button class="btn primary small-link" type="button" id="conn-new">New connection</button></div>
     <div id="conn-home">
@@ -451,17 +454,35 @@
       <details class="conn-more" id="conn-more">
         <summary>More options</summary>
         <div class="conn-more-body">
-          <label>Id, used in pipelines <input name="id" placeholder="Taken from the name" autocapitalize="off" spellcheck="false"></label>
-          <label class="choice"><input type="checkbox" name="enabled">Switched on</label>
-          <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
-          <p class="help">Only for a tool on your own network or mesh. It lets this connection reach addresses that public tools should never need.</p>
-          <p class="pl-field-head">Headers</p>
-          <ul class="conn-headers" id="conn-headers"></ul>
-          <button class="btn small-link" type="button" id="conn-header-add">Add header</button>
-          <p class="help">A login header must use a saved secret, like <code>Bearer ${secret:my_token}</code>.</p>
-          <label class="conn-yaml">Choices a pipeline can make (optional)<textarea name="params_yaml" rows="3" spellcheck="false"></textarea></label>
-          <label class="conn-yaml">Calls<textarea name="calls_yaml" rows="14" spellcheck="false"></textarea></label>
-          <p class="help">Name a <code>list</code> call to start runs from this tool, and a <code>read</code> call to read one item. Each call has a <code>request</code>, and a <code>map</code> saying which reply field is the <code>item_id</code>, <code>title</code>, <code>url</code>, <code>description</code> and <code>state</code>. See the guide for paging.</p>
+          <div class="segmented conn-more-tabs" id="conn-more-tabs" role="tablist" aria-label="More options">
+            <button type="button" role="tab" data-more="conn-actions" aria-selected="true">Actions</button>
+            <button type="button" role="tab" data-more="conn-login" aria-selected="false">Login headers</button>
+            <button type="button" role="tab" data-more="conn-choices" aria-selected="false">Choices</button>
+            <button type="button" role="tab" data-more="conn-settings" aria-selected="false">Settings</button>
+          </div>
+          <div class="conn-more-tab" id="conn-actions" role="tabpanel">
+            <p class="help">What Yardbell can ask this tool to do. A pipeline starts runs from <strong>list</strong>, and reads one item with <strong>read</strong>.</p>
+            <div class="conn-call-list" id="conn-call-list"></div>
+            <button class="btn small-link" type="button" id="conn-action-add">Add action</button>
+          </div>
+          <div class="conn-more-tab" id="conn-login" role="tabpanel" hidden>
+            <p class="help">Sent with every request. A login header must use a saved secret, like <code>Bearer ${secret:my_token}</code>.</p>
+            <div class="conn-pair-head" aria-hidden="true"><span>Header</span><span>Value</span></div>
+            <ul class="conn-headers" id="conn-headers"></ul>
+            <button class="btn small-link" type="button" id="conn-header-add">Add header</button>
+          </div>
+          <div class="conn-more-tab" id="conn-choices" role="tabpanel" hidden>
+            <p class="help">What a pipeline asks you when it uses this connection, such as which board. Options can come from one of its actions.</p>
+            <div class="conn-choice-head" aria-hidden="true"><span>Name</span><span>Label</span><span>Options from</span></div>
+            <ul class="conn-choices" id="conn-choice-list"></ul>
+            <button class="btn small-link" type="button" id="conn-choice-add">Add choice</button>
+          </div>
+          <div class="conn-more-tab" id="conn-settings" role="tabpanel" hidden>
+            <label>Id, used in pipelines<input name="id" placeholder="Taken from the name" autocapitalize="off" spellcheck="false"></label>
+            <label class="choice"><input type="checkbox" name="enabled">Switched on</label>
+            <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
+            <p class="help">Only for a tool on your own network or mesh. Public tools never need this.</p>
+          </div>
         </div>
       </details>
       <div class="form-foot">

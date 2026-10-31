@@ -1333,7 +1333,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 
 .mcp-panel { margin-top: 12px; }
 .conn-guide { margin-top: 8px; font-size: 13px; }
-.conn-guide summary, .conn-more summary { cursor: pointer; font-weight: 500; font-size: 13px; color: var(--ink); width: fit-content; }
+.conn-guide > summary, .conn-more > summary { cursor: pointer; font-weight: 500; font-size: 13px; color: var(--ink); width: fit-content; }
 .conn-guide ol { margin: 10px 0; padding-left: 20px; display: grid; gap: 6px; max-width: 68ch; }
 .conn-all { margin-top: 12px; border: 1px solid var(--line); border-radius: var(--radius); }
 .conn-all[hidden], .conn-step[hidden], #conn-secrets[hidden], #conn-about[hidden] { display: none; }
@@ -1366,6 +1366,45 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-secrets { display: grid; gap: 14px; }
 .conn-error { color: var(--bad-text, var(--bad)); flex: 1; margin: 0; min-height: 1.5em; }
 .conn-card[hidden], #conn-sign-in-none[hidden], #github-token-fields[hidden], #pr-github[hidden] { display: none; }
+.conn-call-body select, .conn-choice select { height: 32px; box-sizing: border-box; }
+.conn-more-tabs { display: grid; grid-template-columns: repeat(4, 1fr); }
+.conn-more-tabs button { justify-content: center; text-align: center; }
+.conn-more-tab { display: grid; gap: 12px; }
+.conn-more-tab[hidden], .conn-body-field[hidden] { display: none; }
+.conn-more-tab > .help { margin: 0; }
+.conn-more-tab > .btn { justify-self: start; }
+.conn-call-list { display: grid; gap: 8px; }
+.conn-call { border: 1px solid var(--line); border-radius: 8px; }
+.conn-call > summary { display: flex; align-items: center; gap: 10px; padding: 10px 12px; cursor: pointer; list-style: none; }
+.conn-call > summary::-webkit-details-marker { display: none; }
+.conn-call > summary:hover { background: var(--hover); border-radius: 8px; }
+.conn-method { min-width: 44px; font: 600 11.5px/1.4 var(--mono); color: var(--ink-2); }
+.conn-call-title { display: grid; gap: 1px; flex: 1; min-width: 0; }
+.conn-call-title strong { font-weight: 550; font-size: 13px; }
+.conn-call-title small { color: var(--muted); font: 12px/1.4 var(--mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-call-body { display: grid; gap: 12px; padding: 12px; border-top: 1px solid var(--line); }
+.conn-call-body .help { margin: 0; }
+.conn-request { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: 8px; }
+.conn-sub { display: grid; gap: 6px; }
+.conn-sub strong { font-size: 13px; font-weight: 500; }
+.conn-sub > .btn { justify-self: start; }
+.conn-pairs, .conn-choices { display: grid; gap: 6px; margin: 0; padding: 0; list-style: none; }
+.conn-pairs:empty { display: none; }
+.conn-pair, .conn-pair-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1.5fr) 32px; gap: 6px; }
+.conn-pair .btn, .conn-choice .btn { width: 32px; padding: 0; }
+.conn-pair-head, .conn-choice-head { color: var(--muted); font-size: 12px; font-weight: 500; }
+.conn-pair-head { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 32px; margin-bottom: -6px; }
+.conn-choice, .conn-choice-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 32px; gap: 6px; }
+.conn-choice-head { margin-bottom: -6px; }
+.conn-call-foot { display: flex; justify-content: flex-end; }
+@media (max-width: 760px) {
+  .conn-more-tabs { grid-template-columns: repeat(2, 1fr); }
+  .conn-pair-head, .conn-choice-head { display: none; }
+  .conn-choice { grid-template-columns: minmax(0, 1fr) 32px; }
+  .conn-choice input, .conn-choice select { grid-column: 1; }
+  .conn-choice .btn { grid-column: 2; grid-row: 1; }
+  .conn-call > summary .conn-badge { display: none; }
+}
 .conn-via { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
 .conn-step .form-foot { justify-content: flex-end; }
 .conn-via .conn-via-option { margin: 0; }

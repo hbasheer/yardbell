@@ -56,6 +56,8 @@ fn view(app: &AppState, c: &Connector) -> Value {
         "missing": missing,
         "params_yaml": if c.params.is_empty() { String::new() } else { yaml_of(&c.params) },
         "calls_yaml": yaml_of(&c.calls),
+        "params": c.params,
+        "calls": c.calls,
     })
 }
 
