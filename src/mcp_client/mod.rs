@@ -2,12 +2,16 @@ pub mod http;
 pub mod oauth;
 #[cfg(test)]
 pub(crate) mod oauth_tests;
+pub mod stdio;
+#[cfg(test)]
+pub(crate) mod stdio_tests;
 #[cfg(test)]
 pub(crate) mod tests;
 
 use serde_json::Value;
 
 pub use http::{HttpClient, HttpOptions};
+pub use stdio::{StdioClient, StdioOptions};
 
 pub const PROTOCOL_OFFERED: &str = "2025-11-25";
 pub const REPLY_MAX: usize = 4 * 1024 * 1024;
@@ -71,6 +75,109 @@ pub(crate) fn holds_own_token(
             .resolve(value)
             .is_ok_and(|resolved| resolved.contains(&token))
     })
+}
+
+pub enum Client {
+    Http(HttpClient),
+    Stdio(StdioClient),
+}
+
+impl Client {
+    pub async fn connect(&mut self) -> Result<String, Failure> {
+        match self {
+            Client::Http(c) => c.connect().await,
+            Client::Stdio(c) => c.connect().await,
+        }
+    }
+
+    pub async fn list_tools(&mut self) -> Result<Vec<Tool>, Failure> {
+        match self {
+            Client::Http(c) => c.list_tools().await,
+            Client::Stdio(c) => c.list_tools().await,
+        }
+    }
+
+    pub async fn call_tool(&mut self, name: &str, arguments: Value) -> Result<ToolReply, Failure> {
+        match self {
+            Client::Http(c) => c.call_tool(name, arguments).await,
+            Client::Stdio(c) => c.call_tool(name, arguments).await,
+        }
+    }
+
+    pub async fn close(&mut self) {
+        match self {
+            Client::Http(c) => c.close().await,
+            Client::Stdio(c) => c.close().await,
+        }
+    }
+}
+
+fn resolved_all(
+    pairs: &std::collections::BTreeMap<String, String>,
+    secrets: &crate::secrets::Secrets,
+) -> Result<Vec<(String, String)>, Failure> {
+    pairs
+        .iter()
+        .map(|(key, value)| {
+            secrets
+                .resolve(value)
+                .map(|value| (key.clone(), value))
+                .map_err(|e| Failure::Other(e.to_string()))
+        })
+        .collect()
+}
+
+pub async fn client_for(
+    server: &crate::config::McpServer,
+    cfg: &crate::config::Config,
+    secrets: &crate::secrets::Secrets,
+    auth: &oauth::Auth,
+    store: &crate::settings::Settings,
+    saved: Vec<String>,
+    timeout: std::time::Duration,
+) -> Result<Client, Failure> {
+    if server.url.is_empty() {
+        let here = cfg
+            .machines
+            .iter()
+            .find(|m| m.local)
+            .map(|m| m.name.as_str());
+        if !server.machines.is_empty()
+            && !here.is_some_and(|h| server.machines.iter().any(|m| m == h))
+        {
+            return Err(Failure::Other(format!(
+                "{} only runs on {}, so a step cannot call it here",
+                server.name,
+                server.machines.join(", ")
+            )));
+        }
+        return Ok(Client::Stdio(StdioClient::new(StdioOptions {
+            command: server.command.clone(),
+            env: resolved_all(&server.env, secrets)?,
+            saved,
+            timeout,
+        })));
+    }
+    let url = secrets
+        .resolve(&server.url)
+        .map_err(|e| Failure::Other(e.to_string()))?;
+    if is_own_server(&url, cfg) || holds_own_token(server, cfg, secrets) {
+        return Err(Failure::Other(format!(
+            "{} is Yardbell itself, which a pipeline must not call",
+            server.name
+        )));
+    }
+    let bearer = auth.bearer(server, store).await?;
+    let client = HttpClient::new(HttpOptions {
+        url,
+        headers: resolved_all(&server.headers, secrets)?,
+        bearer,
+        allow_private: server.allow_private,
+        saved,
+        timeout,
+    })
+    .map_err(Failure::Other)?;
+    Ok(Client::Http(client))
 }
 
 pub(crate) fn tool_of(value: &Value) -> Option<Tool> {

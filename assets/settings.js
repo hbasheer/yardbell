@@ -221,7 +221,6 @@ function serverAuth(srv) {
 }
 
 function serverActions(srv) {
-  if (!srv.url) return "";
   const status = data.mcp_auth?.[srv.name];
   const act = (name, label) => `<button class="btn" type="button" data-mcp-act="${name}" data-name="${esc(srv.name)}">${label}</button>`;
   const signIn = status === "not_signed_in" ? act("sign-in", "Sign in") : status === "sign_in_again" ? act("sign-in", "Sign in again") : "";

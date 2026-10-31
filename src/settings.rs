@@ -434,7 +434,7 @@ impl Settings {
         self.last.lock().expect("settings lock").is_some()
     }
 
-    fn load(&self) -> Result<Config, String> {
+    pub(crate) fn load(&self) -> Result<Config, String> {
         Config::load(&self.cfg_path).map_err(|e| e.to_string())
     }
 

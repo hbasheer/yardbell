@@ -1,7 +1,7 @@
 use super::{ApiError, AppState};
 use crate::config::McpServer;
 use crate::mcp_client::oauth::{Auth, SignIn};
-use crate::mcp_client::{holds_own_token, is_own_server, Failure, HttpClient, HttpOptions};
+use crate::mcp_client::{client_for, Failure};
 use axum::extract::{Path, Query, State as AxState};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -199,32 +199,26 @@ async fn test(
     AxState(app): AxState<Arc<AppState>>,
     Path(name): Path<String>,
 ) -> Result<Response, ApiError> {
-    let server = url_server(&app, &name)?;
     let cfg = app.config()?;
+    let server = cfg
+        .mcp_servers
+        .iter()
+        .find(|s| s.name == name)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no server named {name}")))?;
     let secrets = app.secrets()?;
-    if is_own_server(&server.url, &cfg) || holds_own_token(&server, &cfg, &secrets) {
-        return Err(bad(own_server_error(&name)));
-    }
-    let bearer = app
-        .pipelines
-        .mcp_auth()
-        .bearer(&server, &app.settings)
-        .await
-        .map_err(|f| said(&name, f))?;
-    let mut headers = Vec::new();
-    for (key, value) in &server.headers {
-        let value = secrets.resolve(value).map_err(|e| bad(e.to_string()))?;
-        headers.push((key.clone(), value));
-    }
-    let mut client = HttpClient::new(HttpOptions {
-        url: server.url.clone(),
-        headers,
-        bearer,
-        allow_private: server.allow_private,
-        saved: secrets.values().map(|(_, v)| v.to_string()).collect(),
-        timeout: TEST_TIMEOUT,
-    })
-    .map_err(bad)?;
+    let saved = secrets.values().map(|(_, v)| v.to_string()).collect();
+    let auth = app.pipelines.mcp_auth();
+    let mut client = client_for(
+        server,
+        &cfg,
+        &secrets,
+        auth,
+        &app.settings,
+        saved,
+        TEST_TIMEOUT,
+    )
+    .await
+    .map_err(|f| said(&name, f))?;
     let version = client.connect().await.map_err(|f| said(&name, f))?;
     let tools = client.list_tools().await.map_err(|f| said(&name, f));
     client.close().await;
