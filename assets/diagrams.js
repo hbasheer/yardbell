@@ -34,7 +34,7 @@ const WORDS = { installed: "Installed", not_installed: "Not installed", needs_no
 const TONES = { installed: "ok", not_installed: "", needs_node: "warn", offline: "bad" };
 
 function ready() {
-  return (data?.machines || []).filter((m) => m.state === "installed" && m.folders.length);
+  return (data?.machines || []).filter((m) => m.state === "installed");
 }
 
 function viewUrl(d) {
@@ -84,6 +84,10 @@ function openDraw(machine, folder) {
     folder: folder && first?.folders.includes(folder) ? folder : first?.folders[0] || "",
     agent: data.default_agent,
     focus: "",
+    kind: "code",
+    description: "",
+    where: "",
+    newFolder: "",
     error: "",
   };
   draw_();
@@ -102,7 +106,16 @@ async function submitDraw(e) {
   busy = "draw";
   draw_();
   try {
-    const started = await api("POST", "/api/diagrams/draw", { machine: draw.machine, folder: draw.folder, agent: draw.agent, focus: draw.focus });
+    const described = draw.kind === "description";
+    const fresh = described && draw.where === NEW_FOLDER;
+    const started = await api("POST", "/api/diagrams/draw", {
+      machine: draw.machine,
+      agent: draw.agent,
+      folder: fresh ? "" : described ? draw.where : draw.folder,
+      new_folder: fresh ? draw.newFolder.trim() : "",
+      description: described ? draw.description.trim() : "",
+      focus: described ? "" : draw.focus,
+    });
     location.href = `/term/${encodeURIComponent(started.machine)}/${encodeURIComponent(started.name)}`;
   } catch (err) {
     draw.error = err.message;
@@ -111,6 +124,7 @@ async function submitDraw(e) {
   }
 }
 
+const NEW_FOLDER = "__new";
 const TEMPLATE = "Implement from a diagram";
 
 async function openBuild(d) {
@@ -208,25 +222,50 @@ function list() {
   </li>`)}</ul>`;
 }
 
+function drawReady() {
+  if (draw.kind === "code") return Boolean(draw.folder);
+  if (!draw.description.trim()) return false;
+  return draw.where === NEW_FOLDER ? Boolean(draw.newFolder.trim()) : Boolean(draw.where);
+}
+
+function codeFields(m) {
+  return html`<label>Folder<select .value=${draw.folder} @change=${(e) => { draw.folder = e.target.value; draw_(); }}>
+      ${(m?.folders || []).map((f) => html`<option value=${f} ?selected=${f === draw.folder}>${f}</option>`)}</select></label>
+    ${m?.folders.length ? nothing : html`<p class="help">${draw.machine} has no folders yet. Draw from a description to start one.</p>`}
+    <label>What to focus on, if anything<textarea rows="2" .value=${draw.focus} @input=${(e) => { draw.focus = e.target.value; }} placeholder="The billing flow"></textarea></label>`;
+}
+
+function descriptionFields(m) {
+  return html`<label>What to draw<textarea id="draw-description" rows="4" .value=${draw.description} @input=${(e) => { draw.description = e.target.value; draw_(); }} placeholder="A shop with a cart, Stripe payments and an admin page"></textarea></label>
+    <label>Save it in<select id="draw-where" .value=${draw.where} @change=${(e) => { draw.where = e.target.value; draw_(); }}>
+      <option value=${NEW_FOLDER} ?selected=${draw.where === NEW_FOLDER}>A new folder</option>
+      ${(m?.folders || []).map((f) => html`<option value=${f} ?selected=${f === draw.where}>${f}</option>`)}</select></label>
+    ${draw.where === NEW_FOLDER ? html`<label>Folder name<input id="draw-new-folder" type="text" autocapitalize="off" spellcheck="false" .value=${draw.newFolder} @input=${(e) => { draw.newFolder = e.target.value; draw_(); }} placeholder="my-shop"><small class="help">Made under ${m?.name || "the machine"}'s folder for projects, as a new git repository.</small></label>` : nothing}`;
+}
+
+function kindTabs() {
+  const tab = (kind, label) => html`<button type="button" role="tab" data-kind=${kind} aria-selected=${String(draw.kind === kind)} @click=${() => { draw.kind = kind; if (!draw.where) draw.where = NEW_FOLDER; draw_(); }}>${label}</button>`;
+  return html`<div class="segmented dg-kinds" role="tablist" aria-label="What to draw from">${tab("code", "A folder's code")}${tab("description", "A description")}</div>`;
+}
+
 function drawDialog() {
   const m = draw && data.machines.find((x) => x.name === draw.machine);
   return html`<dialog class="wide dg-dialog" id="draw-dialog" aria-labelledby="draw-title" @close=${() => { draw = null; }}>
     ${draw ? html`<form @submit=${submitDraw}>
       <div class="dialog-head"><h2 id="draw-title">Draw architecture</h2></div>
       <div class="dg-fields">
-        <p class="help">An agent reads the repository and draws it with Archify, in a session you can watch or stop. It uses that agent's tokens. The diagram holds what the agent read, so check it before sharing it.</p>
-        <label>Machine<select .value=${draw.machine} @change=${(e) => { draw.machine = e.target.value; draw.folder = data.machines.find((x) => x.name === draw.machine).folders[0] || ""; draw_(); }}>
+        ${kindTabs()}
+        <p class="help">${draw.kind === "code" ? "An agent reads the repository and draws it with Archify" : "An agent draws your description with Archify, as a plan to build from"}, in a session you can watch or stop. It uses that agent's tokens. The diagram holds what the agent read, so check it before sharing it.</p>
+        <label>Machine<select .value=${draw.machine} @change=${(e) => { draw.machine = e.target.value; draw.folder = data.machines.find((x) => x.name === draw.machine).folders[0] || ""; if (draw.where !== NEW_FOLDER) draw.where = NEW_FOLDER; draw_(); }}>
           ${ready().map((x) => html`<option value=${x.name} ?selected=${x.name === draw.machine}>${x.name}</option>`)}</select></label>
-        <label>Folder<select .value=${draw.folder} @change=${(e) => { draw.folder = e.target.value; }}>
-          ${(m?.folders || []).map((f) => html`<option value=${f} ?selected=${f === draw.folder}>${f}</option>`)}</select></label>
+        ${draw.kind === "code" ? codeFields(m) : descriptionFields(m)}
         <label>Agent<select .value=${draw.agent} @change=${(e) => { draw.agent = e.target.value; }}>
           ${data.agents.map((a) => html`<option value=${a.name} ?selected=${a.name === draw.agent}>${a.label}</option>`)}</select></label>
-        <label>What to focus on, if anything<textarea rows="2" .value=${draw.focus} @input=${(e) => { draw.focus = e.target.value; }} placeholder="The billing flow"></textarea></label>
         ${draw.error ? html`<p class="wt-error" role="alert">${draw.error}</p>` : nothing}
       </div>
       <div class="dialog-foot"><span class="where"></span>
         <button class="btn quiet" type="button" @click=${closeDraw}>Cancel</button>
-        <button class="btn primary" type="submit" ?disabled=${busy === "draw"}>${busy === "draw" ? "Starting…" : "Draw"}</button>
+        <button class="btn primary" type="submit" ?disabled=${busy === "draw" || !drawReady()}>${busy === "draw" ? "Starting…" : "Draw"}</button>
       </div>
     </form>` : nothing}
   </dialog>`;

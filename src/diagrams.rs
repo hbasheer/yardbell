@@ -203,6 +203,36 @@ pub fn exclude_script(path: &str) -> String {
     )
 }
 
+// Made only if nothing is there, so a name can never take over someone's folder.
+pub fn new_folder_script(root: &str, name: &str) -> String {
+    format!(
+        "{}; d=\"$p/\"{}; if [ -e \"$d\" ]; then echo 'a folder with that name already exists' >&2; exit 6; fi; \
+         mkdir -p \"$d\" && git -C \"$d\" init -q && printf 'yardbell-path=%s\\n' \"$d\"",
+        expand_home(root),
+        quote(name),
+    )
+}
+
+pub fn parse_new_folder(text: &str) -> Option<String> {
+    text.lines()
+        .find_map(|line| line.strip_prefix("yardbell-path="))
+        .map(|path| path.trim().to_string())
+}
+
+pub fn describe_prompt(description: &str) -> String {
+    let dir = INSTALL_DIR.replace("$HOME", "~");
+    format!(
+        "Draw an architecture diagram of the system described below, as a plan for building it. It is not \
+         built yet, so do not look for code. Read {dir}/SKILL.md and follow it, using {dir}/bin/archify.mjs as \
+         its command, with ARCHIFY_UPDATE_CHECK_DISABLED=1 in front of every Archify command. Do not change \
+         any file outside .archify/. Where the description leaves something open, choose the simple answer \
+         and say so in your reply.\n\n\
+         If finalize fails only because no browser was found, keep the HTML and say the browser check was \
+         skipped. Any other failure is a real failure to repair.\n\nThe description:\n\n{}",
+        description.trim()
+    )
+}
+
 pub fn draw_prompt(focus: &str) -> String {
     let dir = INSTALL_DIR.replace("$HOME", "~");
     let mut prompt = format!(
@@ -498,6 +528,44 @@ mod tests {
         assert!(ticket.description.contains("the folder app on hp"));
         assert!(ticket.description.contains("{\"nodes\":[]}"));
         assert!(ticket.url.is_empty());
+    }
+
+    #[test]
+    fn a_new_project_gets_its_own_git_folder() {
+        let home = tempfile::tempdir().unwrap();
+        let root = home.path().display().to_string();
+        let out = sh(&new_folder_script(&root, "my-idea"), home.path());
+        assert!(out.status.success(), "{out:?}");
+        let made = parse_new_folder(&String::from_utf8_lossy(&out.stdout)).unwrap();
+        assert_eq!(made, format!("{root}/my-idea"));
+        assert!(home.path().join("my-idea/.git").exists());
+    }
+
+    #[test]
+    fn a_new_project_never_takes_over_a_folder() {
+        let home = tempfile::tempdir().unwrap();
+        write(&home.path().join("taken/keep.txt"), "mine");
+        let root = home.path().display().to_string();
+        let out = sh(&new_folder_script(&root, "taken"), home.path());
+        assert!(!out.status.success());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("already exists"));
+        assert!(!home.path().join("taken/.git").exists());
+        assert_eq!(
+            parse_new_folder(&String::from_utf8_lossy(&out.stdout)),
+            None
+        );
+    }
+
+    #[test]
+    fn a_description_is_drawn_as_a_plan_with_no_code_to_read() {
+        let prompt = describe_prompt("A shop with a cart and Stripe payments");
+        assert!(prompt.contains("A shop with a cart and Stripe payments"));
+        assert!(prompt.contains("archify/3.2.0/SKILL.md"));
+        assert!(prompt.contains("ARCHIFY_UPDATE_CHECK_DISABLED=1"));
+        assert!(prompt.contains("outside .archify/"));
+        assert!(prompt.contains("no browser"));
+        assert!(prompt.contains("not built yet"));
+        assert!(!prompt.contains("backed by its source"));
     }
 
     #[test]

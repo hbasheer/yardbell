@@ -2576,3 +2576,9 @@ label.conn-setting + label.conn-setting { border-top: 1px solid var(--line); }
   .rows.dg-setup > .row, .rows.dg-list > .row { flex-wrap: wrap; }
   .dg-where { flex-basis: 100%; }
 }
+
+/* Only other MCP clients fill this inbox, so its place in the menu is earned by something waiting. */
+.side-link[href="/proposals"]:not(.has-waiting):not([aria-current="page"]) { display: none; }
+.dg-kinds { display: grid; grid-template-columns: 1fr 1fr; }
+.dg-kinds button { justify-content: center; }
+.dg-fields label small { font-weight: 400; }

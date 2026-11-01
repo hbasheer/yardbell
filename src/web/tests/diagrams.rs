@@ -368,3 +368,100 @@ async fn dispatch_drawing_follows_the_rules_and_waits_by_default() {
         "{asked}"
     );
 }
+
+fn drawing_can_start(r: &Rig) {
+    installed(r);
+    r.fake.stub("info/exclude", Output::ok_with(""));
+    r.fake.stub("tmux new", Output::ok_with(""));
+}
+
+#[tokio::test]
+async fn a_description_is_drawn_in_an_existing_folder() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    drawing_can_start(&r);
+    let body = json!({ "machine": "hp", "folder": "slot2", "description": "A shop with a cart" });
+    let (status, text) = post(&r, &c, "/api/diagrams/draw", body).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let all = commands(&r);
+    assert!(all.contains("A shop with a cart"), "{all}");
+    assert!(all.contains("not built yet"), "{all}");
+    assert!(!all.contains("yardbell-path="), "{all}");
+}
+
+#[tokio::test]
+async fn a_description_can_start_a_new_folder() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    drawing_can_start(&r);
+    r.fake.stub(
+        "yardbell-path=",
+        Output::ok_with("yardbell-path=/r/my-idea\n"),
+    );
+    let body = json!({ "machine": "hp", "new_folder": "my-idea", "description": "A shop" });
+    let (status, text) = post(&r, &c, "/api/diagrams/draw", body).await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(v["path"], "/r/my-idea", "{v}");
+}
+
+#[tokio::test]
+async fn a_new_folder_needs_a_plain_name_and_a_description() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    drawing_can_start(&r);
+    for (body, says) in [
+        (
+            json!({ "machine": "hp", "new_folder": "../up", "description": "A shop" }),
+            "folder name",
+        ),
+        (json!({ "machine": "hp", "new_folder": "idea" }), "Describe"),
+        (
+            json!({ "machine": "hp", "description": "A shop" }),
+            "folder",
+        ),
+        (json!({ "machine": "hp" }), "folder"),
+    ] {
+        let (status, text) = post(&r, &c, "/api/diagrams/draw", body.clone()).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}: {text}");
+        assert!(text.contains(says), "{body}: {text}");
+    }
+    assert!(!commands(&r).contains("yardbell-path="));
+    assert!(!commands(&r).contains("tmux new"));
+}
+
+#[tokio::test]
+async fn mcp_clients_are_told_about_diagrams() {
+    let r = rig();
+    let req = Request::post("/mcp")
+        .header(header::HOST, "localhost:4000")
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(
+            header::AUTHORIZATION,
+            format!("Bearer {}", r.app.dispatch.token()),
+        )
+        .body(Body::from(
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }).to_string(),
+        ))
+        .unwrap();
+    let (_, _, body) = send(&r.app, req).await;
+    let v: serde_json::Value = serde_json::from_str(&body).unwrap();
+    let said = v["result"]["instructions"].as_str().unwrap();
+    for tool in ["list_diagrams", "read_diagram", "draw_diagram"] {
+        assert!(said.contains(tool), "{tool}: {said}");
+    }
+}
+
+#[tokio::test]
+async fn dispatch_can_propose_drawing_a_new_project() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    drawing_can_start(&r);
+    let args = json!({ "machine": "hp", "new_folder": "my-idea", "description": "A shop" });
+    let asked = dispatch_tool(&r, Some(&id), "draw_diagram", args).await;
+    assert_ne!(asked["isError"], true, "{asked}");
+    assert!(
+        !commands(&r).contains("yardbell-path="),
+        "nothing is made before it is approved"
+    );
+}

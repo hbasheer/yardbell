@@ -639,7 +639,7 @@ function stepTitle(e) {
   if (e.tool === "save_pipeline") return `${e.input?.before ? "Change the pipeline" : "New pipeline:"} ${e.input?.definition?.name || ""}`.trim();
   if (e.tool === "set_pipeline_enabled") return `${e.input?.on ? "Turn on" : "Turn off"} ${e.input?.name || ""}`.trim();
   if (e.tool === "run_pipeline") return `Run ${e.input?.name || ""}`.trim();
-  if (e.tool === "draw_diagram") return `Draw a diagram of ${e.input?.folder || "a folder"}`;
+  if (e.tool === "draw_diagram") return `Draw a diagram in ${e.input?.folder || e.input?.new_folder || "a folder"}`;
   if (e.tool === "answer_run") {
     const a = e.input?.action;
     const how = a === "continue_pass" ? " as passed" : a === "continue_fail" ? " as failed" : "";

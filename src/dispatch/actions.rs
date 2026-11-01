@@ -222,8 +222,11 @@ fn what(action: &Value) -> String {
         "save_task" => format!("saving the task \"{}\"", text(input, "name")),
         "run_trigger" => format!("running the trigger {} now", text(input, "name")),
         "draw_diagram" => format!(
-            "drawing a diagram of {} on {}",
-            text(input, "folder"),
+            "drawing a diagram in {} on {}",
+            [text(input, "folder"), text(input, "new_folder")]
+                .into_iter()
+                .find(|f| !f.is_empty())
+                .unwrap_or_default(),
             text(input, "machine")
         ),
         "save_pipeline" if input["before"].is_object() => format!(
