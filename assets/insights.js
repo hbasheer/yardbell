@@ -1,6 +1,7 @@
 (function () {
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
   const SHOWN = 80;
+  const LONG_TEXT = 240;
   const STATES = ["working", "waiting", "idle"];
   const WORDS = { working: "Working", waiting: "Waiting for you", idle: "Idle" };
   const TONES = { working: "ok", waiting: "warn", idle: "" };
@@ -140,16 +141,40 @@
     return `<li class="ins-run is-${r.kind}"><span class="ins-time">${esc(at)}</span><span class="ins-mark" title="${kind}" aria-label="${kind}">${r.kind === "test" ? FLASK : TOOL}</span><span class="ins-text"><code>${esc(r.text)}</code></span>${result}</li>`;
   }
 
-  function periodRow(p) {
+  function line(label, text, tone = "") {
+    return text ? `<p class="ins-line ${tone}"><span class="ins-who">${label}</span><span class="ins-said">${esc(text)}</span></p>` : "";
+  }
+
+  function steps(part) {
+    const total = part.did.length + part.more;
+    if (!total) return part.said.length > LONG_TEXT ? `<details class="ins-steps"><summary>Show all of it</summary></details>` : "";
+    const older = part.more ? `<li class="ins-older">${esc(times(part.more, "older step"))} not shown.</li>` : "";
+    return `<details class="ins-steps"><summary>Show ${esc(times(total, "step"))}</summary><ol>${older}${part.did.map((a) => `<li>${esc(a.what)}</li>`).join("")}</ol></details>`;
+  }
+
+  function partDetail(part) {
+    if (!part) return "";
+    const said = [
+      ...part.asked.map((text) => line("You said", text)),
+      line("It asked", part.question, "waiting"),
+      line("Stopped at", part.stopped_at, "waiting"),
+      line("Did", part.summary),
+      line("It said", part.said),
+    ].join("");
+    return said ? `<div class="ins-part">${said}${steps(part)}</div>` : "";
+  }
+
+  function periodRow(p, part) {
     const lasting = p.to ? `for ${duration(p.seconds)}` : `${duration(p.seconds)} so far`;
-    return `<li class="ins-period ${p.state}"><span class="ins-time">${esc(hour(p.from))}</span><span class="ins-mark"><span class="dot ${TONES[p.state]}"></span></span><span class="ins-text">${WORDS[p.state]}</span><span class="ins-len">${esc(lasting)}</span></li>`;
+    return `<li class="ins-period ${p.state}"><span class="ins-time">${esc(hour(p.from))}</span><span class="ins-mark"><span class="dot ${TONES[p.state]}"></span></span><span class="ins-text">${WORDS[p.state]}</span><span class="ins-len">${esc(lasting)}</span>${partDetail(part)}</li>`;
   }
 
   function rows(data, all) {
     const t = data.timeline;
+    const told = data.parts?.periods.some((part) => part.did.length);
     const items = [
-      ...t.periods.map((p) => ({ at: p.from, html: periodRow(p) })),
-      ...t.runs.map((r) => ({ at: r.at, html: runRow(r, hour(r.at)) })),
+      ...t.periods.map((p, i) => ({ at: p.from, html: periodRow(p, data.parts?.periods[i]) })),
+      ...t.runs.filter((r) => !(told && r.kind === "tool")).map((r) => ({ at: r.at, html: runRow(r, hour(r.at)) })),
     ].sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
     if (t.ended) items.push({ at: t.ended, html: `<li class="ins-period ended"><span class="ins-time">${esc(hour(t.ended))}</span><span class="ins-mark"></span><span class="ins-text">Ended</span></li>` });
     if (!items.length) return "";
@@ -163,9 +188,29 @@
       last = d;
       return head + i.html;
     });
+    const notes = timelineNotes(data, told);
+    const before = data.parts && partDetail(data.parts.before);
+    const first = before && !hidden ? `<li class="ins-period before"><span class="ins-time"></span><span class="ins-mark"></span><span class="ins-text">Before Yardbell was watching</span>${before}</li>` : "";
     return `<h3 class="ins-head">Timeline</h3>
-      <p class="help ins-note">Each change between working, waiting and idle with how long it lasted, and each <span class="ins-key">${TOOL}tool call</span> and <span class="ins-key">${FLASK}test run</span> Yardbell saw${t.runs.some((r) => r.kind === "pull") ? `, and what happened to its <span class="ins-key">${PULL}pull request or merge request</span>` : ""}, oldest first.</p>
-      <ol class="ins-list">${cut}${more}${dated.join("")}</ol>`;
+      <p class="help ins-note">${notes}</p>
+      <ol class="ins-list">${cut}${more}${first}${dated.join("")}</ol>`;
+  }
+
+  function timelineNotes(data, told) {
+    const t = data.timeline;
+    const pulls = t.runs.some((r) => r.kind === "pull");
+    const marks = told
+      ? `each <span class="ins-key">${FLASK}test run</span>`
+      : `each <span class="ins-key">${TOOL}tool call</span> and <span class="ins-key">${FLASK}test run</span> Yardbell saw`;
+    const lead = told
+      ? "What happened in each stretch of working, waiting and idle, from this session's transcript, with"
+      : "Each change between working, waiting and idle with how long it lasted, and";
+    const w = data.work;
+    const warn = [
+      w?.shared ? "Another session runs in this folder, so the detail may be from that session." : "",
+      w?.partial ? "This is a long session, so older stretches may have no detail." : "",
+    ].filter(Boolean).join(" ");
+    return `${lead} ${marks}${pulls ? `, and what happened to its <span class="ins-key">${PULL}pull request or merge request</span>` : ""}, oldest first.${warn ? ` ${esc(warn)}` : ""}`;
   }
 
   function empty(data) {
@@ -181,29 +226,16 @@
       <ol class="ins-list">${data.earlier.map((r) => runRow(r, "")).join("")}</ol>`;
   }
 
-  function working(data) {
+  function about(data) {
     const w = data.work;
-    if (!w) return "";
-    const head = `<h3 class="ins-head">What it's working on</h3>`;
-    if (w.screen) {
-      return `<div class="ins-work">${head}<p class="help ins-note">The end of its terminal. Yardbell can only read more detail from Claude Code's sessions.</p>
-        <pre class="ins-task">${esc(w.screen)}</pre></div>`;
-    }
-    const notes = [
-      w.shared ? "Another session runs in this folder, so this may be from that session." : "",
-      w.partial ? "This is a long session, so actions and files come from its latest part." : "",
-    ].filter(Boolean);
-    const said = (label, text) => (text ? `<div><dt>${label}</dt><dd>${esc(text)}</dd></div>` : "");
-    const actions = w.actions?.length
-      ? `<h4 class="ins-sub-head">Latest actions</h4><ol class="ins-actions">${w.actions.map((a) => `<li>${esc(a.what)}</li>`).join("")}</ol>`
-      : "";
-    const files = w.files?.length
-      ? `<h4 class="ins-sub-head">Files touched</h4><ul class="ins-files">${w.files.map((f) => `<li><code>${esc(f)}</code></li>`).join("")}</ul>`
-      : "";
-    return `<div class="ins-work">${head}<p class="help ins-note">From this session's transcript.${notes.length ? ` ${esc(notes.join(" "))}` : ""}</p>
-      ${w.title ? `<p class="ins-work-title">${esc(w.title)}</p>` : ""}
-      <dl class="ins-said">${said("Asked", data.task ? "" : w.first_prompt)}${said("Latest instruction", w.last_prompt)}${said("Now", w.message)}</dl>
-      ${actions}${files}</div>`;
+    const text = w?.title || (data.task ? "" : w?.first_prompt);
+    return text ? `<p class="ins-about">${esc(text)}</p>` : "";
+  }
+
+  function terminalEnd(data) {
+    if (!data.work?.screen) return "";
+    return `<div class="ins-work"><h3 class="ins-head">End of its terminal</h3><p class="help ins-note">Yardbell can only read what happened in each stretch from Claude Code's sessions.</p>
+      <pre class="ins-task">${esc(data.work.screen)}</pre></div>`;
   }
 
   function task(data) {
@@ -218,7 +250,7 @@
     const t = data.timeline;
     const record = t ? `${spent(t)}${rows(data, all)}` : empty(data);
     return `<div class="ins-top"><h2>Insights for ${esc(data.name)}</h2><p class="ins-where">What Yardbell saw of this session while it watched it.</p></div>
-      <div class="ins-body">${facts(data)}${working(data)}${record}${earlier(data)}${task(data)}</div>
+      <div class="ins-body">${about(data)}${facts(data)}${record}${terminalEnd(data)}${earlier(data)}${task(data)}</div>
       <div class="dialog-foot">
         <p class="where">Asks Dispatch to read this session and propose a clearer prompt for next time.</p>
         <button class="btn quiet" type="button" data-ins="close">Close</button>

@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Insights: each stretch of the timeline now says what happened in it: what you said, what the agent
+  did, what it said or asked you, with every step one click away. This replaces the **What it's working
+  on** section.
+
 ## [0.10.1] - 2026-11-01
 
 - **Results in a file.** A pipeline step's task now also asks the agent to save its result block to a

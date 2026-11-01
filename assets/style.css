@@ -2051,13 +2051,18 @@ dialog.ins-dialog:not([open]) { display: none; }
 .ins-empty p { margin: 0; color: var(--ink-2); font-size: 13px; }
 .ins-empty .ins-empty-title { color: var(--ink); font-size: 14px; font-weight: 600; }
 .ins-task { margin: 0 0 8px; padding: 10px 12px; max-height: 240px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; background: var(--side); color: var(--ink); font: 12.5px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
-.ins-work-title { margin: 0 0 8px; font-size: 13px; font-weight: 550; color: var(--ink); overflow-wrap: anywhere; }
-.ins-said { display: grid; gap: 10px; margin: 0; }
-.ins-said dt { color: var(--muted); font-size: 12px; }
-.ins-said dd { margin: 2px 0 0; font-size: 13px; color: var(--ink); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 180px; overflow: auto; }
-.ins-sub-head { margin: 14px 0 6px; font-size: 12px; font-weight: 500; color: var(--muted); }
-.ins-actions, .ins-files { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; font-size: 13px; color: var(--ink); overflow-wrap: anywhere; }
-.ins-files code { font: 12.5px/1.5 var(--mono); }
+.ins-about { margin: 0 0 12px; font-size: 14px; font-weight: 550; color: var(--ink); overflow-wrap: anywhere; }
+.ins-list > li.ins-period:has(.ins-part) { align-items: start; padding-bottom: 10px; }
+.ins-list > li.ins-period:has(.ins-part) > .ins-mark { margin-top: 4px; }
+.ins-part { grid-column: 3 / -1; display: grid; gap: 4px; margin-top: 2px; font-size: 13px; }
+.ins-line { display: grid; grid-template-columns: 76px minmax(0, 1fr); gap: 8px; margin: 0; }
+.ins-who { color: var(--muted); font-size: 12px; line-height: 19px; }
+.ins-said { color: var(--ink); line-height: 19px; overflow-wrap: anywhere; white-space: pre-line; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
+.ins-part:has(.ins-steps[open]) .ins-said { display: block; }
+.ins-steps { margin-top: 2px; padding-left: 84px; }
+.ins-steps summary { width: fit-content; color: var(--accent-text); font-size: 12.5px; cursor: pointer; }
+.ins-steps ol { display: grid; gap: 3px; margin: 6px 0 0; padding: 0; list-style: none; color: var(--ink-2); font-size: 12.5px; overflow-wrap: anywhere; }
+.ins-older { color: var(--muted); }
 dialog.ins-dialog .dialog-foot { flex-wrap: wrap; }
 @media (max-width: 900px) {
   .ins-stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -2175,6 +2180,9 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
   dialog.ins-dialog .dialog-foot .where { display: none; }
   dialog.ins-dialog .dialog-foot .btn { flex: 1; height: 40px; }
   .ins-list > li > .ins-len, .ins-list > li > .ins-result { grid-column: 3; justify-self: start; }
+  .ins-part { grid-column: 1 / -1; }
+  .ins-line { grid-template-columns: 1fr; gap: 0; }
+  .ins-steps { padding-left: 0; }
   .prompt-actions .btn { flex: 1 1 100%; height: 40px; }
 }
 
