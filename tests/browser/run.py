@@ -3380,6 +3380,19 @@ class Suite:
         finally:
             self.remove_mcp_servers()
 
+    def test_the_connection_dialog_is_sized_by_its_content(self):
+        # WebKit, the desktop app's engine, collapses a flex body with no starting height in a
+        # dialog with no height of its own, and Firefox, which runs these tests, does not.
+        b = self.b
+        b.goto(self.url("/settings#connections"))
+        b.wait("document.getElementById('conn-new')", "New connection")
+        b.click("#conn-new")
+        b.wait("document.querySelector('#conn-sign-in-list .conn-card')", "the tools")
+        basis = b.js("getComputedStyle(document.querySelector('.conn-dialog-body')).flexBasis")
+        b.js("document.getElementById('conn-flow').close()")
+        if basis != "auto":
+            raise Failure(f"the dialog body starts from {basis}, which collapses in WebKit")
+
     def test_connection_templates_are_a_grid(self):
         b = self.b
         lists = {"conn-new-panel": "conn-sign-in-list", "conn-tab-token": "conn-new-list"}

@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Fixed: **New connection** collapsed to a thin strip in the desktop app, hiding the tools.
+
 ## [0.10.2] - 2026-11-01
 
 - Insights: each stretch of the timeline now says what happened in it: what you said, what the agent
