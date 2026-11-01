@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.3] - 2026-11-01
+
 - Fixed: **New connection** collapsed to a thin strip in the desktop app, hiding the tools.
 
 ## [0.10.2] - 2026-11-01
