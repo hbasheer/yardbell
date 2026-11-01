@@ -536,6 +536,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(triggers_api::routes())
         .merge(worktrees_api::routes())
         .merge(insights_api::routes())
+        .merge(diagrams_api::routes())
         .merge(pipeline_api::routes())
         .merge(connectors_api::routes())
         .merge(mcp_auth_api::routes())
@@ -2201,6 +2202,7 @@ async fn remove_machine(
 }
 
 mod connectors_api;
+mod diagrams_api;
 mod insights_api;
 mod mcp_auth_api;
 pub(crate) mod pipeline_api;

@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light dark">
+<title>Diagrams · Yardbell</title>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/400.css" integrity="sha384-EfdL97hcnol8T4/i0jMEua2ounMTPBCKaU1QluVPWTv7V8xcTTfxSL1VWdjjpdRl" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/500.css" integrity="sha384-JJ19IMHzOJ2sAC2xNzhH4cnXNAY9idh1hFgmr9ePDd3e68jl+XEPiMVKTwYyGBcc" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/600.css" integrity="sha384-NWCWDXFWH0ixL3DXbRVGmMD8PbUKTQZA1n9RtBQEkxKQdln+Ui814nUpfzeU0ws+" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/400.css" integrity="sha384-kTJy0lu/NAzlcHdqtuJe5q6vDA1M8gHcMp6/umVo4Nqoa7La36UBhvWtM112y0i4" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/500.css" integrity="sha384-Ddvk1ngA7kUJqPAsRbHuZhooNDKcluU0BTRmYku5LWezQzInPKkiH6/z8GGyw5Ow" crossorigin="anonymous">
+<link rel="stylesheet" href="/style.css">
+<script src="/theme.js"></script>
+<script src="/side.js"></script>
+<script src="/live.js"></script>
+<script>if (window.top !== window.self) document.documentElement.classList.add("embedded");</script>
+</head>
+<body data-page="diagrams">
+<div class="app">
+  <aside class="side">
+    <div class="side-head">
+      <a class="wordmark" href="/">Yardbell</a>
+      <span class="side-summary" id="nav-summary" aria-live="polite"></span>
+    </div>
+    <nav class="machine-nav" aria-label="Machines">
+      <p class="nav-label">Machines</p>
+      <ul id="nav-machines" class="nav-list"></ul>
+      <a class="nav-add" href="/add"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Add machine</a>
+    </nav>
+    <div class="side-foot">
+      <p class="vpn" id="nav-vpn"></p>
+      <a class="side-link" href="/">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard
+      </a>
+      <a class="side-link" href="/workspace">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10M8 8h5.5"/></svg>Workspace
+      </a>
+      <a class="side-link" href="/pipeline">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="12.5" cy="8" r="1.5"/><path d="M5 8h1.5M9.5 8H11"/></svg>Pipelines
+      </a>
+      <a class="side-link" href="/diagrams" aria-current="page">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="2" width="5" height="3.5" rx="1"/><rect x="1.5" y="10.5" width="5" height="3.5" rx="1"/><rect x="9.5" y="10.5" width="5" height="3.5" rx="1"/><path d="M8 5.5V8M4 10.5V8h8v2.5"/></svg>Diagrams
+      </a>
+      <a class="side-link" href="/dispatch">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z"/></svg>Dispatch
+      </a>
+      <a class="side-link" href="/proposals">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 9.5 4 3.5h8l1.5 6v3h-11z"/><path d="M2.5 9.5h3.5l.5 1.5h3l.5-1.5h3.5"/></svg>Proposals<span class="side-count" id="nav-proposals-count" hidden></span>
+      </a>
+      <a class="side-link" href="/settings">
+        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:2.3"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings
+      </a>
+      <button class="side-link theme-toggle" type="button" data-theme-toggle></button>
+      <button class="side-link" id="logout" type="button">
+        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 3H3.5v10h3M10 5l3 3-3 3M13 8H6.5"/></svg>Log out
+      </button>
+    </div>
+  </aside>
+
+  <main class="main diagrams-main">
+    <div id="diagrams-root"></div>
+  </main>
+</div>
+<div id="toast" role="status"></div>
+<script src="/nav.js"></script>
+<script type="module" src="/diagrams.js"></script>
+</body>
+</html>

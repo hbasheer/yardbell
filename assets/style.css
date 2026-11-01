@@ -2549,3 +2549,30 @@ label.conn-setting + label.conn-setting { border-top: 1px solid var(--line); }
 .pl-approve-command .help { margin: 0; }
 .step-card-body pre.session-screen { margin: 4px 0 8px; max-height: 240px; overflow: auto; padding: 10px 12px; border-radius: 6px; background: var(--side); color: var(--ink-2); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 .pl-overridden { display: block; color: var(--warn-text); }
+
+.diagrams-main .main-head { justify-content: space-between; }
+.dg-intro { margin: -4px 0 16px; }
+.dg-setup { margin-bottom: 16px; }
+.rows .dg-machine, .rows.dg-setup > .row, .rows.dg-list > .row { display: flex; align-items: center; gap: 10px; padding: 10px 14px; }
+.dg-where { flex: 1; display: grid; gap: 2px; min-width: 0; overflow-wrap: anywhere; }
+.dg-where small { color: var(--muted); font-size: 12.5px; }
+.dg-open { justify-self: start; font-weight: 550; text-align: left; text-transform: capitalize; }
+.dg-empty { padding: 32px 20px; border: 1px solid var(--line); border-radius: 8px; background: var(--side); text-align: center; color: var(--ink-2); }
+.dg-empty p { margin: 0; }
+.dg-empty-title { margin-bottom: 4px !important; font-weight: 600; color: var(--ink); }
+.dg-fields { display: grid; gap: 12px; padding: 0 20px 16px; }
+.dg-fields .help { margin: 0; }
+.dg-fields label { display: grid; gap: 6px; margin: 0; font-size: 13px; font-weight: 500; }
+.dg-view-head { gap: 12px; justify-content: flex-start; }
+.dg-view-head h1 { text-transform: capitalize; }
+.dg-view-head small { color: var(--muted); }
+.dg-frame { display: block; width: 100%; height: calc(100dvh - 120px); border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.diagrams-main .dg-view-head { justify-content: flex-start; }
+@media (max-width: 720px) {
+  .dg-view-head { flex-wrap: wrap; gap: 4px 12px; }
+  .dg-view-head h1 { flex: 1 1 60%; font-size: 17px; }
+  .dg-view-head small { display: none; }
+  .dg-frame { height: calc(100dvh - 210px); }
+  .rows.dg-setup > .row, .rows.dg-list > .row { flex-wrap: wrap; }
+  .dg-where { flex-basis: 100%; }
+}

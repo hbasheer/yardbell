@@ -244,6 +244,21 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   in the desktop app's tray menu.
 - **Undo** restores the previous `yardbell.yml` and `~/.ssh/config` after any change.
 
+#### Diagrams
+
+The **Diagrams** page draws interactive maps of your repositories with
+[Archify](https://github.com/tt-a1i/archify). Each machine shows whether it is ready, and **Install** downloads a fixed
+version, checks its checksum, and unpacks it to `~/.local/share/yardbell/archify/`, not to any agent's skills folder. The
+machine needs Node 18 or later, which Yardbell does not install. **Settings, Diagrams** also has **Remove**.
+
+**Draw architecture** asks for a machine, folder, agent and anything to focus on, then starts a normal session you can
+watch or stop. It uses that agent's tokens. The diagram is saved in the folder's `.archify`, which Yardbell adds to the
+repository's `.git/info/exclude`. On a machine with no Chrome, Chromium or Edge, Archify cannot run its last check, and
+the agent keeps the diagram and says so.
+
+A diagram opens inside Yardbell, in a frame that cannot reach your login, Yardbell's API or the network. It holds what the
+agent read from the repository, and saved secrets are not removed from it, so check it before sharing it.
+
 #### Linear, GitHub and GitLab
 
 Linear has a row under **Settings, Connections** for its API key, saved as the secret `linear`.

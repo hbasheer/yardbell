@@ -5,6 +5,14 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.401] - 2026-11-01
+
+- **Diagrams.** A new page draws an interactive map of a repository with
+  [Archify](https://github.com/tt-a1i/archify). Install it per machine from the page or **Settings, Diagrams**, which
+  downloads a fixed, checked version to Yardbell's own folder and needs Node 18 or later. **Draw architecture** starts a
+  normal session, using that agent's tokens, and saves to `.archify` in the folder, kept out of git. A diagram opens inside
+  Yardbell, locked down so it cannot reach your login, Yardbell's API or the network.
+
 ## [0.10.4] - 2026-11-01
 
 - **Linear is one row.** An MCP server at `mcp.linear.app` now shares the **Linear** row under
