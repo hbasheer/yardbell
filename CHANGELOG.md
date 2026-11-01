@@ -37,6 +37,14 @@ and the project uses [Semantic Versioning](https://semver.org).
   read-only step reached again on the code its last result was about no longer starts: the run waits and
   says the fix changed nothing, and **Run it again** or **Continue** decides.
 
+- **Token limits for pipeline runs.** A run's page shows the tokens it has used, read from Claude Code's
+  transcripts and Dispatch's own turns. With a limit, set per pipeline in the builder or as a default in
+  Pipelines **Settings**, a run that passes it starts no new step that uses tokens and waits for you,
+  showing what it used and the limit, with a phone notification. Pushes, ticket updates and connected tools
+  still go through. Agents that cannot report tokens are named in the builder, in `yardbell doctor` and on
+  the run, and a limited run asks before starting one. A session that runs `/clear` makes the figure "at
+  least" and the run asks the same way. No limit means no change.
+
 ## [0.10.0] - 2026-11-01
 
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing

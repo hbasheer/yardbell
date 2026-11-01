@@ -70,6 +70,7 @@ pub(super) trait Backend: Sync {
     fn session_of(&self, line: &Value) -> Option<String>;
     fn finished(&self, line: &Value) -> bool;
     fn usage_of(&self, line: &Value) -> Option<Value>;
+    fn tokens_of(&self, line: &Value) -> Option<crate::pipeline::tokens::Tokens>;
     // Whether a resumed session keeps the system prompt it started with instead of taking the
     // one given with each turn.
     fn keeps_instructions(&self) -> bool;

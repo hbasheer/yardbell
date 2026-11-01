@@ -31,6 +31,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/runs/{id}/answer", post(answer))
         .route("/api/runs/{id}/retry", post(retry))
         .route("/api/runs/{id}/accept-tool", post(accept_tool))
+        .route("/api/runs/{id}/token-limit", post(token_limit))
         .route("/api/runs/{id}/continue", post(continue_on))
         .route("/api/runs/{id}/drop", post(drop_run))
         .route("/api/runs/{id}/stop-session", post(stop_session))
@@ -101,6 +102,10 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         .collect();
     let machines: Vec<&str> = cfg.machines.iter().map(|m| m.name.as_str()).collect();
     let agents: Vec<String> = cfg.agents().into_iter().map(|a| a.name).collect();
+    let no_tokens: Vec<&String> = agents
+        .iter()
+        .filter(|a| !cfg.agent_reports_tokens(a))
+        .collect();
     let mcp_servers: Vec<&str> = cfg.mcp_servers.iter().map(|m| m.name.as_str()).collect();
     let gitlab_hosts: Vec<&str> = cfg
         .pull_requests
@@ -114,6 +119,8 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "settings": cfg.pipelines,
         "machines": machines,
         "agents": agents,
+        "agents_without_tokens": no_tokens,
+        "default_agent": cfg.default_agent(),
         "mcp_servers": mcp_servers,
         "gitlab_hosts": gitlab_hosts,
         "connectors": cfg.connectors.iter().map(|c| json!({
@@ -276,6 +283,8 @@ fn with_terminals(app: &AppState, runs: Vec<Run>) -> Result<Vec<Value>, ApiError
             }
             let mut out = json!(run);
             out["terminals"] = json!(terminals);
+            out["tokens_used"] = json!(run.tokens.used());
+            out["tokens_from_cache"] = json!(run.tokens.cache_read());
             out
         })
         .collect())
@@ -619,6 +628,19 @@ async fn answer(
     Json(req): Json<AnswerReq>,
 ) -> Result<Response, ApiError> {
     acted(&app, app.pipelines.answer(&id, &req.text))
+}
+
+#[derive(Deserialize)]
+struct TokenLimitReq {
+    limit: u64,
+}
+
+async fn token_limit(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<TokenLimitReq>,
+) -> Result<Response, ApiError> {
+    acted(&app, app.pipelines.raise_limit(&id, req.limit))
 }
 
 async fn accept_tool(

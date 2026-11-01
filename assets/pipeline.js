@@ -15,6 +15,7 @@ let versions = [];
 let show = { waiting: false, settings: false, templates: false, runNow: false };
 let settings = null;
 let answers = new Map();
+let raises = new Map();
 let subjects = "";
 let busy = false;
 // A pipeline Dispatch proposed, opened from its card: saving approves the step.
@@ -185,7 +186,7 @@ function settingsForm() {
   const setNote = (i, key, value) => { notes[i] = { ...notes[i], [key]: value }; draw(); };
   const save = () => doing(async () => {
     const qa_notes = Object.fromEntries(notes.filter((n) => n.folder.trim()).map((n) => [n.folder.trim(), n.note]));
-    await api("PUT", "/api/pipelines/settings", { per_machine: Number(s.per_machine), minutes: Number(s.minutes), memory_limit: s.memory_on ? Number(s.memory_limit) : 0, qa_notes });
+    await api("PUT", "/api/pipelines/settings", { per_machine: Number(s.per_machine), minutes: Number(s.minutes), memory_limit: s.memory_on ? Number(s.memory_limit) : 0, token_limit: Number(s.token_limit) || 0, qa_notes });
     toast("Saved to yardbell.yml", "ok");
     show.settings = false;
     await load();
@@ -201,6 +202,9 @@ function settingsForm() {
         <input type="number" name="memory_limit" min="50" max="99" required placeholder="50 to 99" aria-label="Percent of memory in use that holds new steps" ?disabled=${!s.memory_on} .value=${String(s.memory_limit)} @input=${(e) => set("memory_limit", e.target.value)}>
         <small>Off unless you tick this box. To turn it on, tick it and enter the percent of memory in use, from 50 to 99, that holds new steps. New agent steps on that machine then wait until it has stayed under for two minutes, and at most one starts a minute. Running steps are never stopped. On a Mac this figure can read well above what macOS itself reports, so look at each machine's figure when it is idle before you choose.</small>
       </div>
+      <label class="pl-field"><span>Tokens one run may use before it waits for you</span>
+        <input type="number" name="token_limit" min="0" placeholder="No limit" .value=${s.token_limit ? String(s.token_limit) : ""} @input=${(e) => set("token_limit", e.target.value)}>
+        <small>Empty or 0 means no limit. A pipeline can set its own in its builder.</small></label>
     </div>
     <div class="pl-notes">
       <p class="pl-field-head">QA notes per folder <span>Added to every agent step working in that folder, such as how to run its specs and console.</span></p>
@@ -222,7 +226,7 @@ function listView() {
   const waiting = allRuns.filter(asksForYou).length;
   const openSettings = () => {
     const s = data.settings;
-    settings = { per_machine: s.per_machine, minutes: s.minutes, memory_on: s.memory_limit > 0, memory_limit: s.memory_limit || "", notes: Object.entries(s.qa_notes || {}).map(([folder, note]) => ({ folder, note })) };
+    settings = { per_machine: s.per_machine, minutes: s.minutes, memory_on: s.memory_limit > 0, memory_limit: s.memory_limit || "", token_limit: s.token_limit, notes: Object.entries(s.qa_notes || {}).map(([folder, note]) => ({ folder, note })) };
     show.settings = !show.settings;
     draw();
   };
@@ -297,8 +301,64 @@ function act(run, what, body) {
   });
 }
 
+function tokensOf(n) {
+  return Number(n || 0).toLocaleString("en-US");
+}
+
+function limitOf(d) {
+  return d.token_limit ?? data.settings.token_limit ?? 0;
+}
+
+function reportsTokens(agent) {
+  return !(data.agents_without_tokens || []).includes(agent || data.default_agent);
+}
+
+function raiseLimit(run) {
+  const value = raises.get(run.id) || "";
+  const go = () => {
+    raises.delete(run.id);
+    act(run, "token-limit", { limit: Number(value) });
+  };
+  return html`<form class="pl-raise" @submit=${(e) => { e.preventDefault(); go(); }}>
+    <label class="pl-field"><span>New limit for this run</span>
+      <input type="number" id="pl-raise" min="1" placeholder=${tokensOf((run.tokens_used || 0) * 2 || 1000)} .value=${value} @input=${(e) => { raises.set(run.id, e.target.value); draw(); }}></label>
+    <button class="btn" type="submit" ?disabled=${busy || !Number(value)}>Raise the limit</button>
+  </form>`;
+}
+
+function tokenUse(run) {
+  const t = run.tokens || {};
+  const used = run.tokens_used || 0;
+  const unknown = Object.values(t.unknown || {});
+  if (!used && !unknown.length && !t.limit) return nothing;
+  const passed = t.limit && used >= t.limit;
+  const total = used ? `${unknown.length ? "At least " : ""}${tokensOf(used)} tokens` : unknown.length ? "Not known" : "0 tokens";
+  const pct = t.limit ? Math.min(100, (used * 100) / t.limit) : 0;
+  return html`<div class="pl-tokens" id="pl-tokens">
+    <p class="usage-line"><span><b>${total}</b> used</span>${t.limit ? html`<span>Limit ${tokensOf(t.limit)}</span>` : html`<span>No limit</span>`}</p>
+    ${t.limit ? html`<div class="usage-track" role="img" aria-label=${`${Math.round(pct)}% of the limit`}><span class=${`usage-fill ${passed ? "bad" : pct >= 80 ? "warn" : ""}`} style=${`width:${pct}%`}></span></div>` : nothing}
+    ${passed && ["running", "queued"].includes(run.state) ? html`<p class="pl-tokens-note">Past its limit. This step finishes, and the next step that uses tokens waits for you.</p>` : nothing}
+    ${unknown.map((why) => html`<p class="pl-tokens-note">${why}, so the real total may be higher.</p>`)}
+    ${run.tokens_from_cache ? html`<p class="help">${tokensOf(run.tokens_from_cache)} more were read from cache and are not counted.</p>` : nothing}
+  </div>`;
+}
+
+function tokenLimitForm(d, redraw) {
+  const fallback = data.settings.token_limit || 0;
+  const blind = limitOf(d) > 0 ? d.steps.filter((s) => s.kind === "agent" && !reportsTokens(s.agent)) : [];
+  const names = blind.map((s) => s.name).join(", ");
+  return html`<fieldset class="pl-step-form pl-token-form">
+    <legend>Token limit</legend>
+    ${field("Tokens one run may use", html`<input type="number" name="token_limit" min="0" placeholder=${fallback ? tokensOf(fallback) : "No limit"} .value=${d.token_limit == null ? "" : String(d.token_limit)}
+      @input=${(e) => { d.token_limit = e.target.value === "" ? null : Number(e.target.value); redraw(); }}>`,
+      `Past this the run starts no new step that uses tokens and waits for you. Pushes, ticket updates and connected tools go through. Empty uses the default in Settings, ${fallback ? `${tokensOf(fallback)} tokens` : "no limit"}. 0 means no limit here.`)}
+    ${blind.length ? html`<p class="pl-tokens-note" id="pl-token-blind" role="status">${names} cannot report tokens, because only Claude Code does. A run waits and asks you before starting ${blind.length === 1 ? "it" : "each of them"}, then leaves what it uses out of the total.</p>` : nothing}
+  </fieldset>`;
+}
+
 function needBox(run, d) {
   const w = run.waiting || {};
+  const tokenWait = w.kind === "token_limit" || w.kind === "token_unknown";
   const answerable = ANSWERABLE.includes(w.kind);
   const open = (run.questions || []).filter((q) => !q.answer);
   const text = answers.get(run.id) || "";
@@ -307,14 +367,16 @@ function needBox(run, d) {
     ${w.kind === "questions" && open.length ? html`<ol class="pl-questions">${open.map((q) => html`<li>${q.asked}</li>`)}</ol>` : nothing}
     ${w.kind === "no_result" ? html`<p class="help">The agent went quiet and Yardbell could not read a result from it. Show the terminal to see what it did, then retry the step, continue on pass or fail, or answer it.</p>` : nothing}
     ${w.kind === "unchanged" ? html`<p class="help">Yardbell did not start this step and did not reuse its last verdict. Run it again to read the same code, or continue on pass or fail to take that line yourself.</p>` : nothing}
+    ${w.kind === "token_limit" ? html`<p class="help">This step uses tokens and was not started. Raise the limit to go on, or start this one step and the run waits again after it.</p>${raiseLimit(run)}` : nothing}
+    ${w.kind === "token_unknown" ? html`<p class="help">Starting it anyway leaves its use out of the total, and the run does not ask again.</p>` : nothing}
     ${w.screen ? html`<pre class="session-screen">${w.screen}</pre>` : nothing}
     ${answerable ? html`<label class="visually-hidden" for="pl-answer">Your answer</label>
       <textarea id="pl-answer" rows="3" placeholder="Your answer" .value=${text} @input=${(e) => { answers.set(run.id, e.target.value); draw(); }}></textarea>` : nothing}
     <div class="pl-need-actions">
       <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Drop</button>
-      ${w.kind === "tool_changed" ? html`<button class="btn primary" type="button" ?disabled=${busy} @click=${() => act(run, "accept-tool")}>Accept and run</button>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>${w.kind === "unchanged" ? "Run it again" : "Retry step"}</button>`}
-      <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "fail" })}>Continue on fail</button>
-      <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "pass" })}>Continue on pass</button>
+      ${w.kind === "tool_changed" ? html`<button class="btn primary" type="button" ?disabled=${busy} @click=${() => act(run, "accept-tool")}>Accept and run</button>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>${tokenWait ? "Start this step anyway" : w.kind === "unchanged" ? "Run it again" : "Retry step"}</button>`}
+      ${tokenWait ? nothing : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "fail" })}>Continue on fail</button>
+      <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "pass" })}>Continue on pass</button>`}
       ${answerable ? html`<button class="btn primary" type="button" ?disabled=${busy || !text.trim()} @click=${() => act(run, "answer", { text })}>Send answer</button>` : nothing}
     </div>
   </div>`;
@@ -352,6 +414,7 @@ function detail(run, d) {
     </div>
     ${run.state === "waiting" ? needBox(run, d) : nothing}
     ${run.state === "queued" && run.held ? heldBox(run) : nothing}
+    ${tokenUse(run)}
     ${run.teardown_problem ? html`<p class="pl-teardown-problem" role="alert">${run.teardown_problem}</p>` : nothing}
     <div class="pl-need-actions">
       ${["queued", "running"].includes(run.state) ? html`<button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Stop this run</button>` : nothing}
@@ -459,7 +522,7 @@ function agentFields(step, others, redraw) {
       ${field("Agent", html`<select name="agent" @change=${(e) => { step.agent = e.target.value; redraw(); }}>
         <option value="" ?selected=${!step.agent}>Your default agent</option>
         ${data.agents.map((a) => html`<option value=${a} ?selected=${step.agent === a}>${a}</option>`)}
-      </select>`)}
+      </select>`, draft && limitOf(draft) > 0 && !reportsTokens(step.agent) ? "This agent cannot report tokens, so a run waits and asks you before starting this step." : "")}
       ${field("Machine", html`<select name="machine_mode" @change=${(e) => setMachine(e.target.value === "name" ? { name: data.machines[0] || "" } : e.target.value === "same_as" ? { same_as: others[0]?.id || "" } : { pick: [] })}>
         <option value="pick" ?selected=${mode === "pick"}>Dispatch picks it</option>
         <option value="name" ?selected=${mode === "name"}>Always this machine</option>
@@ -1243,13 +1306,13 @@ function inspector() {
       <div><button class="btn quiet danger" type="button" @click=${() => cutLine(from, outcome)}>Remove line</button></div>
     </div>` : nothing;
   } else if (selected === "@start") {
-    body = triggerFields(draft, redraw);
+    body = html`${triggerFields(draft, redraw)}${tokenLimitForm(draft, redraw)}`;
   } else {
     body = html`<div class="pl-inspector-empty">
       <p><b>${draft.name}</b></p>
       <p>Click a step to edit it, or the Start when card for the trigger. Drag a step in from the library, or click one to add it.</p>
       <p>${draft.steps.length} ${draft.steps.length === 1 ? "step" : "steps"} · ${triggerWords(draft.trigger)}</p>
-    </div>`;
+    </div>${tokenLimitForm(draft, redraw)}`;
   }
   if (phone.matches && !selected) return nothing;
   return html`<aside class=${`pl-inspector ${phone.matches ? "sheet" : ""}`} id="pl-inspector" aria-label="Selected step">

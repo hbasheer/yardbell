@@ -620,6 +620,9 @@ so look at each machine's figure when it is idle before you choose.
 The run's page says it is held and why. A run held for 30 minutes also shows under **Waiting for me**
 and sends one phone notification. It stays queued and still starts by itself when the machine recovers.
 
+A pipeline can also limit how many tokens one run may use, set under **Token limit** in its builder or
+as a default in **Settings**. See [Token limits](#token-limits).
+
 Each run gets one Dispatch conversation, where every step shows as a card marked **Ran as part of
 the pipeline run started at 09:40**. Starting a run is the one approval: your Dispatch rules still
 refuse what they refuse, and a refused step waits for you with the rule's reason.
@@ -631,6 +634,7 @@ A run waits under **Waiting for me**, with a phone notification, when:
 - a step's line goes to Wait for me, such as a step that says it needs you;
 - Plan has questions, or an agent asks something or waits on a prompt (its screen is shown);
 - a step reached its `max_runs`, ran past its minutes, or ended without a result;
+- the run passed its token limit, or cannot tell what a step used;
 - the push or a step was refused, by the secret check or a rule;
 - its machine stayed offline for 30 minutes, or the ticket was closed meanwhile.
 
@@ -723,6 +727,68 @@ Limits:
   review triggers have none.
 - **Run now** with a ticket you name ignores the filter, since you picked that ticket.
 
+### Token limits
+
+A run's page shows what it has used. Each agent session's figures come from its Claude Code transcript
+on its machine, and Plan and Report come from what Dispatch reports for its own turn. Yardbell reads the
+transcripts about once a minute and when a step ends. It counts input, output and cache writes. Cache
+reads are shown apart and left out, because every turn of a long session reads its whole conversation
+again. These are tokens, not money: Yardbell has no price list.
+
+Each transcript is counted once however many steps share its session, and subagents' transcripts are
+included. The figures are saved with the run, so a restart loses nothing and adds nothing.
+
+Once a run with a limit has used it:
+
+- it starts no new step that uses tokens and waits for you, with a phone notification, showing what it
+  used and the limit;
+- steps that use no tokens go through, and the run waits at the next step that does. If none is left, the
+  run ends, and your phone has still been told it passed its limit;
+- a step already going finishes first, and your phone hears when the limit is passed while it runs;
+- **Raise the limit** sets a new limit for this run and goes on, and **Start this step anyway** runs one
+  step, after which the run waits again.
+
+| Step | Past the limit | Why |
+|---|---|---|
+| Agent | waits | an agent session uses tokens |
+| Plan, Report | wait | each is a Dispatch turn |
+| Push and draft PR | goes through | git and the forge, with no model |
+| Update the ticket | goes through | a call to Linear or a connection, and its comment is built from reports |
+| Call, Use a connected tool | go through | Yardbell calls them with no model. If the far side runs a model of its own, that is not counted |
+| Wait for me | is its own wait | it already asks you |
+
+Unknown is never counted as zero. Only Claude Code reports tokens, so:
+
+- a pipeline with a limit and a step on another agent says so in the builder and in `yardbell doctor`;
+- a limited run waits before starting that step. **Start this step anyway** goes on, leaves that step out
+  of the total and does not ask again in that run. The run's page then says "at least" and names the step;
+- if a Claude Code step ends and its transcript cannot be read, or a Dispatch turn reports nothing, the run
+  waits the same way before its next step that uses tokens;
+- if `/clear` is run in one of the run's sessions, the same happens, and the page says the session moved to
+  a new transcript.
+
+`/clear` needs that care because it gives the session a new transcript with nothing in it that names the
+old one. Yardbell finds a run's transcripts by the step markers in them, so it cannot find that one by
+itself. It asks Claude Code's own record of each live session, `sessions/<pid>.json` in its config folder,
+which transcript the session is on now. If that transcript holds no marker from this run, the session has
+moved.
+
+Yardbell warns and does not count that transcript, since the record cannot tell `/clear` from `/resume`, and
+a resumed transcript holds tokens from another session. If the session later gets a step of this run, its
+marker is in that transcript, so the transcript is counted and the warning goes.
+
+This has limits, and a move can still be missed when:
+
+- the session ends before the next read, about a minute at most, since the record goes with the process;
+- the session's Claude Code keeps no such record, or Yardbell's process id for it is not the one the record
+  is named after;
+- the session started a new transcript in another folder.
+
+This was read from Claude Code 2.1.316 and tested with files shaped like its own. It has not been seen
+working on a real `/clear`.
+
+A run without a limit never waits for this, and its page still shows what is known.
+
 ### Settings
 
 The **Settings** button on the Pipelines page writes the `pipelines` section of `yardbell.yml`:
@@ -732,6 +798,7 @@ pipelines:
   per_machine: 2      # agent steps at once on each machine, 1 to 6
   minutes: 120        # an agent step running longer waits for you, 10 to 1440
   memory_limit: 0     # off; or the percent of memory in use that holds new agent steps, 50 to 99
+  token_limit: 500000 # optional: tokens one run may use, 0 for no limit; a pipeline can set its own
   qa_notes:           # added to every agent step working in that folder
     acme/web: |
       Run specs with: docker compose exec web bin/rspec <files>

@@ -8,6 +8,7 @@ pub mod record;
 pub mod run;
 pub mod store;
 pub mod templates;
+pub mod tokens;
 pub mod triggers;
 pub mod watch;
 
@@ -281,6 +282,28 @@ impl Pipelines {
         self.person(id, Seen::Retry, Self::waiting)
     }
 
+    pub fn raise_limit(&self, id: &str, limit: u64) -> Result<Run, String> {
+        if limit > tokens::LIMIT_MAX {
+            return Err(format!(
+                "a limit can be at most {} tokens",
+                tokens::group(tokens::LIMIT_MAX)
+            ));
+        }
+        let allowed = |r: &Run| match &r.waiting {
+            Some(w) if r.state == RunState::Waiting && w.kind == record::WaitKind::TokenLimit => {
+                match r.tokens.used() < limit {
+                    true => Ok(()),
+                    false => Err(format!(
+                        "Set a limit above the {} tokens this run has used",
+                        tokens::group(r.tokens.used())
+                    )),
+                }
+            }
+            _ => Err(format!("{} is not waiting on its limit", r.subject.label())),
+        };
+        self.person(id, Seen::RaiseLimit(limit), allowed)
+    }
+
     pub fn accept_tool(&self, id: &str) -> Result<Run, String> {
         let at_tool = |r: &Run| match &r.waiting {
             Some(w) if r.state == RunState::Waiting && w.kind == record::WaitKind::ToolChanged => {
@@ -443,6 +466,15 @@ impl Pipelines {
                     continue;
                 }
             }
+            if run.state.active()
+                && !self.busy(&run.id)
+                && run.pending.is_none()
+                && tokens::due(&run, now)
+            {
+                if let Some(seen) = tokens::read(world.as_ref(), &run, &view, false).await {
+                    self.apply(world.as_ref(), &run.id, seen, now);
+                }
+            }
             let watched = matches!(run.state, RunState::Running | RunState::Queued);
             if !watched || self.busy(&run.id) || run.pending.is_some() {
                 continue;
@@ -488,6 +520,11 @@ impl Pipelines {
                 _ => None,
             };
             if let Some(seen) = watch::seen(&run, &view, screen.as_deref(), now) {
+                if matches!(seen, Seen::Ended { .. }) {
+                    if let Some(used) = tokens::read(world.as_ref(), &run, &view, true).await {
+                        self.apply(world.as_ref(), &run.id, used, now);
+                    }
+                }
                 self.apply(world.as_ref(), &run.id, seen, now);
             }
             if self.store.get(&run.id).is_some_and(|r| r.pending.is_none()) {

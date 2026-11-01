@@ -538,6 +538,7 @@ pipelines:
   per_machine: 2      # agent steps at once on each machine, 1 to 6
   minutes: 120        # an agent step running longer waits for you, 10 to 1440; a step can set its own
   memory_limit: 0     # off; or the percent of memory in use that holds new agent steps and limits starts to one a minute, 50 to 99
+  token_limit: 500000 # optional: tokens one run may use, 0 for no limit, or from 1000; a pipeline can set its own
   qa_notes:           # optional: added to every agent step working in that folder
     acme/web: |
       Run specs with: docker compose exec web bin/rspec <files>

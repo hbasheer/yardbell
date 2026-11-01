@@ -169,6 +169,10 @@ impl Dispatch {
             .collect::<Vec<_>>())
     }
 
+    pub fn tokens_of(&self, id: &str) -> Option<crate::pipeline::tokens::Tokens> {
+        self.shared.lock().get(id)?.stored.tokens
+    }
+
     pub fn get(&self, id: &str) -> Option<Value> {
         let chats = self.shared.lock();
         let c = chats.get(id)?;

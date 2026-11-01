@@ -140,6 +140,7 @@ impl Library {
             trigger: Trigger::Manual,
             start: String::new(),
             steps: vec![],
+            token_limit: None,
         };
         self.name_uniquely(&mut def);
         self.save(def, cfg)

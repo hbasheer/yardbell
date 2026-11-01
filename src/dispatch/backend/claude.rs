@@ -72,6 +72,10 @@ impl Backend for Claude {
         usage::from_stream(line)
     }
 
+    fn tokens_of(&self, line: &Value) -> Option<crate::pipeline::tokens::Tokens> {
+        crate::pipeline::tokens::from_claude_result(line)
+    }
+
     fn keeps_instructions(&self) -> bool {
         false
     }
