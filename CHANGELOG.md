@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Run a command.** This pipeline step runs a saved shell command in the run's worktree, with no agent
+  and no tokens. Exit 0 follows the pass line and anything else follows the fail line, so code rather
+  than an agent's word decides. The end of its output is the step's report, so a Fix step can read it
+  with `{report}`. A command an agent proposed runs only after you accept its exact text, and the
+  Dispatch rule action `run_command` can refuse it by machine or folder. The step can never pass unless its
+  command ran in that attempt. After a real failure only a person on the run's page can continue on pass,
+  and the run records the override.
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
   in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
   common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have

@@ -5,6 +5,7 @@ use crate::mcp::tool;
 use crate::pipeline::definition::{
     check as check_definition, slug, Definition, Outcome, StepKind, END, WAIT,
 };
+use crate::pipeline::engine::Who;
 use crate::pipeline::record::{PrRef, Run, RunState, Waiting};
 use crate::web::{ApiError, AppState};
 use axum::http::StatusCode;
@@ -51,6 +52,23 @@ pub(crate) fn keep_tool_hashes(def: &mut Definition, before: Option<&Definition>
     }
 }
 
+// An approval records a person reading that exact text, so what an agent sends for it never counts,
+// and it lasts only while the agent sends the same command back.
+pub(crate) fn keep_command_approvals(def: &mut Definition, before: Option<&Definition>) {
+    for step in &mut def.steps {
+        let StepKind::Command { command, approved } = &mut step.kind else {
+            continue;
+        };
+        let same = before.and_then(|b| b.step(&step.id)).is_some_and(
+            |old| matches!(&old.kind, StepKind::Command { approved: a, .. } if a == command),
+        );
+        approved.clear();
+        if same {
+            approved.clone_from(command);
+        }
+    }
+}
+
 pub fn owns(tool: &str) -> bool {
     TOOLS.contains(&tool)
 }
@@ -65,7 +83,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "save_pipeline",
-            "Propose a new pipeline, or a change to one. For a change, read it first with read_pipeline and send the whole definition back with your edits, keeping its id; for a new one leave id empty. The pipeline is checked as the builder checks it, and any problem comes back to you to correct. It always waits for the user, who can approve it, finish it in the builder, or reject it; from a client other than Dispatch it waits in the user's Proposals inbox. A new pipeline is saved switched off.",
+            "Propose a new pipeline, or a change to one. For a change, read it first with read_pipeline and send the whole definition back with your edits, keeping its id; for a new one leave id empty. The pipeline is checked as the builder checks it, and any problem comes back to you to correct. It always waits for the user, who can approve it, finish it in the builder, or reject it; from a client other than Dispatch it waits in the user's Proposals inbox. A new pipeline is saved switched off. A command step (kind command, with the shell text in command) has no placeholders, and a run also waits for the user to accept that exact text the first time it reaches the step.",
             json!({ "definition": { "type": "object", "description": "The whole pipeline definition, as read_pipeline returns it" } }),
             &["definition"],
         ),
@@ -90,7 +108,7 @@ pub fn tools() -> Vec<Value> {
         ),
         tool(
             "answer_run",
-            "Propose acting on a pipeline run that waits for the user (read_run shows what it waits for): answer its question with text, retry the step, continue as if the step passed or failed, or drop the run. From a client other than Dispatch it waits in the user's Proposals inbox.",
+            "Propose acting on a pipeline run that waits for the user (read_run shows what it waits for): answer its question with text, retry the step, continue as if the step passed or failed, or drop the run. A command step cannot be continued as passed unless its command really passed; retry it instead. From a client other than Dispatch it waits in the user's Proposals inbox.",
             json!({
                 "id": { "type": "string", "description": "The run's id, from list_runs" },
                 "action": { "type": "string", "enum": ACTIONS },
@@ -235,7 +253,11 @@ fn fits(run: &Run, action: &str, text: &str) -> Result<(), String> {
         "answer" if text.trim().is_empty() => Err("type an answer first".into()),
         "answer" if waiting && run.waiting.as_ref().is_some_and(|w| w.kind.answerable()) => Ok(()),
         "answer" => Err(format!("{label} is not waiting for an answer")),
-        "retry" | "continue_pass" | "continue_fail" if waiting => Ok(()),
+        "continue_pass" if waiting => {
+            crate::pipeline::engine::continue_refused(run, Outcome::Pass, Who::Agent)
+                .map_or(Ok(()), Err)
+        }
+        "retry" | "continue_fail" if waiting => Ok(()),
         "retry" | "continue_pass" | "continue_fail" => {
             Err(format!("{label} is not waiting for you"))
         }
@@ -319,6 +341,7 @@ pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Val
             let before = existing(app, &definition.id);
             definition.enabled = before.as_ref().is_some_and(|b| b.enabled);
             keep_tool_hashes(&mut definition, before.as_ref());
+            keep_command_approvals(&mut definition, before.as_ref());
             check_definition(&definition, cfg).map_err(problems)?;
             let changes = changes(before.as_ref(), &definition);
             Ok(json!({ "definition": definition, "before": before, "changes": changes }))
@@ -387,6 +410,7 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
                 before,
             } = s;
             keep_tool_hashes(&mut definition, current.as_ref());
+            keep_command_approvals(&mut definition, current.as_ref());
             match current {
                 Some(current) => {
                     let saved = library.save(definition, &cfg).map_err(not_saved)?;
@@ -439,8 +463,8 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
             let run = match a.action.as_str() {
                 "answer" => pipelines.answer(&a.id, &a.text),
                 "retry" => pipelines.retry(&a.id),
-                "continue_pass" => pipelines.continue_on(&a.id, Outcome::Pass),
-                "continue_fail" => pipelines.continue_on(&a.id, Outcome::Fail),
+                "continue_pass" => pipelines.continue_on(&a.id, Outcome::Pass, Who::Agent),
+                "continue_fail" => pipelines.continue_on(&a.id, Outcome::Fail, Who::Agent),
                 "drop" => pipelines.drop_run(&a.id),
                 other => Err(format!(
                     "action {other:?} must be one of {}",
@@ -506,7 +530,7 @@ pub fn changes(before: Option<&Definition>, after: &Definition) -> Value {
             .into_iter()
             .flat_map(|o| o.keys())
             .chain(a.as_object().into_iter().flat_map(|o| o.keys()))
-            .filter(|k| !["id", "x", "y", "next"].contains(&k.as_str()))
+            .filter(|k| !["id", "x", "y", "next", "approved"].contains(&k.as_str()))
             .filter(|k| a.get(k.as_str()) != b.get(k.as_str()))
             .collect::<std::collections::BTreeSet<_>>()
             .into_iter()

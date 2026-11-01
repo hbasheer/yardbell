@@ -585,3 +585,81 @@ async fn old_config_keeps_every_notification_on() {
         serde_json::from_value(json!({ "wait_minutes": 5 })).unwrap();
     assert!(phone.pipeline_waiting && phone.pipeline_finished && phone.proposals);
 }
+
+#[tokio::test]
+async fn an_outside_client_cannot_propose_passing_a_command() {
+    use super::mcp_pipeline::{command_wait, still_waiting};
+    use crate::pipeline::record::WaitKind;
+    let r = rig();
+    mcp_on(&r);
+    for (ran, says) in [
+        (None, "has not run in this attempt"),
+        (Some(false), "only a person"),
+    ] {
+        let run = command_wait(&r, WaitKind::Stopped, ran);
+        let result = propose(
+            &r,
+            "answer_run",
+            json!({ "id": run, "action": "continue_pass" }),
+        )
+        .await;
+        assert_eq!(result["isError"], true, "{result}");
+        assert!(text(&result).contains(says), "{result}");
+        still_waiting(&r, &run);
+        r.app.pipelines.delete_run(&run);
+    }
+    assert!(r.app.proposals.list().is_empty());
+}
+
+#[tokio::test]
+async fn approving_a_proposal_cannot_pass_a_command() {
+    use super::mcp_pipeline::{command_wait, still_waiting};
+    use crate::pipeline::record::{CommandRan, WaitKind};
+    let r = rig();
+    mcp_on(&r);
+    let c = cookie(&r.app).await;
+    let run = command_wait(&r, WaitKind::Stopped, Some(false));
+    propose(
+        &r,
+        "answer_run",
+        json!({ "id": run, "action": "continue_fail" }),
+    )
+    .await;
+    let id = r.app.proposals.list()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let input = json!({ "id": run, "action": "continue_pass" });
+    let (status, body) = decide(
+        &r,
+        &c,
+        &id,
+        json!({ "decision": "approve", "input": input }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    still_waiting(&r, &run);
+    r.app.pipelines.delete_run(&run);
+
+    let run = command_wait(&r, WaitKind::Stopped, Some(true));
+    propose(
+        &r,
+        "answer_run",
+        json!({ "id": run, "action": "continue_pass" }),
+    )
+    .await;
+    let id = r.app.proposals.list()[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let mut failed = r.app.pipelines.run(&run).unwrap();
+    failed.state_of("test").ran = Some(CommandRan {
+        command: "make test".into(),
+        passed: false,
+    });
+    r.app.pipelines.put(failed);
+    let (status, done) = decide(&r, &c, &id, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["result"]["ok"], false, "{done}");
+    still_waiting(&r, &run);
+}

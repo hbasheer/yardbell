@@ -303,6 +303,7 @@ const OUTCOME_WORDS = { pass: "pass", fail: "fail", needs_you: "needs you", star
 function pipelineBody(e) {
   const i = e.input || {};
   const c = i.changes || {};
+  const unapproved = (i.definition?.steps || []).filter((s) => s.kind === "command" && s.approved !== s.command);
   const lists = [
     c.trigger ? html`<li>The trigger changed: ${triggerWords(i.definition.trigger)}.</li>` : nothing,
     c.added?.length ? html`<li>Steps added: ${c.added.join(", ")}.</li>` : nothing,
@@ -314,6 +315,8 @@ function pipelineBody(e) {
     ${lists.some((l) => l !== nothing) ? html`<ul class="step-card-list">${lists}</ul>` : nothing}
     ${c.lines?.length ? html`<ul class="step-card-list pipeline-lines">${c.lines.map((l) => html`<li>On ${OUTCOME_WORDS[l.outcome] || l.outcome}, ${l.from} went to ${l.was}, now goes to ${l.now}</li>`)}</ul>` : nothing}
     ${(c.wording || []).map((w) => html`<p class="step-card-label">${w.step}: instructions</p>${changeDiff(w.diff)}`)}
+    ${unapproved.map((s) => html`<p class="step-card-label">${s.name}: runs this command on a machine</p><pre class="session-screen">${s.command}</pre>`)}
+    ${unapproved.length ? html`<p class="step-card-text muted">Approving saves the pipeline, not ${unapproved.length === 1 ? "this command" : "these commands"}. A run stops at each one and shows it to you before it runs.</p>` : nothing}
     <p class="step-card-text muted">A new or changed pipeline always waits for you.</p>
   </div>`;
 }

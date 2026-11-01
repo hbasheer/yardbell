@@ -509,30 +509,42 @@ fn keep_accepted_hash(
         return Ok(());
     };
     let ran = run.def().step(&w.step).map(|s| s.kind.clone());
-    let saved = def.steps.iter_mut().find(|s| s.id == w.step);
-    if let (
-        Some(StepKind::Tool {
-            server: s, tool: t, ..
-        }),
-        Some(step),
-    ) = (ran, saved)
-    {
-        if let StepKind::Tool {
-            server,
-            tool,
-            schema_hash,
-            ..
-        } = &mut step.kind
-        {
-            if *server == s && *tool == t {
-                schema_hash.clone_from(&w.tool_hash);
-                let cfg = app.config()?;
-                app.pipelines
-                    .library()
-                    .save(def, &cfg)
-                    .map_err(|e| bad(e.join("; ")))?;
-            }
+    let saved = def
+        .steps
+        .iter_mut()
+        .find(|s| s.id == w.step)
+        .map(|s| &mut s.kind);
+    let changed = match (ran, saved) {
+        (
+            Some(StepKind::Tool {
+                server: s, tool: t, ..
+            }),
+            Some(StepKind::Tool {
+                server,
+                tool,
+                schema_hash,
+                ..
+            }),
+        ) if *server == s && *tool == t => {
+            schema_hash.clone_from(&w.tool_hash);
+            true
         }
+        // The saved step may have been edited since; only the text the person read is approved.
+        (
+            Some(StepKind::Command { command: read, .. }),
+            Some(StepKind::Command { command, approved }),
+        ) if *command == read => {
+            approved.clone_from(&read);
+            true
+        }
+        _ => false,
+    };
+    if changed {
+        let cfg = app.config()?;
+        app.pipelines
+            .library()
+            .save(def, &cfg)
+            .map_err(|e| bad(e.join("; ")))?;
     }
     Ok(())
 }
@@ -554,7 +566,11 @@ async fn continue_on(
     Path(id): Path<String>,
     Json(req): Json<ContinueReq>,
 ) -> Result<Response, ApiError> {
-    acted(&app, app.pipelines.continue_on(&id, req.outcome))
+    acted(
+        &app,
+        app.pipelines
+            .continue_on(&id, req.outcome, crate::pipeline::engine::Who::Person),
+    )
 }
 
 async fn delete_run(

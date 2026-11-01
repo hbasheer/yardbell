@@ -201,7 +201,7 @@ pub fn script(path: &str, command: &str, timeout_secs: u64) -> String {
 }
 
 // What an interactive shell without a terminal says about itself, which is not the command's.
-fn shell_noise(line: &str) -> bool {
+pub(super) fn shell_noise(line: &str) -> bool {
     line.contains("Inappropriate ioctl for device") || line.contains("no job control")
 }
 

@@ -4,6 +4,7 @@ use crate::ssh::Ssh;
 use std::sync::Arc;
 
 pub mod cleanup;
+pub mod command;
 pub mod handoff;
 pub mod integrate;
 pub mod scan;

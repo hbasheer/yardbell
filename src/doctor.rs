@@ -113,6 +113,17 @@ pub fn pipelines_lines(
                 None => lines.push((false, format!("{name}: {id} was not checked"))),
             }
         }
+        for s in &def.steps {
+            if matches!(&s.kind, StepKind::Command { command, approved } if command != approved) {
+                lines.push((
+                    false,
+                    format!(
+                        "{name}: nobody has approved the command in {}, so a run waits there until you accept it",
+                        s.name
+                    ),
+                ));
+            }
+        }
         let machines = machines_of(cfg, def);
         let uses_linear = matches!(&def.trigger, Trigger::Linear { .. })
             || matches!(&def.trigger, Trigger::Schedule { state, .. } if !state.trim().is_empty())
@@ -426,6 +437,32 @@ mod tests {
                 .any(|(ok, t)| !ok && t.contains("the secret t is not set")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn a_command_nobody_approved_is_named() {
+        let cfg = crate::pipeline::definition::tests::cfg();
+        let mut def = crate::pipeline::templates::all().remove(0);
+        def.enabled = true;
+        let step = |approved: &str| {
+            serde_json::from_value(serde_json::json!({
+                "id": "test", "name": "Test", "kind": "command",
+                "command": "make test", "approved": approved,
+            }))
+            .unwrap()
+        };
+        def.steps.push(step(""));
+        let lines = pipelines_lines(&cfg, std::slice::from_ref(&def), &None, &[], &[], &[], &[]);
+        let named = |lines: &[(bool, String)]| {
+            lines
+                .iter()
+                .any(|(ok, l)| !ok && l.contains("nobody has approved the command in Test"))
+        };
+        assert!(named(&lines), "{lines:?}");
+        def.steps.pop();
+        def.steps.push(step("make test"));
+        let lines = pipelines_lines(&cfg, &[def], &None, &[], &[], &[], &[]);
+        assert!(!named(&lines), "{lines:?}");
     }
 
     #[test]

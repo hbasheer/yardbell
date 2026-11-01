@@ -29,6 +29,7 @@ const HOOKS_PER_MINUTE: u32 = 30;
 // triggers are read. What was not reached is asked again on the next round.
 const DUE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 const TICK: std::time::Duration = std::time::Duration::from_secs(10);
+const COMMAND_WATCH: std::time::Duration = std::time::Duration::from_secs(2);
 pub const KEEP_FINISHED: usize = 50;
 
 pub struct Pipelines {
@@ -292,8 +293,11 @@ impl Pipelines {
         self.person(id, Seen::AcceptTool, at_tool)
     }
 
-    pub fn continue_on(&self, id: &str, outcome: Outcome) -> Result<Run, String> {
-        self.person(id, Seen::Continue(outcome), Self::waiting)
+    pub fn continue_on(&self, id: &str, outcome: Outcome, who: engine::Who) -> Result<Run, String> {
+        self.person(id, Seen::Continue(outcome), |r| {
+            Self::waiting(r)?;
+            engine::continue_refused(r, outcome, who).map_or(Ok(()), Err)
+        })
     }
 
     // A run still going is dropped first, so its sessions stop and its worktree is torn down as
@@ -473,6 +477,33 @@ impl Pipelines {
         handles
     }
 
+    // A command can run for a long time, and a run dropped meanwhile must not wait for it. It is
+    // told to stop rather than abandoned, so the machine ends what it started.
+    async fn stoppable(
+        &self,
+        world: &dyn World,
+        cfg: &crate::config::Pipelines,
+        run: &Run,
+        effect: &Effect,
+    ) -> Vec<Seen> {
+        let work = run::act(world, cfg, run, effect);
+        tokio::pin!(work);
+        let mut told = false;
+        loop {
+            tokio::select! {
+                seen = &mut work => return seen,
+                () = tokio::time::sleep(COMMAND_WATCH), if !told => {
+                    if self.store.get(&run.id).is_none_or(|r| !r.state.active()) {
+                        told = true;
+                        if let Some((machine, path)) = run::work_place(run) {
+                            world.stop_command(&machine, &path).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     async fn chain(
         self: Arc<Self>,
         world: Arc<dyn World>,
@@ -488,7 +519,10 @@ impl Pipelines {
                 run.conversation = world.open_conversation(&title);
                 self.store.put(run.clone());
             }
-            let seen = run::act(world.as_ref(), &cfg, &run, &effect).await;
+            let seen = match &effect {
+                Effect::Command { .. } => self.stoppable(world.as_ref(), &cfg, &run, &effect).await,
+                _ => run::act(world.as_ref(), &cfg, &run, &effect).await,
+            };
             // A person may have dropped the run meanwhile and left a step of their own.
             self.store.update(&id, |now| {
                 if now.pending.as_ref() == Some(&effect) {

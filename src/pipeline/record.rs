@@ -117,6 +117,13 @@ pub struct Place {
     pub path: String,
 }
 
+// A command that really ran to its end in this attempt, and the text it ran.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandRan {
+    pub command: String,
+    pub passed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct StepState {
@@ -134,6 +141,11 @@ pub struct StepState {
     pub started: String,
     pub ended: String,
     pub answer: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ran: Option<CommandRan>,
+    // A person passed this step although its command failed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub overridden: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -306,6 +318,9 @@ pub enum Effect {
     Tool {
         step: String,
     },
+    Command {
+        step: String,
+    },
     Notify {
         text: String,
     },
@@ -360,6 +375,7 @@ pub enum Seen {
         shown: String,
     },
     AcceptTool,
+    CommandDone(Result<String, String>),
     Answer(String),
     Retry,
     Continue(Outcome),

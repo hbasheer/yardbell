@@ -377,7 +377,7 @@ and `deny`.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, `remember`, or `any` (the default). |
+| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, `remember`, `run_command` (a pipeline's [Run a command](automation.md#run-a-command) step, which only a `deny` stops), or `any` (the default). |
 | `machine` | no | A machine name, or `any` (the default). |
 | `folder` | no | A folder pattern. Empty matches every folder. |
 | `approval` | yes | `allow`, `prompt` or `deny`. |

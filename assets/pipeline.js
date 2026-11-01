@@ -288,18 +288,24 @@ function needBox(run, d) {
   const answerable = ANSWERABLE.includes(w.kind);
   const open = (run.questions || []).filter((q) => !q.answer);
   const text = answers.get(run.id) || "";
+  const step = d.steps.find((s) => s.id === w.step);
+  const command = step?.kind === "command";
+  const ran = run.steps?.[w.step]?.ran;
+  const didRun = !!ran && ran.command === step?.command && step?.approved === step?.command;
   return html`<div class="pl-need" id="pl-need">
     <p>${(w.reason || "").startsWith(nameOf(d, w.step)) ? html`<b>${w.reason}</b>` : html`<b>${nameOf(d, w.step)}</b> · ${w.reason}`}</p>
     ${w.kind === "questions" && open.length ? html`<ol class="pl-questions">${open.map((q) => html`<li>${q.asked}</li>`)}</ol>` : nothing}
     ${w.kind === "no_result" ? html`<p class="help">The agent went quiet and Yardbell could not read a result from it. Show the terminal to see what it did, then retry the step, continue on pass or fail, or answer it.</p>` : nothing}
     ${w.screen ? html`<pre class="session-screen">${w.screen}</pre>` : nothing}
+    ${command && !didRun ? html`<p class="help">This command has not run in this attempt, so the step cannot continue on pass.</p>` : nothing}
+    ${command && didRun && !ran.passed ? html`<p class="help">This command failed. If you continue on pass, the run records that you overrode it.</p>` : nothing}
     ${answerable ? html`<label class="visually-hidden" for="pl-answer">Your answer</label>
       <textarea id="pl-answer" rows="3" placeholder="Your answer" .value=${text} @input=${(e) => { answers.set(run.id, e.target.value); draw(); }}></textarea>` : nothing}
     <div class="pl-need-actions">
       <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Drop</button>
       ${w.kind === "tool_changed" ? html`<button class="btn primary" type="button" ?disabled=${busy} @click=${() => act(run, "accept-tool")}>Accept and run</button>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>Retry step</button>`}
       <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "fail" })}>Continue on fail</button>
-      <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "pass" })}>Continue on pass</button>
+      ${command && !didRun ? nothing : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "pass" })}>Continue on pass</button>`}
       ${answerable ? html`<button class="btn primary" type="button" ?disabled=${busy || !text.trim()} @click=${() => act(run, "answer", { text })}>Send answer</button>` : nothing}
     </div>
   </div>`;
@@ -337,7 +343,7 @@ function detail(run, d) {
       const n = nodeState(run, st);
       return html`<li class=${`pl-st ${n.cls}`}>
         <span class="pl-mark" aria-hidden="true">${n.mark}</span>
-        <div><span class="pl-st-name">${st.name}</span> <small>${n.note}</small>${state.report ? report(state.report) : nothing}</div>
+        <div><span class="pl-st-name">${st.name}</span> <small>${n.note}</small>${state.overridden ? html` <small class="pl-overridden">Passed by a person after its command failed</small>` : nothing}${state.report ? report(state.report) : nothing}</div>
         <time>${clock(state.ended || state.started)}</time>
       </li>`;
     })}</ol>
@@ -659,6 +665,19 @@ function toolFields(step, redraw) {
   </div>`;
 }
 
+// Typing a command is a person writing it, so it counts as approved. One an agent proposed stays
+// unapproved until a person says so here or when a run reaches it. A proposal's edits go through
+// the same check as the agent's own text, so nothing can be approved until it is saved.
+function commandFields(step, redraw) {
+  const waiting = step.command && step.approved !== step.command;
+  return html`${field("Command", html`<textarea name="command" class="mono" rows="3" spellcheck="false" autocapitalize="off" .value=${step.command || ""} @input=${(e) => { step.command = e.target.value; if (!proposal) step.approved = e.target.value; redraw(); }}></textarea>`,
+      "Runs in your login shell in the run's worktree, on its machine. Exit 0 follows the pass line and anything else follows the fail line. The end of its output is the step's report, so a later step can read it with {report}. It takes no placeholders. Join several commands with &&, because only the last one's exit counts otherwise.")}
+    ${waiting ? html`<div class="pl-approve-command">
+      <p class="help">Nobody has approved this command yet, so a run stops here and shows it to you first.${proposal ? " You can accept it then." : ""}</p>
+      ${proposal ? nothing : html`<button class="btn" type="button" name="approve-command" @click=${() => { step.approved = step.command; redraw(); }}>Approve this command</button>`}
+    </div>` : nothing}`;
+}
+
 function kindFields(step, others, redraw) {
   switch (step.kind) {
     case "call": return html`${connectionField(step, redraw)}${callFields(step, redraw)}`;
@@ -666,6 +685,7 @@ function kindFields(step, others, redraw) {
     case "agent": return agentFields(step, others, redraw);
     case "plan": return field("Dispatch may pick from", picks(data.machines, step.machines || [], (list) => { step.machines = list; redraw(); }, "plan"), "None ticked means any machine.");
     case "update": return updateFields(step, redraw);
+    case "command": return commandFields(step, redraw);
     case "wait": return field("Message", html`<textarea name="message" rows="2" .value=${step.message || ""} @input=${(e) => { step.message = e.target.value; redraw(); }}></textarea>`);
     default: return nothing;
   }
@@ -692,6 +712,8 @@ function stepForm(step, d, redraw) {
       ${field("Name", html`<input name="name" .value=${step.name} @input=${(e) => { rename(d, step, e.target.value); redraw(); }}>`)}
       ${field("Runs at most", html`<input type="number" name="max_runs" min="1" max="10" .value=${String(step.max_runs ?? 2)} @input=${(e) => { step.max_runs = Number(e.target.value); redraw(); }}>`)}
       ${step.kind === "agent" ? field("Minutes", html`<input type="number" name="minutes" min="10" max="1440" placeholder=${String(data.settings.minutes)} .value=${step.minutes == null ? "" : String(step.minutes)}
+        @input=${(e) => { step.minutes = e.target.value === "" ? null : Number(e.target.value); redraw(); }}>`) : nothing}
+      ${step.kind === "command" ? field("Stop after minutes", html`<input type="number" name="minutes" min="1" max="1440" placeholder="10" .value=${step.minutes == null ? "" : String(step.minutes)}
         @input=${(e) => { step.minutes = e.target.value === "" ? null : Number(e.target.value); redraw(); }}>`) : nothing}
     </div>
     ${kindFields(step, others, redraw)}
@@ -758,7 +780,7 @@ function save() {
 const LIBRARY = [
   ["Start when", [["manual", "manual", "By hand", "From Run now"], ["schedule", "schedule", "Schedule", "Weekdays, every day, a time"], ["linear", "ticket", "New ticket", "From Linear, Trello or any connection"], ["webhook", "call", "A webhook", "Another system calls an address"], ["github_review", "pull", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "pull", "GitLab reviewer", "An MR adds me as reviewer"]]],
   ["Agent", [["agent", "agent", "Agent step", "Your instructions, on a machine"], ["plan", "plan", "Plan", "Picks machine, folder and branch"]]],
-  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["update", "update", "Update the ticket", "Move or comment, wherever it came from"], ["call", "call", "Use a connected tool", "Do one action in a tool, with no agent"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
+  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["update", "update", "Update the ticket", "Move or comment, wherever it came from"], ["call", "call", "Use a connected tool", "Do one action in a tool, with no agent"], ["command", "command", "Run a command", "Its exit code decides pass or fail"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
   ["You", [["wait", "wait", "Wait for me", "Continues when you say"]]],
 ];
 
@@ -898,6 +920,7 @@ function blank(wanted) {
     update: { action: "move", state: "In Review" },
     call: { connector: data.connectors[0]?.id || "", call: "", params: {} },
     tool: { server: data.mcp_servers[0] || "", tool: "", arguments: {}, call_kind: "change", schema_hash: "" },
+    command: { command: "", approved: "" },
     wait: { message: "" },
   }[kind] || {};
   return { id: slug(name, draft.steps.map((s) => s.id)), name, kind, ...fields, max_runs: 2, minutes: null, next: { pass: "end", fail: "wait", needs_you: "wait" }, x: 0, y: 0 };

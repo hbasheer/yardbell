@@ -267,7 +267,7 @@ pub fn saved_values(app: &AppState) -> Vec<String> {
 }
 
 // The last look over any answer: a saved secret value or a known token shape never leaves.
-fn sweep(value: Value, saved: &[String]) -> Value {
+pub(crate) fn sweep(value: Value, saved: &[String]) -> Value {
     match value {
         Value::String(s) => {
             let mut s = crate::worktrees::scan::redact(&s);

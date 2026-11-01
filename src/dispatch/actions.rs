@@ -203,6 +203,7 @@ fn what(action: &Value) -> String {
             text(input, "into")
         ),
         "push_branch" => format!("pushing {} on {machine}", text(input, "branch")),
+        "run_command" => format!("running \"{}\" on {machine}", text(input, "command")),
         "move_session" => match text(input, "to") {
             "" => format!("moving {session} from {machine} to the machine with the most room"),
             to => format!("moving {session} from {machine} to {to}"),
