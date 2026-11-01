@@ -357,12 +357,51 @@ function renderForges() {
   };
   const on = (flag) => flag !== false;
   const linearKey = (data.secrets?.list || []).some((x) => x.name === "linear");
+  const agents = linearServer();
   setRows("forge-rows", [
-    forgeRow("linear", "Linear", "Tickets for pipelines", "Token", linearKey ? badge("ok", "Saved") : badge("idle", "No key"), ""),
+    forgeRow(
+      "linear",
+      "Linear",
+      agents ? `Pipelines, and agents on ${machinesOf(agents)}` : "Tickets for pipelines",
+      linearKey || !agents ? "Token" : serverType(agents),
+      linearKey ? badge("ok", "Saved") : agents ? serverStatus(agents) : badge("idle", "No key"),
+      agents && serverNeeds(agents) ? "Agents need you to sign in" : "",
+    ),
     forgeRow("github", "GitHub", "Pull requests and CI on sessions", githubToken ? "Token" : "gh", forgeBadge(on(value.use_github), github.problem, github.checked), on(value.use_github) ? github.problem : ""),
     forgeRow("gitlab", "GitLab", hosts.length ? hosts.map((h) => h.host).join(", ") : "Merge requests and CI on sessions", gitlabGlab ? "glab" : "Token",
       hosts.length ? forgeBadge(on(value.use_gitlab), gitlab.problem, gitlab.checked) : badge("idle", "No hosts"), on(value.use_gitlab) ? gitlab.problem : ""),
   ].join(""));
+  renderLinearAgents(agents);
+}
+
+let linearAgentsShown = "";
+
+function renderLinearAgents(srv) {
+  const section = $("linear-agents");
+  $("linear-pipelines-head").hidden = !srv;
+  section.hidden = !srv;
+  if (!srv) {
+    section.innerHTML = "";
+    linearAgentsShown = "";
+    return;
+  }
+  const i = data.mcp_servers.indexOf(srv);
+  const status = data.mcp_auth?.[srv.name];
+  const name = `data-name="${esc(srv.name)}"`;
+  const linked = connections.list.find((c) => c.server === srv.name);
+  const shown = `<h3>Agent sessions</h3>
+    <p class="help">Agents on ${esc(machinesOf(srv))} reach Linear through the MCP server <code>${esc(srv.name)}</code> at ${esc(serverWhere(srv))}.</p>
+    <div class="conn-linear-actions">${serverNeeds(srv)}
+      <button class="btn" type="button" data-mcp-act="test" ${name}>Test</button>
+      ${linked ? `<button class="btn" type="button" data-conn-edit="${esc(linked.id)}">Actions</button>` : ""}
+      <button class="btn" type="button" data-edit="${i}">Edit</button>
+      ${status === "signed_in" || status === "sign_in_again" ? `<button class="btn" type="button" data-mcp-act="sign-out" ${name}>Sign out</button>` : ""}
+      <button class="btn" type="button" data-remove="${i}">Remove</button>
+    </div>`;
+  // A background reload must not replace the buttons under a click.
+  if (shown === linearAgentsShown) return;
+  linearAgentsShown = shown;
+  section.innerHTML = shown;
 }
 
 function showForgeFields() {
@@ -378,6 +417,16 @@ function openForge(key) {
   showStep(`forge-${key}`, { github: "GitHub", gitlab: "GitLab", linear: "Linear" }[key]);
 }
 
+function linearServer() {
+  return (data.mcp_servers || []).find((srv) => {
+    try { return new URL(srv.url).host === "mcp.linear.app"; } catch { return false; }
+  });
+}
+
+function machinesOf(srv) {
+  return srv.machines?.length ? srv.machines.join(", ") : "every machine";
+}
+
 function serverWhere(srv) {
   if (!srv.url) return srv.command;
   try { return new URL(srv.url).host; } catch { return srv.url; }
@@ -386,9 +435,11 @@ function serverWhere(srv) {
 function renderServers() {
   renderForges();
   const servers = data.mcp_servers || [];
-  $("server-rows").hidden = !servers.length;
+  const merged = linearServer();
+  $("server-rows").hidden = !servers.some((srv) => srv !== merged);
   showConnectionsEmpty();
   setRows("server-rows", servers.map((srv, i) => {
+    if (srv === merged) return "";
     const limited = srv.machines?.length ? ` · ${srv.machines.join(", ")}` : "";
     return `<li class="row conn-row" data-server="${i}">
       <span class="conn-name"><strong>${esc(srv.name)}</strong><small>${esc(serverWhere(srv))}${esc(limited)}</small></span>
@@ -2036,7 +2087,7 @@ $("conn-flow").addEventListener("change", (e) => {
   if (["github_via", "gitlab_via"].includes(e.target.name)) showForgeFields();
 });
 
-$("server-rows").addEventListener("click", async (e) => {
+async function serverClick(e) {
   if (!e.target.closest("button")) {
     const row = e.target.closest("[data-server]");
     if (row) openServerForm(Number(row.dataset.server));
@@ -2078,7 +2129,10 @@ $("server-rows").addEventListener("click", async (e) => {
   } catch (err) {
     toast(err.message);
   }
-});
+}
+
+$("server-rows").addEventListener("click", serverClick);
+$("linear-agents").addEventListener("click", serverClick);
 
 $("server-form").addEventListener("submit", async (e) => {
   e.preventDefault();

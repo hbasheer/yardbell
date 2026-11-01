@@ -541,8 +541,10 @@
         <div class="form-foot"><button class="btn quiet" type="button" data-cancel-forge>Cancel</button><button class="btn primary" type="submit" form="pr-form">Save</button></div>
       </div>
       <form class="conn-step" id="forge-linear" hidden>
+        <h3 id="linear-pipelines-head" hidden>Pipelines</h3>
         <p class="help">Pipelines read and move Linear tickets with a personal API key. Make one in Linear under Settings, Security and access. It is saved as the secret <code>linear</code>.</p>
         <label>API key<input type="password" name="linear_key" autocomplete="new-password" placeholder="Paste it here" autocapitalize="off" spellcheck="false" required></label>
+        <div class="conn-step" id="linear-agents" hidden></div>
         <div class="form-foot"><button class="btn quiet" type="button" data-cancel-forge>Cancel</button><button class="btn primary" type="submit">Save</button></div>
       </form>
       <div class="conn-step" id="forge-gitlab" hidden>

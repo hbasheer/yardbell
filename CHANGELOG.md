@@ -5,6 +5,14 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-11-01
+
+- **Linear is one row.** An MCP server at `mcp.linear.app` now shares the **Linear** row under
+  **Settings, Connections**, and **Edit** has a section for pipelines and one for agent sessions. Nothing
+  saved changes.
+- Fixed: a long Dispatch conversation with a change on a card could push the whole page up, leaving empty
+  space under it and cutting off the sidebar.
+
 ## [0.10.3] - 2026-11-01
 
 - Fixed: **New connection** collapsed to a thin strip in the desktop app, hiding the tools.

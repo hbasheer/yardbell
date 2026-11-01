@@ -247,6 +247,8 @@ Settings shows one section at a time; pick it from the section list (a row of bu
 #### Linear, GitHub and GitLab
 
 Linear has a row under **Settings, Connections** for its API key, saved as the secret `linear`.
+If you also have an MCP server at `mcp.linear.app`, it shares that row, which names the machines whose agents
+use it, and **Edit** has a section for each.
 
 GitHub and GitLab are rows under **Settings, Connections**, each with a **How it connects** choice:
 
