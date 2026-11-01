@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.401] - 2026-11-01
+
 - **Diagrams.** A new page draws an interactive map of a repository with
   [Archify](https://github.com/tt-a1i/archify). Install it per machine from the page or **Settings, Diagrams**, which
   downloads a fixed, checked version to Yardbell's own folder and needs Node 18 or later. **Draw architecture** starts a
