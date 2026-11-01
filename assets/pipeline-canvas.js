@@ -76,7 +76,7 @@ export function nodeState(run, step) {
     const note = run.waiting?.kind === "needs_you" ? "needs you" : reason.startsWith(`${step.name} `) ? reason.slice(step.name.length + 1) : reason;
     return { cls: "waiting", mark: "!", note };
   }
-  if (current) return { cls: "now", mark: "", note: run.state === "queued" ? "queued" : `running · ${ago(run.step_since)}` };
+  if (current) return { cls: "now", mark: "", note: run.state === "queued" ? (run.held ? "held" : "queued") : `running · ${ago(run.step_since)}` };
   if (st?.outcome) {
     const runs = st.runs > 1 ? ` · ${st.runs} runs` : "";
     return { cls: `done ${st.outcome === "fail" ? "failed" : ""}`, mark: st.outcome === "fail" ? "✗" : "✓", note: `${WORDS[st.outcome]}${runs}` };

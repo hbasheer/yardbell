@@ -191,6 +191,25 @@ pub struct Waiting {
     pub tool_hash: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldKind {
+    Memory,
+    Settling,
+    Spacing,
+}
+
+// Why a queued agent step is not starting although its machine is up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Held {
+    pub kind: HoldKind,
+    pub machine: String,
+    pub reason: String,
+    pub since: String,
+    #[serde(default)]
+    pub told: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct Entry {
@@ -241,6 +260,8 @@ pub struct Run {
     pub next_try: Option<String>,
     pub slot: Option<String>,
     pub offline_since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<Held>,
     pub teardown_problem: String,
     pub deleting: bool,
     pub questions: Vec<Question>,
@@ -325,6 +346,7 @@ pub enum Seen {
     PersonStopped(String),
     Tick,
     Admitted,
+    Held(Option<(HoldKind, String, String)>),
     Offline,
     Closed(String),
     Refused(String),

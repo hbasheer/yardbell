@@ -18,6 +18,12 @@ and the project uses [Semantic Versioning](https://semver.org).
   show on the dashboard, and each one notifies your phone once, and again only after it clears and comes back,
   also across a restart. **Settings, Health checks** has an on or off and a time for each.
 
+- **Pipeline steps can wait while a machine is short of memory.** This is off unless you turn it on in the
+  Pipelines settings and enter a limit. From that percent of memory in use, new agent steps on that machine
+  are held until it has stayed under for two minutes, and at most one starts a minute on each machine.
+  Running steps are never stopped. The run's page says it is held and why, and a run held for 30 minutes
+  shows under **Waiting for me** with one phone notification while it stays queued.
+
 ## [0.10.0] - 2026-11-01
 
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing

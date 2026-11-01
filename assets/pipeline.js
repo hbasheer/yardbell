@@ -116,6 +116,7 @@ function counts(c) {
   const parts = [];
   if (c.running) parts.push(`${c.running} running`);
   if (c.waiting) parts.push(`${c.waiting} waiting`);
+  if (c.held) parts.push(`${c.held} held a long time`);
   if (c.done) parts.push(`${c.done} done`);
   return parts.join(" · ") || "No runs yet";
 }
@@ -164,13 +165,15 @@ function newPipeline(template) {
   });
 }
 
+const asksForYou = (r) => r.state === "waiting" || (r.state === "queued" && r.held?.told);
+
 function waitingList() {
-  const waiting = allRuns.filter((r) => r.state === "waiting");
+  const waiting = allRuns.filter(asksForYou);
   if (!waiting.length) return html`<p class="pl-empty">Nothing is waiting for you.</p>`;
   return html`<ul class="pl-wait-list">${waiting.map((r) => html`<li class="pl-wait-item">
     <button class="pl-wait-open" type="button" @click=${() => go(`p=${encodeURIComponent(r.pipeline)}&run=${encodeURIComponent(r.id)}`)}>
       <span class="pl-wait-label">${label(r)}</span>
-      <span class="pl-wait-why">${r.pipeline_name} · ${r.waiting?.reason || "Waiting"} · ${ago(r.step_since)}</span>
+      <span class="pl-wait-why">${r.pipeline_name} · ${r.waiting?.reason || r.held?.reason || "Waiting"} · ${ago(r.held?.since || r.step_since)}</span>
     </button>
   </li>`)}</ul>`;
 }
@@ -182,7 +185,7 @@ function settingsForm() {
   const setNote = (i, key, value) => { notes[i] = { ...notes[i], [key]: value }; draw(); };
   const save = () => doing(async () => {
     const qa_notes = Object.fromEntries(notes.filter((n) => n.folder.trim()).map((n) => [n.folder.trim(), n.note]));
-    await api("PUT", "/api/pipelines/settings", { per_machine: Number(s.per_machine), minutes: Number(s.minutes), qa_notes });
+    await api("PUT", "/api/pipelines/settings", { per_machine: Number(s.per_machine), minutes: Number(s.minutes), memory_limit: s.memory_on ? Number(s.memory_limit) : 0, qa_notes });
     toast("Saved to yardbell.yml", "ok");
     show.settings = false;
     await load();
@@ -193,6 +196,11 @@ function settingsForm() {
         <input type="number" name="per_machine" min="1" max="6" .value=${String(s.per_machine)} @input=${(e) => set("per_machine", e.target.value)}></label>
       <label class="pl-field"><span>Minutes a step may run before it waits for you</span>
         <input type="number" name="minutes" min="10" max="1440" .value=${String(s.minutes)} @input=${(e) => set("minutes", e.target.value)}></label>
+      <div class="pl-field">
+        <label class="check"><input type="checkbox" name="memory_on" .checked=${s.memory_on} @change=${(e) => set("memory_on", e.target.checked)}>Hold new steps when memory runs short</label>
+        <input type="number" name="memory_limit" min="50" max="99" required placeholder="50 to 99" aria-label="Percent of memory in use that holds new steps" ?disabled=${!s.memory_on} .value=${String(s.memory_limit)} @input=${(e) => set("memory_limit", e.target.value)}>
+        <small>Off unless you tick this box. To turn it on, tick it and enter the percent of memory in use, from 50 to 99, that holds new steps. New agent steps on that machine then wait until it has stayed under for two minutes, and at most one starts a minute. Running steps are never stopped. On a Mac this figure can read well above what macOS itself reports, so look at each machine's figure when it is idle before you choose.</small>
+      </div>
     </div>
     <div class="pl-notes">
       <p class="pl-field-head">QA notes per folder <span>Added to every agent step working in that folder, such as how to run its specs and console.</span></p>
@@ -211,10 +219,10 @@ function settingsForm() {
 }
 
 function listView() {
-  const waiting = allRuns.filter((r) => r.state === "waiting").length;
+  const waiting = allRuns.filter(asksForYou).length;
   const openSettings = () => {
     const s = data.settings;
-    settings = { per_machine: s.per_machine, minutes: s.minutes, notes: Object.entries(s.qa_notes || {}).map(([folder, note]) => ({ folder, note })) };
+    settings = { per_machine: s.per_machine, minutes: s.minutes, memory_on: s.memory_limit > 0, memory_limit: s.memory_limit || "", notes: Object.entries(s.qa_notes || {}).map(([folder, note]) => ({ folder, note })) };
     show.settings = !show.settings;
     draw();
   };
@@ -250,11 +258,17 @@ function runsOf(id) {
   return allRuns.filter((r) => r.pipeline === id);
 }
 
+function heldWord(h) {
+  if (h.kind === "memory") return `${h.machine} is short of memory`;
+  if (h.kind === "settling") return `${h.machine} is back under its memory limit, waiting two minutes`;
+  return "next start on this machine is within a minute";
+}
+
 function stateWord(run, d) {
   const step = nameOf(d, run.step);
   switch (run.state) {
     case "waiting": return `Waiting for you at ${step} · ${ago(run.step_since)}`;
-    case "queued": return `${step}, queued`;
+    case "queued": return run.held ? `${step}, held · ${heldWord(run.held)}` : `${step}, queued`;
     case "running": return `${step} · ${ago(run.step_since)}`;
     case "done": return `Done ${clock(run.history?.at(-1)?.at || run.step_since)}`;
     default: return "Dropped";
@@ -305,6 +319,15 @@ function needBox(run, d) {
   </div>`;
 }
 
+function heldBox(run) {
+  const h = run.held;
+  if (h.kind === "spacing") return html`<p class="help" id="pl-held">${h.reason}</p>`;
+  return html`<div class="pl-need" id="pl-held" role="status">
+    <p><b>Held</b> · ${h.reason}</p>
+    ${h.told ? html`<p>Held since ${clock(h.since)}. It still starts by itself. To start it sooner, free memory on ${h.machine} or raise the limit in the Pipelines settings, or stop this run.</p>` : nothing}
+  </div>`;
+}
+
 function report(text) {
   const lines = (text || "").trim().split("\n");
   if (lines.length <= 3) return html`<p class="pl-report">${text}</p>`;
@@ -327,6 +350,7 @@ function detail(run, d) {
       </div>
     </div>
     ${run.state === "waiting" ? needBox(run, d) : nothing}
+    ${run.state === "queued" && run.held ? heldBox(run) : nothing}
     ${run.teardown_problem ? html`<p class="pl-teardown-problem" role="alert">${run.teardown_problem}</p>` : nothing}
     <div class="pl-need-actions">
       ${["queued", "running"].includes(run.state) ? html`<button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Stop this run</button>` : nothing}
@@ -395,7 +419,7 @@ function runsTab(d) {
   const dot = { waiting: "wait", queued: "run", running: "run", done: "ok", dropped: "off" };
   return html`<div class="pl-run-view">
     <nav class="pl-run-list" aria-label="Runs">${runs.map((r) => html`<button type="button" class=${`pl-run-item ${r === chosen ? "sel" : ""}`} data-id=${r.id} aria-current=${r === chosen ? "true" : "false"} @click=${() => pick(r)}>
-      <span class="pl-run-title"><span class=${`pl-dot ${dot[r.state] || "off"}`}></span>${label(r)}</span>
+      <span class="pl-run-title"><span class=${`pl-dot ${asksForYou(r) ? "wait" : dot[r.state] || "off"}`}></span>${label(r)}</span>
       <small>${stateWord(r, r.definition || d)}</small>
     </button>`)}</nav>
     <div class=${`pl-run-main ${terminalOpen && chosen.terminals?.length ? "" : "terminal-closed"}`}>

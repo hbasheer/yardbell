@@ -511,6 +511,11 @@ def pipeline_runs():
         "run-c": run("run-c", 84, "Login redirect", "done", "",
                      [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes."),
                       ("test", "pass", "Specs pass."), ("report", "pass", "Looks good.")]),
+        "run-held": {**run("run-held", 80, "Slow export", "queued", "test",
+                           [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes.")]),
+                     "slot": "nowhere",
+                     "held": {"kind": "memory", "machine": "nowhere", "since": ago_stamp(45), "told": True,
+                              "reason": "nowhere is short of memory: 93% is in use and the limit is 90%. This step starts once nowhere has stayed under the limit for two minutes."}},
     }
 
 
@@ -1945,7 +1950,7 @@ class Suite:
         b.wait(f"document.querySelector('{card}')", "the review pipeline's card")
         text = b.js(f"document.querySelector('{card}').textContent.replace(/\\s+/g, ' ')")
         for want in ("When a GitLab merge request on git.example.com adds me as reviewer",
-                     "Understand", "Test ⟲ Root cause", "v1", "2 waiting · 1 done", "Needs you"):
+                     "Understand", "Test ⟲ Root cause", "v1", "1 running · 2 waiting · 1 held a long time · 1 done", "Needs you"):
             if want not in text:
                 raise Failure(f"the card does not say {want!r}: {text}")
         if b.js(f"document.querySelector('{card} input[type=checkbox]').checked"):
@@ -1955,7 +1960,7 @@ class Suite:
                "the checks' problem when switching on")
         b.wait(f"!document.querySelector('{card} input[type=checkbox]').checked", "the switch back off")
         b.click("#pl-waiting-toggle")
-        b.wait("document.querySelectorAll('#pl-waiting .pl-wait-item').length === 2", "two runs waiting for me")
+        b.wait("document.querySelectorAll('#pl-waiting .pl-wait-item').length === 3", "two waiting runs and one held too long")
         if "!87 COM-1287 Fix the webhook dedup" not in b.js("document.getElementById('pl-waiting').textContent"):
             raise Failure("the waiting list does not name the merge request")
         self.check_errors("the Pipelines list")
@@ -2388,6 +2393,21 @@ class Suite:
         if self.api("GET", "/api/pipelines/review")["steps"][0]["name"] != first:
             raise Failure("restoring version 1 did not bring its step names back")
 
+    def test_pipeline_run_held_for_memory(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-held"))
+        b.wait("document.querySelector('#pl-held')?.textContent.includes('short of memory: 93%')", "why the run is held")
+        text = b.js("document.getElementById('pl-held').textContent")
+        if "still starts by itself" not in text:
+            raise Failure(f"a run held too long does not say what happens next: {text}")
+        if "held" not in b.js("document.querySelector('.pl-run-item[data-id=\"run-held\"] small').textContent"):
+            raise Failure("the run list does not say the run is held")
+        if "held" not in b.js("document.querySelector('.pl-node[data-step=\"test\"]').textContent"):
+            raise Failure("the step on the graph does not say held")
+        b.goto(self.url("/pipeline"))
+        b.click("#pl-waiting-toggle")
+        b.wait("[...document.querySelectorAll('#pl-waiting .pl-wait-why')].some((x) => x.textContent.includes('short of memory'))", "the held run under Waiting for me")
+
     def test_pipeline_settings_panel(self):
         b = self.b
         b.goto(self.url("/pipeline"))
@@ -2395,6 +2415,20 @@ class Suite:
         b.wait("document.querySelector('#pl-settings input[name=per_machine]')", "the settings form")
         self.set_field("#pl-settings input[name=per_machine]", "3")
         self.set_field("#pl-settings input[name=minutes]", "90")
+        off = b.js("""(() => {
+          const limit = document.querySelector('#pl-settings input[name=memory_limit]');
+          return { on: document.querySelector('#pl-settings input[name=memory_on]').checked, disabled: limit.disabled, value: limit.value };
+        })()""")
+        if off != {"on": False, "disabled": True, "value": ""}:
+            raise Failure(f"the memory limit is not off with no number by default: {off}")
+        help_text = b.js("document.querySelector('#pl-settings input[name=memory_limit]').parentElement.textContent")
+        if "tick it and enter" not in help_text or "On a Mac" not in help_text:
+            raise Failure(f"the settings do not say how to turn the hold on: {help_text}")
+        b.click("#pl-settings input[name=memory_on]")
+        b.wait("!document.querySelector('#pl-settings input[name=memory_limit]').disabled", "the limit enabled")
+        if not b.js("document.querySelector('#pl-settings input[name=memory_limit]').validity.valueMissing"):
+            raise Failure("the hold can be switched on with no limit")
+        self.set_field("#pl-settings input[name=memory_limit]", "85")
         b.click("#pl-note-add")
         self.set_field("#pl-settings .pl-note:last-child input[name=folder]", "demo-app")
         self.set_field("#pl-settings .pl-note:last-child input[name=note]", "Run bin/rspec")
@@ -2402,9 +2436,20 @@ class Suite:
         b.wait("document.getElementById('toast').textContent.includes('Saved')", "the settings saved")
         with open(self.y.config) as f:
             config = f.read()
-        for want in ("per_machine: 3", "minutes: 90", "demo-app: Run bin/rspec"):
+        for want in ("per_machine: 3", "minutes: 90", "memory_limit: 85", "demo-app: Run bin/rspec"):
             if want not in config:
                 raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
+        b.click("#pl-settings-open")
+        b.wait("document.querySelector('#pl-settings input[name=memory_on]')?.checked", "the hold switched on")
+        if b.js("document.querySelector('#pl-settings input[name=memory_limit]').value") != "85":
+            raise Failure("the saved memory limit is not shown again")
+        b.click("#pl-settings input[name=memory_on]")
+        b.wait("document.querySelector('#pl-settings input[name=memory_limit]').disabled", "the limit disabled while off")
+        b.click("#pl-settings-save")
+        b.wait("document.getElementById('pl-settings') === null", "the settings saved again")
+        with open(self.y.config) as f:
+            if "memory_limit: 0" not in f.read():
+                raise Failure("turning the hold off did not write memory_limit: 0")
 
     # Last, so the change it saves to the review pipeline comes after the Pipelines tests.
     def test_dispatch_save_pipeline_card(self):

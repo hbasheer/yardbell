@@ -2201,6 +2201,7 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
 .pl-field small { color: var(--muted); font-weight: 400; }
 .pl-field :is(input, select, textarea), .pl-note input, .pl-panel textarea { width: 100%; min-width: 0; padding: 6px 9px; border: 1px solid var(--line-strong); border-radius: var(--radius-sm); background: var(--surface); color: var(--ink); font: 13px var(--sans); }
 .pl-field textarea { resize: vertical; line-height: 1.5; }
+.pl-field label.check input { width: auto; padding: 0; }
 .pl-notes { display: grid; gap: 8px; justify-items: start; }
 .pl-notes ul { display: grid; gap: 6px; width: 100%; margin: 0; padding: 0; list-style: none; }
 .pl-note { display: grid; grid-template-columns: minmax(120px, 1fr) minmax(0, 3fr) auto; gap: 6px; }
