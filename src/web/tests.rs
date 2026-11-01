@@ -12,6 +12,7 @@ use std::path::Path;
 use tower::ServiceExt;
 
 mod connectors;
+mod health;
 mod insights;
 mod mcp_auth;
 mod mcp_change;

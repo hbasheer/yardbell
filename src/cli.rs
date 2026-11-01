@@ -321,6 +321,7 @@ pub async fn serve(
         }),
     };
     let app = Arc::new(AppState::new(path, services, &cfg, Arc::new(Instant::now)));
+    crate::health::Ledger::load(dir.join("health.json")).start_loop(app.clone());
     pipelines.clone().start_loop(
         app.clone(),
         crate::pipeline::forge::Forge::new(runner.clone(), ssh.clone()),

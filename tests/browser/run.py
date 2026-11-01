@@ -544,6 +544,10 @@ class Yardbell:
             json.dump({"history": [{"version": 1, "saved": ago_stamp(60), "definition": review_pipeline()}]}, f)
         with open(os.path.join(self.state, "runs.json"), "w") as f:
             json.dump(pipeline_runs(), f)
+        with open(os.path.join(self.state, "health.json"), "w") as f:
+            json.dump({"run_waiting:run-a:root-cause:NeedsYou": {
+                "check": "run_waiting", "title": "", "detail": "", "link": "", "since": ago_stamp(300), "notified": True,
+            }}, f)
         with open(os.path.join(self.state, "proposals.json"), "w") as f:
             json.dump(inbox_proposals(), f)
         self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
@@ -787,6 +791,19 @@ class Suite:
             f"document.querySelector('section.mgroup:not(.down) h2#mg-{MACHINE}')?.textContent === {json.dumps(MACHINE)}",
             "the machine on the dashboard, connected",
         )
+
+    def test_dashboard_shows_what_looks_stuck(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait(
+            "document.querySelector('#health-banner:not([hidden]) .health-list a')?.getAttribute('href').includes('run=run-a')",
+            "the stuck run on the dashboard",
+        )
+        said = b.js("document.getElementById('health-banner').textContent")
+        for want in ("1 thing looks stuck", "is still waiting for you", "Root cause needs you", "5 h"):
+            if want not in said:
+                raise Failure(f"the banner does not say {want!r}: {said}")
+        b.wait("document.getElementById('nav-problems-count')?.textContent === '1'", "the count in the sidebar")
 
     def test_start_a_shell_session(self):
         b = self.b
@@ -1412,6 +1429,22 @@ class Suite:
         b.click("#rule-rows .rule-row:first-child [data-remove-rule]")
         b.click("#dispatch-form button[type=submit]")
         b.wait("(async () => (await (await fetch('/api/settings')).json()).dispatch.rules?.length === 1)()", "one rule saved after removing the other")
+
+    def test_settings_saves_health_checks(self):
+        b = self.b
+        b.goto(self.url("/settings#health"))
+        b.wait("document.querySelector('#health-form input[name=ci_pending_minutes]')?.value === '120'", "the defaults")
+        b.wait("document.querySelector('#health-form input[name=ci_pending]').checked", "the check on")
+        b.click("#health-form input[name=memory_short]")
+        self.set_field("#health-form input[name=ci_pending_minutes]", "45")
+        b.click("#health-form button[type=submit]")
+        b.wait("document.getElementById('undo-text').textContent.includes('Health checks updated')", "the checks saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        for want in ("ci_pending_minutes: 45", "memory_short: false"):
+            if want not in config:
+                raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
+        b.wait("document.querySelector('#health-form input[name=ci_pending_minutes]').value === '45'", "the saved time shown")
 
     def test_settings_secrets(self):
         b = self.b

@@ -499,6 +499,12 @@ span.mg-fold { cursor: default; }
 .updated.late { color: var(--warn-text); }
 .banner.warn { border-color: color-mix(in srgb, var(--warn) 40%, var(--line)); background: color-mix(in srgb, var(--warn) 8%, var(--surface)); }
 .banner.warn .banner-text strong { color: var(--warn-text); }
+.health-list { display: grid; gap: 8px; margin: 6px 0 0; padding: 0; list-style: none; }
+.health-list li { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 12px; }
+.health-list a { color: var(--ink); font-weight: 500; overflow-wrap: anywhere; }
+.health-list a:hover { text-decoration: underline; }
+.banner-text .health-detail { grid-column: 1 / -1; overflow-wrap: anywhere; }
+.banner-text .health-lasted { color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .shortcuts { margin: 28px 0 0; color: var(--muted); font-size: 12px; }
 kbd {
   font: 11px/1 var(--mono);
@@ -1582,6 +1588,11 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .phone-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
 .phone-wait { color: var(--ink-2); }
 .phone-wait input { width: 64px; height: 32px; font-variant-numeric: tabular-nums; }
+#health-form .phone-switches { justify-items: stretch; }
+#health-form .phone-wait input { width: 84px; }
+@media (min-width: 720px) {
+  #health-form .phone-switch { display: grid; grid-template-columns: 340px auto; justify-content: start; }
+}
 #phone-status.ok { color: var(--ok-text); }
 #about-mismatch { margin-bottom: 10px; }
 .about-head { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 12px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
@@ -1861,7 +1872,7 @@ html.embedded .dispatch-tabs { top: -10px; }
   .side-foot .side-link .icon, .ws-nav .side-link .icon { display: inline-block; width: 20px; height: 20px; }
   .side-foot [aria-current="page"].side-link, .ws-nav [aria-current="page"].side-link { background: none; box-shadow: none; color: var(--accent); font-weight: 600; }
   .side-foot [aria-current="page"].side-link .icon, .ws-nav [aria-current="page"].side-link .icon { color: var(--accent); }
-  .side-foot .side-link[href="/proposals"] .side-count, .ws-nav .side-link[href="/proposals"] .side-count { position: absolute; top: 4px; left: calc(50% + 4px); min-width: 15px; margin: 0; padding: 0 3px; font-size: 10px; font-weight: 600; line-height: 15px; }
+  .side-foot .side-link[href="/"] .side-count, .ws-nav .side-link[href="/"] .side-count, .side-foot .side-link[href="/proposals"] .side-count, .ws-nav .side-link[href="/proposals"] .side-count { position: absolute; top: 4px; left: calc(50% + 4px); min-width: 15px; margin: 0; padding: 0 3px; font-size: 10px; font-weight: 600; line-height: 15px; }
   /* Theme and Log out stay in the top corner: they are not pages. The Workspace's corner is its own,
      and Settings has both. */
   .side-foot .theme-toggle, .side-foot #logout { position: fixed; top: max(8px, env(safe-area-inset-top)); flex: none; width: 34px; height: 34px; font-size: 0; }
@@ -2065,7 +2076,7 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .step-card-pipeline .pl-canvas { height: 220px; min-height: 0; border: 1px solid var(--line); border-radius: 8px; }
 .side-count { margin-left: auto; min-width: 18px; padding: 0 6px; border-radius: 9px; background: var(--warn-text); color: var(--bg); font-size: 11px; font-weight: 600; line-height: 18px; text-align: center; }
 .side-count[hidden] { display: none; }
-.side-rail .side-link[href="/proposals"] { position: relative; }
+.side-rail .side-link[href="/"], .side-rail .side-link[href="/proposals"] { position: relative; }
 .side-rail .side-count { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; line-height: 14px; font-size: 10px; }
 .proposals-main .pr-intro { margin: -4px 0 16px; }
 .pl-state-list { display: grid; gap: 2px; }

@@ -135,6 +135,71 @@ impl PhoneNotifications {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HealthChecks {
+    pub run_queued: bool,
+    pub run_queued_minutes: u64,
+    pub run_waiting: bool,
+    pub run_waiting_minutes: u64,
+    pub step_quiet: bool,
+    pub step_quiet_minutes: u64,
+    pub ci_pending: bool,
+    pub ci_pending_minutes: u64,
+    pub trigger_failing: bool,
+    pub trigger_failing_minutes: u64,
+    pub memory_short: bool,
+    pub memory_short_minutes: u64,
+}
+
+impl Default for HealthChecks {
+    fn default() -> Self {
+        HealthChecks {
+            run_queued: true,
+            run_queued_minutes: 120,
+            run_waiting: true,
+            run_waiting_minutes: 240,
+            step_quiet: true,
+            step_quiet_minutes: 30,
+            ci_pending: true,
+            ci_pending_minutes: 120,
+            trigger_failing: true,
+            trigger_failing_minutes: 60,
+            memory_short: true,
+            memory_short_minutes: 60,
+        }
+    }
+}
+
+pub const HEALTH_MINUTES_MIN: u64 = 5;
+pub const HEALTH_MINUTES_MAX: u64 = 10080;
+
+impl HealthChecks {
+    pub fn is_default(&self) -> bool {
+        *self == HealthChecks::default()
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let all = [
+            ("run_queued_minutes", self.run_queued_minutes),
+            ("run_waiting_minutes", self.run_waiting_minutes),
+            ("step_quiet_minutes", self.step_quiet_minutes),
+            ("ci_pending_minutes", self.ci_pending_minutes),
+            ("trigger_failing_minutes", self.trigger_failing_minutes),
+            ("memory_short_minutes", self.memory_short_minutes),
+        ];
+        match all
+            .iter()
+            .find(|(_, m)| !(HEALTH_MINUTES_MIN..=HEALTH_MINUTES_MAX).contains(m))
+        {
+            Some((name, _)) => Err(format!(
+                "health_checks.{name} must be from {HEALTH_MINUTES_MIN} to {HEALTH_MINUTES_MAX}"
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
 pub const PULL_POLL_MIN: u64 = 30;
 
 fn is_on(on: &bool) -> bool {
@@ -532,6 +597,8 @@ pub struct Config {
     pub agents: Vec<Agent>,
     #[serde(default, skip_serializing_if = "PhoneNotifications::is_default")]
     pub phone_notifications: PhoneNotifications,
+    #[serde(default, skip_serializing_if = "HealthChecks::is_default")]
+    pub health_checks: HealthChecks,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<McpServer>,
     #[serde(default, skip_serializing_if = "DispatchSettings::is_default")]
@@ -669,6 +736,9 @@ impl Config {
         if self.phone_notifications.wait_minutes > 60 {
             return invalid("phone_notifications.wait_minutes must be from 0 to 60".into());
         }
+        self.health_checks
+            .validate()
+            .map_err(ConfigError::Invalid)?;
         if self.pull_requests.poll_seconds < PULL_POLL_MIN {
             return invalid(format!(
                 "pull_requests.poll_seconds must be at least {PULL_POLL_MIN}"
@@ -1181,6 +1251,56 @@ mod tests {
         assert_eq!(
             Config::load(&path).unwrap().phone_notifications,
             cfg.phone_notifications
+        );
+    }
+
+    #[test]
+    fn health_checks_default_quietly_and_a_partial_section_keeps_the_rest() {
+        let cfg = fixture();
+        assert_eq!(cfg.health_checks, HealthChecks::default());
+        assert!(cfg.health_checks.run_queued);
+        assert_eq!(cfg.health_checks.memory_short_minutes, 60);
+        let some = load_str(&format!(
+            "{BASE}health_checks:\n  run_queued: false\n  ci_pending_minutes: 30\n"
+        ))
+        .unwrap()
+        .health_checks;
+        assert!(!some.run_queued);
+        assert_eq!(some.run_queued_minutes, 120);
+        assert_eq!(some.ci_pending_minutes, 30);
+    }
+
+    #[test]
+    fn health_check_minutes_are_checked_and_defaults_are_not_written() {
+        for minutes in [4, 10081] {
+            match load_str(&format!(
+                "{BASE}health_checks:\n  step_quiet_minutes: {minutes}\n"
+            )) {
+                Err(ConfigError::Invalid(got)) => assert_eq!(
+                    got,
+                    "health_checks.step_quiet_minutes must be from 5 to 10080"
+                ),
+                other => panic!("{other:?}"),
+            }
+        }
+        for minutes in [5, 10080] {
+            load_str(&format!(
+                "{BASE}health_checks:\n  step_quiet_minutes: {minutes}\n"
+            ))
+            .unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("y.yml");
+        let mut cfg = fixture();
+        cfg.save(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("health_checks"));
+        cfg.health_checks.ci_pending = false;
+        cfg.save(&path).unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().health_checks,
+            cfg.health_checks
         );
     }
 

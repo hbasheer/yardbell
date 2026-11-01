@@ -431,6 +431,7 @@ async fn pulls_from_the_cards() {
                 review: "changes_requested".into(),
                 ci: crate::pulls::Ci::Failing,
                 failed: vec!["rspec".into()],
+                head: String::new(),
             },
         )]
         .into(),

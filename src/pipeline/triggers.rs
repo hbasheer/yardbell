@@ -51,6 +51,9 @@ pub struct Kept {
     pub anchor: String,
     pub checked: String,
     pub problem: String,
+    // When a scheduled read failed. A read retried on every check leaves it empty.
+    #[serde(skip_serializing_if = "String::is_empty")]
+    pub problem_at: String,
 }
 
 pub struct Watch {
@@ -232,6 +235,14 @@ impl Watch {
         polls.retain(|id, _| kept.contains_key(id));
     }
 
+    #[cfg(test)]
+    pub fn set_kept(&self, id: &str, kept: Kept) {
+        self.kept
+            .lock()
+            .expect("watch lock")
+            .insert(id.to_string(), kept);
+    }
+
     fn edit<T>(&self, id: &str, change: impl FnOnce(&mut Kept) -> T) -> T {
         change(
             self.kept
@@ -270,11 +281,17 @@ impl Watch {
             let listed = src.connectors.list(connector, params).await;
             let items = match listed {
                 Ok(listed) => {
-                    self.edit(&def.id, |k| k.problem = String::new());
+                    self.edit(&def.id, |k| {
+                        k.problem = String::new();
+                        k.problem_at = String::new();
+                    });
                     listed.items
                 }
                 Err(problem) => {
-                    self.edit(&def.id, |k| k.problem = problem);
+                    self.edit(&def.id, |k| {
+                        k.problem = problem;
+                        k.problem_at = now.to_rfc3339();
+                    });
                     return None;
                 }
             };
@@ -686,6 +703,80 @@ pub(crate) mod tests {
         let later = Local.with_ymd_and_hms(2026, 10, 30, 9, 1, 0).unwrap();
         assert_eq!(w.due(&defs, &sources(&f), later).await.len(), 1);
         assert_eq!(w.kept(&def.id).problem, "");
+    }
+
+    fn hourly() -> Definition {
+        pipeline(
+            Trigger::Schedule {
+                schedule: "every 1 hour".into(),
+                state: "Todo".into(),
+                connector: "trello".into(),
+                params: Default::default(),
+            },
+            true,
+        )
+    }
+
+    #[tokio::test]
+    async fn each_failed_scheduled_read_saves_its_time_and_a_good_read_clears_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("watch.json");
+        let w = Watch::load(file.clone());
+        let f = Fakes::default();
+        *f.card_problem.lock().unwrap() = Some("the server said no".into());
+        let def = hourly();
+        let defs = vec![def.clone()];
+        w.due(&defs, &sources(&f), at(8, 0)).await;
+        assert_eq!(w.kept(&def.id).problem_at, "");
+
+        w.due(&defs, &sources(&f), at(9, 1)).await;
+        assert_eq!(w.kept(&def.id).problem_at, at(9, 1).to_rfc3339());
+        w.due(&defs, &sources(&f), at(9, 30)).await;
+        assert_eq!(
+            w.kept(&def.id).problem_at,
+            at(9, 1).to_rfc3339(),
+            "no read happened, so the time stays"
+        );
+        w.due(&defs, &sources(&f), at(10, 2)).await;
+        assert_eq!(w.kept(&def.id).problem_at, at(10, 2).to_rfc3339());
+
+        let back = Watch::load(file);
+        let kept = back.kept(&def.id);
+        assert_eq!(kept.problem, "the server said no");
+        assert_eq!(kept.problem_at, at(10, 2).to_rfc3339());
+
+        *f.card_problem.lock().unwrap() = None;
+        back.due(&defs, &sources(&f), at(11, 3)).await;
+        let kept = back.kept(&def.id);
+        assert_eq!((kept.problem.as_str(), kept.problem_at.as_str()), ("", ""));
+    }
+
+    #[tokio::test]
+    async fn a_trigger_read_on_every_check_saves_no_time() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        *f.card_problem.lock().unwrap() = Some("the server said no".into());
+        let def = pipeline(connector_trigger(&[], &[]), true);
+        w.due(std::slice::from_ref(&def), &sources(&f), at(9, 0))
+            .await;
+        let kept = w.kept(&def.id);
+        assert_eq!(kept.problem, "the server said no");
+        assert_eq!(kept.problem_at, "");
+    }
+
+    #[test]
+    fn a_watch_file_from_before_the_time_was_saved_still_loads() {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("watch.json");
+        std::fs::write(
+            &file,
+            r#"{"p1":{"trigger":"x","baseline":true,"problem":"no"}}"#,
+        )
+        .unwrap();
+        let kept = Watch::load(file).kept("p1");
+        assert_eq!(kept.problem, "no");
+        assert_eq!(kept.problem_at, "");
+        assert!(kept.baseline);
     }
 
     #[tokio::test]

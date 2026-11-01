@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Health checks.** Plain checks now tell you when automation is quietly stuck: a run queued or waiting
+  too long, a step near its limit whose screen has stopped changing, CI pending too long on a pull or merge
+  request, a trigger that keeps failing or whose last start or scheduled read failed in the past day, and a
+  machine that stays short of memory. They use no tokens, start nothing and change nothing. Current problems
+  show on the dashboard, and each one notifies your phone once, and again only after it clears and comes back,
+  also across a restart. **Settings, Health checks** has an on or off and a time for each.
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
   in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
   common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have

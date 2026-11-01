@@ -3,13 +3,14 @@ use crate::web::{ApiError, AppState};
 use axum::http::StatusCode;
 use serde_json::{json, Map, Value};
 
-pub const AREAS: [&str; 12] = [
+pub const AREAS: [&str; 13] = [
     "dispatch",
     "triggers",
     "worktree_setup",
     "agents",
     "session_mcp_servers",
     "phone",
+    "health_checks",
     "machines",
     "pipelines",
     "pull_requests",
@@ -34,7 +35,7 @@ pub fn tools() -> Vec<Value> {
     vec![tool(
         "read_settings",
         "One area of Yardbell's settings as Settings shows it, with what it may be set to. Areas: \
-dispatch, triggers, worktree_setup, agents, session_mcp_servers, phone, machines, pipelines, \
+dispatch, triggers, worktree_setup, agents, session_mcp_servers, phone, health_checks, machines, pipelines, \
 pull_requests, connectors, security, about. Secrets are never shown: a setting that uses one shows \
 ${secret:name}, and any other credential shows (hidden).",
         json!({ "area": { "type": "string", "enum": AREAS } }),
@@ -311,7 +312,8 @@ async fn settings(app: &AppState, area: &str) -> Result<Value, ApiError> {
             json!({ "tasks": tasks, "kinds": ["schedule", "linear", "github"] })
         }
         "worktree_setup" | "session_mcp_servers" => json!({ "machines": machines }),
-        "agents" | "phone" | "machines" | "pipelines" | "pull_requests" | "security" | "about" => {
+        "agents" | "phone" | "health_checks" | "machines" | "pipelines" | "pull_requests"
+        | "security" | "about" => {
             json!({})
         }
         _ => {
@@ -388,6 +390,7 @@ fn value_of(cfg: &Config, area: &str) -> Value {
         }
         "session_mcp_servers" => shown(&cfg.mcp_servers),
         "phone" => shown(&cfg.phone_notifications),
+        "health_checks" => shown(&cfg.health_checks),
         "machines" => machines_of(cfg),
         "pipelines" => shown(&cfg.pipelines),
         "pull_requests" => shown(&cfg.pull_requests),

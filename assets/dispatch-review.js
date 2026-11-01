@@ -54,6 +54,7 @@ const SETTINGS_AREAS = {
   agents: ["Agents", "/settings"],
   session_mcp_servers: ["Connections for sessions", "/settings#connections"],
   phone: ["Phone notifications", "/settings#phone"],
+  health_checks: ["Health checks", "/settings#health"],
   machines: ["Machines", "/settings#machines"],
   pipelines: ["Pipelines", "/pipeline"],
   pull_requests: ["Pull requests", "/settings"],

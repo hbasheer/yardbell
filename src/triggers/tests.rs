@@ -18,6 +18,82 @@ fn dispatch(dir: &Path, script: &str) -> Dispatch {
         .with_command(vec![path.display().to_string()])
 }
 
+#[test]
+fn a_failing_trigger_is_named_until_it_works_again() {
+    let cfg = config(
+        "  - {name: Tickets, task: T, linear: {assigned: true}}\n  - {name: Off, task: T, enabled: false, schedule: every 1 hour}\n  - {name: Morning, task: T, schedule: every 1 hour}\n  - {name: Fine, task: T, schedule: every 2 hours}\n",
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let triggers = Triggers::new(
+        Arc::new(Live::new(Arc::new(FakeRunner::default()))),
+        dir.path().join("triggers.json"),
+    );
+    let when = Local::now();
+    let failed = |text: &str, outcome: &str| LastRun {
+        at: when.to_rfc3339(),
+        outcome: outcome.into(),
+        text: text.into(),
+        conversation: String::new(),
+    };
+    {
+        let mut kept = triggers.lock();
+        for t in &cfg.triggers {
+            kept.insert(
+                t.name.clone(),
+                Kept {
+                    source: t.source(),
+                    ..Kept::default()
+                },
+            );
+        }
+        kept.get_mut("Tickets").unwrap().problem = "gh auth login".into();
+        kept.get_mut("Off").unwrap().problem = "nobody asked".into();
+        kept.get_mut("Morning").unwrap().last = Some(failed("Could not start: no task", "failed"));
+        kept.get_mut("Fine").unwrap().last = Some(failed("Started", "started"));
+    }
+    let found = triggers.failing(&cfg);
+    let named: Vec<(&str, &str)> = found
+        .iter()
+        .map(|f| (f.title.as_str(), f.problem.as_str()))
+        .collect();
+    assert_eq!(
+        named,
+        [
+            ("Trigger Tickets keeps failing", "gh auth login"),
+            ("Trigger Morning keeps failing", "Could not start: no task"),
+        ]
+    );
+    assert_eq!(found[0].failed_once_at, None, "a failing check has no end");
+    assert_eq!(
+        found[1].failed_once_at.map(|at| at.timestamp()),
+        Some(when.timestamp()),
+        "a failed start knows when it was"
+    );
+
+    let d = tempfile::tempdir().unwrap();
+    let chat = dispatch(d.path(), QUICK);
+    let later = when + Duration::days(3);
+    let rows = triggers.view(&cfg, &launch(&cfg, &chat), later);
+    let morning = rows
+        .iter()
+        .find(|row| row["trigger"]["name"] == "Morning")
+        .unwrap();
+    assert_eq!(
+        morning["last"]["outcome"], "failed",
+        "its own row keeps showing the failed start"
+    );
+
+    triggers.lock().get_mut("Morning").unwrap().last = Some(failed("Started", "started"));
+    assert_eq!(
+        triggers.failing(&cfg).len(),
+        1,
+        "a later start that worked ends it"
+    );
+    triggers.lock().get_mut("Morning").unwrap().last = Some(failed("Could not start", "failed"));
+    triggers.lock().get_mut("Tickets").unwrap().source = "changed".into();
+    assert_eq!(triggers.failing(&cfg).len(), 1);
+}
+
 fn config(triggers: &str) -> Config {
     let cfg: Config = serde_yaml::from_str(&format!(
         "machines:\n  - name: hp\n    local: true\n    root: /r\ntriggers:\n{triggers}"

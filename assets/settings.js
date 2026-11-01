@@ -89,6 +89,16 @@ function renderPhone(p) {
   status.classList.toggle("ok", p.app_connected);
 }
 
+const HEALTH_CHECKS = ["run_queued", "run_waiting", "step_quiet", "ci_pending", "trigger_failing", "memory_short"];
+
+function renderHealthChecks(h) {
+  const f = $("health-form");
+  for (const name of HEALTH_CHECKS) {
+    f.elements[name].checked = h[name];
+    f.elements[`${name}_minutes`].value = h[`${name}_minutes`];
+  }
+}
+
 function renderMcp(m) {
   const on = Boolean(m.token);
   $("mcp-intro").hidden = on;
@@ -765,6 +775,7 @@ async function load() {
   $("mesh-current").textContent = `currently ${LABELS[data.mesh] || data.mesh}`;
   $("machine-forms").innerHTML = data.machines.map(machineForm).join("");
   renderPhone(data.phone);
+  renderHealthChecks(data.health_checks);
   renderMcp(data.mcp);
   renderServers();
   renderSecrets();
@@ -1627,6 +1638,27 @@ $("phone-form").addEventListener("submit", async (e) => {
     toast(err.message);
   } finally {
     phoneBusy(false);
+  }
+});
+
+$("health-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {};
+  for (const name of HEALTH_CHECKS) {
+    body[name] = f.elements[name].checked;
+    body[`${name}_minutes`] = Number(f.elements[`${name}_minutes`].value.trim());
+  }
+  const button = f.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("POST", "/api/settings/health", body);
+    saved("Health checks updated.");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
   }
 });
 
