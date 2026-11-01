@@ -2202,7 +2202,7 @@ async fn remove_machine(
 }
 
 mod connectors_api;
-mod diagrams_api;
+pub(crate) mod diagrams_api;
 mod insights_api;
 mod mcp_auth_api;
 pub(crate) mod pipeline_api;

@@ -1420,7 +1420,28 @@ function runNow(d) {
     return;
   }
   show.runNow = !show.runNow;
+  if (show.runNow && d.trigger.kind === "manual") loadDiagramChoices();
   draw();
+}
+
+let diagramChoices = null;
+let diagramPick = "";
+
+async function loadDiagramChoices() {
+  try {
+    diagramChoices = (await api("GET", "/api/diagrams")).diagrams;
+  } catch {
+    diagramChoices = [];
+  }
+  draw();
+}
+
+function diagramField() {
+  if (!diagramChoices?.length) return nothing;
+  return field("Work from a diagram (optional)", html`<select id="pl-diagram" .value=${diagramPick} @change=${(e) => { diagramPick = e.target.value; draw(); }}>
+    <option value="">None</option>
+    ${diagramChoices.map((c) => html`<option value=${JSON.stringify({ machine: c.machine, folder: c.folder, dir: c.dir })} ?selected=${diagramPick === JSON.stringify({ machine: c.machine, folder: c.folder, dir: c.dir })}>${c.dir.replace(/-\d{8}-\d{6}$/, "").replace(/[-_]+/g, " ")}, ${c.folder} on ${c.machine}</option>`)}
+  </select>`, "The run keeps its own copy, so drawing again does not change it.");
 }
 
 function runNowPanel(d) {
@@ -1433,8 +1454,10 @@ function runNowPanel(d) {
     const body = tool
       ? { tickets: items, prs: [] }
       : { tickets: items.filter((x) => !x.startsWith("https://")), prs: items.filter((x) => x.startsWith("https://")) };
+    if (diagramPick) body.diagram = JSON.parse(diagramPick);
     const out = await api("POST", `/api/pipelines/${encodeURIComponent(d.id)}/runs`, body);
     subjects = "";
+    diagramPick = "";
     show.runNow = false;
     toast(`Started ${out.runs.length} ${out.runs.length === 1 ? "run" : "runs"}`, "ok");
     await load();
@@ -1443,6 +1466,7 @@ function runNowPanel(d) {
     ${hook ? html`<p class="help">Starts one run with no item.</p>` : tool ? field("Item ids or links", html`<textarea rows="2" id="pl-subjects" placeholder="abc123"
       .value=${subjects} @input=${(e) => { subjects = e.target.value; draw(); }}></textarea>`, "One run each.") : field(optional ? "Ticket ids or links (optional)" : linear ? "Ticket ids" : "Merge or pull request links", html`<textarea rows="2" id="pl-subjects" placeholder=${linear || optional ? "COM-1234 COM-1240" : "https://gitlab.example.com/group/app/-/merge_requests/87"}
       .value=${subjects} @input=${(e) => { subjects = e.target.value; draw(); }}></textarea>`, optional ? "One run each, or leave it empty for one run with no ticket." : "One run each. Ticket ids and links can be mixed.")}
+    ${optional && !hook ? diagramField() : nothing}
     <div class="pl-panel-actions">
       <button class="btn quiet" type="button" @click=${() => { show.runNow = false; draw(); }}>Cancel</button>
       <button class="btn primary" type="button" ?disabled=${busy || (!optional && !subjects.trim())} @click=${start}>Start</button>

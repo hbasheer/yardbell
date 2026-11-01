@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Build from a diagram.** **Build from this** on a diagram, or **Run now** on a by-hand pipeline, starts a run that
+  works from it, with its own copy of the diagram's source. The new template **Implement from a diagram** writes a task
+  list and waits for your approval before changing any code. Steps can quote the diagram with `{diagram}`.
+- **Dispatch and diagrams.** Dispatch can read diagrams, start a run on one, and propose drawing one, which your rules
+  decide as the new action `draw_diagram`.
+
 ## [0.10.401] - 2026-11-01
 
 - **Diagrams.** A new page draws an interactive map of a repository with

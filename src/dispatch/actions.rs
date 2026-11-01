@@ -3,13 +3,14 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 18] = [
+const CHANGING: [&str; 19] = [
     "save_connector",
     "start_session",
     "send_to_session",
     "stop_session",
     "review_session",
     "scan_folder",
+    "draw_diagram",
     "remove_worktree",
     "integrate_branches",
     "push_branch",
@@ -220,6 +221,11 @@ fn what(action: &Value) -> String {
         "change_settings" => format!("changing the {} settings", text(input, "area")),
         "save_task" => format!("saving the task \"{}\"", text(input, "name")),
         "run_trigger" => format!("running the trigger {} now", text(input, "name")),
+        "draw_diagram" => format!(
+            "drawing a diagram of {} on {}",
+            text(input, "folder"),
+            text(input, "machine")
+        ),
         "save_pipeline" if input["before"].is_object() => format!(
             "changing the pipeline \"{}\"",
             input["definition"]["name"].as_str().unwrap_or_default()

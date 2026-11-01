@@ -1647,7 +1647,7 @@ impl World for Live {
         ticket: &'a TicketRef,
     ) -> BoxFuture<'a, Result<(TicketText, bool), String>> {
         Box::pin(async move {
-            if ticket.source == WEBHOOK_SOURCE {
+            if ticket.source == WEBHOOK_SOURCE || ticket.source == crate::diagrams::SOURCE {
                 let text = TicketText {
                     description: ticket.description.clone(),
                     comments: Vec::new(),

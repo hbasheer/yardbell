@@ -103,6 +103,15 @@ pub fn tools() -> Vec<Value> {
                 "id": { "type": "string", "description": "The pipeline's id, from list_pipelines" },
                 "tickets": { "type": "array", "items": { "type": "string" } },
                 "prs": { "type": "array", "items": { "type": "string" } },
+                "diagram": {
+                    "type": "object",
+                    "description": "A diagram from list_diagrams for the run to work from: its machine, folder and dir",
+                    "properties": {
+                        "machine": { "type": "string" },
+                        "folder": { "type": "string" },
+                        "dir": { "type": "string" },
+                    },
+                },
             }),
             &["id"],
         ),
@@ -187,6 +196,8 @@ struct RunPipeline {
     tickets: Vec<String>,
     #[serde(default)]
     prs: Vec<String>,
+    #[serde(default)]
+    diagram: Option<crate::web::diagrams_api::DiagramRef>,
 }
 
 #[derive(Deserialize)]
@@ -354,7 +365,13 @@ pub fn plan(app: &AppState, cfg: &Config, tool: &str, args: Value) -> Result<Val
         "run_pipeline" => {
             let r: RunPipeline = arg(args)?;
             let def = runnable(app, &r)?;
-            Ok(json!({ "id": def.id, "name": def.name, "tickets": r.tickets, "prs": r.prs }))
+            let diagram = r
+                .diagram
+                .as_ref()
+                .map(|d| json!({ "machine": d.machine, "folder": d.folder, "dir": d.dir }));
+            Ok(
+                json!({ "id": def.id, "name": def.name, "tickets": r.tickets, "prs": r.prs, "diagram": diagram }),
+            )
         }
         "answer_run" => {
             let a: AnswerRun = arg(args)?;
@@ -448,8 +465,10 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
                     format!("there is no pipeline {}", r.id),
                 )
             })?;
-            let subjects =
-                crate::web::pipeline_api::subjects(app, &def, &r.tickets, &r.prs).await?;
+            let subjects = match &r.diagram {
+                Some(d) => vec![crate::web::diagrams_api::subject(app, d).await?],
+                None => crate::web::pipeline_api::subjects(app, &def, &r.tickets, &r.prs).await?,
+            };
             let runs = app
                 .pipelines
                 .start(&r.id, subjects, "dispatch")

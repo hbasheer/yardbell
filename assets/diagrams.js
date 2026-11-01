@@ -7,6 +7,7 @@ let loadError = "";
 let busy = "";
 let draw = null;
 let opened = null;
+let build = null;
 
 function toast(message, kind = "error") {
   const el = $("toast");
@@ -110,6 +111,61 @@ async function submitDraw(e) {
   }
 }
 
+const TEMPLATE = "Implement from a diagram";
+
+async function openBuild(d) {
+  const { pipelines } = await api("GET", "/api/pipelines");
+  const usable = (pipelines || []).map((p) => p.definition).filter((p) => p.trigger?.kind === "manual" && p.steps?.length);
+  const made = usable.find((p) => p.name === TEMPLATE);
+  build = { diagram: d, pipelines: usable, pick: (made || usable[0])?.id || "", error: "" };
+  draw_();
+  document.getElementById("build-dialog")?.showModal();
+}
+
+function closeBuild() {
+  document.getElementById("build-dialog")?.close();
+  build = null;
+  draw_();
+}
+
+async function submitBuild(e) {
+  e.preventDefault();
+  const d = build.diagram;
+  busy = "build";
+  build.error = "";
+  draw_();
+  try {
+    let id = build.pick;
+    if (!id) id = (await api("POST", "/api/pipelines", { template: TEMPLATE })).id;
+    await api("POST", `/api/pipelines/${encodeURIComponent(id)}/runs`, { diagram: { machine: d.machine, folder: d.folder, dir: d.dir } });
+    location.href = `/pipeline?p=${encodeURIComponent(id)}`;
+  } catch (err) {
+    build.error = err.message;
+    busy = "";
+    draw_();
+  }
+}
+
+function buildDialog() {
+  return html`<dialog class="wide dg-dialog" id="build-dialog" aria-labelledby="build-title" @close=${() => { build = null; }}>
+    ${build ? html`<form @submit=${submitBuild}>
+      <div class="dialog-head"><h2 id="build-title">Build from ${title(build.diagram)}</h2></div>
+      <div class="dg-fields">
+        <p class="help">A run takes its own copy of this diagram and uses your agents' tokens. <strong>${TEMPLATE}</strong> writes a task list and waits for you to approve it before changing any code. A pipeline you made yourself only waits where you told it to.</p>
+        ${build.pipelines.length
+          ? html`<label>Pipeline<select .value=${build.pick} @change=${(e) => { build.pick = e.target.value; }}>
+              ${build.pipelines.map((p) => html`<option value=${p.id} ?selected=${p.id === build.pick}>${p.name}</option>`)}</select></label>`
+          : html`<p class="help">This adds the pipeline <strong>${TEMPLATE}</strong> to your Pipelines page.</p>`}
+        ${build.error ? html`<p class="wt-error" role="alert">${build.error}</p>` : nothing}
+      </div>
+      <div class="dialog-foot"><span class="where"></span>
+        <button class="btn quiet" type="button" @click=${closeBuild}>Cancel</button>
+        <button class="btn primary" type="submit" ?disabled=${busy === "build"}>${busy === "build" ? "Starting…" : "Start the run"}</button>
+      </div>
+    </form>` : nothing}
+  </dialog>`;
+}
+
 function openViewer(d) {
   opened = d;
   history.pushState(null, "", `/diagrams?${new URLSearchParams({ machine: d.machine, folder: d.folder, dir: d.dir, file: d.file })}`);
@@ -146,6 +202,7 @@ function list() {
   return html`<ul class="rows dg-list">${rows.map((d) => html`<li class="row">
     <span class="dg-where"><button class="link-btn dg-open" type="button" @click=${() => openViewer(d)}>${title(d)}</button>
       <small>${d.folder} on ${d.machine}, ${when(d.modified)}</small></span>
+    <button class="btn" type="button" @click=${() => openBuild(d).catch((err) => toast(err.message))}>Build from this</button>
     <button class="btn" type="button" ?disabled=${!ready().some((m) => m.name === d.machine)} @click=${() => openDraw(d.machine, d.folder)}>Draw again</button>
     <button class="btn quiet danger" type="button" ?disabled=${busy === `delete:${d.machine}/${d.folder}/${d.dir}`} @click=${() => removeDiagram(d)}>Delete</button>
   </li>`)}</ul>`;
@@ -190,7 +247,7 @@ function page() {
   return html`<header class="main-head"><h1>Diagrams</h1>
       <button class="btn primary" type="button" id="draw-new" ?disabled=${!ready().length} @click=${() => openDraw()}>Draw architecture</button></header>
     <p class="help dg-intro">Interactive maps of your repositories, drawn with <a href="https://github.com/tt-a1i/archify" target="_blank" rel="noopener">Archify</a> ${data.version}. They are saved in each folder's <code>.archify</code>, kept out of git.</p>
-    ${setupRows()}${list()}${drawDialog()}`;
+    ${setupRows()}${list()}${drawDialog()}${buildDialog()}`;
 }
 
 function draw_() {
@@ -208,7 +265,7 @@ async function load() {
   } catch (err) {
     loadError = err.message;
   }
-  if (!document.getElementById("draw-dialog")?.open) draw_();
+  if (!document.getElementById("draw-dialog")?.open && !document.getElementById("build-dialog")?.open) draw_();
 }
 
 addEventListener("popstate", () => {

@@ -1,3 +1,4 @@
+use crate::pipeline::record::TicketRef;
 use crate::shell::{expand_home, quote};
 use serde::Serialize;
 
@@ -8,6 +9,9 @@ const INSTALL_DIR: &str = "$HOME/.local/share/yardbell/archify/3.2.0";
 const NODE_MAJOR: u32 = 18;
 pub const MAX_BYTES: u64 = 10 * 1024 * 1024;
 const ROW: &str = "yardbell-diagram";
+pub const SOURCE: &str = "diagram";
+pub const SOURCE_MAX: u64 = 256 * 1024;
+const SOURCE_FILE: &str = "candidate.json";
 
 #[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct Setup {
@@ -148,6 +152,46 @@ pub fn delete_script(path: &str, dir: &str) -> String {
         expand_home(path),
         quote(dir),
     )
+}
+
+// What the diagram was built from, which is far easier for an agent to read than the page.
+pub fn source_script(path: &str, dir: &str) -> String {
+    format!(
+        "{}; d=\"$p/.archify/\"{}; f=\"$d/{SOURCE_FILE}\"; \
+         if [ -L \"$p/.archify\" ] || [ -L \"$d\" ] || [ -L \"$f\" ] || [ ! -f \"$f\" ]; then echo 'that diagram has no source to read' >&2; exit 4; fi; \
+         [ \"$(wc -c <\"$f\")\" -le {SOURCE_MAX} ] || {{ echo 'that diagram is too large to read' >&2; exit 5; }}; \
+         cat \"$f\"",
+        expand_home(path),
+        quote(dir),
+    )
+}
+
+pub fn title_of(dir: &str) -> String {
+    slug_of(dir).replace(['-', '_'], " ")
+}
+
+fn slug_of(dir: &str) -> &str {
+    let parts: Vec<&str> = dir.rsplitn(3, '-').collect();
+    match parts[..] {
+        [time, date, rest] if time.len() == 6 && date.len() == 8 => rest,
+        _ => dir,
+    }
+}
+
+// A run keeps its own copy, so a worktree does not need the file, which stays out of git, and
+// drawing again cannot change a run that has started.
+pub fn work_item(machine: &str, folder: &str, dir: &str, source: &str) -> TicketRef {
+    TicketRef {
+        source: SOURCE.to_string(),
+        item_id: dir.to_string(),
+        id: slug_of(dir).to_string(),
+        title: title_of(dir),
+        url: String::new(),
+        description: format!(
+            "An architecture diagram of the folder {folder} on {machine}, as the JSON it was drawn from.\n\n{source}"
+        ),
+        fields: Default::default(),
+    }
 }
 
 // A folder that is not a git repository has nothing to keep it out of, and still gets its diagram.
@@ -397,6 +441,63 @@ mod tests {
         assert!(sh(&exclude_script(&path), home.path()).status.success());
         let exclude = std::fs::read_to_string(repo.join(".git/info/exclude")).unwrap();
         assert_eq!(exclude.lines().filter(|l| *l == ".archify/").count(), 1);
+    }
+
+    #[test]
+    fn a_diagrams_source_is_read_for_agents() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = home.path().join("app");
+        write(&repo.join(".archify/d/candidate.json"), "{\"nodes\":[]}");
+        let path = repo.display().to_string();
+        let out = sh(&source_script(&path, "d"), home.path());
+        assert_eq!(String::from_utf8_lossy(&out.stdout), "{\"nodes\":[]}");
+        let missing = sh(&source_script(&path, "gone"), home.path());
+        assert!(!missing.status.success());
+        assert!(String::from_utf8_lossy(&missing.stderr).contains("no source"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_diagrams_source_is_never_a_symlink_or_too_large() {
+        let home = tempfile::tempdir().unwrap();
+        let repo = home.path().join("app");
+        write(&home.path().join("secret.json"), "secret");
+        write(&repo.join(".archify/d/keep"), "x");
+        std::os::unix::fs::symlink(
+            home.path().join("secret.json"),
+            repo.join(".archify/d/candidate.json"),
+        )
+        .unwrap();
+        let path = repo.display().to_string();
+        let out = sh(&source_script(&path, "d"), home.path());
+        assert!(!out.status.success());
+        assert!(!String::from_utf8_lossy(&out.stdout).contains("secret"));
+        write(&repo.join(".archify/big/candidate.json"), "x");
+        std::fs::File::options()
+            .write(true)
+            .open(repo.join(".archify/big/candidate.json"))
+            .unwrap()
+            .set_len(SOURCE_MAX + 1)
+            .unwrap();
+        let out = sh(&source_script(&path, "big"), home.path());
+        assert!(String::from_utf8_lossy(&out.stderr).contains("too large"));
+    }
+
+    #[test]
+    fn a_diagram_becomes_a_work_item() {
+        let ticket = work_item(
+            "hp",
+            "app",
+            "architecture-billing-flow-20261101-120000",
+            "{\"nodes\":[]}",
+        );
+        assert_eq!(ticket.source, SOURCE);
+        assert_eq!(ticket.item_id, "architecture-billing-flow-20261101-120000");
+        assert_eq!(ticket.id, "architecture-billing-flow");
+        assert_eq!(ticket.title, "architecture billing flow");
+        assert!(ticket.description.contains("the folder app on hp"));
+        assert!(ticket.description.contains("{\"nodes\":[]}"));
+        assert!(ticket.url.is_empty());
     }
 
     #[test]

@@ -481,6 +481,8 @@ struct StartReq {
     tickets: Vec<String>,
     #[serde(default)]
     prs: Vec<String>,
+    #[serde(default)]
+    diagram: Option<super::diagrams_api::DiagramRef>,
 }
 
 async fn connector_subjects(
@@ -594,8 +596,12 @@ async fn start(
     let req = body.map(|Json(r)| r).unwrap_or(StartReq {
         tickets: Vec::new(),
         prs: Vec::new(),
+        diagram: None,
     });
-    let subjects = subjects(&app, &def, &req.tickets, &req.prs).await?;
+    let subjects = match &req.diagram {
+        Some(d) => vec![super::diagrams_api::subject(&app, d).await?],
+        None => subjects(&app, &def, &req.tickets, &req.prs).await?,
+    };
     let runs = app
         .pipelines
         .start(&id, subjects, "you")

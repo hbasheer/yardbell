@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::path::Path;
 
 const RESULT_PREVIEW: usize = 4000;
-pub(super) const TOOLS: [&str; 35] = [
+pub(super) const TOOLS: [&str; 38] = [
     "save_connector",
     "list_machines",
     "list_sessions",
@@ -18,6 +18,9 @@ pub(super) const TOOLS: [&str; 35] = [
     "stop_session",
     "review_session",
     "scan_folder",
+    "draw_diagram",
+    "list_diagrams",
+    "read_diagram",
     "start_group",
     "remove_worktree",
     "integrate_branches",

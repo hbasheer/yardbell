@@ -211,3 +211,160 @@ async fn install_and_remove_run_on_the_machine() {
     assert_eq!(status, StatusCode::OK);
     assert!(commands(&r).contains("rm -rf"));
 }
+
+fn save_secret(r: &Rig) {
+    let mut secrets = r.app.secrets().unwrap();
+    secrets
+        .set("token", "shh-secret-1", chrono::Utc::now())
+        .unwrap();
+    secrets.save().unwrap();
+}
+
+fn source_of_diagram(r: &Rig, text: &str) {
+    r.fake.stub("candidate.json", Output::ok_with(text));
+}
+
+fn no_rules_needed() -> serde_json::Value {
+    json!({ "machine": "hp", "folder": "slot2", "dir": "architecture-billing-20261101-120000" })
+}
+
+#[tokio::test]
+async fn dispatch_can_list_and_read_a_diagram() {
+    let r = rig();
+    installed(&r);
+    r.fake.stub(
+        "yardbell-diagram",
+        Output::ok_with("yardbell-diagram\tslot2\tarchitecture-1\tout.html\t1700000000\t860000\n"),
+    );
+    source_of_diagram(&r, "{\"nodes\":[\"api\"]}");
+    let listed = crate::mcp_read::read(&r.app, "list_diagrams", &json!({}))
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(listed["diagrams"][0]["dir"], "architecture-1", "{listed}");
+    let read = crate::mcp_read::read(&r.app, "read_diagram", &no_rules_needed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(read["source"].as_str().unwrap().contains("api"), "{read}");
+}
+
+#[tokio::test]
+async fn dispatch_cannot_read_outside_a_diagram() {
+    let r = rig();
+    let bad = json!({ "machine": "hp", "folder": "slot2", "dir": "../.." });
+    assert!(crate::mcp_read::read(&r.app, "read_diagram", &bad)
+        .await
+        .unwrap()
+        .is_err());
+    assert!(!commands(&r).contains("candidate.json"));
+}
+
+#[tokio::test]
+async fn saved_secrets_stay_out_of_what_dispatch_reads() {
+    let r = rig();
+    save_secret(&r);
+    source_of_diagram(&r, "{\"note\":\"shh-secret-1\"}");
+    let read = crate::mcp_read::read(&r.app, "read_diagram", &no_rules_needed())
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(!read.to_string().contains("shh-secret-1"), "{read}");
+}
+
+#[tokio::test]
+async fn a_run_keeps_its_own_copy_of_the_diagram() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    save_secret(&r);
+    source_of_diagram(&r, "{\"nodes\":[\"api\"],\"note\":\"shh-secret-1\"}");
+    let (status, text) = post(
+        &r,
+        &c,
+        "/api/pipelines",
+        json!({ "template": "Implement from a diagram" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let def: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let id = def["id"].as_str().unwrap();
+    let (status, text) = post(
+        &r,
+        &c,
+        &format!("/api/pipelines/{id}/runs"),
+        json!({ "diagram": no_rules_needed() }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{text}");
+    let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        v["runs"].as_array().unwrap().len(),
+        1,
+        "one run, not an empty one as well: {v}"
+    );
+    let run_id = v["runs"][0]
+        .as_str()
+        .map(str::to_string)
+        .or_else(|| v["runs"][0]["id"].as_str().map(str::to_string))
+        .unwrap();
+    let run = r.app.pipelines.run(&run_id).unwrap();
+    let ticket = run.subject.ticket.unwrap();
+    assert_eq!(ticket.source, "diagram");
+    assert_eq!(ticket.id, "architecture-billing");
+    let stored = ticket.description;
+    assert!(
+        stored.contains("api") && stored.contains("slot2"),
+        "{stored}"
+    );
+    assert!(!stored.contains("shh-secret-1"), "{stored}");
+}
+
+#[tokio::test]
+async fn a_run_refuses_a_diagram_that_is_not_one() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (_, text) = post(
+        &r,
+        &c,
+        "/api/pipelines",
+        json!({ "template": "Implement from a diagram" }),
+    )
+    .await;
+    let def: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let id = def["id"].as_str().unwrap();
+    let body = json!({ "diagram": { "machine": "hp", "folder": "slot2", "dir": "../x" } });
+    let (status, _) = post(&r, &c, &format!("/api/pipelines/{id}/runs"), body).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn dispatch_drawing_follows_the_rules_and_waits_by_default() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    installed(&r);
+    r.fake.stub("info/exclude", Output::ok_with(""));
+    r.fake.stub("tmux new", Output::ok_with(""));
+    let bad = dispatch_tool(
+        &r,
+        Some(&id),
+        "draw_diagram",
+        json!({ "machine": "hp", "folder": "nowhere" }),
+    )
+    .await;
+    assert_eq!(bad["isError"], true, "{bad}");
+    let asked = dispatch_tool(
+        &r,
+        Some(&id),
+        "draw_diagram",
+        json!({ "machine": "hp", "folder": "slot2" }),
+    )
+    .await;
+    assert!(
+        !commands(&r).contains("tmux new"),
+        "it waits for the person: {asked}"
+    );
+    assert!(
+        asked.to_string().to_lowercase().contains("wait") || asked.to_string().contains("approv"),
+        "{asked}"
+    );
+}
