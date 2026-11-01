@@ -3,6 +3,7 @@ use super::forge::{Draft, Forge};
 use super::linear::Linear;
 use super::prompts::{self, TicketText};
 use super::record::{Effect, PullRef, Run, Seen, StepState, TicketRef};
+use super::tokens::{self, Tokens};
 use crate::config::{Approval, Config, Pipelines as Cfg};
 use crate::dispatch::{By, ReviewOf};
 use crate::phone::Push;
@@ -91,6 +92,15 @@ pub trait World: Send + Sync {
         path: &'a str,
     ) -> BoxFuture<'a, Result<(), String>>;
     fn other_runs(&self, id: &str) -> Vec<Run>;
+    fn reports_tokens(&self, agent: &str) -> bool;
+    fn token_use<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        markers: &'a [String],
+        pids: &'a [u32],
+    ) -> BoxFuture<'a, Option<tokens::TranscriptRead>>;
+    fn dispatch_tokens(&self, conversation: &str) -> Option<Tokens>;
 }
 
 // What a phone notification from a pipeline is about, for the switches in Settings.
@@ -594,6 +604,14 @@ async fn tool_step(world: &dyn World, run: &Run, call: ToolCall<'_>) -> Seen {
     }
 }
 
+fn blind_to(world: &dyn World, step: &Step) -> Option<Seen> {
+    let (agent, _) = agent_of(step)?;
+    (!world.reports_tokens(agent)).then(|| Seen::TokenBlind {
+        step: step.id.clone(),
+        why: tokens::blind_why(step, agent),
+    })
+}
+
 pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Vec<Seen> {
     let step_of = |id: &str| run.def().step(id).cloned();
     match effect {
@@ -610,15 +628,26 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             if machines.is_empty() {
                 machines = world.machines();
             }
+            let before = world.dispatch_tokens(&run.conversation);
             let reply = world
                 .ask(&run.conversation, &prompts::plan(run, &text, &machines))
                 .await;
-            vec![Seen::Planned(
-                reply.and_then(|t| prompts::parse_plan(&t, &machines, run)),
-            )]
+            vec![
+                tokens::after_turn(world, run, step, before),
+                Seen::Planned(reply.and_then(|t| prompts::parse_plan(&t, &machines, run))),
+            ]
         }
         Effect::Agent { step } => match step_of(step) {
-            Some(s) => agent(world, cfg, run, &s).await,
+            Some(s) => {
+                let Some(blind) = blind_to(world, &s) else {
+                    return agent(world, cfg, run, &s).await;
+                };
+                let mut seen = vec![blind];
+                if run.tokens.limit.is_none() || run.tokens.go_on_unknown {
+                    seen.extend(agent(world, cfg, run, &s).await);
+                }
+                seen
+            }
             None => vec![],
         },
         Effect::Answer { step, text } => {
@@ -709,8 +738,10 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             }
             _ => vec![],
         },
-        Effect::Report { .. } => {
+        Effect::Report { step } => {
+            let before = world.dispatch_tokens(&run.conversation);
             let reply = world.ask(&run.conversation, &prompts::report(run)).await;
+            let used = tokens::after_turn(world, run, step, before);
             let written = reply.and_then(|t| prompts::parse_report(&t));
             let line = written
                 .as_ref()
@@ -722,7 +753,7 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 &format!("{}: {line}", run.subject.label()),
                 run,
             );
-            vec![Seen::Reported(written)]
+            vec![used, Seen::Reported(written)]
         }
         Effect::Notify { text } => {
             world.notify(Note::Waiting, text, run);
@@ -1025,6 +1056,32 @@ impl World for Live {
                 _ => Ok(()),
             }
         })
+    }
+
+    fn reports_tokens(&self, agent: &str) -> bool {
+        self.cfg.agent_reports_tokens(agent)
+    }
+
+    fn token_use<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        markers: &'a [String],
+        pids: &'a [u32],
+    ) -> BoxFuture<'a, Option<tokens::TranscriptRead>> {
+        Box::pin(async move {
+            let m = self.cfg.machine(machine)?;
+            let lines = self
+                .app
+                .sessions
+                .token_lines(m, path, markers, pids)
+                .await?;
+            Some(tokens::parse_lines(&lines))
+        })
+    }
+
+    fn dispatch_tokens(&self, conversation: &str) -> Option<Tokens> {
+        self.app.dispatch.tokens_of(conversation)
     }
 
     fn view(&self) -> StateView {

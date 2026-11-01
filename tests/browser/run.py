@@ -511,6 +511,20 @@ def pipeline_runs():
         "run-c": run("run-c", 84, "Login redirect", "done", "",
                      [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes."),
                       ("test", "pass", "Specs pass."), ("report", "pass", "Looks good.")]),
+        "run-d": {**run("run-d", 93, "Tokens spent", "waiting", "test",
+                        [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes.")],
+                        {"kind": "token_limit", "step": "test",
+                         "reason": "This run used 612,400 tokens, and its limit is 500,000"}),
+                  "tokens": {"sources": {"nowhere:a.jsonl": {"input": 12400, "output": 100000, "cache_write": 500000,
+                                                              "cache_read": 3000000}},
+                             "limit": 500000, "raised": True}},
+        "run-e": {**run("run-e", 94, "Tokens unknown", "waiting", "test",
+                        [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes.")],
+                        {"kind": "token_unknown", "step": "test",
+                         "reason": "Test runs on codex, which does not report tokens, so the limit of 500,000 tokens cannot be checked"}),
+                  "tokens": {"sources": {"nowhere:a.jsonl": {"input": 1000, "output": 2000}},
+                             "unknown": {"test": "Test runs on codex, which does not report tokens"},
+                             "limit": 500000, "raised": True}},
     }
 
 
@@ -1912,7 +1926,7 @@ class Suite:
         b.wait(f"document.querySelector('{card}')", "the review pipeline's card")
         text = b.js(f"document.querySelector('{card}').textContent.replace(/\\s+/g, ' ')")
         for want in ("When a GitLab merge request on git.example.com adds me as reviewer",
-                     "Understand", "Test ⟲ Root cause", "v1", "2 waiting · 1 done", "Needs you"):
+                     "Understand", "Test ⟲ Root cause", "v1", "4 waiting · 1 done", "Needs you"):
             if want not in text:
                 raise Failure(f"the card does not say {want!r}: {text}")
         if b.js(f"document.querySelector('{card} input[type=checkbox]').checked"):
@@ -1922,7 +1936,7 @@ class Suite:
                "the checks' problem when switching on")
         b.wait(f"!document.querySelector('{card} input[type=checkbox]').checked", "the switch back off")
         b.click("#pl-waiting-toggle")
-        b.wait("document.querySelectorAll('#pl-waiting .pl-wait-item').length === 2", "two runs waiting for me")
+        b.wait("document.querySelectorAll('#pl-waiting .pl-wait-item').length === 4", "four runs waiting for me")
         if "!87 COM-1287 Fix the webhook dedup" not in b.js("document.getElementById('pl-waiting').textContent"):
             raise Failure("the waiting list does not name the merge request")
         self.check_errors("the Pipelines list")
@@ -2306,6 +2320,48 @@ class Suite:
                "run B back at Root cause")
         self.check_errors("the Runs tab")
 
+    def test_a_run_past_its_token_limit_shows_it_and_can_be_raised(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-d"))
+        b.wait("document.querySelector('#pl-need')?.textContent.includes('612,400 tokens')", "what it used and the limit")
+        use = b.js("document.getElementById('pl-tokens').textContent")
+        for want in ("612,400 tokens", "Limit 500,000", "3,000,000 more were read from cache"):
+            if want not in use:
+                raise Failure(f"the run's use does not say {want!r}: {use}")
+        words = b.js("document.getElementById('pl-need').textContent")
+        if "Continue on pass" in words or "Start this step anyway" not in words:
+            raise Failure(f"the waiting box offers the wrong choices: {words}")
+        self.set_field("#pl-raise", "100")
+        b.js("document.querySelector('.pl-raise button').click()")
+        b.wait("document.getElementById('toast').textContent.includes('Set a limit above the 612,400 tokens')", "a limit below the use refused")
+        self.set_field("#pl-raise", "900000")
+        b.js("document.querySelector('.pl-raise button').click()")
+        b.wait("(async () => { const r = (await (await fetch('/api/runs')).json()).runs.find((r) => r.id === 'run-d'); return r.tokens.limit === 900000 && r.state !== 'waiting'; })()",
+               "the limit raised and the run going on")
+        self.check_errors("the raised limit")
+
+    def test_a_run_that_cannot_measure_says_so(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-e"))
+        b.wait("document.getElementById('pl-tokens')?.textContent.includes('At least 3,000 tokens')", "the partial total")
+        use = b.js("document.getElementById('pl-tokens').textContent")
+        if "does not report tokens" not in use:
+            raise Failure(f"the run does not name the unknown step: {use}")
+        if not b.js("document.getElementById('pl-need').textContent.includes('Start this step anyway')"):
+            raise Failure("the waiting box does not offer to go on")
+        self.check_errors("the unknown use")
+
+    def test_a_limit_with_an_agent_that_cannot_report_warns_in_the_builder(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.querySelector('#pl-inspector input[name=token_limit]')", "the token limit in the builder")
+        if b.js("document.getElementById('pl-token-blind')"):
+            raise Failure("no limit is set, and the builder warns anyway")
+        self.set_field("#pl-inspector input[name=token_limit]", "500000")
+        b.wait("document.getElementById('pl-token-blind')?.textContent.includes('cannot report tokens')", "the warning about the agents")
+        self.set_field("#pl-inspector input[name=token_limit]", "")
+        self.check_errors("the builder's token limit")
+
     def test_canvas_zoom_controls(self):
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-c"))
@@ -2362,6 +2418,7 @@ class Suite:
         b.wait("document.querySelector('#pl-settings input[name=per_machine]')", "the settings form")
         self.set_field("#pl-settings input[name=per_machine]", "3")
         self.set_field("#pl-settings input[name=minutes]", "90")
+        self.set_field("#pl-settings input[name=token_limit]", "400000")
         b.click("#pl-note-add")
         self.set_field("#pl-settings .pl-note:last-child input[name=folder]", "demo-app")
         self.set_field("#pl-settings .pl-note:last-child input[name=note]", "Run bin/rspec")
@@ -2369,7 +2426,7 @@ class Suite:
         b.wait("document.getElementById('toast').textContent.includes('Saved')", "the settings saved")
         with open(self.y.config) as f:
             config = f.read()
-        for want in ("per_machine: 3", "minutes: 90", "demo-app: Run bin/rspec"):
+        for want in ("per_machine: 3", "minutes: 90", "token_limit: 400000", "demo-app: Run bin/rspec"):
             if want not in config:
                 raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
 

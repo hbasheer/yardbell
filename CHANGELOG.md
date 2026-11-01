@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Token limits for pipeline runs.** A run's page shows the tokens it has used, read from Claude Code's
+  transcripts and Dispatch's own turns. With a limit, set per pipeline in the builder or as a default in
+  Pipelines **Settings**, a run that passes it starts no new step that uses tokens and waits for you,
+  showing what it used and the limit, with a phone notification. Pushes, ticket updates and connected tools
+  still go through. Agents that cannot report tokens are named in the builder, in `yardbell doctor` and on
+  the run, and a limited run asks before starting one. A session that runs `/clear` makes the figure "at
+  least" and the run asks the same way. No limit means no change.
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
   in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
   common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have

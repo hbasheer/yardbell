@@ -212,8 +212,14 @@ impl GitLabHost {
 pub struct Pipelines {
     pub per_machine: u32,
     pub minutes: u64,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub token_limit: u64,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub qa_notes: BTreeMap<String, String>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Default for Pipelines {
@@ -221,6 +227,7 @@ impl Default for Pipelines {
         Pipelines {
             per_machine: 2,
             minutes: 120,
+            token_limit: 0,
             qa_notes: BTreeMap::new(),
         }
     }
@@ -686,6 +693,13 @@ impl Config {
         if !(10..=1440).contains(&self.pipelines.minutes) {
             return invalid("pipelines.minutes must be from 10 to 1440".into());
         }
+        if !crate::pipeline::tokens::valid_limit(self.pipelines.token_limit) {
+            return invalid(format!(
+                "pipelines.token_limit must be 0 for none, or from {} to {}",
+                crate::pipeline::tokens::LIMIT_MIN,
+                crate::pipeline::tokens::LIMIT_MAX
+            ));
+        }
         crate::worktrees::setup::validate(&self.worktree_setup, |m| self.machine(m).is_some())
             .map_err(ConfigError::Invalid)?;
         crate::triggers::validate(&self.triggers).map_err(ConfigError::Invalid)
@@ -901,6 +915,17 @@ impl Config {
 
     pub fn agent(&self, name: &str) -> Option<Agent> {
         self.agents().into_iter().find(|a| a.name == name)
+    }
+
+    // Only Claude Code's transcripts say what a session used.
+    pub fn agent_reports_tokens(&self, name: &str) -> bool {
+        let name = if name.is_empty() {
+            self.default_agent()
+        } else {
+            name
+        };
+        self.agent(name)
+            .is_some_and(|a| a.process_name() == "claude")
     }
 
     pub fn default_agent(&self) -> &str {
@@ -1218,6 +1243,14 @@ mod tests {
     fn pipelines_settings_defaults_and_ranges() {
         let cfg = load_str(BASE).unwrap();
         assert_eq!((cfg.pipelines.per_machine, cfg.pipelines.minutes), (2, 120));
+        assert_eq!(cfg.pipelines.token_limit, 0);
+        assert!(cfg.pipelines.is_default());
+        let limited = load_str(&format!("{BASE}pipelines:\n  token_limit: 5000\n")).unwrap();
+        assert_eq!(limited.pipelines.token_limit, 5000);
+        match load_str(&format!("{BASE}pipelines:\n  token_limit: 5\n")) {
+            Err(ConfigError::Invalid(got)) => assert!(got.contains("token_limit"), "{got}"),
+            other => panic!("5 tokens was not refused: {other:?}"),
+        }
         let notes = load_str(&format!(
             "{BASE}pipelines:\n  qa_notes:\n    acme/web: Run bin/rspec\n"
         ))

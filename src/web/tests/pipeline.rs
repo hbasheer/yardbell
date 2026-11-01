@@ -370,6 +370,91 @@ async fn run_actions() {
 }
 
 #[tokio::test]
+async fn token_limits_save_and_a_run_says_what_it_used() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _) = call(
+        &r,
+        &c,
+        "PUT",
+        "/api/pipelines/settings",
+        Some(json!({ "per_machine": 2, "minutes": 120, "token_limit": 400000 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(r.app.config().unwrap().pipelines.token_limit, 400000);
+    let (status, body) = call(
+        &r,
+        &c,
+        "PUT",
+        "/api/pipelines/settings",
+        Some(json!({ "per_machine": 2, "minutes": 120, "token_limit": 5 })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let (_, list) = call(&r, &c, "GET", "/api/pipelines", None).await;
+    assert_eq!(list["settings"]["token_limit"], 400000);
+    let without = list["agents_without_tokens"].as_array().unwrap();
+    assert!(without.contains(&json!("codex")), "{without:?}");
+    assert!(!without.contains(&json!("claude")), "{without:?}");
+    let mut def = list["pipelines"][0]["definition"].clone();
+    def["token_limit"] = json!(9000);
+    let (status, body) = call(&r, &c, "PUT", &format!("/api/pipelines/{id}"), Some(def)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        r.app.pipelines.library().get(&id).unwrap().token_limit,
+        Some(9000)
+    );
+
+    let mut run = r
+        .app
+        .pipelines
+        .start(&id, vec![Subject::default()], "you")
+        .unwrap()
+        .remove(0);
+    run.tokens.note(
+        vec![(
+            "hp:a.jsonl".into(),
+            crate::pipeline::tokens::Tokens {
+                input: 1000,
+                output: 500,
+                cache_write: 0,
+                cache_read: 70,
+            },
+        )],
+        vec![],
+    );
+    run.tokens.limit = Some(1200);
+    run.state = RunState::Waiting;
+    run.step = "plan".into();
+    run.waiting = Some(Waiting {
+        kind: WaitKind::TokenLimit,
+        step: "plan".into(),
+        reason: "over".into(),
+        screen: String::new(),
+        tool_hash: String::new(),
+    });
+    let run_id = run.id.clone();
+    r.app.pipelines.put(run);
+    let (_, runs) = call(&r, &c, "GET", "/api/runs", None).await;
+    let shown = &runs["runs"][0];
+    assert_eq!(shown["tokens_used"], 1500);
+    assert_eq!(shown["tokens_from_cache"], 70);
+    let url = format!("/api/runs/{run_id}/token-limit");
+    let (status, body) = call(&r, &c, "POST", &url, Some(json!({ "limit": 100 }))).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.to_string().contains("1,500"), "{body}");
+    let (status, body) = call(&r, &c, "POST", &url, Some(json!({ "limit": 2000 }))).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        r.app.pipelines.run(&run_id).unwrap().tokens.limit,
+        Some(2000)
+    );
+}
+
+#[tokio::test]
 async fn settings_are_saved_to_yardbell_yml() {
     let r = rig();
     let c = cookie(&r.app).await;

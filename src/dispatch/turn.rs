@@ -453,6 +453,14 @@ async fn run_turn(
         if let Some(found) = backend.usage_of(&message) {
             shared.set_usage(found);
         }
+        if let Some(used) = backend.tokens_of(&message) {
+            if let Some(c) = shared.lock().get_mut(id) {
+                c.stored
+                    .tokens
+                    .get_or_insert_with(Default::default)
+                    .add(used);
+            }
+        }
         for event in backend.events_of(&message, &mut tools) {
             // A step that changes something is recorded by the MCP server as a step of its own,
             // with its decision and result.
@@ -651,6 +659,40 @@ echo '{{"type":"system","subtype":"init","session_id":"s1"}}'"#,
                 .starts_with("-p\nthanks\n"),
             "nothing is told twice"
         );
+    }
+
+    #[tokio::test]
+    async fn each_turns_tokens_add_up_on_its_conversation_and_survive_a_restart() {
+        let dir = tempfile::tempdir().unwrap();
+        let script = r#"echo '{"type":"system","subtype":"init","session_id":"s-1"}'
+echo '{"type":"result","is_error":false,"result":"ok","usage":{"input_tokens":10,"output_tokens":5,"cache_creation_input_tokens":2,"cache_read_input_tokens":100}}'"#;
+        let dispatch = fake_claude(dir.path(), script);
+        let settings = DispatchSettings::default();
+        let (id, rx) = dispatch
+            .ask(None, "one", 4000, &settings, None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        let (_, rx) = dispatch
+            .ask(Some(&id), "two", 4000, &settings, None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        let used = dispatch.tokens_of(&id).unwrap();
+        assert_eq!((used.counted(), used.cache_read), (34, 200));
+        let reopened = fake_claude(dir.path(), script);
+        assert_eq!(reopened.tokens_of(&id), Some(used));
+
+        let quiet = fake_claude(
+            dir.path(),
+            r#"echo '{"type":"result","is_error":false,"result":"ok"}'"#,
+        );
+        let (other, rx) = quiet
+            .ask(None, "three", 4000, &settings, None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        assert_eq!(quiet.tokens_of(&other), None, "no figure is not zero");
     }
 
     #[tokio::test]

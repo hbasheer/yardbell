@@ -202,6 +202,7 @@ fn implement() -> Definition {
                 (1720.0, 120.0),
             ),
         ],
+        token_limit: None,
     }
 }
 
@@ -281,6 +282,7 @@ fn review() -> Definition {
                 (880.0, 220.0),
             ),
         ],
+        token_limit: None,
     }
 }
 

@@ -3,6 +3,7 @@ use super::engine::{self, tests::run_of};
 use super::prompts::{marker, TicketText};
 use super::record::{Effect, PrRef, PullRef, Run, RunState, Seen, TicketRef, WaitKind};
 use super::run::{act, needless_sessions, World};
+use super::tokens::{Tokens, TranscriptRead};
 use super::watch;
 use crate::config::Pipelines;
 use crate::dispatch::ReviewOf;
@@ -41,6 +42,12 @@ pub(crate) struct Fake {
     pub tool_now: Mutex<Option<Result<(String, String), crate::mcp_client::Failure>>>,
     pub tool_reply: Mutex<Option<Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>>>,
     pub tool_args: Mutex<Vec<Value>>,
+    pub tokenless: Mutex<Vec<String>>,
+    pub token_files: Mutex<HashMap<String, Option<TranscriptRead>>>,
+    pub token_pids: Mutex<Vec<u32>>,
+    pub token_reads: Mutex<u32>,
+    pub dispatch_tokens: Mutex<Option<Tokens>>,
+    pub turn_tokens: Mutex<Option<Tokens>>,
 }
 
 impl Fake {
@@ -206,6 +213,13 @@ impl World for Fake {
     ) -> BoxFuture<'a, Result<String, String>> {
         Box::pin(async move {
             self.call(format!("ask {}", text.lines().next().unwrap_or_default()));
+            if let Some(used) = *self.turn_tokens.lock().unwrap() {
+                self.dispatch_tokens
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(Default::default)
+                    .add(used);
+            }
             self.replies
                 .lock()
                 .unwrap()
@@ -324,6 +338,33 @@ impl World for Fake {
             self.call_vars.lock().unwrap().push(vars);
             Ok(json!({ "done": true }))
         })
+    }
+
+    fn reports_tokens(&self, agent: &str) -> bool {
+        !self.tokenless.lock().unwrap().iter().any(|a| a == agent)
+    }
+
+    fn token_use<'a>(
+        &'a self,
+        _machine: &'a str,
+        path: &'a str,
+        _markers: &'a [String],
+        pids: &'a [u32],
+    ) -> BoxFuture<'a, Option<TranscriptRead>> {
+        Box::pin(async move {
+            *self.token_reads.lock().unwrap() += 1;
+            self.token_pids.lock().unwrap().extend_from_slice(pids);
+            self.token_files
+                .lock()
+                .unwrap()
+                .get(path)
+                .cloned()
+                .unwrap_or_else(|| Some(TranscriptRead::default()))
+        })
+    }
+
+    fn dispatch_tokens(&self, _conversation: &str) -> Option<Tokens> {
+        *self.dispatch_tokens.lock().unwrap()
     }
 
     fn notify(&self, kind: super::run::Note, text: &str, _run: &Run) {
@@ -1547,6 +1588,265 @@ mod pipelines {
         assert_eq!(run.steps["review"].report, "Reviewed it.");
     }
 
+    fn files(files: Vec<(String, Tokens)>) -> TranscriptRead {
+        TranscriptRead {
+            files,
+            moved: vec![],
+        }
+    }
+
+    fn used(input: u64) -> Tokens {
+        Tokens {
+            input,
+            ..Tokens::default()
+        }
+    }
+
+    fn at_review(p: &Arc<Pipelines>, limit: Option<u64>, session: &str) -> (Run, String) {
+        let def = p
+            .library()
+            .copy_template("Implement my tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.definition.as_mut().unwrap().token_limit = limit;
+        run.step = "review".into();
+        run.state = RunState::Running;
+        run.pending = None;
+        run.step_since = chrono::Local::now().to_rfc3339();
+        for step in ["implement", "review"] {
+            let st = run.state_of(step);
+            st.session = session.into();
+            st.machine = "hp".into();
+            st.path = "/r/app".into();
+            st.runs = 1;
+        }
+        let marker = marker(&run, "review");
+        (run, marker)
+    }
+
+    fn at_idle_review(fake: &Fake, marker: &str) {
+        fake.session("hp", "hp-s", "b", Activity::Idle);
+        fake.screens
+            .lock()
+            .unwrap()
+            .insert("hp-s".into(), result(marker, "pass", "Reviewed it."));
+    }
+
+    #[tokio::test]
+    async fn a_shared_session_counts_once_and_a_restart_keeps_the_total() {
+        let (p, dir) = pipelines();
+        let (run, _) = at_review(&p, None, "hp-s");
+        let id = run.id.clone();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-s", "b", Activity::Active);
+        fake.token_files.lock().unwrap().insert(
+            "/r/app".into(),
+            Some(files(vec![("a.jsonl".into(), used(700))])),
+        );
+        let now = chrono::Local::now();
+        tick(&p, &fake, None, now).await;
+        assert_eq!(*fake.token_reads.lock().unwrap(), 1, "one folder, one read");
+        assert_eq!(p.run(&id).unwrap().tokens.used(), 700);
+        tick(&p, &fake, None, now + chrono::Duration::seconds(10)).await;
+        assert_eq!(*fake.token_reads.lock().unwrap(), 1, "not every round");
+
+        let reopened = Arc::new(Pipelines::new(dir.path().to_path_buf()));
+        assert_eq!(reopened.run(&id).unwrap().tokens.used(), 700);
+        tick(&reopened, &fake, None, now + chrono::Duration::seconds(61)).await;
+        assert_eq!(*fake.token_reads.lock().unwrap(), 2);
+        assert_eq!(
+            reopened.run(&id).unwrap().tokens.used(),
+            700,
+            "not added again"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_step_ending_past_the_limit_waits_with_no_new_session_and_a_note() {
+        let (p, _dir) = pipelines();
+        let (run, marker) = at_review(&p, Some(1000), "hp-s");
+        let id = run.id.clone();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        at_idle_review(&fake, &marker);
+        fake.token_files.lock().unwrap().insert(
+            "/r/app".into(),
+            Some(files(vec![("a.jsonl".into(), used(1500))])),
+        );
+        let now = chrono::Local::now();
+        let world: Arc<dyn World> = fake.clone();
+        for handle in p
+            .tick(&world, &crate::config::Pipelines::default(), None, now)
+            .await
+        {
+            handle.await.unwrap();
+        }
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.steps["review"].outcome, Some(Outcome::Pass));
+        let w = run.waiting.clone().expect("it waits");
+        assert_eq!((w.kind, w.step.as_str()), (WaitKind::TokenLimit, "qa"));
+        assert!(w.reason.contains("1,500") && w.reason.contains("1,000"));
+        assert_eq!(*fake.started.lock().unwrap(), 0);
+        let notes = fake.notes.lock().unwrap().clone();
+        assert!(notes.iter().any(|n| n.contains("1,500")), "{notes:?}");
+    }
+
+    #[tokio::test]
+    async fn a_transcript_that_cannot_be_read_is_unknown_and_not_zero() {
+        for (limit, waits) in [(Some(1000), true), (None, false)] {
+            let (p, _dir) = pipelines();
+            let (run, marker) = at_review(&p, limit, "hp-s");
+            let id = run.id.clone();
+            p.put(run);
+            let fake = Arc::new(Fake::default());
+            at_idle_review(&fake, &marker);
+            fake.token_files
+                .lock()
+                .unwrap()
+                .insert("/r/app".into(), None);
+            tick(&p, &fake, None, chrono::Local::now()).await;
+            let run = p.run(&id).unwrap();
+            assert_eq!(run.tokens.used(), 0);
+            assert!(run.tokens.unknown["review"].contains("could not read"));
+            let kind = run.waiting.map(|w| w.kind);
+            assert_eq!(kind == Some(WaitKind::TokenUnknown), waits, "{limit:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_limited_step_on_an_agent_that_cannot_report_asks_before_it_starts() {
+        let (p, _dir) = pipelines();
+        let (mut run, _) = at_review(&p, Some(1000), "");
+        let def = run.definition.as_mut().unwrap();
+        let step = def.steps.iter_mut().find(|s| s.id == "qa").unwrap();
+        if let StepKind::Agent { agent, .. } = &mut step.kind {
+            *agent = "codex".into();
+        }
+        run.step = "qa".into();
+        run.state = RunState::Queued;
+        run.slot = Some("hp".into());
+        run.state_of("qa").machine = "hp".into();
+        let id = run.id.clone();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.tokenless.lock().unwrap().push("codex".into());
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        let w = run.waiting.clone().expect("it asks first");
+        assert_eq!(w.kind, WaitKind::TokenUnknown);
+        assert!(
+            w.reason.contains("codex") && w.reason.contains("1,000"),
+            "{}",
+            w.reason
+        );
+        assert_eq!(*fake.started.lock().unwrap(), 0, "nothing was started");
+        assert_eq!(fake.notes.lock().unwrap().len(), 1, "the phone was told");
+
+        p.retry(&id).unwrap();
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.waiting, None);
+        assert_eq!(*fake.started.lock().unwrap(), 1, "the person said to go on");
+        assert!(
+            run.tokens.unknown["qa"].contains("codex"),
+            "still not counted"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_session_that_moved_transcript_is_unknown_and_holds_a_limited_run() {
+        for (limit, waits) in [(Some(100_000), true), (None, false)] {
+            let (p, _dir) = pipelines();
+            let (run, marker) = at_review(&p, limit, "hp-s");
+            let id = run.id.clone();
+            p.put(run);
+            let fake = Arc::new(Fake::default());
+            at_idle_review(&fake, &marker);
+            fake.token_files.lock().unwrap().insert(
+                "/r/app".into(),
+                Some(TranscriptRead {
+                    files: vec![("a.jsonl".into(), used(700))],
+                    moved: vec!["b.jsonl".into()],
+                }),
+            );
+            tick(&p, &fake, None, chrono::Local::now()).await;
+            assert_eq!(
+                fake.token_pids.lock().unwrap()[0],
+                1,
+                "the session's own pid"
+            );
+            let run = p.run(&id).unwrap();
+            assert_eq!(run.tokens.used(), 700, "only what is certainly this run's");
+            assert!(
+                run.tokens.unknown["moved:hp:b.jsonl"].contains("/clear"),
+                "{:?}",
+                run.tokens.unknown
+            );
+            let kind = run.waiting.map(|w| w.kind);
+            assert_eq!(kind == Some(WaitKind::TokenUnknown), waits, "{limit:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_move_seen_mid_step_stays_unknown_after_the_session_is_gone() {
+        let (p, _dir) = pipelines();
+        let (run, _) = at_review(&p, None, "hp-s");
+        let id = run.id.clone();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-s", "b", Activity::Active);
+        fake.token_files.lock().unwrap().insert(
+            "/r/app".into(),
+            Some(TranscriptRead {
+                files: vec![("a.jsonl".into(), used(700))],
+                moved: vec!["b.jsonl".into()],
+            }),
+        );
+        let now = chrono::Local::now();
+        tick(&p, &fake, None, now).await;
+        fake.token_files.lock().unwrap().insert(
+            "/r/app".into(),
+            Some(files(vec![("a.jsonl".into(), used(700))])),
+        );
+        tick(&p, &fake, None, now + chrono::Duration::seconds(61)).await;
+        let run = p.run(&id).unwrap();
+        assert!(
+            run.tokens.unknown.contains_key("moved:hp:b.jsonl"),
+            "a later read does not forget"
+        );
+    }
+
+    #[tokio::test]
+    async fn raising_a_limit_must_go_above_what_was_used() {
+        let (p, _dir) = pipelines();
+        let (mut run, _) = at_review(&p, Some(1000), "");
+        run.state = RunState::Waiting;
+        run.tokens.limit = Some(1000);
+        run.tokens.sources.insert("a".into(), used(1500));
+        run.waiting = Some(crate::pipeline::record::Waiting {
+            kind: WaitKind::TokenLimit,
+            step: "review".into(),
+            reason: "over".into(),
+            screen: String::new(),
+            tool_hash: String::new(),
+        });
+        let id = run.id.clone();
+        p.put(run);
+        let refused = p.raise_limit(&id, 1500).unwrap_err();
+        assert!(refused.contains("1,500"), "{refused}");
+        let run = p.raise_limit(&id, 2000).unwrap();
+        assert_eq!(
+            (run.tokens.limit, run.state),
+            (Some(2000), RunState::Queued)
+        );
+        assert!(p.raise_limit(&id, 3000).is_err(), "it is no longer waiting");
+    }
+
     #[test]
     fn a_notification_opens_its_run() {
         let mut run = crate::pipeline::engine::tests::run_of("Implement my tickets");
@@ -2315,4 +2615,50 @@ fn saving_says_when_a_connection_lacks_the_update() {
             .any(|p| p.contains("Up") && p.contains("move") && p.contains("Tool")),
         "{problems:?}"
     );
+}
+
+#[tokio::test]
+async fn a_dispatch_turn_is_counted_and_one_that_reports_nothing_is_unknown() {
+    let (mut run, _) = engine::start(run_of("Implement my tickets"), chrono::Local::now());
+    run.conversation = "conv0000000001".into();
+    let effect = Effect::Plan {
+        step: "plan".into(),
+    };
+    let reply = "MACHINE: hp\nFOLDER: acme/app\nBRANCH: com-1\nWHY: it has the folder";
+    let fake = Fake::default();
+    fake.replies.lock().unwrap().push_back(reply.into());
+    *fake.turn_tokens.lock().unwrap() = Some(Tokens {
+        input: 40,
+        output: 2,
+        ..Tokens::default()
+    });
+    let seen = act(&fake, &Pipelines::default(), &run, &effect).await;
+    match &seen[0] {
+        Seen::TokensRead {
+            found,
+            known,
+            unknown,
+            ending,
+        } => {
+            assert_eq!(found[0].0, "dispatch:conv0000000001");
+            assert_eq!(found[0].1.counted(), 42);
+            assert_eq!((known.len(), unknown.len(), *ending), (1, 0, true));
+        }
+        other => panic!("{other:?}"),
+    }
+    assert!(matches!(seen[1], Seen::Planned(_)));
+
+    let silent = Fake::default();
+    silent.replies.lock().unwrap().push_back(reply.into());
+    let seen = act(&silent, &Pipelines::default(), &run, &effect).await;
+    match &seen[0] {
+        Seen::TokensRead { found, unknown, .. } => {
+            assert!(found.is_empty());
+            assert!(
+                unknown[0].1.contains("Dispatch did not report"),
+                "{unknown:?}"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
 }

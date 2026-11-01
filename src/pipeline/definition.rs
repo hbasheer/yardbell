@@ -214,6 +214,8 @@ pub struct Definition {
     pub trigger: Trigger,
     pub start: String,
     pub steps: Vec<Step>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_limit: Option<u64>,
 }
 
 impl Definition {
@@ -300,6 +302,16 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
     let mut out = Vec::new();
     if def.name.trim().is_empty() {
         out.push("the pipeline needs a name".to_string());
+    }
+    if def
+        .token_limit
+        .is_some_and(|limit| !super::tokens::valid_limit(limit))
+    {
+        out.push(format!(
+            "the token limit must be 0 for none, or from {} to {}",
+            super::tokens::group(super::tokens::LIMIT_MIN),
+            super::tokens::group(super::tokens::LIMIT_MAX)
+        ));
     }
     let known = |name: &str| cfg.machine(name).is_some();
     let source = match &def.trigger {
@@ -748,6 +760,7 @@ pub(crate) mod tests {
             trigger: Trigger::Manual,
             start: steps[0].id.clone(),
             steps,
+            token_limit: None,
         }
     }
 
@@ -851,6 +864,15 @@ pub(crate) mod tests {
         ));
 
         let mut review = agent("review", "Review", MachineChoice::Name("hp".into()));
+        let mut limited = def(vec![plan_step("plan")]);
+        limited.token_limit = Some(500);
+        assert!(problems(&limited)
+            .iter()
+            .any(|p| p.contains("token limit must be 0 for none")));
+        for fine in [0, 1000, 500_000] {
+            limited.token_limit = Some(fine);
+            assert!(!problems(&limited).iter().any(|p| p.contains("token limit")));
+        }
         review.max_runs = 11;
         assert!(problems(&def(vec![review]))
             .contains(&"Review: max_runs must be from 1 to 10".to_string()));

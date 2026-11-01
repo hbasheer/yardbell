@@ -46,6 +46,62 @@ pub fn transcript_lines_command(path: &str, needle: &str) -> String {
     )
 }
 
+// What each of this run's transcripts used, and the agents those sessions started: numbers and
+// file names only. Claude Code writes one line per content block of a reply, each with the reply's
+// usage, so a reply is counted once by its id, and a resumed session that copied it stays once.
+const TOKEN_LINES_AWK: &str = r#"
+function after(line, key,   at) {
+  while ((at = index(line, key)) > 0) line = substr(line, at + length(key));
+  return line;
+}
+function number(text, name) {
+  if (!match(text, "\"" name "\":[0-9]+")) return 0;
+  return substr(text, RSTART + length(name) + 3, RLENGTH - length(name) - 3) + 0;
+}
+function largest(have, n) { return n > have ? n : have; }
+BEGIN { for (i = 1; i < ARGC; i++) file[ARGV[i]] = 1; }
+index($0, "\"type\":\"assistant\"") && index($0, "\"usage\":{") && match($0, /"id":"msg_[^"]*"/) {
+  id = substr($0, RSTART, RLENGTH);
+  usage = after($0, "\"usage\":{");
+  if (!(id in home)) home[id] = FILENAME;
+  input[id] = largest(input[id], number(usage, "input_tokens"));
+  write[id] = largest(write[id], number(usage, "cache_creation_input_tokens"));
+  read[id] = largest(read[id], number(usage, "cache_read_input_tokens"));
+  output[id] = largest(output[id], number(usage, "output_tokens"));
+}
+END {
+  for (id in home) {
+    f = home[id]; a[f] += input[id]; b[f] += write[id]; c[f] += read[id]; d[f] += output[id];
+  }
+  for (f in file) printf "%.0f %.0f %.0f %.0f %s\n", a[f], b[f], c[f], d[f], f;
+}"#;
+
+// `/clear` gives the running agent a new session id and a new transcript, with nothing in it that
+// names the old one. Claude Code keeps the current id in sessions/<pid>.json, so a live session
+// whose current transcript holds none of the run's markers has moved. Only the id's hexadecimal
+// characters leave the file, and that transcript is named, never read for numbers: the id alone
+// cannot tell /clear from /resume, and a resumed transcript holds another session's tokens.
+pub fn token_lines_command(path: &str, markers: &[String], pids: &[u32]) -> String {
+    let needles: Vec<String> = markers.iter().map(|m| format!("-e {}", quote(m))).collect();
+    let pids: Vec<String> = pids.iter().map(u32::to_string).collect();
+    format!(
+        "c=\"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}\"; d=\"$c/projects/$(printf %s {} | sed 's/[^a-zA-Z0-9]/-/g')\"; \
+         cd \"$d\" 2>/dev/null || exit 0; \
+         for p in {}; do \
+         i=$(sed -n 's/.*\"sessionId\"[[:space:]]*:[[:space:]]*\"\\([0-9a-fA-F-]\\{{1,64\\}}\\)\".*/\\1/p' \"$c/sessions/$p.json\" 2>/dev/null | head -n 1); \
+         [ -n \"$i\" ] && [ -f \"$i.jsonl\" ] || continue; \
+         grep -q -F {needles} -- \"$i.jsonl\" || echo \"moved $i.jsonl\"; done; \
+         set --; for f in $(ls -t -- *.jsonl 2>/dev/null | head -n 16); do \
+         grep -q -F {needles} -- \"$f\" || continue; set -- \"$@\" \"$f\"; \
+         for s in $(find \"${{f%.jsonl}}/subagents\" -name '*.jsonl' 2>/dev/null); do set -- \"$@\" \"$s\"; done; done; \
+         [ $# -gt 0 ] || exit 0; awk {} \"$@\"",
+        quote(path),
+        pids.join(" "),
+        quote(TOKEN_LINES_AWK),
+        needles = needles.join(" "),
+    )
+}
+
 // Its size, the start of the newest transcript and then its latest part. A transcript also holds
 // copies of whole API requests, which are skipped, as is any one line too long to send back.
 pub fn work_lines_command(path: &str) -> String {
@@ -311,6 +367,18 @@ impl Sessions {
 
     pub async fn transcript_lines(&self, m: &Machine, path: &str, needle: &str) -> Option<String> {
         self.output(m, &transcript_lines_command(path, needle))
+            .await
+            .ok()
+    }
+
+    pub async fn token_lines(
+        &self,
+        m: &Machine,
+        path: &str,
+        markers: &[String],
+        pids: &[u32],
+    ) -> Option<String> {
+        self.output(m, &token_lines_command(path, markers, pids))
             .await
             .ok()
     }
@@ -582,6 +650,187 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success() && out.stdout.is_empty());
+    }
+
+    fn run_token_lines(home: &std::path::Path, path: &str, markers: &[&str]) -> String {
+        run_token_lines_for(home, path, markers, &[])
+    }
+
+    fn run_token_lines_for(
+        home: &std::path::Path,
+        path: &str,
+        markers: &[&str],
+        pids: &[u32],
+    ) -> String {
+        let markers: Vec<String> = markers.iter().map(|m| m.to_string()).collect();
+        let out = std::process::Command::new("sh")
+            .args(["-c", &token_lines_command(path, &markers, pids)])
+            .env("HOME", home)
+            .env_remove("CLAUDE_CONFIG_DIR")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    // Lines shaped like Claude Code's own: entry fields, then the message with its id before its
+    // content, its usage with the totals before the nested details.
+    fn reply(id: &str, input: u64, output: u64) -> String {
+        format!(
+            "{{\"parentUuid\":\"p\",\"isSidechain\":false,\"message\":{{\"model\":\"m\",\"id\":\"{id}\",\"type\":\"message\",\"role\":\"assistant\",\"content\":[{{\"type\":\"tool_use\",\"id\":\"toolu_1\",\"name\":\"T\",\"input\":{{\"usage\":{{\"input_tokens\":999999}}}}}},{{\"type\":\"text\",\"text\":\"said \\\"input_tokens\\\":777 aloud\"}}],\"usage\":{{\"input_tokens\":{input},\"cache_creation_input_tokens\":100,\"cache_read_input_tokens\":1000,\"output_tokens\":{output},\"cache_creation\":{{\"ephemeral_5m_input_tokens\":100}},\"iterations\":[{{\"input_tokens\":55555,\"output_tokens\":66666}}]}}}},\"type\":\"assistant\",\"uuid\":\"u\"}}\n"
+        )
+    }
+
+    #[test]
+    fn a_transcript_is_counted_once_per_reply_and_says_nothing_else() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/projects/-r-app");
+        std::fs::create_dir_all(&dir).unwrap();
+        let prompt = "{\"type\":\"user\",\"message\":{\"content\":\"secret words step: fix-1-ab12\"},\"toolUseResult\":{\"usage\":{\"input_tokens\":88888}}}\n";
+        let mut main = prompt.to_string();
+        main.push_str(&reply("msg_a", 10, 1));
+        main.push_str(&reply("msg_a", 10, 5));
+        main.push_str(&reply("msg_b", 20, 2));
+        std::fs::write(dir.join("main.jsonl"), &main).unwrap();
+        std::fs::write(dir.join("other.jsonl"), reply("msg_z", 500, 500)).unwrap();
+        let said = run_token_lines(home.path(), "/r/app", &["fix-1-ab12", "fix-2-ab12"]);
+        assert_eq!(
+            crate::pipeline::tokens::parse_lines(&said).files,
+            vec![(
+                "main.jsonl".to_string(),
+                crate::pipeline::tokens::Tokens {
+                    input: 30,
+                    cache_write: 200,
+                    cache_read: 2000,
+                    output: 7
+                }
+            )]
+        );
+        assert!(!said.contains("secret"), "{said}");
+        assert_eq!(run_token_lines(home.path(), "/r/none", &["fix-1-ab12"]), "");
+        assert_eq!(run_token_lines(home.path(), "/r/app", &["nothing-1-x"]), "");
+    }
+
+    #[test]
+    fn a_session_shared_or_resumed_counts_each_reply_once_and_its_agents_too() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/projects/-r-app");
+        let agents = dir.join("two/subagents");
+        std::fs::create_dir_all(&agents).unwrap();
+        let mine = "{\"type\":\"user\",\"text\":\"step: fix-1-ab12 step: review-1-ab12\"}\n";
+        let one = format!("{mine}{}", reply("msg_a", 10, 1));
+        let two = format!("{mine}{}{}", reply("msg_a", 10, 1), reply("msg_b", 20, 2));
+        std::fs::write(dir.join("one.jsonl"), one).unwrap();
+        std::fs::write(dir.join("two.jsonl"), two).unwrap();
+        std::fs::write(agents.join("agent-1.jsonl"), reply("msg_c", 40, 4)).unwrap();
+        let said = run_token_lines(home.path(), "/r/app", &["fix-1-ab12", "review-1-ab12"]);
+        let lines = crate::pipeline::tokens::parse_lines(&said).files;
+        assert_eq!(lines.len(), 3, "{said}");
+        let inputs: u64 = lines.iter().map(|(_, t)| t.input).sum();
+        let outputs: u64 = lines.iter().map(|(_, t)| t.output).sum();
+        assert_eq!((inputs, outputs), (70, 7));
+        assert!(lines
+            .iter()
+            .any(|(f, _)| f == "two/subagents/agent-1.jsonl"));
+    }
+
+    #[test]
+    fn a_transcript_with_no_reply_yet_is_found_with_nothing_used() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/projects/-r-app");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.jsonl"), "{\"text\":\"fix-1-ab12\"}\n").unwrap();
+        let said = run_token_lines(home.path(), "/r/app", &["fix-1-ab12"]);
+        assert_eq!(said, "0 0 0 0 a.jsonl\n");
+    }
+
+    // Shaped like a real session file on this machine: one compact line, with hostSessionId and
+    // other fields beside the id.
+    fn pid_file(home: &std::path::Path, pid: u32, id: &str) {
+        let dir = home.join(".claude/sessions");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(format!("{pid}.json")),
+            format!("{{\"pid\":{pid},\"sessionId\":\"{id}\",\"cwd\":\"/r/app\",\"hostSessionId\":\"99999999\",\"name\":\"secret name\"}}"),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn a_live_session_on_a_transcript_with_no_marker_is_named_and_not_counted() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/projects/-r-app");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mine = format!(
+            "{{\"text\":\"step: fix-1-ab12\"}}\n{}",
+            reply("msg_a", 10, 1)
+        );
+        std::fs::write(dir.join("aaaa-1111.jsonl"), mine).unwrap();
+        std::fs::write(
+            dir.join("bbbb-2222.jsonl"),
+            format!(
+                "{{\"text\":\"secret words\"}}\n{}",
+                reply("msg_b", 500, 500)
+            ),
+        )
+        .unwrap();
+        let markers = ["fix-1-ab12"];
+
+        pid_file(home.path(), 41, "aaaa-1111");
+        let said = run_token_lines_for(home.path(), "/r/app", &markers, &[41]);
+        assert!(
+            !said.contains("moved"),
+            "still on its own transcript: {said}"
+        );
+
+        pid_file(home.path(), 41, "bbbb-2222");
+        let said = run_token_lines_for(home.path(), "/r/app", &markers, &[41]);
+        let read = crate::pipeline::tokens::parse_lines(&said);
+        assert_eq!(read.moved, vec!["bbbb-2222.jsonl"], "{said}");
+        assert_eq!(read.files.len(), 1, "{said}");
+        assert_eq!(read.files[0].0, "aaaa-1111.jsonl");
+        assert_eq!(
+            read.files[0].1.input, 10,
+            "the other transcript is not counted"
+        );
+        assert!(!said.contains("secret"), "{said}");
+        for line in said.lines() {
+            assert!(
+                line.ends_with(".jsonl")
+                    && line
+                        .split(' ')
+                        .rev()
+                        .skip(1)
+                        .all(|w| w == "moved" || w.parse::<u64>().is_ok()),
+                "only numbers and file names: {line}"
+            );
+        }
+
+        let quiet = run_token_lines_for(home.path(), "/r/app", &markers, &[]);
+        assert!(!quiet.contains("moved"), "no live session to ask about");
+        let gone = run_token_lines_for(home.path(), "/r/app", &markers, &[77]);
+        assert!(!gone.contains("moved"), "no session file, nothing known");
+        pid_file(home.path(), 41, "cccc-3333");
+        let fresh = run_token_lines_for(home.path(), "/r/app", &markers, &[41]);
+        assert!(
+            !fresh.contains("moved"),
+            "no transcript yet, so nothing used yet"
+        );
+    }
+
+    #[test]
+    fn a_session_file_that_is_not_an_id_sends_nothing_back() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/projects/-r-app");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("a.jsonl"), "{\"text\":\"fix-1-ab12\"}\n").unwrap();
+        pid_file(home.path(), 41, "../../secret; echo owned");
+        let said = run_token_lines_for(home.path(), "/r/app", &["fix-1-ab12"], &[41]);
+        assert_eq!(said, "0 0 0 0 a.jsonl\n");
     }
 
     #[test]

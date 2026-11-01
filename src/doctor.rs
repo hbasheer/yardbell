@@ -106,6 +106,20 @@ pub fn pipelines_lines(
     let mut lines = Vec::new();
     for def in defs.iter().filter(|d| d.enabled) {
         let name = &def.name;
+        if let Some(limit) = crate::pipeline::tokens::limit_for(def, &cfg.pipelines) {
+            let limit = crate::pipeline::tokens::group(limit);
+            for s in &def.steps {
+                let StepKind::Agent { agent, .. } = &s.kind else {
+                    continue;
+                };
+                if !cfg.agent_reports_tokens(agent) {
+                    lines.push((false, format!(
+                        "{name}: {} cannot report tokens, so a run waits for you before it. The limit of {limit} cannot be checked for that step",
+                        s.name
+                    )));
+                }
+            }
+        }
         for id in connectors_of(def) {
             match connectors.iter().find(|(c, _)| c == &id) {
                 Some((_, Ok(n))) => lines.push((true, format!("{name}: {id} answers, {n} items"))),
@@ -396,6 +410,28 @@ mod tests {
                 "tool: sign in again under Settings, Connections".to_string()
             )]
         );
+    }
+
+    #[test]
+    fn doctor_names_a_limited_pipelines_agent_that_cannot_report() {
+        let mut cfg = crate::pipeline::definition::tests::cfg();
+        cfg.default_agent = Some("codex".into());
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        let lines = |cfg: &Config, def: &Definition| {
+            pipelines_lines(cfg, std::slice::from_ref(def), &None, &[], &[], &[], &[])
+        };
+        let says = |lines: &[(bool, String)]| {
+            lines
+                .iter()
+                .any(|(ok, text)| !ok && text.contains("cannot report tokens"))
+        };
+        assert!(!says(&lines(&cfg, &def)), "no limit, nothing to say");
+        def.token_limit = Some(5000);
+        let warned = lines(&cfg, &def);
+        assert!(says(&warned), "{warned:?}");
+        cfg.default_agent = Some("claude".into());
+        assert!(!says(&lines(&cfg, &def)), "Claude Code reports");
     }
 
     #[test]

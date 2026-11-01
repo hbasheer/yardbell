@@ -169,6 +169,8 @@ pub enum WaitKind {
     Questions,
     Push,
     ToolChanged,
+    TokenLimit,
+    TokenUnknown,
 }
 
 impl WaitKind {
@@ -247,6 +249,7 @@ pub struct Run {
     pub pull: Option<PullRef>,
     pub notes: Vec<String>,
     pub report: String,
+    pub tokens: super::tokens::TokenUse,
 }
 
 impl Run {
@@ -359,6 +362,17 @@ pub enum Seen {
         reason: String,
         shown: String,
     },
+    TokensRead {
+        found: Vec<(String, super::tokens::Tokens)>,
+        known: Vec<String>,
+        unknown: Vec<(String, String)>,
+        ending: bool,
+    },
+    TokenBlind {
+        step: String,
+        why: String,
+    },
+    RaiseLimit(u64),
     AcceptTool,
     Answer(String),
     Retry,

@@ -32,6 +32,8 @@ pub(super) struct Stored {
     pub(super) sessions: Vec<follow::Tracked>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(super) trigger: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(super) tokens: Option<crate::pipeline::tokens::Tokens>,
 }
 
 pub(super) struct Conversation {
