@@ -46,6 +46,39 @@ pub fn transcript_lines_command(path: &str, needle: &str) -> String {
     )
 }
 
+pub const RESULT_FOLDER: &str = "yardbell-result";
+pub const RESULT_FILE_MAX: usize = 64 * 1024;
+
+// The agent writes this file, so it is not followed through a link, and a pipe would never end.
+// One byte over the limit comes back, so a file that is too long can be told from one that fits.
+pub fn result_file_command(path: &str, name: &str) -> String {
+    format!(
+        "cd {} 2>/dev/null || exit 0; \
+         f=$(git rev-parse --git-path {} 2>/dev/null) || exit 0; \
+         if [ -L \"${{f%/*}}\" ] || [ -L \"$f\" ] || [ ! -f \"$f\" ]; then exit 0; fi; \
+         head -c {} -- \"$f\" 2>/dev/null; true",
+        quote(path),
+        quote(&format!("{RESULT_FOLDER}/{name}")),
+        RESULT_FILE_MAX + 1
+    )
+}
+
+// Only the files named, and the folder once it is empty, so another run's stay.
+pub fn remove_result_files_command(path: &str, names: &[String]) -> String {
+    let files: Vec<String> = names
+        .iter()
+        .map(|name| format!("\"$d\"/{}", quote(name)))
+        .collect();
+    format!(
+        "cd {} 2>/dev/null || exit 0; \
+         d=$(git rev-parse --git-path {RESULT_FOLDER} 2>/dev/null) || exit 0; \
+         if [ -L \"$d\" ] || [ ! -d \"$d\" ]; then exit 0; fi; \
+         rm -f -- {} 2>/dev/null; rmdir -- \"$d\" 2>/dev/null; true",
+        quote(path),
+        files.join(" ")
+    )
+}
+
 // Its size, the start of the newest transcript and then its latest part. A transcript also holds
 // copies of whole API requests, which are skipped, as is any one line too long to send back.
 pub fn work_lines_command(path: &str) -> String {
@@ -315,6 +348,20 @@ impl Sessions {
             .ok()
     }
 
+    pub async fn result_file(&self, m: &Machine, path: &str, name: &str) -> Option<String> {
+        self.output(m, &result_file_command(path, name)).await.ok()
+    }
+
+    pub async fn remove_result_files(
+        &self,
+        m: &Machine,
+        path: &str,
+        names: &[String],
+    ) -> Result<(), String> {
+        self.exec(m, &remove_result_files_command(path, names))
+            .await
+    }
+
     pub async fn work_lines(&self, m: &Machine, path: &str) -> Option<String> {
         self.output(m, &work_lines_command(path)).await.ok()
     }
@@ -582,6 +629,134 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success() && out.stdout.is_empty());
+    }
+
+    fn shell(script: &str) -> String {
+        let out = std::process::Command::new("sh")
+            .args(["-c", script])
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{script}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) -> String {
+        let out = std::process::Command::new("git")
+            .args(["-c", "user.name=y", "-c", "user.email=y@y"])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(out.status.success(), "{args:?}");
+        String::from_utf8_lossy(&out.stdout).trim().to_string()
+    }
+
+    // A repository and a linked worktree of it, with the worktree's result folder made.
+    fn result_rig() -> (tempfile::TempDir, std::path::PathBuf, std::path::PathBuf) {
+        let top = tempfile::tempdir().unwrap();
+        let main = top.path().join("main");
+        std::fs::create_dir(&main).unwrap();
+        git(&main, &["init", "-q"]);
+        git(&main, &["commit", "-q", "--allow-empty", "-m", "first"]);
+        let tree = top.path().join("it's a tree");
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                tree.to_str().unwrap(),
+                "-b",
+                "work",
+            ],
+        );
+        let folder = std::path::PathBuf::from(git(
+            &tree,
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                RESULT_FOLDER,
+            ],
+        ));
+        std::fs::create_dir_all(&folder).unwrap();
+        (top, tree, folder)
+    }
+
+    #[test]
+    fn a_result_file_is_read_from_the_worktrees_own_git_folder() {
+        let (_top, tree, folder) = result_rig();
+        let path = tree.to_str().unwrap();
+        assert_eq!(shell(&result_file_command(path, "s-1-ab")), "");
+        std::fs::write(folder.join("s-1-ab"), "the block").unwrap();
+        assert_eq!(shell(&result_file_command(path, "s-1-ab")), "the block");
+        assert_eq!(shell(&result_file_command(path, "s-2-ab")), "");
+        assert!(
+            folder.to_str().unwrap().contains("/.git/worktrees/"),
+            "{folder:?}"
+        );
+        assert_eq!(git(&tree, &["status", "--porcelain"]), "");
+        assert_eq!(shell(&result_file_command("/no/such/folder", "s-1-ab")), "");
+    }
+
+    #[test]
+    fn a_result_file_is_refused_through_a_link_or_as_a_pipe() {
+        let (top, tree, folder) = result_rig();
+        let path = tree.to_str().unwrap();
+        let secret = top.path().join("secret");
+        std::fs::write(&secret, "a secret").unwrap();
+        std::os::unix::fs::symlink(&secret, folder.join("s-1-ab")).unwrap();
+        assert_eq!(shell(&result_file_command(path, "s-1-ab")), "");
+
+        std::fs::remove_file(folder.join("s-1-ab")).unwrap();
+        shell(&format!(
+            "mkfifo {}",
+            quote(folder.join("s-1-ab").to_str().unwrap())
+        ));
+        assert_eq!(shell(&result_file_command(path, "s-1-ab")), "");
+
+        std::fs::remove_file(folder.join("s-1-ab")).unwrap();
+        std::fs::remove_dir(&folder).unwrap();
+        let elsewhere = top.path().join("elsewhere");
+        std::fs::create_dir(&elsewhere).unwrap();
+        std::fs::write(elsewhere.join("s-1-ab"), "a secret").unwrap();
+        std::os::unix::fs::symlink(&elsewhere, &folder).unwrap();
+        assert_eq!(shell(&result_file_command(path, "s-1-ab")), "");
+        let names = vec!["s-1-ab".to_string()];
+        shell(&remove_result_files_command(path, &names));
+        assert!(
+            elsewhere.join("s-1-ab").exists(),
+            "nothing followed the link"
+        );
+    }
+
+    #[test]
+    fn a_long_result_file_comes_back_one_byte_over_the_limit() {
+        let (_top, tree, folder) = result_rig();
+        std::fs::write(folder.join("s-1-ab"), "x".repeat(RESULT_FILE_MAX * 2)).unwrap();
+        let read = shell(&result_file_command(tree.to_str().unwrap(), "s-1-ab"));
+        assert_eq!(read.len(), RESULT_FILE_MAX + 1);
+    }
+
+    #[test]
+    fn removing_result_files_touches_only_the_ones_named() {
+        let (_top, tree, folder) = result_rig();
+        let path = tree.to_str().unwrap();
+        for file in ["s-1-ab", "s-2-ab", "s-1-other"] {
+            std::fs::write(folder.join(file), "x").unwrap();
+        }
+        let names = vec!["s-1-ab".to_string(), "s-2-ab".to_string()];
+        shell(&remove_result_files_command(path, &names));
+        assert!(!folder.join("s-1-ab").exists() && !folder.join("s-2-ab").exists());
+        assert!(folder.join("s-1-other").exists(), "another run's stays");
+
+        shell(&remove_result_files_command(
+            path,
+            &["s-1-other".to_string()],
+        ));
+        assert!(!folder.exists(), "an empty folder goes");
+        shell(&remove_result_files_command(path, &names));
+        shell(&remove_result_files_command("/no/such/folder", &names));
     }
 
     #[test]

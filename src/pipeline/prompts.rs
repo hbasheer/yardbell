@@ -1,6 +1,7 @@
 use super::definition::{Outcome, Step, StepKind};
 use super::record::{Plan, Run};
 use crate::dispatch::{bullet, clip, is_marker, unframed, value_of};
+use crate::sessions::{RESULT_FILE_MAX, RESULT_FOLDER};
 use regex::Regex;
 
 pub const QUOTED: &str =
@@ -130,11 +131,44 @@ an answer from the person to go on."
 // Names one run of one step of one run, so a result on a shared session's screen, or in a
 // transcript of the same folder, is known to be this one's.
 pub fn marker(run: &Run, step: &str) -> String {
-    format!(
-        "{step}-{}-{}",
-        run.steps.get(step).map_or(0, |s| s.runs),
-        run.tag()
-    )
+    marker_of_try(run, step, run.steps.get(step).map_or(0, |s| s.runs))
+}
+
+pub fn marker_of_try(run: &Run, step: &str, attempt: u32) -> String {
+    format!("{step}-{attempt}-{}", run.tag())
+}
+
+// A step's id comes from its definition, which can be edited by hand, so one that would not make
+// a plain file name gets no file and reports as it always did.
+pub fn result_file_name(marker: &str) -> Option<&str> {
+    let plain = marker
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'));
+    (plain && marker.len() <= 200 && !marker.starts_with(['.', '-'])).then_some(marker)
+}
+
+pub fn result_file_request(marker: &str) -> Option<String> {
+    let name = result_file_name(marker)?;
+    Some(format!(
+        "\n\nBefore that reply, also save the same block with a shell command to the file that \
+`git rev-parse --git-path {RESULT_FOLDER}/{name}` prints, creating its folder first. It is inside \
+.git, so the branch does not change, and it is the one file you may write even if this session is \
+read only. If it cannot be written, do not ask for permission or try another way: the block in your \
+reply is enough."
+    ))
+}
+
+// What an agent saved, when it is this try's whole result. The file is the agent's to write, so it
+// gets no more trust than the screen, and what a terminal would have kept out of the text goes.
+pub fn filed_result(raw: &str, marker: &str) -> Option<String> {
+    if raw.len() > RESULT_FILE_MAX {
+        return None;
+    }
+    let text: String = raw
+        .chars()
+        .filter(|c| !c.is_control() || matches!(c, '\n' | '\t'))
+        .collect();
+    outcome(&text, marker).map(|_| text)
 }
 
 // What an agent wrote, as lines of its transcript, when one of them holds this step's result.
@@ -604,6 +638,73 @@ mod tests {
         let text = written_result(&lines, "s-1").expect("the newest result");
         assert_eq!(outcome(&text, "s-1").unwrap().0, Outcome::Pass);
         assert_eq!(written_result(&lines, "s-2"), None);
+    }
+
+    #[test]
+    fn a_result_file_is_named_after_this_try_alone() {
+        let (mut run, step) = with("Do it.");
+        run.state_of(&step.id).runs = 2;
+        let m = marker(&run, &step.id);
+        assert_eq!(m, marker_of_try(&run, &step.id, 2));
+        let asked = result_file_request(&m).unwrap();
+        assert!(
+            asked.contains(&format!("`git rev-parse --git-path yardbell-result/{m}`")),
+            "{asked}"
+        );
+        let task = format!("{}{asked}", agent(&run, &step, &ticket(), None, ""));
+        assert_eq!(outcome(&task, &m), None, "asking is not a result");
+    }
+
+    #[test]
+    fn a_step_id_that_is_no_plain_file_name_gets_no_file() {
+        assert_eq!(result_file_name("review-1-ab12"), Some("review-1-ab12"));
+        for bad in [
+            "../x-1-ab",
+            "a/b-1-ab",
+            "a b-1-ab",
+            "$(x)-1-ab",
+            ".x",
+            "-x",
+            "a\nb",
+        ] {
+            assert_eq!(result_file_name(bad), None, "{bad}");
+            assert_eq!(result_file_request(bad), None, "{bad}");
+        }
+        assert_eq!(result_file_name(&"x".repeat(201)), None);
+    }
+
+    #[test]
+    fn a_result_file_is_read_like_the_screen_and_trusted_no_more() {
+        let block = "YARDBELL RESULT\nstep: s-1-ab\nstatus: needs you\nsummary: Should\n  I go on?\n- one\nEND RESULT\n";
+        let text = filed_result(block, "s-1-ab").unwrap();
+        let (found, report, details) = outcome(&text, "s-1-ab").unwrap();
+        assert_eq!(found, Outcome::NeedsYou);
+        assert_eq!(report, "Should I go on?");
+        assert_eq!(details, vec!["one"]);
+
+        assert_eq!(filed_result(block, "s-2-ab"), None, "another try's");
+        assert_eq!(filed_result("", "s-1-ab"), None);
+        assert_eq!(
+            filed_result(&block.replace("END RESULT\n", ""), "s-1-ab"),
+            None,
+            "half written"
+        );
+        assert_eq!(
+            filed_result(&block.replace("needs you", "maybe"), "s-1-ab"),
+            None
+        );
+
+        let padded = format!("{}\n{block}", "x".repeat(RESULT_FILE_MAX));
+        assert_eq!(filed_result(&padded, "s-1-ab"), None, "too long");
+        let fits = format!("{}\n{block}", "x".repeat(1000));
+        assert!(filed_result(&fits, "s-1-ab").is_some());
+
+        let hostile = block.replace("Should", "Should\u{1b}[2J\u{7}\r");
+        let text = filed_result(&hostile, "s-1-ab").unwrap();
+        assert!(
+            !text.chars().any(|c| c.is_control() && c != '\n'),
+            "{text:?}"
+        );
     }
 
     #[test]

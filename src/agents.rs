@@ -37,6 +37,31 @@ impl Agent {
         }
     }
 
+    // Whether this agent can save a step's result inside .git without stopping at a prompt. Claude
+    // Code asks before any write to .git unless permissions are bypassed, whatever its allow rules
+    // say, and Codex's sandboxes keep it inside the workspace, so those two are only asked when
+    // their command turns that off. A read-only Codex is never asked to go beyond its sandbox.
+    pub fn saves_result_file(&self, read_only: bool) -> bool {
+        let has = |flags: &[&str]| self.command.split_whitespace().any(|w| flags.contains(&w));
+        match self.process_name().as_str() {
+            "claude" => has(&[
+                "--dangerously-skip-permissions",
+                "bypassPermissions",
+                "--permission-mode=bypassPermissions",
+            ]),
+            "codex" => {
+                !read_only
+                    && has(&[
+                        "--dangerously-bypass-approvals-and-sandbox",
+                        "--yolo",
+                        "danger-full-access",
+                        "--sandbox=danger-full-access",
+                    ])
+            }
+            _ => true,
+        }
+    }
+
     pub fn with_prompt(&self, prompt: &str) -> Result<String, String> {
         let Some(arg) = &self.prompt_arg else {
             return Err(format!(
@@ -229,6 +254,23 @@ mod tests {
         assert_eq!(flags("gemini"), None);
         let custom = agent("codex", "/opt/bin/codex --full-auto", "codex resume --last");
         assert_eq!(custom.read_only_flags(), Some("--sandbox read-only"));
+    }
+
+    #[test]
+    fn a_result_file_is_only_asked_of_an_agent_that_will_not_stop_for_it() {
+        let saves =
+            |command: &str, read_only: bool| agent("x", command, "x").saves_result_file(read_only);
+        assert!(!saves("claude", false));
+        assert!(!saves("claude", true));
+        assert!(!saves("claude --allow-dangerously-skip-permissions", true));
+        assert!(saves("claude --dangerously-skip-permissions", true));
+        assert!(saves("claude --permission-mode bypassPermissions", false));
+        assert!(!saves("codex", false));
+        assert!(!saves("codex --full-auto", false));
+        assert!(saves("codex --sandbox danger-full-access", false));
+        assert!(!saves("codex --yolo", true));
+        assert!(saves("gemini", true));
+        assert!(saves("aider", false));
     }
 
     #[test]

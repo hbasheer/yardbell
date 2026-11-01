@@ -550,6 +550,27 @@ Code it also reads the session's transcript in `~/.claude/projects`, because age
 alternate screen, where only what fits in the pane can be seen. A long result, a small terminal or a
 view scrolled up cannot hide it there.
 
+**Result files.** So a result never has to fit on the screen, the task also asks the agent to save the
+same block with a shell command to the file that `git rev-parse --git-path yardbell-result/<step line>`
+prints. That is inside the worktree's git folder, so the branch does not change. When the agent goes
+quiet, Yardbell reads the file first, then the screen, then the transcript. The `step:` line must still
+match, so an old file or another try's file is never accepted. The file is read the same way as the
+screen and trusted no more: it is limited to 64 KB, a symbolic link is refused, and one that does not
+hold up is ignored. An agent that does not write it reports as it always did. When the run ends, its
+own files are removed, and the folder too once it is empty, whoever else works in that worktree.
+
+Whether the task asks for the file depends on the agent, since asking must not stop a step at a prompt
+or take an agent past its read-only limit:
+
+| Agent | Asked for the file? |
+|---|---|
+| Claude Code | Only when its command turns permissions off, with `--dangerously-skip-permissions` or `--permission-mode bypassPermissions`. In every other mode it prompts before any write to `.git`, whatever your allow rules say, and the transcript already has its result. A reviewer's `--disallowed-tools` does not block shell commands, so a reviewer can write it. |
+| Codex | Only when not read only and its command has `--sandbox danger-full-access`, `--yolo` or `--dangerously-bypass-approvals-and-sandbox`. Its result is otherwise read from the screen. `--sandbox read-only` blocks the write, so a read-only Codex is never asked. |
+| Any other agent | Always, also when read only, since those are read only by instruction. An agent that asks before running a shell command will ask here too, and the run waits for you as it does for any other prompt. |
+
+A permission mode set in a settings file rather than in the command cannot be seen, so that agent is not
+asked and reports as before.
+
 If a step goes quiet with no result, it gets one more try after a 2 minute wait: a reviewer is asked to
 print its result again, and a writer gets its task again. After that the run waits and says **ended
 without a result**, and **Show terminal** shows what the agent did. Your **Retry step** starts a
@@ -648,8 +669,9 @@ pipelines:
 
 - Plan can only pick a folder a machine already has; otherwise it says so and waits.
 - An agent step reports through its result block. One that ends without it gets one more try, then
-  waits for you. Only Claude Code's result is also read from its transcript; other agents' results
-  must fit on the terminal's screen.
+  waits for you. Only Claude Code's result is also read from its transcript. An agent that is not asked
+  for a result file, or does not write one, and has no transcript must fit its result on the terminal's
+  screen. **Result files** under [How a run works](#how-a-run-works) says which agents are asked.
 
 ## Connectors
 

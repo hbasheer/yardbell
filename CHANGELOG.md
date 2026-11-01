@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Results in a file.** A pipeline step's task now also asks the agent to save its result block to a
+  file in the worktree's git folder, so a long result no longer has to fit on the screen. The screen
+  and the transcript still work for an agent that does not write it. Claude Code is only asked when its
+  command turns permissions off, and Codex when it has full access and is not read only, so neither
+  stops at a new prompt. See `docs/automation.md`.
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
   in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
   common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have

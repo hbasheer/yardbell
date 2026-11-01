@@ -84,6 +84,19 @@ pub trait World: Send + Sync {
         path: &'a str,
         marker: &'a str,
     ) -> BoxFuture<'a, Option<String>>;
+    fn saves_result_file(&self, agent: &str, read_only: bool) -> bool;
+    fn result_file<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        name: &'a str,
+    ) -> BoxFuture<'a, Option<String>>;
+    fn remove_result_files<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        names: &'a [String],
+    ) -> BoxFuture<'a, Result<(), String>>;
     fn teardown<'a>(
         &'a self,
         machine: &'a str,
@@ -230,6 +243,53 @@ fn agent_of(step: &Step) -> Option<(&str, bool)> {
     }
 }
 
+fn saves_result(world: &dyn World, step: &Step) -> bool {
+    agent_of(step).is_some_and(|(agent, read_only)| world.saves_result_file(agent, read_only))
+}
+
+fn asking_for_file(world: &dyn World, step: &Step, marker: &str, mut text: String) -> String {
+    if saves_result(world, step) {
+        text.push_str(&prompts::result_file_request(marker).unwrap_or_default());
+    }
+    text
+}
+
+// This try's saved result, when its agent was asked for one and it holds up.
+pub async fn filed_result(
+    world: &dyn World,
+    run: &Run,
+    machine: &str,
+    path: &str,
+    marker: &str,
+) -> Option<String> {
+    let step = run.def().step(&run.step)?;
+    if !saves_result(world, step) {
+        return None;
+    }
+    let name = prompts::result_file_name(marker)?;
+    let raw = world.result_file(machine, path, name).await?;
+    prompts::filed_result(&raw, marker)
+}
+
+// Every file this run's agents were asked to save, by the folder each is in. The names hold the
+// run's tag and try, so they are this run's alone whoever else works in the folder.
+fn result_files(world: &dyn World, run: &Run) -> Vec<((String, String), Vec<String>)> {
+    let mut found: std::collections::BTreeMap<(String, String), Vec<String>> = Default::default();
+    for step in run.def().steps.iter().filter(|s| saves_result(world, s)) {
+        let Some(st) = run.steps.get(&step.id).filter(|st| !st.path.is_empty()) else {
+            continue;
+        };
+        let names = (1..=st.runs)
+            .map(|attempt| prompts::marker_of_try(run, &step.id, attempt))
+            .filter(|m| prompts::result_file_name(m).is_some());
+        found
+            .entry((st.machine.clone(), st.path.clone()))
+            .or_default()
+            .extend(names);
+    }
+    found.into_iter().filter(|(_, n)| !n.is_empty()).collect()
+}
+
 // The session this step can type into instead of starting one: the run's newest live session on
 // the same machine, with the same agent and the same read-only setting, which cannot change in a
 // running agent. A reviewer run again never reuses its own.
@@ -315,7 +375,9 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
         .cloned()
         .unwrap_or_else(|| world.notes(&run.place.folder));
     let answer = Some(state.answer.as_str()).filter(|a| !a.is_empty());
-    let prompt = prompts::agent(run, step, &text, answer, &notes);
+    let marker = prompts::marker(run, &step.id);
+    let task = prompts::agent(run, step, &text, answer, &notes);
+    let prompt = asking_for_file(world, step, &marker, task);
     let view = world.view();
     let machine = state.machine.clone();
     if let Some(shared) = shared_session(run, &view, step, &machine) {
@@ -349,7 +411,7 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
                 if old.activity != crate::snapshot::Activity::Idle {
                     return vec![];
                 }
-                let text = prompts::result_reminder(&prompts::marker(run, &step.id));
+                let text = asking_for_file(world, step, &marker, prompts::result_reminder(&marker));
                 let input = json!({ "machine": old.machine, "name": state.session, "text": text });
                 return match run_step(world, run, "send_to_session", input).await {
                     Ok(_) => vec![Seen::Sent(Ok(()))],
@@ -746,6 +808,11 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                     problems.push(format!("{name} on {machine} did not stop: {e}"));
                 }
             }
+            for ((machine, path), names) in result_files(world, run) {
+                if let Err(e) = world.remove_result_files(&machine, &path, &names).await {
+                    problems.push(format!("Result files stayed in {path}: {e}"));
+                }
+            }
             let mut places: Vec<(&str, &str, &str)> = run
                 .steps
                 .values()
@@ -1006,6 +1073,44 @@ impl World for Live {
             .into_iter()
             .filter(|r| r.id != id)
             .collect()
+    }
+
+    fn saves_result_file(&self, agent: &str, read_only: bool) -> bool {
+        let name = if agent.is_empty() {
+            self.cfg.default_agent()
+        } else {
+            agent
+        };
+        self.cfg
+            .agent(name)
+            .is_some_and(|a| a.saves_result_file(read_only))
+    }
+
+    fn result_file<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        name: &'a str,
+    ) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let m = self.cfg.machine(machine)?;
+            self.app.sessions.result_file(m, path, name).await
+        })
+    }
+
+    fn remove_result_files<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        names: &'a [String],
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let m = self
+                .cfg
+                .machine(machine)
+                .ok_or_else(|| format!("{machine} is not a machine"))?;
+            self.app.sessions.remove_result_files(m, path, names).await
+        })
     }
 
     fn teardown<'a>(

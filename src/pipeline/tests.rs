@@ -35,6 +35,11 @@ pub(crate) struct Fake {
     pub stop_fails: Mutex<bool>,
     pub hold_stops: Mutex<Option<std::sync::Arc<tokio::sync::Semaphore>>>,
     pub transcript: Mutex<HashMap<String, String>>,
+    pub no_result_file: Mutex<bool>,
+    pub result_files: Mutex<HashMap<String, String>>,
+    pub result_file_reads: Mutex<u32>,
+    pub removed_results: Mutex<Vec<(String, String, Vec<String>)>>,
+    pub remove_results_fails: Mutex<bool>,
     pub recorded_inputs: Mutex<Vec<Value>>,
     pub call_kind: Mutex<Option<Result<crate::connectors::CallKind, String>>>,
     pub call_vars: Mutex<Vec<crate::connectors::client::Vars>>,
@@ -329,6 +334,41 @@ impl World for Fake {
     fn notify(&self, kind: super::run::Note, text: &str, _run: &Run) {
         self.note_kinds.lock().unwrap().push(kind);
         self.notes.lock().unwrap().push(text.into());
+    }
+
+    fn saves_result_file(&self, _agent: &str, _read_only: bool) -> bool {
+        !*self.no_result_file.lock().unwrap()
+    }
+
+    fn result_file<'a>(
+        &'a self,
+        _machine: &'a str,
+        _path: &'a str,
+        name: &'a str,
+    ) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            *self.result_file_reads.lock().unwrap() += 1;
+            self.result_files.lock().unwrap().get(name).cloned()
+        })
+    }
+
+    fn remove_result_files<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        names: &'a [String],
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            self.removed_results.lock().unwrap().push((
+                machine.to_string(),
+                path.to_string(),
+                names.to_vec(),
+            ));
+            if *self.remove_results_fails.lock().unwrap() {
+                return Err("hp did not answer in time".to_string());
+            }
+            Ok(())
+        })
     }
 
     fn teardown<'a>(
@@ -721,6 +761,89 @@ async fn teardown_runs_once_per_folder() {
     let mut did = fake.teardowns.lock().unwrap().clone();
     did.sort();
     assert_eq!(did, vec!["devbox:/r/copy", "hp:/r/main"]);
+}
+
+#[tokio::test]
+async fn the_end_of_a_run_removes_each_tries_result_file_and_no_other() {
+    let fake = Fake::default();
+    let mut run = engine::tests::run_of("Implement my tickets");
+    let tag = run.tag().to_string();
+    let st = run.state_of("implement");
+    (st.machine, st.path, st.runs) = ("hp".into(), "/r/app".into(), 2);
+    let st = run.state_of("review");
+    (st.machine, st.path, st.runs) = ("hp".into(), "/r/app".into(), 1);
+    let st = run.state_of("fix");
+    (st.machine, st.path, st.runs) = ("mini".into(), "/m/app".into(), 1);
+    let st = run.state_of("never-started");
+    st.runs = 1;
+    assert_eq!(stop_all(&fake, &run).await, None);
+    let mut removed = fake.removed_results.lock().unwrap().clone();
+    removed.iter_mut().for_each(|r| r.2.sort());
+    assert_eq!(
+        removed,
+        vec![
+            (
+                "hp".to_string(),
+                "/r/app".to_string(),
+                vec![
+                    format!("implement-1-{tag}"),
+                    format!("implement-2-{tag}"),
+                    format!("review-1-{tag}"),
+                ],
+            ),
+            (
+                "mini".to_string(),
+                "/m/app".to_string(),
+                vec![format!("fix-1-{tag}")]
+            ),
+        ]
+    );
+}
+
+#[tokio::test]
+async fn result_files_that_cannot_be_removed_are_told_and_end_the_run() {
+    let fake = Fake::default();
+    *fake.remove_results_fails.lock().unwrap() = true;
+    let mut run = engine::tests::run_of("Implement my tickets");
+    let st = run.state_of("implement");
+    (st.machine, st.path, st.runs) = ("hp".into(), "/r/app".into(), 1);
+    let said = stop_all(&fake, &run).await.unwrap();
+    assert!(said.contains("Result files stayed in /r/app"), "{said}");
+}
+
+#[tokio::test]
+async fn no_result_file_was_asked_for_so_none_is_removed() {
+    let fake = Fake::default();
+    *fake.no_result_file.lock().unwrap() = true;
+    let mut run = engine::tests::run_of("Implement my tickets");
+    let st = run.state_of("implement");
+    (st.machine, st.path, st.runs) = ("hp".into(), "/r/app".into(), 1);
+    assert_eq!(stop_all(&fake, &run).await, None);
+    assert!(fake.removed_results.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_task_asks_for_the_file_only_of_an_agent_that_can_save_it() {
+    for (no_file, asked) in [(false, true), (true, false)] {
+        let fake = Fake::default();
+        *fake.no_result_file.lock().unwrap() = no_file;
+        let mut run = engine::tests::run_of("Implement my tickets");
+        let st = run.state_of("implement");
+        st.machine = "hp".into();
+        st.runs = 1;
+        let m = marker(&run, "implement");
+        let effect = Effect::Agent {
+            step: "implement".into(),
+        };
+        act(&fake, &Pipelines::default(), &run, &effect).await;
+        let calls = fake.calls().join("\n");
+        assert_eq!(
+            calls.contains(&format!("--git-path yardbell-result/{m}")),
+            asked,
+            "{calls}"
+        );
+        assert!(calls.contains(&format!("step: {m}")), "{calls}");
+    }
 }
 
 #[tokio::test]
@@ -1156,6 +1279,10 @@ async fn a_quiet_reviewer_is_asked_for_its_result_not_stopped() {
         sent.contains("hp-review") && sent.contains("review-1-r1"),
         "{sent}"
     );
+    assert!(
+        sent.contains("--git-path yardbell-result/review-1-r1"),
+        "{sent}"
+    );
 }
 
 #[tokio::test]
@@ -1545,6 +1672,124 @@ mod pipelines {
         let run = p.run(&id).unwrap();
         assert_eq!(run.steps["review"].outcome, Some(Outcome::Pass));
         assert_eq!(run.steps["review"].report, "Reviewed it.");
+    }
+
+    fn quiet_review(p: &Pipelines) -> (String, String, Arc<Fake>) {
+        let def = p
+            .library()
+            .copy_template("Implement my tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.step = "review".into();
+        run.state = RunState::Running;
+        run.pending = None;
+        run.step_since = chrono::Local::now().to_rfc3339();
+        let st = run.state_of("review");
+        st.session = "hp-review".into();
+        st.machine = "hp".into();
+        st.runs = 1;
+        let marker = marker(&run, "review");
+        let id = run.id.clone();
+        p.put(run);
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-review", "b", Activity::Idle);
+        fake.screens
+            .lock()
+            .unwrap()
+            .insert("hp-review".into(), "❯".into());
+        (id, marker, fake)
+    }
+
+    #[tokio::test]
+    async fn a_result_file_comes_before_the_screen_and_the_transcript() {
+        let (p, _dir) = pipelines();
+        let (id, marker, fake) = quiet_review(&p);
+        let long = "A summary far longer than any screen. ".repeat(4);
+        fake.result_files
+            .lock()
+            .unwrap()
+            .insert(marker.clone(), result(&marker, "fail", long.trim()));
+        fake.screens
+            .lock()
+            .unwrap()
+            .insert("hp-review".into(), result(&marker, "pass", "The screen."));
+        fake.transcript
+            .lock()
+            .unwrap()
+            .insert(marker.clone(), result(&marker, "pass", "The transcript."));
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.steps["review"].outcome, Some(Outcome::Fail));
+        assert!(run.steps["review"].report.starts_with("A summary far"));
+    }
+
+    #[tokio::test]
+    async fn a_file_from_another_try_leaves_the_screen_to_decide() {
+        let (p, _dir) = pipelines();
+        let (id, marker, fake) = quiet_review(&p);
+        let older = marker.replacen("-1-", "-0-", 1);
+        fake.result_files
+            .lock()
+            .unwrap()
+            .insert(marker.clone(), result(&older, "fail", "An older try."));
+        fake.screens
+            .lock()
+            .unwrap()
+            .insert("hp-review".into(), result(&marker, "pass", "This try."));
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.steps["review"].outcome, Some(Outcome::Pass));
+        assert_eq!(run.steps["review"].report, "This try.");
+    }
+
+    #[tokio::test]
+    async fn no_file_leaves_the_transcript_to_decide() {
+        let (p, _dir) = pipelines();
+        let (id, marker, fake) = quiet_review(&p);
+        fake.transcript
+            .lock()
+            .unwrap()
+            .insert(marker.clone(), result(&marker, "pass", "The transcript."));
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(*fake.result_file_reads.lock().unwrap(), 1);
+        assert_eq!(run.steps["review"].report, "The transcript.");
+    }
+
+    #[tokio::test]
+    async fn an_agent_not_asked_for_a_file_has_none_read() {
+        let (p, _dir) = pipelines();
+        let (id, marker, fake) = quiet_review(&p);
+        *fake.no_result_file.lock().unwrap() = true;
+        fake.result_files
+            .lock()
+            .unwrap()
+            .insert(marker.clone(), result(&marker, "fail", "Not asked for."));
+        fake.screens
+            .lock()
+            .unwrap()
+            .insert("hp-review".into(), result(&marker, "pass", "The screen."));
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(*fake.result_file_reads.lock().unwrap(), 0);
+        assert_eq!(run.steps["review"].report, "The screen.");
+    }
+
+    #[tokio::test]
+    async fn a_busy_agents_file_waits_until_it_is_quiet() {
+        let (p, _dir) = pipelines();
+        let (id, marker, fake) = quiet_review(&p);
+        fake.session("hp", "hp-review", "b", Activity::Blocked);
+        fake.result_files
+            .lock()
+            .unwrap()
+            .insert(marker.clone(), result(&marker, "pass", "Too soon."));
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        assert_eq!(*fake.result_file_reads.lock().unwrap(), 0);
+        assert_eq!(p.run(&id).unwrap().steps["review"].outcome, None);
     }
 
     #[test]
