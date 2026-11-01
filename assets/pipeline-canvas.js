@@ -17,6 +17,7 @@ export const KINDS = {
   plan: "Plan",
   push: "Push and draft PR",
   update: "Update the ticket",
+  checks: "Wait for CI and reviews",
   call: "Use a connected tool",
   tool: "Use a connected tool",
   report: "Report to me",
@@ -32,6 +33,7 @@ const ICONS = {
   agent: "M2.5 3.5h11v9h-11z M5 6.5l2 1.5-2 1.5 M8.5 10h2.5",
   plan: "M8 2.5v11 M3.5 4.5h6.5l2 1.75-2 1.75H3.5z",
   push: "M8 13V3.5 M4.5 7 8 3.5 11.5 7",
+  checks: "M8 2.5a5.5 5.5 0 1 0 0 11 5.5 5.5 0 0 0 0-11z M5.5 8l1.75 1.75L10.5 6.5",
   update: "M3 3.5h10v9H3z M5.5 8l1.75 1.75L10.5 6.5",
   call: "M2.5 8h8 M8 5l3 3-3 3 M13.5 3v10",
   tool: "M9.5 3.5a3 3 0 0 0-3.8 3.8L2.5 10.5l3 3 3.2-3.2a3 3 0 0 0 3.8-3.8l-2 2-2-2z",
@@ -76,6 +78,7 @@ export function nodeState(run, step) {
     const note = run.waiting?.kind === "needs_you" ? "needs you" : reason.startsWith(`${step.name} `) ? reason.slice(step.name.length + 1) : reason;
     return { cls: "waiting", mark: "!", note };
   }
+  if (current && step.kind === "checks" && st?.watch?.status) return { cls: "now", mark: "", note: `${st.watch.status} · ${ago(run.step_since)}` };
   if (current) return { cls: "now", mark: "", note: run.state === "queued" ? "queued" : `running · ${ago(run.step_since)}` };
   if (st?.outcome) {
     const runs = st.runs > 1 ? ` · ${st.runs} runs` : "";
@@ -374,6 +377,7 @@ export function describe(s) {
     case "agent": return { who: s.read_only ? "Agent · read only" : "Agent", does: s.instructions || "No instructions yet", tags: [machineWord(s), workspaceWord(s)] };
     case "plan": return { who: "Agent · Dispatch", does: "Picks the machine, folder and branch, or asks you", tags: [s.machines?.length ? s.machines.join(" or ") : "any machine"] };
     case "push": return { who: "Yardbell", does: "Pushes the branch and opens a draft pull or merge request", tags: ["secret check", "never forced"] };
+    case "checks": return { who: "Yardbell", does: s.require_approval ? "Waits for CI to pass and an approval, then follows pass or fail" : "Waits for CI to pass, then follows pass or fail", tags: ["no agent", s.require_approval ? "needs approval" : "CI only"] };
     case "update": return { who: "Yardbell · the ticket's tool", does: s.action === "move" ? `Moves the ticket to ${s.state || "a state you pick"}` : "Comments on the ticket, or drafts it for Linear", tags: [s.action === "move" ? "move" : "comment"] };
     case "call": {
       const call = connectorOf(s.connector)?.calls?.find((c) => c.name === s.call);

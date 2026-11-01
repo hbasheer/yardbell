@@ -111,6 +111,10 @@ pub enum StepKind {
         machines: Vec<String>,
     },
     Push,
+    Checks {
+        #[serde(default)]
+        require_approval: bool,
+    },
     #[serde(rename = "update", alias = "linear")]
     Update {
         action: UpdateAction,
@@ -541,7 +545,7 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                     out.push(format!("{name}: machine {m} does not exist"));
                 }
             }
-            StepKind::Push => {
+            StepKind::Push | StepKind::Checks { .. } => {
                 let worktree = |id: &String| {
                     def.step(id).is_some_and(|x| {
                         matches!(
@@ -818,6 +822,36 @@ pub(crate) mod tests {
             problems(&def(alone)),
             vec!["Push: needs a step that works in a new worktree before it on every path"]
         );
+    }
+
+    #[test]
+    fn a_wait_for_ci_needs_a_worktree_before_it_and_a_time_limit_in_range() {
+        let wait = |minutes| Step {
+            kind: StepKind::Checks {
+                require_approval: true,
+            },
+            minutes,
+            ..agent("ci", "CI", MachineChoice::Name("hp".into()))
+        };
+        let mut alone = vec![plan_step("plan"), wait(None)];
+        alone[0].next.pass = "ci".into();
+        assert_eq!(
+            problems(&def(alone)),
+            vec!["CI: needs a step that works in a new worktree before it on every path"]
+        );
+        let mut steps = vec![
+            plan_step("plan"),
+            agent("a", "Implement", MachineChoice::Name("hp".into())),
+            wait(Some(5)),
+        ];
+        steps[0].next.pass = "a".into();
+        steps[1].next.pass = "ci".into();
+        assert_eq!(
+            problems(&def(steps.clone())),
+            vec!["CI: minutes must be from 10 to 1440"]
+        );
+        steps[2].minutes = Some(600);
+        assert!(problems(&def(steps)).is_empty());
     }
 
     #[test]

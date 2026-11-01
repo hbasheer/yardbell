@@ -1,3 +1,4 @@
+pub mod checks;
 pub mod definition;
 pub mod engine;
 pub mod forge;
@@ -128,6 +129,25 @@ impl Pipelines {
 
     pub fn run(&self, id: &str) -> Option<Run> {
         self.store.get(id)
+    }
+
+    // A run with a wait for CI takes the failures and comments of its own pull or merge request,
+    // so the same failure does not also become a card with Send to session.
+    pub fn owns_pull(&self, url: &str, machine: &str, path: &str) -> bool {
+        self.store.all().iter().any(|run| {
+            let waits = run.definition.as_ref().is_some_and(|d| {
+                d.steps
+                    .iter()
+                    .any(|s| matches!(s.kind, definition::StepKind::Checks { .. }))
+            });
+            let its_own = run.pull.as_ref().is_some_and(|p| p.url == url)
+                || run.subject.pr.as_ref().is_some_and(|p| p.url == url)
+                || run
+                    .steps
+                    .values()
+                    .any(|st| st.machine == machine && st.path == path);
+            waits && its_own && run.state.active()
+        })
     }
 
     pub fn linear(&self) -> Arc<linear::Linear> {
@@ -414,7 +434,11 @@ impl Pipelines {
                     continue;
                 }
             }
-            let watched = matches!(run.state, RunState::Running | RunState::Queued);
+            let watched = matches!(run.state, RunState::Running | RunState::Queued)
+                || run
+                    .waiting
+                    .as_ref()
+                    .is_some_and(|w| w.kind == record::WaitKind::CiUnsettled);
             if !watched || self.busy(&run.id) || run.pending.is_some() {
                 continue;
             }

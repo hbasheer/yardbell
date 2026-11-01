@@ -5,6 +5,14 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Wait for CI and reviews.** This new pipeline step goes after **Push and draft PR** and waits for the
+  run's pull or merge request on GitHub or GitLab. It follows pass when CI is green, optionally with an
+  approval, and fail when a check fails or a reviewer asks for changes. Its report holds the failed logs
+  and open comments for a Fix step's `{report}`. The wait keeps no agent session or slot, has a time limit
+  and survives a restart. It sends a failure only once, and stops for you when a check fails the same way
+  on two commits or checks fail on four commits in a row. A check that was cancelled, went stale or waits for
+  someone to act is not green and sends no Fix: the run waits for you, says what happened to it, and carries
+  on by itself once it is run again or dealt with. While a run has this step, its pull or merge request posts no Dispatch cards.
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
   in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
   common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have

@@ -1,3 +1,4 @@
+use super::checks::{self, Read};
 use super::definition::{Outcome, Step, StepKind, UpdateAction, Workspace};
 use super::forge::{Draft, Forge};
 use super::linear::Linear;
@@ -91,6 +92,20 @@ pub trait World: Send + Sync {
         path: &'a str,
     ) -> BoxFuture<'a, Result<(), String>>;
     fn other_runs(&self, id: &str) -> Vec<Run>;
+    fn read_pull<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+    ) -> BoxFuture<'a, Read>;
+    fn pull_detail<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+        pull: crate::pulls::Pull,
+    ) -> BoxFuture<'a, crate::pulls::Pull>;
+    fn pull_poll_seconds(&self) -> u64;
 }
 
 // What a phone notification from a pipeline is about, for the switches in Settings.
@@ -250,19 +265,25 @@ fn shared_session(run: &Run, view: &StateView, step: &Step, machine: &str) -> Op
 }
 
 // Sessions of a live run that nothing needs any more: everything but the current step's and the
-// newest writer's, which later steps type into.
+// newest writer's, which later steps type into. A wait for CI can last hours, so it keeps none, and
+// the step after it starts a new session in the run's folder.
 pub fn needless_sessions(run: &Run, view: &StateView) -> Vec<(String, String)> {
     let def = run.def();
+    let watching = def
+        .step(&run.step)
+        .is_some_and(|s| matches!(s.kind, StepKind::Checks { .. }));
     let current = run
         .steps
         .get(&run.step)
+        .filter(|_| !watching)
         .map(|s| s.session.as_str())
         .unwrap_or_default();
     let writer = run
         .steps
         .iter()
         .filter(|(id, st)| {
-            !st.session.is_empty()
+            !watching
+                && !st.session.is_empty()
                 && def
                     .step(id)
                     .and_then(agent_of)
@@ -650,6 +671,41 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             Some(path) => vec![Seen::Opened(world.open_draft(run, &path).await)],
             None => vec![Seen::Opened(Err("no step made a worktree".into()))],
         },
+        Effect::Checks { step } => {
+            let every_seconds = world.pull_poll_seconds();
+            let Some(path) = work_path(run) else {
+                let read = Read::Blocked("no step made a worktree to read the branch from".into());
+                return vec![Seen::ChecksRead {
+                    step: step.clone(),
+                    read,
+                    every_seconds,
+                }];
+            };
+            let (machine, wanted) = (&run.place.machine, branch(run));
+            let read = match world.read_pull(machine, &path, &wanted).await {
+                Read::Found(pull) => {
+                    let watch = run.steps.get(step).map(|s| s.watch.clone());
+                    let approval = matches!(
+                        step_of(step).map(|s| s.kind),
+                        Some(StepKind::Checks {
+                            require_approval: true
+                        })
+                    );
+                    if checks::wants_detail(&watch.unwrap_or_default(), &pull, approval) {
+                        let pull = world.pull_detail(machine, &path, &wanted, *pull).await;
+                        Read::Found(Box::new(pull))
+                    } else {
+                        Read::Found(pull)
+                    }
+                }
+                other => other,
+            };
+            vec![Seen::ChecksRead {
+                step: step.clone(),
+                read,
+                every_seconds,
+            }]
+        }
         Effect::Linear { step } => {
             let Some(StepKind::Update { action, state }) = step_of(step).map(|s| s.kind) else {
                 return vec![];
@@ -949,6 +1005,20 @@ impl Live {
 }
 
 impl Live {
+    fn github_api(&self) -> Option<crate::pulls::github_api::GitHubApi> {
+        (self.cfg.pull_requests.github_via == crate::config::GithubVia::Token).then(|| {
+            let api = crate::pulls::github_api::GitHubApi::new(self.forge.remotes());
+            let token = match &self.secrets {
+                Ok(s) => s
+                    .resolve(&self.cfg.pull_requests.github_token)
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.clone()),
+            };
+            api.set_token(token);
+            api
+        })
+    }
+
     async fn noting<T>(
         &self,
         server: &str,
@@ -1025,6 +1095,47 @@ impl World for Live {
                 _ => Ok(()),
             }
         })
+    }
+
+    fn read_pull<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+    ) -> BoxFuture<'a, Read> {
+        Box::pin(async move {
+            let Some(m) = self.cfg.machine(machine) else {
+                return Read::Blocked(format!("{machine} is not a machine"));
+            };
+            let gitlab = crate::pulls::accesses_for(&self.cfg, &self.secrets);
+            let github = self.github_api();
+            self.forge
+                .read_pull(m, path, branch, &gitlab, github.as_ref())
+                .await
+        })
+    }
+
+    fn pull_detail<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+        pull: crate::pulls::Pull,
+    ) -> BoxFuture<'a, crate::pulls::Pull> {
+        Box::pin(async move {
+            let Some(m) = self.cfg.machine(machine) else {
+                return pull;
+            };
+            let gitlab = crate::pulls::accesses_for(&self.cfg, &self.secrets);
+            let github = self.github_api();
+            self.forge
+                .pull_detail(m, path, branch, pull, &gitlab, github.as_ref())
+                .await
+        })
+    }
+
+    fn pull_poll_seconds(&self) -> u64 {
+        self.cfg.pull_requests.poll_seconds
     }
 
     fn view(&self) -> StateView {
@@ -1216,18 +1327,7 @@ impl World for Live {
                 title: run.subject.label(),
                 body,
             };
-            let github = (self.cfg.pull_requests.github_via == crate::config::GithubVia::Token)
-                .then(|| {
-                    let api = crate::pulls::github_api::GitHubApi::new(self.forge.remotes());
-                    let token = match &self.secrets {
-                        Ok(s) => s
-                            .resolve(&self.cfg.pull_requests.github_token)
-                            .map_err(|e| e.to_string()),
-                        Err(e) => Err(e.clone()),
-                    };
-                    api.set_token(token);
-                    api
-                });
+            let github = self.github_api();
             self.forge
                 .open_draft(m, path, &draft, &gitlab, github.as_ref())
                 .await

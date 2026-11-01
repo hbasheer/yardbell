@@ -1,10 +1,11 @@
-use super::{Check, Ci, Fetched, Forge, Note, Pull};
+use super::{Check, Ci, Fetched, Forge, Note, Pull, Unsettled, UnsettledCheck};
 use crate::config::Machine;
 use crate::shell::{quote, Duration, Output, Runner};
 use crate::ssh::Ssh;
 use futures::future::BoxFuture;
 use regex::Regex;
 use serde::Deserialize;
+use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
 const FIELDS: &str = "number,url,title,state,isDraft,reviewDecision,headRefOid,author,statusCheckRollup,comments,reviews,createdAt";
@@ -92,6 +93,23 @@ impl Forge for GitHub {
                 return Vec::new();
             }
             parse_review_comments(&out.stdout, &review.author)
+        })
+    }
+
+    fn resolved_comments<'a>(
+        &'a self,
+        m: &'a Machine,
+        path: &'a str,
+        number: u64,
+    ) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            let out = self
+                .gh(m, path, &resolved_command(number), VIEW_TIMEOUT)
+                .await;
+            if !out.ok() {
+                return Vec::new();
+            }
+            parse_resolved(&out.stdout)
         })
     }
 }
@@ -238,6 +256,19 @@ fn outcome(c: &RawCheck) -> Outcome {
     }
 }
 
+fn unsettled(c: &RawCheck) -> Option<Unsettled> {
+    let check_run = c.typename.as_deref() != Some("StatusContext") && c.context.is_none();
+    if !check_run || c.status.as_deref() != Some("COMPLETED") {
+        return None;
+    }
+    match c.conclusion.as_deref() {
+        Some("CANCELLED") => Some(Unsettled::Cancelled),
+        Some("STALE") => Some(Unsettled::Stale),
+        Some("ACTION_REQUIRED") => Some(Unsettled::ActionRequired),
+        _ => None,
+    }
+}
+
 fn check_name(c: &RawCheck) -> String {
     let name = c.name.clone().or(c.context.clone()).unwrap_or_default();
     match c.workflow_name.as_deref() {
@@ -274,6 +305,28 @@ pub fn parse_view(json: &str) -> Result<Pull, String> {
             log: String::new(),
         })
         .collect();
+    // A check run again can sit in the list beside its earlier try, and then that try is not how
+    // it was left.
+    let mut ended: Vec<UnsettledCheck> = Vec::new();
+    for c in &checks {
+        let name = check_name(c);
+        let Some(how) = unsettled(c) else {
+            continue;
+        };
+        let again = checks
+            .iter()
+            .any(|o| unsettled(o).is_none() && check_name(o) == name);
+        if !again && !ended.iter().any(|e| e.check.name == name) {
+            ended.push(UnsettledCheck {
+                check: Check {
+                    name,
+                    url: c.details_url.clone().unwrap_or_default(),
+                    log: String::new(),
+                },
+                how,
+            });
+        }
+    }
     let theirs = |who: &str| !who.is_empty() && who != author;
     let mut notes = Vec::new();
     for c in raw.comments.unwrap_or_default() {
@@ -294,13 +347,19 @@ pub fn parse_view(json: &str) -> Result<Pull, String> {
         });
     }
     let mut approvers: Vec<String> = Vec::new();
+    let mut standing: HashMap<String, String> = HashMap::new();
     for r in raw.reviews.unwrap_or_default() {
         let who = login(&r.author);
         let kind = match r.state.as_deref().unwrap_or_default() {
             "APPROVED" => {
+                standing.remove(&who);
                 if theirs(&who) && !approvers.contains(&who) {
                     approvers.push(who);
                 }
+                continue;
+            }
+            "DISMISSED" => {
+                standing.remove(&who);
                 continue;
             }
             "CHANGES_REQUESTED" => "changes_requested",
@@ -312,6 +371,9 @@ pub fn parse_view(json: &str) -> Result<Pull, String> {
         };
         if !theirs(&who) {
             continue;
+        }
+        if kind == "changes_requested" {
+            standing.insert(who.clone(), id.clone());
         }
         notes.push(Note {
             id,
@@ -337,6 +399,9 @@ pub fn parse_view(json: &str) -> Result<Pull, String> {
         url: raw.url,
         created: raw.created_at.unwrap_or_default(),
         approvers,
+        asking: standing.into_values().collect(),
+        resolved: Vec::new(),
+        unsettled: ended,
     })
 }
 
@@ -388,6 +453,35 @@ pub(crate) fn review_comments_query() -> String {
     format!(
         "query($id: ID!) {{ node(id: $id) {{ ... on PullRequestReview {{ comments(first: {INLINE_MAX}) {{ nodes {{ id path line originalLine body url author {{ login }} }} }} }} }} }}"
     )
+}
+
+pub(crate) const RESOLVED_QUERY: &str = "query($owner: String!, $name: String!, $number: Int!) { repository(owner: $owner, name: $name) { pullRequest(number: $number) { reviewThreads(first: 100) { nodes { isResolved comments(first: 50) { nodes { id } } } } } } }";
+
+pub fn resolved_command(number: u64) -> String {
+    format!(
+        "gh api graphql -F owner='{{owner}}' -F name='{{repo}}' -F number={number} -f query={}",
+        quote(RESOLVED_QUERY)
+    )
+}
+
+pub fn parse_resolved(json: &str) -> Vec<String> {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(json) else {
+        return Vec::new();
+    };
+    let threads = &value["data"]["repository"]["pullRequest"]["reviewThreads"]["nodes"];
+    threads
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter(|t| t["isResolved"] == true)
+        .flat_map(|t| {
+            t["comments"]["nodes"]
+                .as_array()
+                .cloned()
+                .unwrap_or_default()
+        })
+        .filter_map(|c| c["id"].as_str().map(str::to_string))
+        .collect()
 }
 
 pub fn review_comments_command(review: &str) -> String {
