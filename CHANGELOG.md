@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.4] - 2026-11-01
+
 - **Linear is one row.** An MCP server at `mcp.linear.app` now shares the **Linear** row under
   **Settings, Connections**, and **Edit** has a section for pipelines and one for agent sessions. Nothing
   saved changes.
