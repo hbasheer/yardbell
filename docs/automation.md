@@ -158,9 +158,10 @@ is no ticket to fill them with and they stay as written.
   or a reviewer comments, a card appears in Dispatch with **Send to session**. That is set under
   [`pull_requests`](configuration.md#pull_requests-optional), see the end of
   [Dispatch](usage.md#dispatch).
-- **Linear filters** beyond "assigned to me" and states, such as a team, a label or a project, are
-  not available. Every ticket assigned to you starts a conversation, but the task can tell
-  Dispatch to stop there ("if the ticket is not in the Web team, start nothing and say so").
+- **Linear filters** on these triggers go no further than "assigned to me" and states. Every ticket
+  assigned to you starts a conversation, but the task can tell Dispatch to stop there ("if the ticket
+  is not in the Web team, start nothing and say so"). A [pipeline trigger can filter](#filter-which-tickets-start-a-run)
+  by label, team or project.
 - **Stacking.** While a trigger's last conversation is still working, a scheduled time is skipped
   and new tickets wait. Tickets start one at a time, one per check.
 
@@ -630,6 +631,54 @@ A ticket or link that is already in a run of the same pipeline is not started tw
 kept in `pipelines/` and runs in `runs.json` in the state folder, so a restart carries on where each
 run was. A run keeps the version it started with, so saving a pipeline never changes a run halfway.
 
+### Filter which tickets start a run
+
+A **New ticket** trigger can narrow which tickets start a run, on the **Build** tab under **Start when**.
+What you can filter on depends on where the tickets come from:
+
+| From | Filter on | Who filters |
+|---|---|---|
+| Linear | labels, teams (key or name), projects | Linear |
+| GitHub Issues | label | GitHub |
+| GitLab Issues | label | GitLab |
+| Trello with a token | label | Yardbell, on the board's cards it reads |
+| Jira | label, project key | Yardbell, on what your search returns |
+| Asana | tag, project | Yardbell, on your tasks it reads |
+| Trello by sign-in, and any other connection | what its **Choices** offer, often nothing | as the choice is set up |
+
+Under Linear, names in one box mean any of them, and a ticket must match every box. Names ignore case.
+A connection's filter takes one value.
+
+**See what matches now** reads the tickets, shows how many match with the first few, and says who did
+the filtering. It changes nothing and starts nothing.
+
+```yaml
+trigger:
+  kind: linear
+  assigned: true
+  filter:
+    labels: [agent-ready, bug]
+    teams: [ENG]
+    projects: [Billing]
+```
+
+**A filter never floods you.** The first check after you switch a pipeline on, or change its filter, only
+notes what matches and starts nothing. A ticket that comes to match later starts one run, such as one
+that gets the label today. That holds when you widen or remove a filter too.
+
+Limits:
+
+- Linear only shows Yardbell open tickets assigned to you, the 100 most recently updated, so a team
+  filter narrows those. It does not bring in your teammates' tickets.
+- Yardbell filtering needs the whole list read first, up to the [paging limits](#paging). To have Jira
+  filter, write it into the `jql` of the connection's `list` action instead.
+- A name with a typo matches nothing, and the tool does not say so. **See what matches now** tells you
+  when nothing matches, and so does `yardbell doctor` for Linear.
+- A connection saved before filters existed has none until you add them. The builder says so.
+- A schedule reading a connection uses its filters. A schedule reading Linear and the GitHub and GitLab
+  review triggers have none.
+- **Run now** with a ticket you name ignores the filter, since you picked that ticket.
+
 ### Settings
 
 The **Settings** button on the Pipelines page writes the `pipelines` section of `yardbell.yml`:
@@ -792,6 +841,30 @@ Each call has:
 
 `list` and `read` make a connector a source of work. `states` and any call named by `params` fill the
 builder's lists with names. Only mapped fields are kept: the rest of a reply is never stored.
+
+### Add a filter to a connection
+
+A choice marked as a filter is optional, and narrows which items [start a run](#filter-which-tickets-start-a-run).
+In the form it is the **Filter** box under **Choices**. There are two ways to apply one:
+
+```yaml
+params:
+  - { name: repo, label: Repository, options: repos }
+  - { name: label, label: Label, options: labels, filter: true }   # the tool filters
+  - { name: team, label: Team, filter: true }                      # Yardbell filters
+calls:
+  labels:
+    request: { method: GET, path: '/repos/{{repo}}/labels' }
+    map: { id: name, name: name }
+  list:
+    request: { method: GET, path: '/repos/{{repo}}/issues', query: { labels: '{{label}}' } }
+    map: { item_id: number, title: title, team: 'assignee.team' }
+```
+
+Use the tool's own filter when it has one, because it reads less. The slot must be the whole value of a
+query field or tool argument, and it is left out when no filter is picked. Otherwise map a field with the
+filter's name, and Yardbell keeps the items whose field matches, ignoring case. The field can be a list,
+like `labels[].name`, and an item without it does not match. **Save** refuses a filter that does neither.
 
 ### Paging
 

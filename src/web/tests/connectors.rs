@@ -851,3 +851,73 @@ async fn a_server_a_pipeline_uses_is_not_removed() {
     assert!(body.contains("Cards"), "{body}");
     assert_eq!(r.app.config().unwrap().mcp_servers.len(), 1);
 }
+
+#[tokio::test]
+async fn a_preview_says_what_matches_and_who_filtered() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let s = stub().await;
+    s.answer(
+        "/l",
+        200,
+        r#"[{"id":"1","name":"One","labels":["bug"]},{"id":"2","name":"Two","labels":["ui"]}]"#,
+    );
+    let mut e = entry(&s.base);
+    e["params_yaml"] = json!(r#"[{"name":"label","label":"Label","filter":true}]"#);
+    e["calls_yaml"] = json!(
+        "list:\n  request: { method: GET, path: /l }\n  map: { item_id: id, title: name, label: labels }\n"
+    );
+    let (status, body) = call(&r, &c, "POST", ROOT, Some(e)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, listed) = call(&r, &c, "GET", "/api/pipelines", None).await;
+    assert_eq!(listed["connectors"][0]["filters"]["label"], "yardbell");
+
+    let preview = |label: Option<&str>| {
+        let params = label.map_or(json!({}), |l| json!({ "label": l }));
+        json!({ "trigger": { "kind": "connector", "connector": "t", "params": params, "states": [] } })
+    };
+    let at = "/api/pipelines/trigger-preview";
+    let (status, out) = call(&r, &c, "POST", at, Some(preview(Some("bug")))).await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["count"], 1);
+    assert_eq!(out["read"], 2);
+    assert_eq!(out["items"][0]["title"], "One");
+    assert!(out["how"]
+        .as_str()
+        .unwrap()
+        .contains("Yardbell read 2 items"));
+    let (_, out) = call(&r, &c, "POST", at, Some(preview(None))).await;
+    assert_eq!(out["count"], 2);
+    assert!(out["how"].as_str().unwrap().contains("No filter"), "{out}");
+    let (status, out) = call(
+        &r,
+        &c,
+        "POST",
+        at,
+        Some(json!({ "trigger": { "kind": "manual" } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+}
+
+#[tokio::test]
+async fn a_preview_will_not_run_a_list_that_changes_something() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let s = stub().await;
+    let mut e = entry(&s.base);
+    e["calls_yaml"] = json!(
+        "list:\n  request: { method: POST, path: /l }\n  map: { item_id: id, title: name }\n"
+    );
+    call(&r, &c, "POST", ROOT, Some(e)).await;
+    let (status, out) = call(
+        &r,
+        &c,
+        "POST",
+        "/api/pipelines/trigger-preview",
+        Some(json!({ "trigger": { "kind": "connector", "connector": "t", "params": {}, "states": [] } })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+    assert!(s.urls().is_empty(), "nothing was sent");
+}

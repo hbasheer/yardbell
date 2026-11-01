@@ -87,6 +87,14 @@ impl Feeds for FakeFeeds {
         Box::pin(async move { out })
     }
 
+    fn linear_where<'a>(
+        &'a self,
+        key: &'a str,
+        _filter: &'a LinearFilter,
+    ) -> BoxFuture<'a, Result<Vec<Ticket>, String>> {
+        self.linear(key)
+    }
+
     fn github(&self, list: GhList) -> BoxFuture<'_, Result<Vec<Ticket>, String>> {
         self.asked.lock().unwrap().push(format!("github {list:?}"));
         let out = self

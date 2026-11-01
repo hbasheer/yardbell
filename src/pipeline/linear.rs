@@ -1,5 +1,5 @@
 use super::prompts::TicketText;
-use crate::triggers::{parse_linear, LINEAR_API, LINEAR_QUERY, LINEAR_SECRET};
+use crate::triggers::{parse_linear, LinearFilter, LINEAR_API, LINEAR_SECRET};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::time::Duration;
@@ -91,7 +91,16 @@ impl Linear {
     }
 
     pub async fn open(&self, key: &str) -> Result<Vec<Ticket>, String> {
-        let body = self.call(key, LINEAR_QUERY, json!({})).await?;
+        self.open_where(key, &LinearFilter::default()).await
+    }
+
+    pub async fn open_where(
+        &self,
+        key: &str,
+        filter: &LinearFilter,
+    ) -> Result<Vec<Ticket>, String> {
+        let (query, variables) = filter.request();
+        let body = self.call(key, query, variables).await?;
         Ok(parse_linear(&body)?
             .into_iter()
             .map(|t| Ticket {

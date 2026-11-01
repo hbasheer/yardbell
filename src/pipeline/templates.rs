@@ -112,6 +112,7 @@ fn implement() -> Definition {
         trigger: Trigger::Linear {
             assigned: true,
             states: vec![],
+            filter: Default::default(),
         },
         start: "plan".into(),
         steps: vec![

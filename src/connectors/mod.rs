@@ -59,6 +59,15 @@ pub struct Param {
     pub label: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub options: String,
+    #[serde(default, skip_serializing_if = "is_off")]
+    pub filter: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterBy {
+    Source,
+    Yardbell,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -151,6 +160,23 @@ pub struct Page {
     pub size: u32,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_pages: Option<u32>,
+}
+
+impl Connector {
+    // Where a filter is applied: the tool's own query when list sends it, otherwise Yardbell,
+    // on the items it read.
+    pub fn filter_by(&self, name: &str) -> Option<FilterBy> {
+        let list = self.calls.get("list")?;
+        let sent = |text: &str| client::only_slot(text).is_some_and(|slot| slot == name);
+        let in_arguments = list
+            .arguments
+            .as_object()
+            .is_some_and(|a| a.values().any(|v| v.as_str().is_some_and(sent)));
+        if in_arguments || list.request.query.values().any(|v| sent(v)) {
+            return Some(FilterBy::Source);
+        }
+        list.map.contains_key(name).then_some(FilterBy::Yardbell)
+    }
 }
 
 impl Call {
@@ -552,7 +578,35 @@ fn check_tool_connector(c: &Connector) -> Result<(), String> {
     Ok(())
 }
 
+fn check_filter(c: &Connector, name: &str) -> Result<(), String> {
+    let list = c
+        .calls
+        .get("list")
+        .ok_or_else(|| format!("the filter {name} needs a list call"))?;
+    let mut elsewhere = list.clone();
+    let whole = |text: &str| client::only_slot(text).is_some_and(|slot| slot == name);
+    elsewhere.request.query.retain(|_, v| !whole(v));
+    if let Some(arguments) = elsewhere.arguments.as_object_mut() {
+        arguments.retain(|_, v| !v.as_str().is_some_and(whole));
+    }
+    // An unset filter drops its whole query value, which only works when the slot is all of it.
+    if client::needs_of(&elsewhere).contains(&name.to_string()) {
+        return Err(format!(
+            "the filter {name} must be a whole query value or argument of list, like {{{{{name}}}}}"
+        ));
+    }
+    if c.filter_by(name).is_none() {
+        return Err(format!(
+            "the filter {name} does nothing: send it in list's query or map a field named {name}"
+        ));
+    }
+    Ok(())
+}
+
 fn check_connector(c: &Connector) -> Result<(), String> {
+    for p in c.params.iter().filter(|p| p.filter) {
+        check_filter(c, &p.name)?;
+    }
     if !c.server.is_empty() {
         return check_tool_connector(c);
     }

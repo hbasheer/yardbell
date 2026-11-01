@@ -229,9 +229,10 @@ connectors:
       Authorization: 'Bearer ${secret:tracker}'  # a login header must use a secret
     params:
       - { name: board, label: Board, options: boards }  # a choice in the builder
+      - { name: label, label: Label, filter: true }     # optional, narrows what starts a run
     calls:
       list:
-        request: { method: GET, path: /items, query: { open: 'true' } }
+        request: { method: GET, path: /items, query: { open: 'true', label: '{{label}}' } }
         map: { item_id: id, title: name, state: status }
         page: { style: number, param: page, size: 50, max_pages: 20 }
 ```

@@ -144,7 +144,7 @@ impl Client {
     pub async fn list(&self, vars: &Vars) -> Result<Listed, String> {
         let call = self.call_named("list")?;
         let name = self.connector.name.clone();
-        let mut vars = vars.clone();
+        let mut vars = self.with_filters(vars);
         vars.0.entry("cursor".to_string()).or_default();
         let steps = self.run_before(call, &vars).await?;
         let max_pages = match &call.page {

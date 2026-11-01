@@ -81,6 +81,19 @@ pub fn needs_of(call: &Call) -> Vec<String> {
     names
 }
 
+// The name in a value that is one slot and nothing else.
+pub fn only_slot(text: &str) -> Option<&str> {
+    let inner = text.trim().strip_prefix("{{")?.strip_suffix("}}")?.trim();
+    (!inner.is_empty() && !inner.contains(['{', '}'])).then_some(inner)
+}
+
+// A mapped list reaches a field as JSON text, such as ["bug","ui"].
+pub fn field_holds(field: &str, wanted: &str) -> bool {
+    field.eq_ignore_ascii_case(wanted)
+        || serde_json::from_str::<Vec<Value>>(field)
+            .is_ok_and(|list| list.iter().any(|v| text_of(v).eq_ignore_ascii_case(wanted)))
+}
+
 fn fill(
     text: &str,
     vars: &Vars,
@@ -405,6 +418,25 @@ impl Client {
         Ok(Reply { value, link })
     }
 
+    fn is_unset_filter(&self, value: &str, vars: &Vars) -> bool {
+        only_slot(value).is_some_and(|slot| {
+            self.connector
+                .params
+                .iter()
+                .any(|p| p.filter && p.name == slot)
+                && vars.0.get(slot).is_none_or(String::is_empty)
+        })
+    }
+
+    // Nobody has to pick a filter, so one left unset still fills its slot.
+    pub(super) fn with_filters(&self, vars: &Vars) -> Vars {
+        let mut filled = vars.clone();
+        for p in self.connector.params.iter().filter(|p| p.filter) {
+            filled.0.entry(p.name.clone()).or_default();
+        }
+        filled
+    }
+
     pub(super) async fn send(
         &self,
         request: &Request,
@@ -426,6 +458,9 @@ impl Client {
                 .insert(format!("secret.{name}"), value.clone());
         }
         for (k, v) in &request.query {
+            if self.is_unset_filter(v, vars) {
+                continue;
+            }
             let v = references().replace_all(v, "{{secret.$1}}");
             let v = fill(&v, &with_secrets, steps, &str::to_string)
                 .map_err(|e| format!("{}: {e}", self.connector.name))?;
@@ -470,6 +505,7 @@ impl Client {
 
     pub async fn call(&self, name: &str, vars: &Vars) -> Result<Value, String> {
         let call = self.call_named(name)?;
+        let vars = &self.with_filters(vars);
         let steps = self.run_before(call, vars).await?;
         let reply = self.send_call(call, vars, &steps, None).await?;
         self.check_error(call, &reply.value)?;
@@ -526,7 +562,7 @@ impl Client {
     pub async fn with_defaults(&self, vars: &Vars) -> Vars {
         let mut filled = vars.clone();
         for param in &self.connector.params {
-            if filled.0.contains_key(&param.name) || param.options.is_empty() {
+            if filled.0.contains_key(&param.name) || param.options.is_empty() || param.filter {
                 continue;
             }
             if let Ok(found) = self.options(&param.options, &filled).await {

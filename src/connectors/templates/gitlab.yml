@@ -5,12 +5,16 @@ headers:
   PRIVATE-TOKEN: '${secret:gitlab}'
 params:
   - { name: project, label: Project, options: projects }
+  - { name: label, label: Label, options: labels, filter: true }
 calls:
   projects:
     request: { method: GET, path: /projects, query: { membership: 'true', per_page: '100', order_by: last_activity_at } }
     map: { id: id, name: path_with_namespace }
+  labels:
+    request: { method: GET, path: '/projects/{{project}}/labels', query: { per_page: '100' } }
+    map: { id: name, name: name }
   list:
-    request: { method: GET, path: '/projects/{{project}}/issues', query: { state: opened, per_page: '100' } }
+    request: { method: GET, path: '/projects/{{project}}/issues', query: { state: opened, per_page: '100', labels: '{{label}}' } }
     map: { item_id: iid, id: iid, title: title, url: web_url, description: description, state: state }
     page: { style: link, max_pages: 5 }
   read:

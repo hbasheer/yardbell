@@ -499,7 +499,7 @@ fn the_trello_template_is_valid() {
     let names: Vec<&str> = c.calls.keys().map(String::as_str).collect();
     assert_eq!(
         names,
-        ["boards", "comment", "list", "move", "read", "states"]
+        ["boards", "comment", "labels", "list", "move", "read", "states"]
     );
     assert_eq!(c.calls["move"].kind(), CallKind::Change);
     assert_eq!(c.calls["comment"].kind(), CallKind::Change);
@@ -974,6 +974,7 @@ async fn defaults_fill_a_missing_choice_from_its_list() {
         name: "board".into(),
         label: "Board".into(),
         options: "boards".into(),
+        filter: false,
     });
     let cl = client(&c, &dir);
     let filled = cl.with_defaults(&vars(&[])).await;
@@ -1058,4 +1059,129 @@ fn sign_in_tools_say_which_were_tested() {
         .map(|t| t.id)
         .collect();
     assert!(client.contains(&"asana") && client.contains(&"github"));
+}
+
+fn filtered(query_label: bool, tail: &str) -> Connector {
+    let query = if query_label {
+        ", query: { labels: '{{label}}' }"
+    } else {
+        ""
+    };
+    let mut c = connector(
+        "https://x.example",
+        &format!("  list:\n    request: {{ method: GET, path: /l{query} }}\n    map: {{ item_id: id, title: name{tail} }}\n"),
+    );
+    c.params = vec![Param {
+        name: "label".into(),
+        label: "Label".into(),
+        options: String::new(),
+        filter: true,
+    }];
+    c
+}
+
+#[tokio::test]
+async fn an_unset_filter_leaves_the_query_and_a_set_one_goes_in_it() {
+    let s = stub().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = filtered(true, "");
+    c.base_url = s.base.clone();
+    s.answer("/l", 200, r#"[{"id":"1","name":"All"}]"#);
+    s.answer("/l?labels=bug", 200, r#"[{"id":"2","name":"Bug"}]"#);
+    let client = client(&c, &dir);
+    let all = client.list(&Vars::default()).await.unwrap();
+    assert_eq!(all.items[0].title, "All");
+    let empty = client.list(&vars(&[("label", "")])).await.unwrap();
+    assert_eq!(empty.items[0].title, "All");
+    let bug = client.list(&vars(&[("label", "bug")])).await.unwrap();
+    assert_eq!(bug.items[0].title, "Bug");
+}
+
+#[test]
+fn where_a_filter_runs_is_known() {
+    assert_eq!(
+        filtered(true, "").filter_by("label"),
+        Some(FilterBy::Source)
+    );
+    assert_eq!(
+        filtered(false, ", label: labels").filter_by("label"),
+        Some(FilterBy::Yardbell)
+    );
+    assert_eq!(filtered(false, "").filter_by("label"), None);
+}
+
+#[test]
+fn a_filter_must_be_able_to_filter() {
+    let err = validate(&[filtered(false, "")]).unwrap_err();
+    assert!(err.contains("the filter label does nothing"), "{err}");
+    validate(&[filtered(true, "")]).unwrap();
+    validate(&[filtered(false, ", label: labels")]).unwrap();
+}
+
+#[test]
+fn a_filter_cannot_sit_where_leaving_it_unset_breaks_the_request() {
+    let in_path = {
+        let mut c = filtered(true, "");
+        c.calls.get_mut("list").unwrap().request.path = "/l/{{label}}".into();
+        c
+    };
+    let in_text = {
+        let mut c = filtered(true, "");
+        c.calls.get_mut("list").unwrap().request.query =
+            [("jql".to_string(), "labels = \"{{label}}\"".to_string())].into();
+        c
+    };
+    for c in [in_path, in_text] {
+        let err = validate(&[c]).unwrap_err();
+        assert!(err.contains("must be a whole query value"), "{err}");
+    }
+}
+
+#[test]
+fn every_template_is_valid_and_offers_a_filter() {
+    for name in templates() {
+        let c = template(name).unwrap();
+        validate(std::slice::from_ref(&c)).unwrap();
+        assert!(c.params.iter().any(|p| p.filter), "{name} has no filter");
+        for p in c.params.iter().filter(|p| !p.options.is_empty()) {
+            assert!(c.calls.contains_key(&p.options), "{name}: {}", p.options);
+        }
+    }
+    let by = |name: &str, param: &str| template(name).unwrap().filter_by(param);
+    assert_eq!(by("github", "label"), Some(FilterBy::Source));
+    assert_eq!(by("gitlab", "label"), Some(FilterBy::Source));
+    assert_eq!(by("trello", "label"), Some(FilterBy::Yardbell));
+    assert_eq!(by("jira", "project"), Some(FilterBy::Yardbell));
+    assert_eq!(by("asana", "tag"), Some(FilterBy::Yardbell));
+}
+
+#[test]
+fn a_mapped_list_of_labels_reaches_a_field_a_filter_can_read() {
+    let c = template("jira").unwrap();
+    let row = serde_json::json!({
+        "id": "1", "key": "ENG-1",
+        "fields": { "summary": "S", "labels": ["bug", "ui"], "project": { "key": "ENG" } }
+    });
+    let item = Client::item_of(&c.calls["list"], &row).unwrap();
+    assert!(client::field_holds(&item.fields["label"], "UI"));
+    assert!(!client::field_holds(&item.fields["label"], "backend"));
+    assert!(client::field_holds(&item.fields["project"], "eng"));
+    let asana = template("asana").unwrap();
+    let row = serde_json::json!({ "gid": "9", "name": "T", "tags": [{ "name": "urgent" }], "projects": [] });
+    let item = Client::item_of(&asana.calls["list"], &row).unwrap();
+    assert!(client::field_holds(&item.fields["tag"], "urgent"));
+    assert!(!client::field_holds(&item.fields["project"], "Billing"));
+}
+
+#[tokio::test]
+async fn a_check_of_the_connection_does_not_pick_a_filter() {
+    let s = stub().await;
+    let dir = tempfile::tempdir().unwrap();
+    let mut c = filtered(true, "");
+    c.base_url = s.base.clone();
+    c.params[0].options = "labels".into();
+    let client = client(&c, &dir);
+    let vars = client.with_defaults(&Vars::default()).await;
+    assert!(!vars.0.contains_key("label"));
+    assert!(s.urls().is_empty(), "no call was made to choose one");
 }
