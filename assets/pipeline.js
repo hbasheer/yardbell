@@ -851,6 +851,8 @@ function kindFields(step, others, redraw) {
     case "plan": return field("Dispatch may pick from", picks(data.machines, step.machines || [], (list) => { step.machines = list; redraw(); }, "plan"), "None ticked means any machine.");
     case "update": return updateFields(step, redraw);
     case "command": return commandFields(step, redraw);
+    case "checks": return html`<label class="check"><input type="checkbox" name="require_approval" .checked=${!!step.require_approval} @change=${(e) => { step.require_approval = e.target.checked; redraw(); }}>Also wait for an approval</label>
+      <p class="help">Follows pass when CI is green, and fail when a check fails or a reviewer asks for changes. Its report holds the failed logs and open comments, so a Fix step can use {report}. Stops for you if a check fails the same way on two commits, or checks fail on four commits in a row.</p>`;
     case "wait": return field("Message", html`<textarea name="message" rows="2" .value=${step.message || ""} @input=${(e) => { step.message = e.target.value; redraw(); }}></textarea>`);
     default: return nothing;
   }
@@ -876,7 +878,7 @@ function stepForm(step, d, redraw) {
     <div class="pl-fields">
       ${field("Name", html`<input name="name" .value=${step.name} @input=${(e) => { rename(d, step, e.target.value); redraw(); }}>`)}
       ${field("Runs at most", html`<input type="number" name="max_runs" min="1" max="10" .value=${String(step.max_runs ?? 2)} @input=${(e) => { step.max_runs = Number(e.target.value); redraw(); }}>`)}
-      ${step.kind === "agent" ? field("Minutes", html`<input type="number" name="minutes" min="10" max="1440" placeholder=${String(data.settings.minutes)} .value=${step.minutes == null ? "" : String(step.minutes)}
+      ${step.kind === "agent" || step.kind === "checks" ? field("Minutes", html`<input type="number" name="minutes" min="10" max="1440" placeholder=${String(data.settings.minutes)} .value=${step.minutes == null ? "" : String(step.minutes)}
         @input=${(e) => { step.minutes = e.target.value === "" ? null : Number(e.target.value); redraw(); }}>`) : nothing}
       ${step.kind === "command" ? field("Stop after minutes", html`<input type="number" name="minutes" min="1" max="1440" placeholder="10" .value=${step.minutes == null ? "" : String(step.minutes)}
         @input=${(e) => { step.minutes = e.target.value === "" ? null : Number(e.target.value); redraw(); }}>`) : nothing}
@@ -947,7 +949,7 @@ function save() {
 const LIBRARY = [
   ["Start when", [["manual", "manual", "By hand", "From Run now"], ["schedule", "schedule", "Schedule", "Weekdays, every day, a time"], ["linear", "ticket", "New ticket", "From Linear, Trello or any connection"], ["webhook", "call", "A webhook", "Another system calls an address"], ["github_review", "pull", "GitHub review request", "A PR asks for my review"], ["gitlab_reviewer", "pull", "GitLab reviewer", "An MR adds me as reviewer"]]],
   ["Agent", [["agent", "agent", "Agent step", "Your instructions, on a machine"], ["plan", "plan", "Plan", "Picks machine, folder and branch"]]],
-  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["update", "update", "Update the ticket", "Move or comment, wherever it came from"], ["call", "call", "Use a connected tool", "Do one action in a tool, with no agent"], ["command", "command", "Run a command", "Its exit code decides pass or fail"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
+  ["Yardbell", [["push", "push", "Push and draft PR", "Secret check, never forced"], ["checks", "checks", "Wait for CI and reviews", "Goes on when CI passes, holds no agent"], ["update", "update", "Update the ticket", "Move or comment, wherever it came from"], ["call", "call", "Use a connected tool", "Do one action in a tool, with no agent"], ["command", "command", "Run a command", "Its exit code decides pass or fail"], ["report", "report", "Report to me", "What the run found, on your phone"]]],
   ["You", [["wait", "wait", "Wait for me", "Continues when you say"]]],
 ];
 
@@ -1089,8 +1091,9 @@ function blank(wanted) {
     tool: { server: data.mcp_servers[0] || "", tool: "", arguments: {}, call_kind: "change", schema_hash: "" },
     command: { command: "", approved: "" },
     wait: { message: "" },
+    checks: { require_approval: false },
   }[kind] || {};
-  return { id: slug(name, draft.steps.map((s) => s.id)), name, kind, ...fields, max_runs: 2, minutes: null, next: { pass: "end", fail: "wait", needs_you: "wait" }, x: 0, y: 0 };
+  return { id: slug(name, draft.steps.map((s) => s.id)), name, kind, ...fields, max_runs: kind === "checks" ? 5 : 2, minutes: null, next: { pass: "end", fail: "wait", needs_you: "wait" }, x: 0, y: 0 };
 }
 
 // Moves a new card down until it no longer sits on another.

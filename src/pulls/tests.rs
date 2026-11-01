@@ -1614,3 +1614,184 @@ mod through_glab {
         assert_eq!(cfg.pull_requests.github_token, "${secret:github_pr}");
     }
 }
+
+#[test]
+fn only_a_review_that_still_stands_asks_for_changes() {
+    let view = |reviews: &str| {
+        format!(r#"{{"number":1,"url":"u","author":{{"login":"me"}},"reviews":[{reviews}]}}"#)
+    };
+    let review = |id: &str, who: &str, state: &str| {
+        format!(r#"{{"id":"{id}","author":{{"login":"{who}"}},"state":"{state}","body":"b"}}"#)
+    };
+    let asked = review("r1", "alice", "CHANGES_REQUESTED");
+    let pull = parse_view(&view(&asked)).unwrap();
+    assert_eq!(pull.asking, vec!["r1"]);
+    assert_eq!(
+        pull.review, "",
+        "GitHub gives no decision without required reviews"
+    );
+    let approved = format!("{asked},{}", review("r2", "alice", "APPROVED"));
+    assert!(parse_view(&view(&approved)).unwrap().asking.is_empty());
+    let dismissed = format!("{asked},{}", review("r2", "alice", "DISMISSED"));
+    assert!(parse_view(&view(&dismissed)).unwrap().asking.is_empty());
+    let commented = format!("{asked},{}", review("r2", "alice", "COMMENTED"));
+    assert_eq!(parse_view(&view(&commented)).unwrap().asking, vec!["r1"]);
+}
+
+#[test]
+fn resolved_threads_name_their_comments() {
+    let answer = r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[
+        {"isResolved":true,"comments":{"nodes":[{"id":"c1"},{"id":"c2"}]}},
+        {"isResolved":false,"comments":{"nodes":[{"id":"c3"}]}}
+    ]}}}}}"#;
+    assert_eq!(super::github::parse_resolved(answer), vec!["c1", "c2"]);
+    assert!(super::github::parse_resolved("not json").is_empty());
+    let command = super::github::resolved_command(12);
+    assert!(command.contains("-F number=12"), "{command}");
+    assert!(command.contains("owner='{owner}'"), "{command}");
+}
+
+#[tokio::test]
+async fn a_pull_a_run_owns_gets_no_card_and_none_later() {
+    let rig = Rig::new("");
+    rig.fake
+        .stub(BRANCH, Output::ok_with(&view_with("pending", "a", &[])));
+    let (dispatch, start) = (rig.dispatch(), Instant::now());
+    let owned = Arc::new(std::sync::atomic::AtomicBool::new(true));
+    let says = owned.clone();
+    let pulls = rig.pulls().with_owner(Box::new(move |_| {
+        says.load(std::sync::atomic::Ordering::Relaxed)
+    }));
+    pulls
+        .round(&rig.cfg, &rig.secrets(), &rig.state, &dispatch, start)
+        .await;
+    rig.fake
+        .restub(BRANCH, Output::ok_with(&view_with("failing", "a", &[])));
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 120),
+        )
+        .await;
+    assert!(
+        rig.pull_cards(&dispatch).is_empty(),
+        "the run takes this failure"
+    );
+    assert_eq!(
+        rig.badge(0).unwrap().ci,
+        Ci::Failing,
+        "the badge still shows it"
+    );
+    owned.store(false, std::sync::atomic::Ordering::Relaxed);
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 360),
+        )
+        .await;
+    assert!(
+        rig.pull_cards(&dispatch).is_empty(),
+        "nor once the run has ended"
+    );
+    rig.fake
+        .restub(BRANCH, Output::ok_with(&view_with("failing", "b", &[])));
+    rig.fake.stub("gh run view --job 222", Output::ok_with(LOG));
+    pulls
+        .round(
+            &rig.cfg,
+            &rig.secrets(),
+            &rig.state,
+            &dispatch,
+            later(start, 480),
+        )
+        .await;
+    assert_eq!(
+        rig.pull_cards(&dispatch).len(),
+        1,
+        "a new failure afterwards is a card"
+    );
+}
+
+fn rollup(checks: &[(&str, &str)]) -> Pull {
+    let list: Vec<String> = checks
+        .iter()
+        .map(|(name, conclusion)| {
+            format!(
+                r#"{{"__typename":"CheckRun","name":"{name}","status":"COMPLETED","conclusion":"{conclusion}","detailsUrl":"https://ci/{name}"}}"#
+            )
+        })
+        .collect();
+    parse_view(&format!(
+        r#"{{"number":1,"url":"u","author":{{"login":"me"}},"statusCheckRollup":[{}]}}"#,
+        list.join(",")
+    ))
+    .unwrap()
+}
+
+#[test]
+fn a_cancelled_github_check_is_named_and_badges_stay_as_they_were() {
+    let pull = rollup(&[("build", "CANCELLED"), ("test", "SUCCESS")]);
+    let names: Vec<&str> = pull
+        .unsettled
+        .iter()
+        .map(|u| u.check.name.as_str())
+        .collect();
+    assert_eq!(names, ["build"]);
+    assert_eq!(pull.unsettled[0].check.url, "https://ci/build");
+    assert_eq!(pull.unsettled[0].how, Unsettled::Cancelled);
+    assert_eq!(pull.ci, Ci::Passing, "cards and badges are unchanged");
+    assert!(pull.failed.is_empty());
+}
+
+#[test]
+fn a_cancelled_github_check_run_again_under_its_name_no_longer_counts() {
+    for word in ["CANCELLED", "STALE", "ACTION_REQUIRED"] {
+        let pull = rollup(&[("build", word), ("build", "SUCCESS")]);
+        assert!(pull.unsettled.is_empty(), "{word}");
+    }
+}
+
+#[test]
+fn stale_and_action_required_are_named_and_badges_stay_as_they_were() {
+    for (word, how) in [
+        ("STALE", Unsettled::Stale),
+        ("ACTION_REQUIRED", Unsettled::ActionRequired),
+    ] {
+        let pull = rollup(&[("deploy", word), ("test", "SUCCESS")]);
+        assert_eq!(pull.unsettled.len(), 1, "{word}");
+        assert_eq!(pull.unsettled[0].check.name, "deploy");
+        assert_eq!(pull.unsettled[0].how, how);
+        assert_eq!(
+            pull.ci,
+            Ci::Passing,
+            "{word}: cards and badges are unchanged"
+        );
+        assert!(pull.failed.is_empty(), "{word}");
+    }
+}
+
+#[test]
+fn a_check_with_two_tries_that_both_ended_badly_is_named_once() {
+    let pull = rollup(&[("build", "CANCELLED"), ("build", "STALE")]);
+    assert_eq!(pull.unsettled.len(), 1);
+}
+
+#[test]
+fn other_github_conclusions_keep_what_they_mean_today() {
+    for word in ["SKIPPED", "NEUTRAL", "SUCCESS"] {
+        let pull = rollup(&[("x", word)]);
+        assert_eq!(pull.ci, Ci::Passing, "{word}");
+        assert!(pull.unsettled.is_empty(), "{word}");
+    }
+    for word in ["FAILURE", "TIMED_OUT", "STARTUP_FAILURE"] {
+        let pull = rollup(&[("x", word)]);
+        assert_eq!(pull.ci, Ci::Failing, "{word}");
+        assert!(pull.unsettled.is_empty(), "{word}");
+    }
+}

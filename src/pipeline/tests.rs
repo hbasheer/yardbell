@@ -57,6 +57,8 @@ pub(crate) struct Fake {
     pub turn_tokens: Mutex<Option<Tokens>>,
     pub command_result: Mutex<Option<Result<crate::worktrees::command::CommandRun, String>>>,
     pub hold_commands: Mutex<Option<std::sync::Arc<tokio::sync::Semaphore>>>,
+    pub pull_reads: Mutex<VecDeque<super::checks::Read>>,
+    pub details: Mutex<u32>,
 }
 
 impl Fake {
@@ -76,6 +78,42 @@ impl Fake {
 }
 
 impl World for Fake {
+    fn read_pull<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+    ) -> BoxFuture<'a, super::checks::Read> {
+        Box::pin(async move {
+            self.call(format!("read_pull {machine} {path} {branch}"));
+            self.pull_reads
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or(super::checks::Read::NoPull)
+        })
+    }
+
+    fn pull_detail<'a>(
+        &'a self,
+        _machine: &'a str,
+        _path: &'a str,
+        _branch: &'a str,
+        mut pull: crate::pulls::Pull,
+    ) -> BoxFuture<'a, crate::pulls::Pull> {
+        Box::pin(async move {
+            *self.details.lock().unwrap() += 1;
+            for check in &mut pull.failed {
+                check.log = format!("error: {} broke", check.name);
+            }
+            pull
+        })
+    }
+
+    fn pull_poll_seconds(&self) -> u64 {
+        120
+    }
+
     fn view(&self) -> StateView {
         StateView {
             agents: vec![],
@@ -3650,4 +3688,937 @@ fn a_run_saved_before_this_field_existed_has_not_run_its_command() {
     assert!(!saved.overridden);
     let plain = serde_json::to_value(super::record::StepState::default()).unwrap();
     assert!(plain.get("ran").is_none() && plain.get("overridden").is_none());
+}
+
+mod ci_wait {
+    use super::*;
+    use crate::pipeline::checks::Read;
+    use crate::pipeline::definition::Outcome;
+    use crate::pipeline::engine::tests::at;
+    use crate::pipeline::Pipelines;
+    use crate::pulls::{Check, Ci, Pull, Unsettled, UnsettledCheck};
+    use std::sync::Arc;
+
+    fn pull(head: &str, ci: Ci, failed: &[&str]) -> Box<Pull> {
+        Box::new(Pull {
+            forge: "github".into(),
+            number: 12,
+            url: "https://github.com/acme/app/pull/12".into(),
+            title: "Fix".into(),
+            state: "open".into(),
+            draft: true,
+            review: String::new(),
+            ci,
+            failed: failed
+                .iter()
+                .map(|n| Check {
+                    name: n.to_string(),
+                    url: format!("https://ci/{n}"),
+                    log: String::new(),
+                })
+                .collect(),
+            head: head.into(),
+            author: "me".into(),
+            notes: vec![],
+            created: String::new(),
+            approvers: vec![],
+            asking: vec![],
+            resolved: vec![],
+            unsettled: vec![],
+        })
+    }
+
+    // Implement, Push, the wait; a fail goes to Fix, then Push again and back to the wait.
+    fn at_wait(minutes: Option<u64>) -> Run {
+        let mut run = run_of("Implement my tickets");
+        run.id = "run-ab12cd".into();
+        run.place.machine = "hp".into();
+        run.place.branch = "com-1".into();
+        let def = run.definition.as_mut().unwrap();
+        def.steps.push(
+            serde_json::from_value(json!({
+                "id": "ci", "name": "CI", "kind": "checks", "max_runs": 5, "minutes": minutes,
+                "next": { "pass": "report", "fail": "fix", "needs_you": "wait" },
+            }))
+            .unwrap(),
+        );
+        for s in def.steps.iter_mut() {
+            match s.id.as_str() {
+                "push" => {
+                    s.next.pass = "ci".into();
+                    s.max_runs = 5;
+                }
+                "fix" => {
+                    s.next.pass = "push".into();
+                    s.max_runs = 5;
+                }
+                _ => {}
+            }
+        }
+        let st = run.state_of("implement");
+        st.machine = "hp".into();
+        st.path = "/r/w".into();
+        st.session = "hp-1".into();
+        run.step = "ci".into();
+        run.state = RunState::Running;
+        run.step_since = at(0).to_rfc3339();
+        run.pending = Some(Effect::Checks { step: "ci".into() });
+        run.history.push(crate::pipeline::record::Entry {
+            step: "ci".into(),
+            ..Default::default()
+        });
+        run
+    }
+
+    fn fake_with(reads: Vec<Read>) -> Arc<Fake> {
+        let fake = Arc::new(Fake::default());
+        *fake.pull_reads.lock().unwrap() = reads.into();
+        fake
+    }
+
+    async fn round(
+        p: &Arc<Pipelines>,
+        world: &Arc<dyn World>,
+        now: chrono::DateTime<chrono::Local>,
+    ) {
+        for h in p
+            .tick(world, &crate::config::Pipelines::default(), None, now)
+            .await
+        {
+            h.await.unwrap();
+        }
+    }
+
+    fn setup(run: Run) -> (Arc<Pipelines>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let p = Arc::new(Pipelines::new(dir.path().to_path_buf()));
+        p.put(run);
+        (p, dir)
+    }
+
+    fn later(minutes: i64) -> chrono::DateTime<chrono::Local> {
+        at(0) + chrono::Duration::minutes(minutes)
+    }
+
+    #[tokio::test]
+    async fn the_wait_holds_no_slot_and_no_session_and_reads_the_branch_from_its_folder() {
+        let fake = fake_with(vec![Read::Found(pull("a", Ci::Pending, &[]))]);
+        fake.session("hp", "hp-1", "com-1", Activity::Idle);
+        let world: Arc<dyn World> = fake.clone();
+        let (p, _dir) = setup(at_wait(None));
+        round(&p, &world, later(1)).await;
+        assert!(
+            fake.calls().iter().any(|c| c == "read_pull hp /r/w com-1"),
+            "{:?}",
+            fake.calls()
+        );
+        let run = p.run("run-ab12cd").unwrap();
+        assert_eq!((run.state, run.slot.clone()), (RunState::Running, None));
+        assert!(run.steps["ci"].watch.status.contains("CI is running"));
+        assert_eq!(*fake.details.lock().unwrap(), 0, "nothing to quote yet");
+        round(&p, &world, later(1)).await;
+        assert!(
+            fake.calls()
+                .iter()
+                .any(|c| c.contains("stop_session") && c.contains("hp-1")),
+            "the writer's session goes while it waits: {:?}",
+            fake.calls()
+        );
+        let reads = fake
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("read_pull"))
+            .count();
+        assert_eq!(reads, 1, "asked again only after the poll interval");
+    }
+
+    #[test]
+    fn a_session_stays_needed_outside_the_wait() {
+        let fake = Fake::default();
+        fake.session("hp", "hp-1", "com-1", Activity::Idle);
+        let mut run = at_wait(None);
+        assert_eq!(
+            needless_sessions(&run, &fake.view()),
+            vec![("hp".to_string(), "hp-1".to_string())]
+        );
+        run.step = "fix".into();
+        assert!(needless_sessions(&run, &fake.view()).is_empty());
+    }
+
+    #[tokio::test]
+    async fn it_survives_a_restart_with_its_count_and_its_time() {
+        let fake = fake_with(vec![Read::Found(pull("aaaaaaaa", Ci::Failing, &["test"]))]);
+        let world: Arc<dyn World> = fake.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let p = Arc::new(Pipelines::new(dir.path().to_path_buf()));
+        p.put(at_wait(None));
+        round(&p, &world, later(1)).await;
+        let run = p.run("run-ab12cd").unwrap();
+        assert_eq!(run.step, "fix", "the failure went down the fail line");
+        assert!(run.steps["ci"].report.contains("error: test broke"));
+        drop(p);
+
+        let mut waiting = at_wait(None);
+        waiting.pending = None;
+        waiting.next_try = Some(later(5).to_rfc3339());
+        waiting.state_of("ci").watch = run.steps["ci"].watch.clone();
+        let again = Arc::new(Pipelines::new(dir.path().to_path_buf()));
+        again.put(waiting);
+        drop(again);
+        let restarted = Arc::new(Pipelines::new(dir.path().to_path_buf()));
+        round(&restarted, &world, later(2)).await;
+        let reads = fake
+            .calls()
+            .iter()
+            .filter(|c| c.starts_with("read_pull"))
+            .count();
+        assert_eq!(reads, 1, "not due yet after the restart");
+        *fake.pull_reads.lock().unwrap() =
+            vec![Read::Found(pull("aaaaaaaa", Ci::Failing, &["test"]))].into();
+        round(&restarted, &world, later(6)).await;
+        let run = restarted.run("run-ab12cd").unwrap();
+        assert_eq!(
+            run.step, "ci",
+            "the same failure, remembered across the restart, is not sent again"
+        );
+        assert!(run.steps["ci"].watch.status.contains("already sent"));
+        assert_eq!(run.state, RunState::Running);
+    }
+
+    #[tokio::test]
+    async fn the_loop_fix_pushes_again_and_returns_to_the_wait_then_stops_on_a_repeat() {
+        let fake = fake_with(vec![Read::Found(pull("aaaaaaaa", Ci::Failing, &["test"]))]);
+        let world: Arc<dyn World> = fake.clone();
+        let (p, _dir) = setup(at_wait(None));
+        round(&p, &world, later(1)).await;
+        let run = p.run("run-ab12cd").unwrap();
+        assert_eq!((run.step.as_str(), run.state), ("fix", RunState::Queued));
+        assert_eq!(run.pull.as_ref().unwrap().number, 12, "kept from the read");
+
+        let cfg = crate::config::Pipelines::default();
+        let (run, _) = engine::step(run, Seen::Admitted, &cfg, later(2));
+        let (run, _) = engine::step(
+            run,
+            Seen::Ended {
+                step: "fix".into(),
+                outcome: Outcome::Pass,
+                report: "fixed".into(),
+                details: vec![],
+            },
+            &cfg,
+            later(3),
+        );
+        assert_eq!(run.step, "push");
+        let (run, did) = engine::step(run, Seen::Pushed(Ok(())), &cfg, later(3));
+        assert_eq!(run.step, "ci", "a second push opens no second draft");
+        assert_eq!(did, vec![Effect::Checks { step: "ci".into() }]);
+        assert_eq!(run.steps["ci"].runs, 1);
+
+        let (repeat, did) = engine::step(
+            run,
+            Seen::ChecksRead {
+                step: "ci".into(),
+                read: Read::Found({
+                    let mut p = pull("bbbbbbbb", Ci::Failing, &["test"]);
+                    p.failed[0].log = "error: test broke".into();
+                    p
+                }),
+                every_seconds: 120,
+            },
+            &cfg,
+            later(4),
+        );
+        let w = repeat.waiting.as_ref().unwrap();
+        assert_eq!(w.kind, WaitKind::Stopped);
+        assert_eq!(w.reason, "test failed the same way on aaaaaaa and bbbbbbb");
+        assert!(matches!(&did[..], [Effect::Notify { .. }]), "{did:?}");
+        assert_eq!(repeat.step, "ci");
+
+        let (on, _) = engine::step(
+            repeat.clone(),
+            Seen::Continue(Outcome::Fail),
+            &cfg,
+            later(5),
+        );
+        assert_eq!(on.step, "fix", "a person can send it to Fix anyway");
+        assert!(
+            on.steps["ci"].watch.rounds.is_empty(),
+            "and the count starts again"
+        );
+        let (retried, did) = engine::step(repeat, Seen::Retry, &cfg, later(5));
+        assert_eq!(did, vec![Effect::Checks { step: "ci".into() }]);
+        assert!(retried.steps["ci"].watch.rounds.is_empty());
+    }
+
+    #[tokio::test]
+    async fn fix_reads_the_failure_through_its_report() {
+        let fake = fake_with(vec![Read::Found(pull("aaaaaaaa", Ci::Failing, &["test"]))]);
+        let world: Arc<dyn World> = fake.clone();
+        let (p, _dir) = setup(at_wait(None));
+        round(&p, &world, later(1)).await;
+        let mut run = p.run("run-ab12cd").unwrap();
+        let def = run.definition.as_mut().unwrap();
+        let fix = def.steps.iter_mut().find(|s| s.id == "fix").unwrap();
+        if let StepKind::Agent { instructions, .. } = &mut fix.kind {
+            *instructions = "Fix this:\n\n{report}".into();
+        }
+        let fix = run.def().step("fix").unwrap().clone();
+        let text = crate::pipeline::prompts::agent(&run, &fix, &TicketText::default(), None, "");
+        assert!(text.contains("This is CI's report, quoted."), "{text}");
+        assert!(text.contains("Failed check: test"), "{text}");
+        assert!(text.contains("error: test broke"), "{text}");
+    }
+
+    #[tokio::test]
+    async fn the_time_limit_stops_the_wait_and_says_what_it_saw() {
+        let fake = fake_with(vec![Read::Found(pull("aaaaaaaa", Ci::Pending, &[]))]);
+        let world: Arc<dyn World> = fake.clone();
+        let (p, _dir) = setup(at_wait(Some(30)));
+        round(&p, &world, later(1)).await;
+        assert_eq!(p.run("run-ab12cd").unwrap().state, RunState::Running);
+        round(&p, &world, later(31)).await;
+        let run = p.run("run-ab12cd").unwrap();
+        let w = run.waiting.expect("waiting");
+        assert_eq!(w.kind, WaitKind::TimeLimit);
+        assert!(w.reason.starts_with("CI waited 31 min"), "{}", w.reason);
+        assert!(w.reason.contains("CI is running"), "{}", w.reason);
+    }
+
+    #[test]
+    fn it_reads_again_only_when_the_poll_interval_is_up_and_after_a_lost_read() {
+        let cfg = crate::config::Pipelines::default();
+        let read = Seen::ChecksRead {
+            step: "ci".into(),
+            read: Read::Found(pull("a", Ci::Pending, &[])),
+            every_seconds: 120,
+        };
+        let mut run = at_wait(None);
+        run.pending = None;
+        let (run, did) = engine::step(run, read, &cfg, later(1));
+        assert_eq!(did, vec![]);
+        assert_eq!(run.next_try, Some(later(3).to_rfc3339()));
+        let early = later(3) - chrono::Duration::seconds(30);
+        let (run, did) = engine::step(run, Seen::Tick, &cfg, early);
+        assert_eq!(did, vec![], "30 seconds early is too early");
+        let (mut run, did) = engine::step(run, Seen::Tick, &cfg, later(3));
+        assert_eq!(did, vec![Effect::Checks { step: "ci".into() }]);
+        assert_eq!(run.next_try, None);
+        run.pending = None;
+        let (_, did) = engine::step(run, Seen::Tick, &cfg, later(4));
+        assert_eq!(
+            did,
+            vec![Effect::Checks { step: "ci".into() }],
+            "a restart lost the read"
+        );
+    }
+
+    #[test]
+    fn a_read_left_over_for_another_step_is_ignored_and_leaving_clears_the_poll() {
+        let cfg = crate::config::Pipelines::default();
+        let mut run = at_wait(None);
+        run.pending = None;
+        run.next_try = Some(later(9).to_rfc3339());
+        let stray = Seen::ChecksRead {
+            step: "other".into(),
+            read: Read::Found(pull("a", Ci::Failing, &["test"])),
+            every_seconds: 120,
+        };
+        let (run, did) = engine::step(run, stray, &cfg, later(1));
+        assert_eq!((run.step.as_str(), did), ("ci", vec![]));
+        let (run, _) = engine::step(
+            run,
+            Seen::ChecksRead {
+                step: "ci".into(),
+                read: Read::Blocked("gh is logged out".into()),
+                every_seconds: 120,
+            },
+            &cfg,
+            later(1),
+        );
+        let (run, _) = engine::step(run, Seen::Continue(Outcome::Fail), &cfg, later(2));
+        assert_eq!(run.step, "fix");
+        assert_eq!(run.next_try, None, "or Fix would be asked to plan later");
+    }
+
+    #[tokio::test]
+    async fn a_run_without_a_worktree_or_with_gh_logged_out_stops_at_once() {
+        let fake = fake_with(vec![Read::Blocked("gh is not installed".into())]);
+        let world: Arc<dyn World> = fake.clone();
+        let (p, _dir) = setup(at_wait(None));
+        round(&p, &world, later(1)).await;
+        let run = p.run("run-ab12cd").unwrap();
+        assert_eq!(run.waiting.unwrap().reason, "gh is not installed");
+        let mut bare = at_wait(None);
+        bare.steps.remove("implement");
+        let (p, _dir) = setup(bare);
+        round(&p, &world, later(1)).await;
+        let run = p.run("run-ab12cd").unwrap();
+        assert!(run
+            .waiting
+            .unwrap()
+            .reason
+            .contains("no step made a worktree"));
+    }
+
+    #[test]
+    fn a_run_with_a_wait_owns_its_pull_until_it_ends() {
+        let (p, _dir) = setup(at_wait(None));
+        let url = "https://github.com/acme/app/pull/12";
+        assert!(p.owns_pull(url, "hp", "/r/w"), "by the run's folder");
+        assert!(!p.owns_pull(url, "hp", "/r/other"), "someone else's");
+        let mut run = p.run("run-ab12cd").unwrap();
+        run.pull = Some(PullRef {
+            url: url.into(),
+            number: 12,
+        });
+        p.put(run.clone());
+        assert!(p.owns_pull(url, "hp", "/r/other"), "by its address");
+        run.state = RunState::Done;
+        p.put(run);
+        assert!(!p.owns_pull(url, "hp", "/r/w"), "finished, cards come back");
+
+        let (p, _dir) = setup(run_of_without_wait());
+        assert!(
+            !p.owns_pull(url, "hp", "/r/w"),
+            "a run with no wait leaves cards alone"
+        );
+    }
+
+    fn run_of_without_wait() -> Run {
+        let mut run = run_of("Implement my tickets");
+        run.id = "run-zz".into();
+        run.state = RunState::Running;
+        run.state_of("implement").machine = "hp".into();
+        run.state_of("implement").path = "/r/w".into();
+        run
+    }
+
+    fn cancelled_read(head: &str, ci: Ci, names: &[&str]) -> Seen {
+        ended_read(Unsettled::Cancelled, head, ci, names)
+    }
+
+    fn ended_read(how: Unsettled, head: &str, ci: Ci, names: &[&str]) -> Seen {
+        let mut found = pull(head, ci, &[]);
+        found.unsettled = names
+            .iter()
+            .map(|n| UnsettledCheck {
+                check: Check {
+                    name: n.to_string(),
+                    url: format!("https://ci/{n}"),
+                    log: String::new(),
+                },
+                how,
+            })
+            .collect();
+        Seen::ChecksRead {
+            step: "ci".into(),
+            read: Read::Found(found),
+            every_seconds: 120,
+        }
+    }
+
+    fn cancelled_run() -> Run {
+        let mut run = at_wait(None);
+        run.pending = None;
+        let cfg = crate::config::Pipelines::default();
+        let seen = cancelled_read("aaaaaaaa", Ci::Passing, &["build"]);
+        engine::step(run, seen, &cfg, later(1)).0
+    }
+
+    #[test]
+    fn a_cancelled_check_goes_to_you_once_and_sends_no_fix() {
+        let cfg = crate::config::Pipelines::default();
+        let mut run = at_wait(None);
+        run.pending = None;
+        let seen = cancelled_read("aaaaaaaa", Ci::Passing, &["build"]);
+        let (run, did) = engine::step(run, seen, &cfg, later(1));
+        let w = run.waiting.clone().expect("waiting for you");
+        assert_eq!(w.kind, WaitKind::CiUnsettled);
+        assert!(w.reason.contains("build"), "{}", w.reason);
+        assert_eq!(run.step, "ci", "not Fix");
+        assert!(matches!(&did[..], [Effect::Notify { .. }]), "{did:?}");
+        assert_eq!(run.next_try, Some(later(3).to_rfc3339()));
+        assert!(run.steps["ci"].report.contains("Cancelled check: build"));
+        assert!(run.steps["ci"].report.starts_with(&w.reason));
+        assert!(
+            w.screen.starts_with("Cancelled check: build"),
+            "{}",
+            w.screen
+        );
+
+        let seen = cancelled_read("aaaaaaaa", Ci::Passing, &["build"]);
+        let (run, did) = engine::step(run, seen, &cfg, later(3));
+        assert_eq!(did, vec![], "told once");
+        let w = run.waiting.clone().unwrap();
+        assert!(
+            w.screen.starts_with("Cancelled check: build"),
+            "{}",
+            w.screen
+        );
+        assert_eq!(run.state, RunState::Waiting);
+        assert_eq!(run.next_try, Some(later(5).to_rfc3339()));
+    }
+
+    #[test]
+    fn stale_and_needing_action_wait_the_same_way_and_move_on_when_read_again() {
+        let cfg = crate::config::Pipelines::default();
+        for (how, words) in [
+            (Unsettled::Stale, "deploy went stale"),
+            (Unsettled::ActionRequired, "deploy is waiting for someone"),
+        ] {
+            let mut run = at_wait(None);
+            run.pending = None;
+            let read = |ci, names: &[&str]| ended_read(how, "aaaaaaaa", ci, names);
+            let (run, did) = engine::step(run, read(Ci::Passing, &["deploy"]), &cfg, later(1));
+            let w = run.waiting.clone().expect("waiting for you");
+            assert_eq!(w.kind, WaitKind::CiUnsettled);
+            assert!(w.reason.starts_with(words), "{}", w.reason);
+            assert_eq!(run.step, "ci", "not Fix");
+            assert!(matches!(&did[..], [Effect::Notify { .. }]), "{did:?}");
+            assert_eq!(run.next_try, Some(later(3).to_rfc3339()), "still reading");
+            let (run, did) = engine::step(run, read(Ci::Passing, &["deploy"]), &cfg, later(3));
+            assert_eq!((run.state, did), (RunState::Waiting, vec![]), "told once");
+            let (run, _) = engine::step(run, read(Ci::Pending, &[]), &cfg, later(5));
+            assert_eq!((run.state, run.waiting.clone()), (RunState::Running, None));
+            let (run, _) = engine::step(run, read(Ci::Passing, &[]), &cfg, later(7));
+            assert_eq!(run.step, "ci", "green takes two reads");
+            let (run, _) = engine::step(run, read(Ci::Passing, &[]), &cfg, later(9));
+            assert_eq!(run.step, "report");
+        }
+    }
+
+    #[test]
+    fn a_re_run_moves_on_by_itself_and_green_still_takes_two_reads() {
+        let cfg = crate::config::Pipelines::default();
+        let (run, did) = engine::step(
+            cancelled_run(),
+            cancelled_read("aaaaaaaa", Ci::Pending, &[]),
+            &cfg,
+            later(3),
+        );
+        assert_eq!(did, vec![]);
+        assert_eq!((run.state, run.waiting.clone()), (RunState::Running, None));
+        assert_eq!(run.step_since, later(3).to_rfc3339(), "a fresh time limit");
+        let green = || cancelled_read("aaaaaaaa", Ci::Passing, &[]);
+        let (run, _) = engine::step(run, green(), &cfg, later(5));
+        assert_eq!((run.step.as_str(), run.state), ("ci", RunState::Running));
+        let (run, did) = engine::step(run, green(), &cfg, later(7));
+        assert_eq!(run.step, "report");
+        assert_eq!(
+            did,
+            vec![Effect::Report {
+                step: "report".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_re_run_that_goes_straight_to_green_takes_two_reads_too() {
+        let cfg = crate::config::Pipelines::default();
+        let green = || cancelled_read("aaaaaaaa", Ci::Passing, &[]);
+        let (run, _) = engine::step(cancelled_run(), green(), &cfg, later(3));
+        assert_eq!((run.step.as_str(), run.state), ("ci", RunState::Running));
+        let (run, _) = engine::step(run, green(), &cfg, later(5));
+        assert_eq!(run.step, "report");
+    }
+
+    #[test]
+    fn a_re_run_that_fails_goes_to_fix() {
+        let cfg = crate::config::Pipelines::default();
+        let seen = Seen::ChecksRead {
+            step: "ci".into(),
+            read: Read::Found(pull("aaaaaaaa", Ci::Failing, &["build"])),
+            every_seconds: 120,
+        };
+        let (run, _) = engine::step(cancelled_run(), seen, &cfg, later(3));
+        assert_eq!((run.step.as_str(), run.state), ("fix", RunState::Queued));
+        assert_eq!(run.waiting, None);
+    }
+
+    #[test]
+    fn retry_and_continue_still_work_on_a_cancelled_check() {
+        let cfg = crate::config::Pipelines::default();
+        let (run, did) = engine::step(cancelled_run(), Seen::Retry, &cfg, later(2));
+        assert_eq!(did, vec![Effect::Checks { step: "ci".into() }]);
+        assert_eq!((run.state, run.next_try), (RunState::Running, None));
+        let (run, _) = engine::step(
+            cancelled_run(),
+            Seen::Continue(Outcome::Pass),
+            &cfg,
+            later(2),
+        );
+        assert_eq!(run.step, "report");
+        assert_eq!(run.next_try, None);
+        let (run, _) = engine::step(
+            cancelled_run(),
+            Seen::Continue(Outcome::Fail),
+            &cfg,
+            later(2),
+        );
+        assert_eq!(run.step, "fix");
+        let (run, did) = engine::step(cancelled_run(), Seen::Drop, &cfg, later(2));
+        assert_eq!(
+            (run.state, did),
+            (RunState::Dropped, vec![Effect::StopSessions])
+        );
+    }
+
+    #[test]
+    fn another_wait_is_not_read_again_and_a_stray_read_is_ignored() {
+        let cfg = crate::config::Pipelines::default();
+        let mut run = cancelled_run();
+        run.waiting.as_mut().unwrap().kind = WaitKind::Stopped;
+        let (same, did) = engine::step(run.clone(), Seen::Tick, &cfg, later(9));
+        assert_eq!(did, vec![]);
+        let seen = cancelled_read("aaaaaaaa", Ci::Pending, &[]);
+        let (same, did) = engine::step(same, seen, &cfg, later(9));
+        assert_eq!((same.state, did), (RunState::Waiting, vec![]));
+    }
+
+    #[tokio::test]
+    async fn the_open_wait_keeps_reading_across_a_restart_then_stops_at_its_limit() {
+        let fake = fake_with(vec![Read::Found(pull("aaaaaaaa", Ci::Pending, &[]))]);
+        let world: Arc<dyn World> = fake.clone();
+        let dir = tempfile::tempdir().unwrap();
+        let mut run = cancelled_run();
+        run.next_try = Some(later(3).to_rfc3339());
+        let p = Arc::new(Pipelines::new(dir.path().to_path_buf()));
+        p.put(run);
+        drop(p);
+        let p = Arc::new(Pipelines::new(dir.path().to_path_buf()));
+        round(&p, &world, later(2)).await;
+        assert_eq!(
+            fake.calls()
+                .iter()
+                .filter(|c| c.starts_with("read_pull"))
+                .count(),
+            0
+        );
+        round(&p, &world, later(3)).await;
+        round(&p, &world, later(3)).await;
+        assert_eq!(
+            fake.calls()
+                .iter()
+                .filter(|c| c.starts_with("read_pull"))
+                .count(),
+            1
+        );
+        let run = p.run("run-ab12cd").unwrap();
+        assert_eq!((run.state, run.waiting), (RunState::Running, None));
+
+        let mut limit = cancelled_run();
+        limit.next_try = Some(later(500).to_rfc3339());
+        let (p, _dir) = setup(limit);
+        round(&p, &world, later(121)).await;
+        round(&p, &world, later(600)).await;
+        let run = p.run("run-ab12cd").unwrap();
+        let w = run.waiting.expect("still waiting for you");
+        assert_eq!(w.kind, WaitKind::TimeLimit);
+        assert!(w.reason.contains("build"), "{}", w.reason);
+        assert_eq!(run.next_try, None);
+        assert_eq!(
+            fake.calls()
+                .iter()
+                .filter(|c| c.starts_with("read_pull"))
+                .count(),
+            1,
+            "no more reads after the limit"
+        );
+    }
+
+    fn failing_read(head: &str) -> Seen {
+        let mut found = pull(head, Ci::Failing, &["test"]);
+        found.failed[0].log = "error: test broke".into();
+        Seen::ChecksRead {
+            step: "ci".into(),
+            read: Read::Found(found),
+            every_seconds: 120,
+        }
+    }
+
+    fn past_its_limit(mut run: Run) -> Run {
+        run.tokens.limit = Some(1_000);
+        run.tokens.raised = true;
+        run.tokens.told = true;
+        run.tokens.sources.insert(
+            "hp:a".into(),
+            Tokens {
+                input: 2_000,
+                ..Tokens::default()
+            },
+        );
+        run
+    }
+
+    #[test]
+    fn past_the_token_limit_a_ci_failure_waits_at_fix_and_spends_nothing() {
+        let cfg = crate::config::Pipelines::default();
+        let mut run = past_its_limit(at_wait(None));
+        run.pending = None;
+        let (run, did) = engine::step(run, failing_read("aaaaaaaa"), &cfg, later(1));
+        let w = run.waiting.clone().expect("waiting for you");
+        assert_eq!((w.kind, w.step.as_str()), (WaitKind::TokenLimit, "fix"));
+        assert_eq!(run.state, RunState::Waiting);
+        assert_eq!(run.slot, None, "no agent queued");
+        assert_eq!(run.steps.get("fix").map_or(0, |s| s.runs), 0);
+        assert!(
+            !did.iter().any(|e| matches!(e, Effect::Agent { .. })),
+            "{did:?}"
+        );
+        assert!(run.steps["ci"].report.contains("error: test broke"));
+
+        let (run, did) = engine::step(run, Seen::Retry, &cfg, later(2));
+        assert_eq!((run.step.as_str(), run.state), ("fix", RunState::Queued));
+        assert_eq!(did, vec![]);
+        assert!(
+            !run.steps["ci"].watch.rounds.is_empty(),
+            "starting Fix anyway keeps the wait's count"
+        );
+    }
+
+    #[test]
+    fn past_the_token_limit_a_re_run_that_fails_also_waits_at_fix() {
+        let cfg = crate::config::Pipelines::default();
+        let run = past_its_limit(cancelled_run());
+        let (run, _) = engine::step(run, failing_read("aaaaaaaa"), &cfg, later(3));
+        let w = run.waiting.clone().expect("waiting for you");
+        assert_eq!((w.kind, w.step.as_str()), (WaitKind::TokenLimit, "fix"));
+    }
+
+    #[test]
+    fn the_wait_itself_goes_on_past_the_token_limit() {
+        let cfg = crate::config::Pipelines::default();
+        let mut run = past_its_limit(at_wait(None));
+        run.step = "push".into();
+        run.pending = None;
+        run.pull = Some(PullRef {
+            url: "u".into(),
+            number: 12,
+        });
+        let (run, did) = engine::step(run, Seen::Pushed(Ok(())), &cfg, later(1));
+        assert_eq!(run.step, "ci");
+        assert_eq!(did, vec![Effect::Checks { step: "ci".into() }]);
+    }
+
+    #[test]
+    fn raising_the_limit_at_fix_keeps_the_waits_count() {
+        let cfg = crate::config::Pipelines::default();
+        let mut run = past_its_limit(at_wait(None));
+        run.pending = None;
+        let (run, _) = engine::step(run, failing_read("aaaaaaaa"), &cfg, later(1));
+        let (run, _) = engine::step(run, Seen::RaiseLimit(9_000), &cfg, later(2));
+        assert_eq!(run.step, "fix");
+        assert!(!run.steps["ci"].watch.rounds.is_empty());
+    }
+
+    #[test]
+    fn a_ci_wait_is_not_held_takes_no_slot_and_does_not_count_in_spacing() {
+        let cfg = crate::config::Pipelines {
+            memory_limit: 80,
+            per_machine: 1,
+            ..Default::default()
+        };
+        let mut wait = at_wait(None);
+        wait.state_of("ci").started = later(1).to_rfc3339();
+        wait.pending = None;
+        assert_eq!(wait.slot, None);
+        let mut queued = run_of("Implement my tickets");
+        queued.id = "run-queued".into();
+        queued.step = "implement".into();
+        queued.state = RunState::Queued;
+        queued.step_since = later(0).to_rfc3339();
+        queued.slot = Some("hp".into());
+        let runs = vec![wait, queued];
+        let memory = engine::MemoryWatch::default();
+        let admitted = engine::admit(&runs, &cfg, &|_| true, &memory, &later(1));
+        assert_eq!(admitted.start, vec!["run-queued"], "{:?}", admitted.held);
+        assert!(admitted.held.is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_ci_wait_reads_on_while_memory_is_short() {
+        let fake = fake_with(vec![Read::Found(pull("a", Ci::Pending, &[]))]);
+        fake.memory.lock().unwrap().insert("hp".into(), 99);
+        let world: Arc<dyn World> = fake.clone();
+        let (p, _dir) = setup(at_wait(None));
+        round(&p, &world, later(1)).await;
+        let run = p.run("run-ab12cd").unwrap();
+        assert_eq!((run.state, run.held), (RunState::Running, None));
+        assert!(fake.calls().iter().any(|c| c.starts_with("read_pull")));
+    }
+
+    #[tokio::test]
+    async fn a_fix_that_changed_nothing_stops_at_the_review_and_does_not_loop_through_ci() {
+        let cfg = crate::config::Pipelines::default();
+        let fake = Fake::default();
+        let mut run = at_wait(None);
+        run.pending = None;
+        let def = run.definition.as_mut().unwrap();
+        for s in def.steps.iter_mut() {
+            match s.id.as_str() {
+                "fix" => s.next.pass = "review".into(),
+                "review" => {
+                    s.next.pass = "push".into();
+                    s.max_runs = 5;
+                }
+                _ => {}
+            }
+        }
+        let judged = super::pin("a", "");
+        {
+            let st = run.state_of("review");
+            st.machine = "hp".into();
+            st.path = "/r/w".into();
+            st.judged = Some(judged.clone());
+            st.outcome = Some(Outcome::Pass);
+            st.runs = 1;
+        }
+        let (run, _) = engine::step(run, failing_read("aaaaaaaa"), &cfg, later(1));
+        assert_eq!(run.step, "fix");
+        let sent = run.steps["ci"].watch.sent.clone();
+        let (run, _) = engine::step(run, Seen::Admitted, &cfg, later(2));
+        let (run, _) = engine::step(
+            run,
+            Seen::Ended {
+                step: "fix".into(),
+                outcome: Outcome::Pass,
+                report: "nothing to do".into(),
+                details: vec![],
+            },
+            &cfg,
+            later(3),
+        );
+        assert_eq!(run.step, "review");
+        let (run, effects) = engine::step(run, Seen::Admitted, &cfg, later(3));
+        fake.pins.lock().unwrap().push_back(judged);
+        let seen = act(&fake, &cfg, &run, &effects[0]).await;
+        assert!(
+            matches!(&seen[..], [Seen::Unchanged { .. }]),
+            "the review is not skipped past: {seen:?}"
+        );
+        let (run, _) = engine::step(run, seen[0].clone(), &cfg, later(3));
+        assert_eq!(run.waiting.as_ref().unwrap().kind, WaitKind::Unchanged);
+        assert_eq!(run.steps["ci"].watch.sent, sent, "the wait still remembers");
+
+        let (run, did) = engine::step(run, Seen::Continue(Outcome::Pass), &cfg, later(4));
+        assert_eq!(run.step, "push");
+        assert_eq!(
+            did,
+            vec![Effect::Push {
+                step: "push".into()
+            }]
+        );
+        let (run, _) = engine::step(run, Seen::Pushed(Ok(())), &cfg, later(4));
+        assert_eq!(run.step, "ci");
+        let (run, did) = engine::step(run, failing_read("aaaaaaaa"), &cfg, later(5));
+        assert_eq!(did, vec![], "no second Fix for the same failure");
+        assert_eq!((run.step.as_str(), run.state), ("ci", RunState::Running));
+        assert!(run.steps["ci"].watch.status.contains("already sent"));
+    }
+
+    #[test]
+    fn a_command_step_still_cannot_pass_unrun_after_a_ci_wait() {
+        let cfg = crate::config::Pipelines::default();
+        let mut run = at_wait(None);
+        run.pending = None;
+        let def = run.definition.as_mut().unwrap();
+        def.steps.push(
+            serde_json::from_value(json!({
+                "id": "test", "name": "Test", "kind": "command", "command": "make test",
+                "approved": "",
+                "next": { "pass": "report", "fail": "wait", "needs_you": "wait" },
+            }))
+            .unwrap(),
+        );
+        def.steps
+            .iter_mut()
+            .find(|s| s.id == "ci")
+            .unwrap()
+            .next
+            .pass = "test".into();
+        run.state_of("ci").watch.green = "a".into();
+        let green = Seen::ChecksRead {
+            step: "ci".into(),
+            read: Read::Found(pull("a", Ci::Passing, &[])),
+            every_seconds: 120,
+        };
+        let (run, _) = engine::step(run, green, &cfg, later(1));
+        assert_eq!(run.step, "test");
+        let seen = Seen::ToolChanged {
+            hash: String::new(),
+            reason: "accept it".into(),
+            shown: "make test".into(),
+        };
+        let (run, _) = engine::step(run, seen, &cfg, later(1));
+        let (still, did) = engine::step(run, Seen::Continue(Outcome::Pass), &cfg, later(2));
+        assert_eq!((still.state, did), (RunState::Waiting, vec![]));
+        assert_eq!(still.step, "test");
+    }
+
+    #[test]
+    fn health_stays_out_only_while_a_run_is_at_its_wait() {
+        let url = "https://github.com/acme/app/pull/12";
+        let (p, _dir) = setup(at_wait(None));
+        assert!(p.waits_on_pull(url, "hp", "/r/w"));
+        assert!(!p.waits_on_pull(url, "hp", "/r/other"));
+        let mut run = p.run("run-ab12cd").unwrap();
+        run.step = "fix".into();
+        p.put(run.clone());
+        assert!(
+            !p.waits_on_pull(url, "hp", "/r/w"),
+            "at Fix it is not waiting"
+        );
+        assert!(
+            p.owns_pull(url, "hp", "/r/w"),
+            "cards stay off all the same"
+        );
+        run.step = "ci".into();
+        run.state = RunState::Waiting;
+        run.waiting = Some(crate::pipeline::record::Waiting {
+            kind: WaitKind::CiUnsettled,
+            step: "ci".into(),
+            reason: "build was cancelled".into(),
+            screen: String::new(),
+            tool_hash: String::new(),
+        });
+        p.put(run);
+        assert!(p.waits_on_pull(url, "hp", "/r/w"));
+    }
+
+    #[test]
+    fn a_run_waiting_on_an_unsettled_check_is_only_a_waiting_run_to_health() {
+        use crate::health::checks::{run_queued, run_waiting, step_quiet};
+        let run = cancelled_run();
+        let fake = Fake::default();
+        assert_eq!(run_waiting(std::slice::from_ref(&run)).len(), 1);
+        assert!(run_queued(std::slice::from_ref(&run)).is_empty());
+        let quiet = step_quiet(
+            std::slice::from_ref(&run),
+            &fake.view(),
+            &Default::default(),
+            120,
+        );
+        assert!(quiet.is_empty());
+    }
+
+    #[test]
+    fn a_saved_run_and_pipeline_from_before_load_as_they_were() {
+        let run: Run = serde_json::from_value(json!({
+            "id": "r", "steps": { "implement": { "runs": 1 } }, "next_try": null,
+        }))
+        .unwrap();
+        assert!(run.steps["implement"].watch.is_empty());
+        let written = serde_json::to_value(&run).unwrap();
+        assert!(written["steps"]["implement"].get("watch").is_none());
+        let step: crate::pipeline::definition::Step = serde_json::from_value(json!({
+            "id": "ci", "name": "CI", "kind": "checks",
+        }))
+        .unwrap();
+        assert!(matches!(
+            step.kind,
+            StepKind::Checks {
+                require_approval: false
+            }
+        ));
+    }
 }

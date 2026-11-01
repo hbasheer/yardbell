@@ -312,7 +312,12 @@ fn facts_of(app: &AppState, cfg: &Config) -> Facts {
         runs: app.pipelines.runs(),
         step_minutes: cfg.pipelines.minutes,
         screens: app.state.screens(),
-        pulls: app.state.pulls(),
+        pulls: app
+            .state
+            .pulls()
+            .into_iter()
+            .filter(|(key, pull)| !app.pipelines.waits_on_pull(&pull.url, &key.0, &key.1))
+            .collect(),
         unread_pulls: app.state.unread_pulls(),
         triggers,
         view,

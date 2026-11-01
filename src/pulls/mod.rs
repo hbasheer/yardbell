@@ -6,6 +6,8 @@ mod gitlab;
 mod remote;
 
 pub use github::GitHub;
+#[cfg(test)]
+pub(crate) use gitlab::stub as gitlab_stub;
 pub use gitlab::{accesses, accesses_for, Answer, GitLab, GitLabAccess, Mr};
 pub(crate) use gitlab::{glab_error, run_glab};
 pub use remote::{folder_remotes_command, parse_folder_remotes, service_of, Remotes, Repo};
@@ -56,6 +58,20 @@ pub struct Check {
     pub log: String,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Unsettled {
+    Cancelled,
+    Stale,
+    ActionRequired,
+}
+
+// A check that ended with neither a pass nor anything an agent could fix.
+#[derive(Debug, Clone, PartialEq)]
+pub struct UnsettledCheck {
+    pub check: Check,
+    pub how: Unsettled,
+}
+
 // A comment, a review, or a review's comment on a line, by someone other than the pull request's
 // author.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -85,6 +101,10 @@ pub struct Pull {
     pub notes: Vec<Note>,
     pub created: String,
     pub approvers: Vec<String>,
+    // The reviews that ask for changes now: a reviewer's later approval or a dismissal ends one.
+    pub asking: Vec<String>,
+    pub resolved: Vec<String>,
+    pub unsettled: Vec<UnsettledCheck>,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -148,6 +168,14 @@ pub trait Forge: Send + Sync {
         path: &'a str,
         review: &'a Note,
     ) -> BoxFuture<'a, Vec<Note>>;
+    fn resolved_comments<'a>(
+        &'a self,
+        _m: &'a Machine,
+        _path: &'a str,
+        _number: u64,
+    ) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async { Vec::new() })
+    }
     fn configure(
         &self,
         _cfg: &crate::config::PullRequests,
@@ -344,7 +372,7 @@ fn last_lines(lines: &[String], count: usize, bytes: usize) -> String {
         .to_string()
 }
 
-fn clip(text: &str, chars: usize) -> String {
+pub(crate) fn clip(text: &str, chars: usize) -> String {
     if text.chars().count() <= chars {
         return text.to_string();
     }
@@ -365,24 +393,25 @@ pub fn telling_line(log: &str) -> String {
         .map(str::trim)
         .filter(|l| !l.is_empty())
         .collect();
-    let said = |l: &&&str| {
-        let low = l.to_ascii_lowercase();
-        ["error", "fail", "panic", "assert"]
-            .iter()
-            .any(|w| low.contains(w))
-            && !low.starts_with("process completed with exit code")
-            && !low.starts_with("error: job failed: exit code")
-    };
     lines
         .iter()
         .rev()
-        .find(said)
+        .find(|l| says_what_broke(l))
         .or(lines.last())
         .map(|l| clip(l, QUOTE_CHARS))
         .unwrap_or_default()
 }
 
-fn what_failed(checks: &[Check]) -> String {
+pub(crate) fn says_what_broke(line: &str) -> bool {
+    let low = line.to_ascii_lowercase();
+    ["error", "fail", "panic", "assert"]
+        .iter()
+        .any(|w| low.contains(w))
+        && !low.starts_with("process completed with exit code")
+        && !low.starts_with("error: job failed: exit code")
+}
+
+pub(crate) fn what_failed(checks: &[Check]) -> String {
     let names: Vec<&str> = checks.iter().map(|c| c.name.as_str()).collect();
     match names.as_slice() {
         [] => "a check".into(),
@@ -416,7 +445,7 @@ fn titled(p: &Pull) -> String {
         .unwrap_or_default()
 }
 
-fn both(names: &[String]) -> String {
+pub(crate) fn both(names: &[String]) -> String {
     match names {
         [] => String::new(),
         [one] => one.clone(),
@@ -518,7 +547,7 @@ pub fn ci_instruction(pull: &Pull, checks: &[Check]) -> String {
     )
 }
 
-fn said_by(n: &Note) -> String {
+pub(crate) fn said_by(n: &Note) -> String {
     let who = if n.author.is_empty() {
         "A reviewer"
     } else {
@@ -602,6 +631,32 @@ pub fn card(n: &Notice, checks: &[Check], notes: &[Note]) -> Value {
     })
 }
 
+// A review's comments on lines are read after it, and a review that says nothing itself drops out.
+pub(crate) async fn with_comments_on_lines(
+    github: &dyn Forge,
+    m: &Machine,
+    path: &str,
+    notes: &[Note],
+    gitlab: bool,
+) -> Vec<Note> {
+    let mut all = Vec::new();
+    let mut asked = 0;
+    for note in notes {
+        let review = note.kind != "comment";
+        if !review || !note.body.trim().is_empty() {
+            all.push(note.clone());
+        }
+        if review && !gitlab && asked < REVIEWS_PER_CARD {
+            asked += 1;
+            all.extend(github.review_comments(m, path, note).await);
+        }
+    }
+    if all.is_empty() {
+        all = notes.to_vec();
+    }
+    all
+}
+
 struct Entry {
     next: Instant,
     pull: Option<Pull>,
@@ -618,11 +673,11 @@ pub struct PullHealth {
     pub github_problem: Option<String>,
 }
 
-fn no_gh(machine: &str) -> String {
+pub(crate) fn no_gh(machine: &str) -> String {
     format!("gh is not installed or not signed in on {machine}")
 }
 
-fn gh_failed(why: &str) -> String {
+pub(crate) fn gh_failed(why: &str) -> String {
     if why.contains("known GitHub host") {
         return "This branch's remote is not on GitHub. If it is on GitLab, add its host in Settings, GitHub and GitLab".into();
     }
@@ -658,7 +713,11 @@ pub struct Pulls {
     file: PathBuf,
     inner: Mutex<Inner>,
     insights: Option<Arc<Insights>>,
+    owner: Option<Owner>,
 }
+
+// Whether something other than a card takes this pull request's failures and comments.
+pub type Owner = Box<dyn Fn(&Notice) -> bool + Send + Sync>;
 
 fn today() -> String {
     chrono::Local::now().format("%Y-%m-%d").to_string()
@@ -685,7 +744,13 @@ impl Pulls {
                 ..Inner::default()
             }),
             insights: None,
+            owner: None,
         }
+    }
+
+    pub fn with_owner(mut self, owner: Owner) -> Pulls {
+        self.owner = Some(owner);
+        self
     }
 
     pub fn with_insights(mut self, insights: Arc<Insights>) -> Pulls {
@@ -1025,22 +1090,8 @@ impl Pulls {
                 card(n, &with_logs, &[])
             }
             Change::Reviewed(notes) => {
-                let mut all = Vec::new();
-                let mut asked = 0;
-                for note in notes {
-                    let review = note.kind != "comment";
-                    if !review || !note.body.trim().is_empty() {
-                        all.push(note.clone());
-                    }
-                    if review && !gitlab && asked < REVIEWS_PER_CARD {
-                        asked += 1;
-                        all.extend(self.github.review_comments(m, &n.path, note).await);
-                    }
-                }
-                if all.is_empty() {
-                    all = notes.clone();
-                }
-                card(n, &[], &all)
+                let all = with_comments_on_lines(self.github.as_ref(), m, &n.path, notes, gitlab);
+                card(n, &[], &all.await)
             }
         }
     }
@@ -1077,6 +1128,9 @@ impl Pulls {
             return;
         }
         for n in notices {
+            if self.owner.as_ref().is_some_and(|owns| owns(&n)) {
+                continue;
+            }
             let Some(m) = cfg.machine(&n.machine) else {
                 continue;
             };

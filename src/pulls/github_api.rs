@@ -1,5 +1,6 @@
 use super::github::{
-    actions_url, excerpt, parse_review_comments, parse_view, review_comments_query,
+    actions_url, excerpt, parse_resolved, parse_review_comments, parse_view, review_comments_query,
+    RESOLVED_QUERY,
 };
 use super::{Check, Fetched, Forge, Note, Remotes};
 use crate::config::{GithubVia, Machine, PullRequests};
@@ -305,6 +306,24 @@ impl Forge for GitHubApi {
         })
     }
 
+    fn resolved_comments<'a>(
+        &'a self,
+        m: &'a Machine,
+        path: &'a str,
+        number: u64,
+    ) -> BoxFuture<'a, Vec<String>> {
+        Box::pin(async move {
+            let Ok((owner, name)) = self.repo_of(m, path, "HEAD").await else {
+                return Vec::new();
+            };
+            let variables = json!({ "owner": owner, "name": name, "number": number });
+            match self.graphql(RESOLVED_QUERY, variables).await {
+                Ok(answer) => parse_resolved(&answer.to_string()),
+                Err(_) => Vec::new(),
+            }
+        })
+    }
+
     fn problem(&self) -> Option<String> {
         self.problem.lock().expect("github problem").clone()
     }
@@ -365,6 +384,15 @@ impl Forge for GitHubEither {
         review: &'a Note,
     ) -> BoxFuture<'a, Vec<Note>> {
         self.current().review_comments(m, path, review)
+    }
+
+    fn resolved_comments<'a>(
+        &'a self,
+        m: &'a Machine,
+        path: &'a str,
+        number: u64,
+    ) -> BoxFuture<'a, Vec<String>> {
+        self.current().resolved_comments(m, path, number)
     }
 
     fn configure(&self, cfg: &PullRequests, secrets: &Result<Secrets, String>) {

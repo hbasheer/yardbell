@@ -2116,6 +2116,28 @@ class Suite:
             raise Failure("Save stays off after adding a step")
         self.check_errors("dragging from the library")
 
+    def test_builder_wait_for_ci_step_saves_its_approval_and_minutes(self):
+        b = self.b
+        original = self.api("GET", "/api/pipelines/review")
+        self.open_builder()
+        b.click('.pl-node[data-step="test"]')
+        b.wait("document.querySelector('#pl-inspector .pl-step-form[data-step=\"test\"]')", "the Test step in the inspector")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"checks\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-checks.selected')", "the new wait on Test's pass line")
+        if b.js("document.querySelector('#pl-inspector input[name=max_runs]').value") != "5":
+            raise Failure("a new wait should allow a Fix loop, with 5 runs")
+        b.click("#pl-inspector input[name=require_approval]")
+        b.wait("document.querySelector('.pl-node.kind-checks').textContent.includes('an approval')", "the card saying it waits for an approval")
+        self.set_field('#pl-inspector input[name=minutes]', "240")
+        b.click("#pl-save")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {original['version'] + 1})()", "the pipeline saved")
+        saved = self.api("GET", "/api/pipelines/review")
+        step = next(s for s in saved["steps"] if s["kind"] == "checks")
+        if (step["require_approval"], step["minutes"]) != (True, 240):
+            raise Failure(f"the wait was saved as {step}")
+        self.check_errors("the wait for CI step")
+        self.api("PUT", "/api/pipelines/review", original)
+
     def test_builder_connect_ports_and_cut_a_line(self):
         b = self.b
         self.open_builder()

@@ -117,6 +117,30 @@ pub fn mcp_sign_in_lines(cfg: &Config, secrets: &crate::secrets::Secrets) -> Vec
         .collect()
 }
 
+// A host under pull_requests.gitlab has its own line above; a run on any other remote asks GitHub.
+fn checks_lines(
+    cfg: &Config,
+    name: &str,
+    gh: &[(String, bool)],
+    machines: &[String],
+) -> Vec<(bool, String)> {
+    if cfg.pull_requests.github_via == crate::config::GithubVia::Token {
+        return vec![(
+            !cfg.pull_requests.github_token.trim().is_empty(),
+            format!("{name}: a wait for CI reads GitHub with the token in Settings"),
+        )];
+    }
+    gh.iter()
+        .filter(|(m, ok)| !ok && machines.contains(m))
+        .map(|(m, _)| {
+            (
+                false,
+                format!("{name}: gh is not logged in on {m}, so a wait for CI cannot read a GitHub pull request there"),
+            )
+        })
+        .collect()
+}
+
 pub fn pipelines_lines(
     cfg: &Config,
     defs: &[Definition],
@@ -211,6 +235,13 @@ pub fn pipelines_lines(
                     format!("{name}: gh is logged in on {}", machines.join(", ")),
                 ));
             }
+        }
+        if def
+            .steps
+            .iter()
+            .any(|s| matches!(s.kind, StepKind::Checks { .. }))
+        {
+            lines.extend(checks_lines(cfg, name, gh, &machines));
         }
         let down: Vec<&String> = machines
             .iter()
@@ -461,6 +492,35 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
 mod tests {
     use super::*;
     use std::path::Path;
+
+    #[test]
+    fn a_wait_for_ci_names_who_cannot_read_github() {
+        let mut cfg = crate::pipeline::definition::tests::cfg();
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "ci", "name": "CI", "kind": "checks",
+            }))
+            .unwrap(),
+        );
+        let gh = [("hp".to_string(), false)];
+        let lines = pipelines_lines(&cfg, &[def.clone()], &None, &gh, &[], &[], &[]);
+        assert!(
+            lines.iter().any(|(ok, text)| !ok
+                && text.contains("a wait for CI cannot read a GitHub pull request")),
+            "{lines:?}"
+        );
+        cfg.pull_requests.github_via = crate::config::GithubVia::Token;
+        cfg.pull_requests.github_token = "${github}".into();
+        let lines = pipelines_lines(&cfg, &[def], &None, &gh, &[], &[], &[]);
+        assert!(
+            lines
+                .iter()
+                .any(|(ok, text)| *ok && text.contains("reads GitHub with the token")),
+            "{lines:?}"
+        );
+    }
 
     #[test]
     fn gitlab_lines_name_the_account_or_the_problem() {

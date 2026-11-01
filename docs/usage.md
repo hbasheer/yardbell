@@ -511,6 +511,9 @@ apply: it is sent at once, waits below for you to approve or edit it, or is refu
 (one commit) and each comment gets one card, also after a restart, and a pull request seen for the
 first time only sets what is known, so old comments never turn into cards.
 
+A pipeline run with a [Wait for CI and reviews](automation.md#wait-for-ci-and-reviews) step takes these
+for its own pull or merge request while it runs, so it gets no cards then.
+
 #### Triggers
 
 A trigger starts a Dispatch conversation from one of your saved tasks without you typing it. Add

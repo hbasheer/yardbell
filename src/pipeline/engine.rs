@@ -1,3 +1,4 @@
+use super::checks::{self, Read, Verdict};
 use super::definition::{MachineChoice, Outcome, Step, StepKind, END, WAIT};
 use super::record::{
     CommandRan, Effect, Entry, Held, HoldKind, Question, Run, RunState, Seen, WaitKind, Waiting,
@@ -201,6 +202,7 @@ fn enter_step(
     run.step = id.to_string();
     run.step_since = now.to_rfc3339();
     run.retried = false;
+    run.next_try = None;
     run.waiting = None;
     run.slot = None;
     run.held = None;
@@ -226,6 +228,7 @@ fn enter_step(
         }
         StepKind::Plan { .. } => Effect::Plan { step: id.into() },
         StepKind::Push => Effect::Push { step: id.into() },
+        StepKind::Checks { .. } => Effect::Checks { step: id.into() },
         StepKind::Update { .. } => Effect::Linear { step: id.into() },
         StepKind::Report => Effect::Report { step: id.into() },
         StepKind::Call { .. } => Effect::Call { step: id.into() },
@@ -336,24 +339,42 @@ fn tick(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
     if run.state != RunState::Running {
         return (run, vec![]);
     }
+    let watching = current(&run).is_some_and(|s| matches!(s.kind, StepKind::Checks { .. }));
     if let Some(at) = run.next_try.clone() {
-        if elapsed(&at, now).is_some_and(|m| m >= 0) {
+        if DateTime::parse_from_rfc3339(&at).is_ok_and(|at| *now >= at) {
             run.next_try = None;
-            return (run, vec![Effect::Plan { step: id }]);
+            let effect = if watching {
+                Effect::Checks { step: id }
+            } else {
+                Effect::Plan { step: id }
+            };
+            return (run, vec![effect]);
         }
     }
     let Some(step) = current(&run) else {
         return (run, vec![]);
     };
-    if !matches!(step.kind, StepKind::Agent { .. } | StepKind::Plan { .. }) {
+    if !watching && !matches!(step.kind, StepKind::Agent { .. } | StepKind::Plan { .. }) {
         return (run, vec![]);
     }
     let limit = step.minutes.unwrap_or(cfg.minutes) as i64;
     match elapsed(&run.step_since, now).filter(|m| *m > limit) {
+        Some(m) if watching => {
+            let waited = duration(m);
+            let reason = match run.steps.get(&id).map(|s| s.watch.status.as_str()) {
+                Some(status) if !status.is_empty() => {
+                    format!("{} waited {waited}: {status}", step.name)
+                }
+                _ => format!("{} waited {waited}", step.name),
+            };
+            wait(run, WaitKind::TimeLimit, &id, reason, "")
+        }
         Some(m) => {
             let reason = format!("{} has run for {}", step.name, duration(m));
             wait(run, WaitKind::TimeLimit, &id, reason, "")
         }
+        // A restart between a read and what came of it leaves nothing due, so the wait asks again.
+        None if watching && run.next_try.is_none() => (run, vec![Effect::Checks { step: id }]),
         None => (run, vec![]),
     }
 }
@@ -375,6 +396,136 @@ fn held_too_long(mut run: Run, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
         held.reason
     );
     (run, vec![Effect::Notify { text }])
+}
+
+// A person who answers a stopped wait starts its count again, or the next commit would stop it.
+fn count_again(run: &mut Run, step: &str) {
+    let watches = run
+        .def()
+        .step(step)
+        .is_some_and(|s| matches!(s.kind, StepKind::Checks { .. }));
+    if watches {
+        run.state_of(step).watch = checks::Watch::default();
+    }
+}
+
+// The report opens with the reason, which the run page already shows above this text.
+fn under_reason<'a>(report: &'a str, reason: &str) -> &'a str {
+    report
+        .strip_prefix(reason)
+        .map_or(report, |rest| rest.trim_start_matches('.').trim_start())
+}
+
+fn waits_on_an_unsettled_check(run: &Run) -> bool {
+    run.waiting
+        .as_ref()
+        .is_some_and(|w| w.kind == WaitKind::CiUnsettled)
+}
+
+// The person has been told, and a re-run needs nothing from them, so the wait keeps reading until
+// its time limit, and then only they can move it on.
+fn tick_unsettled(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
+    let Some(step) = current(&run) else {
+        return (run, vec![]);
+    };
+    let limit = step.minutes.unwrap_or(cfg.minutes) as i64;
+    if let Some(m) = elapsed(&run.step_since, now).filter(|m| *m > limit) {
+        run.next_try = None;
+        if let Some(w) = run.waiting.as_mut() {
+            w.kind = WaitKind::TimeLimit;
+            w.reason = format!("{} waited {}: {}", step.name, duration(m), w.reason);
+        }
+        return (run, vec![]);
+    }
+    let due = match &run.next_try {
+        Some(at) => DateTime::parse_from_rfc3339(at).is_ok_and(|at| *now >= at),
+        None => true,
+    };
+    if !due {
+        return (run, vec![]);
+    }
+    run.next_try = None;
+    (run, vec![Effect::Checks { step: step.id }])
+}
+
+fn checks_read(
+    mut run: Run,
+    read: Read,
+    every_seconds: u64,
+    now: &DateTime<Local>,
+) -> (Run, Vec<Effect>) {
+    let id = run.step.clone();
+    let Some(StepKind::Checks { require_approval }) = current(&run).map(|s| s.kind) else {
+        return (run, vec![]);
+    };
+    let next_read = (*now + Duration::seconds(every_seconds as i64)).to_rfc3339();
+    let open = waits_on_an_unsettled_check(&run);
+    if open && !matches!(read, Read::Found(_)) {
+        run.next_try = Some(next_read);
+        return (run, vec![]);
+    }
+    let verdict = match read {
+        Read::Found(pull) => {
+            if run.pull.is_none() {
+                run.pull = Some(super::record::PullRef {
+                    url: pull.url.clone(),
+                    number: pull.number,
+                });
+            }
+            checks::judge(&mut run.state_of(&id).watch, &pull, require_approval, now)
+        }
+        Read::NoPull => {
+            Verdict::Hold("No pull or merge request is open for this branch yet".into())
+        }
+        Read::Problem(e) => Verdict::Hold(e),
+        Read::Blocked(reason) => Verdict::Stop {
+            reason,
+            report: String::new(),
+        },
+    };
+    if open && !matches!(verdict, Verdict::Unsettled { .. }) {
+        run.waiting = None;
+        run.state = RunState::Running;
+        run.step_since = now.to_rfc3339();
+    }
+    match verdict {
+        Verdict::Hold(status) => {
+            run.state_of(&id).watch.status = status;
+            run.next_try = Some(next_read);
+            (run, vec![])
+        }
+        Verdict::Unsettled { reason, report } if open => {
+            run.state_of(&id).report.clone_from(&report);
+            let screen = tail(under_reason(&report, &reason), SCREEN_LINES);
+            if let Some(w) = run.waiting.as_mut() {
+                w.reason = reason;
+                w.screen = screen;
+            }
+            run.next_try = Some(next_read);
+            (run, vec![])
+        }
+        Verdict::Unsettled { reason, report } => {
+            run.state_of(&id).report.clone_from(&report);
+            let screen = under_reason(&report, &reason).to_string();
+            let (mut run, effects) = wait(run, WaitKind::CiUnsettled, &id, reason, &screen);
+            run.next_try = Some(next_read);
+            (run, effects)
+        }
+        Verdict::Pass(report) => {
+            run.state_of(&id).report = report;
+            follow(run, Outcome::Pass, now)
+        }
+        Verdict::Fail(report) => {
+            run.state_of(&id).report = report;
+            follow(run, Outcome::Fail, now)
+        }
+        Verdict::Stop { reason, report } => {
+            if !report.is_empty() {
+                run.state_of(&id).report = report.clone();
+            }
+            wait(run, WaitKind::Stopped, &id, reason, &report)
+        }
+    }
 }
 
 fn answer(mut run: Run, text: String, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
@@ -512,6 +663,7 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             if !matches!(kind, Some(WaitKind::TokenLimit | WaitKind::TokenUnknown)) {
                 run.state_of(&at).again = true;
             }
+            count_again(&mut run, &at);
             enter(run, &at, now, true)
         }
         Seen::RaiseLimit(limit) if waiting => {
@@ -526,6 +678,7 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
                 return (run, vec![]);
             }
             if let Some(w) = run.waiting.take() {
+                count_again(&mut run, &w.step);
                 run.step = w.step;
             }
             let at = run.step.clone();
@@ -544,6 +697,14 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             follow(run, outcome, now)
         }
         Seen::Answer(text) if waiting => answer(run, text, now),
+        Seen::Tick if waits_on_an_unsettled_check(&run) => tick_unsettled(run, cfg, now),
+        Seen::ChecksRead {
+            step,
+            read,
+            every_seconds,
+        } if step == id && waits_on_an_unsettled_check(&run) => {
+            checks_read(run, read, every_seconds, now)
+        }
         _ if waiting => (run, vec![]),
         Seen::Tick => tick(run, cfg, now),
         Seen::Offline if run.state == RunState::Queued => {
@@ -689,6 +850,8 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.step = step;
             follow(run, outcome, now)
         }
+        // A fix pushed again goes to the pull or merge request the first push opened.
+        Seen::Pushed(Ok(())) if run.pull.is_some() => follow(run, Outcome::Pass, now),
         Seen::Pushed(Ok(())) => (run, vec![Effect::OpenPull { step: id }]),
         Seen::Pushed(Err(e)) => wait(run, WaitKind::Push, &id, e, ""),
         Seen::Opened(opened) => {
@@ -698,6 +861,11 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             }
             follow(run, Outcome::Pass, now)
         }
+        Seen::ChecksRead {
+            step,
+            read,
+            every_seconds,
+        } if step == id => checks_read(run, read, every_seconds, now),
         Seen::Linear(Ok(())) => follow(run, Outcome::Pass, now),
         Seen::Linear(Err(e)) => {
             run.notes.push(format!("Linear: {e}"));

@@ -1,3 +1,4 @@
+pub mod checks;
 pub mod definition;
 pub mod engine;
 pub mod forge;
@@ -62,6 +63,15 @@ fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
         }
     }
     (step, notes)
+}
+
+fn pull_of_run(run: &Run, url: &str, machine: &str, path: &str) -> bool {
+    run.pull.as_ref().is_some_and(|p| p.url == url)
+        || run.subject.pr.as_ref().is_some_and(|p| p.url == url)
+        || run
+            .steps
+            .values()
+            .any(|st| st.machine == machine && st.path == path)
 }
 
 impl Pipelines {
@@ -132,6 +142,32 @@ impl Pipelines {
 
     pub fn run(&self, id: &str) -> Option<Run> {
         self.store.get(id)
+    }
+
+    // A run with a wait for CI takes the failures and comments of its own pull or merge request,
+    // so the same failure does not also become a card with Send to session.
+    pub fn owns_pull(&self, url: &str, machine: &str, path: &str) -> bool {
+        self.store.all().iter().any(|run| {
+            let waits = run.definition.as_ref().is_some_and(|d| {
+                d.steps
+                    .iter()
+                    .any(|s| matches!(s.kind, definition::StepKind::Checks { .. }))
+            });
+            waits && run.state.active() && pull_of_run(run, url, machine, path)
+        })
+    }
+
+    // A run at its wait has its own time limit and says so itself, so a health check on the same
+    // pull request would only be a second alert.
+    pub fn waits_on_pull(&self, url: &str, machine: &str, path: &str) -> bool {
+        self.store.all().iter().any(|run| {
+            let at_wait = run
+                .definition
+                .as_ref()
+                .and_then(|d| d.step(&run.step))
+                .is_some_and(|s| matches!(s.kind, definition::StepKind::Checks { .. }));
+            at_wait && run.state.active() && pull_of_run(run, url, machine, path)
+        })
     }
 
     pub fn linear(&self) -> Arc<linear::Linear> {
@@ -479,7 +515,11 @@ impl Pipelines {
                     self.apply(world.as_ref(), &run.id, seen, now);
                 }
             }
-            let watched = matches!(run.state, RunState::Running | RunState::Queued);
+            let watched = matches!(run.state, RunState::Running | RunState::Queued)
+                || run
+                    .waiting
+                    .as_ref()
+                    .is_some_and(|w| w.kind == record::WaitKind::CiUnsettled);
             if !watched || self.busy(&run.id) || run.pending.is_some() {
                 continue;
             }

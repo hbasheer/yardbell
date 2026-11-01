@@ -104,6 +104,7 @@ pub fn uses_tokens(kind: &StepKind) -> bool {
         | StepKind::Call { .. }
         | StepKind::Tool { .. }
         | StepKind::Command { .. }
+        | StepKind::Checks { .. }
         | StepKind::Wait { .. } => false,
     }
 }
@@ -379,6 +380,9 @@ mod tests {
             StepKind::Command {
                 command: String::new(),
                 approved: String::new(),
+            },
+            StepKind::Checks {
+                require_approval: true,
             },
             StepKind::Wait {
                 message: String::new(),

@@ -496,7 +496,7 @@ Enterprise keeps working, and a GitLab host that is not listed shows no badge.
 # github_via: gh or token. token needs github_token, naming a saved secret.
 # gitlab_via: token or glab. glab needs no token on its hosts.
 pull_requests:
-  enabled: true        # false: no badges, no cards, gh and GitLab are never asked
+  enabled: true        # false: no badges, no cards; only a pipeline's Push and Wait for CI steps ask gh and GitLab
   poll_seconds: 120    # how often each branch is asked, at least 30
   cards: true          # false: badges only, no cards in Dispatch
   use_github: true     # false: gh is never asked for badges and cards

@@ -592,6 +592,7 @@ reviewer afresh.
 | Agent | Starts an agent with your instructions. It works in a new worktree on the run's branch, in another step's folder, or in a copy of another step's branch on another machine; in a new session or by continuing another step's session; optionally read only. Its machine is a fixed one, the machine of another step, or one Dispatch picks. It ends with a result block saying pass, fail or needs you. |
 | Plan | Dispatch reads the ticket and its comments and picks the machine, folder and branch, from all machines or the ones you tick. Unclear tickets come back to you as questions. |
 | Push and draft PR | Pushes the run's branch (with the secret check, never forced) and opens a draft pull or merge request. |
+| Wait for CI and reviews | Waits for the run's pull or merge request without an agent, then follows pass or fail. See [below](#wait-for-ci-and-reviews). |
 | Linear | Moves the ticket to a state, or drafts a comment that you post yourself. |
 | Use a connected tool | Does one action in a [connection](#connectors): reads from or changes an outside tool. Its reply goes on the pass line and an error on the fail line. |
 | Run a command | Runs a saved shell command in the run's worktree, with no agent. Exit 0 goes on the pass line and anything else on the fail line. See [Run a command](#run-a-command). |
@@ -685,6 +686,95 @@ so it runs nothing, and a later step that reads `{report}` finds no output if th
 **Dispatch rules.** A rule on the action `run_command` matches the machine, and the folder either as its name
 such as `acme/web` or as the worktree's path. A `deny` rule makes the run wait with the rule's reason. As with
 the other steps of a run, starting the run is the one approval, so `prompt` does not stop it.
+### Wait for CI and reviews
+
+Put this step after **Push and draft PR**, with its fail line going to a Fix step, and Fix's pass line
+going back to Push:
+
+```
+ Push and draft PR --> Wait for CI and reviews --pass--> Report to me
+        ^                      |
+        |                     fail
+        |                      v
+        +------- pass ------- Fix    "Fix what this found: {report}"
+```
+
+Every `poll_seconds` (Settings, Connections, GitHub and GitLab) it reads the branch's pull or merge
+request the same way badges and cards do, through `gh`, a GitHub token, a GitLab token or `glab`. The
+switches for badges and cards do not turn it off, since you put the step there.
+
+| What it reads | What it does |
+|---|---|
+| CI green on the same commit at two reads in a row | Follows **pass**. The second read catches a check that registers late. |
+| CI green, **Also wait for an approval** on, and no approval yet | Keeps waiting. |
+| A failed check, or a reviewer asking for changes | Follows **fail**, once per set of failures. |
+| A check that was cancelled, went stale or waits for someone, with nothing failing and nothing still running | Waits for you and names the check. See below. |
+| CI still running | Keeps waiting. |
+| No checks at all after 10 minutes | Waits for you, because nothing says it passed. **Continue on pass** carries on. |
+| The pull or merge request was merged | Follows **pass**. |
+| It was closed, `gh` is logged out, or GitLab refused the token | Waits for you. |
+
+Plain comments do not fail the step. They come along in its report, so a pass can show them too.
+
+**Checks that ended with no result.** A check that was cancelled, went stale or waits for someone to act
+on it is not green, and it gives an agent nothing to fix, so it sends no Fix. This covers a GitHub check run
+that ended `CANCELLED`, `STALE` or `ACTION_REQUIRED`, and a GitLab pipeline that is `canceled` or `canceling`.
+The run waits for you with **Retry step** and **Continue on pass** or **Continue on fail**, and says what
+happened to each check. You do not have to answer if the check is run again or someone deals with it: until
+the step's time limit the wait keeps reading, without telling you again, and a later read with the check
+running or green carries on as usual with a fresh time limit. Green still takes two reads, and a read from
+before does not count. A check that was run again under the same name goes by its other result. After the
+limit the wait stops reading and only you can move it on. If a check failed as well, the failure takes the
+fail line, and the others are listed in the report. These checks neither pass nor add to the count of
+failing commits. Badges and cards do not treat them differently.
+
+Other results keep their meaning. On GitHub, `SUCCESS`, `SKIPPED` and `NEUTRAL` count as green, and `FAILURE`,
+`TIMED_OUT` and `STARTUP_FAILURE` as failed. So a pull request whose checks were all skipped passes. On
+GitLab, a pipeline that is `skipped` or waiting on a `manual` job counts as no checks, so the run waits for
+you after 10 minutes.
+
+**Its report** starts with what failed, then lists the unresolved comments with who said them and
+where, then each failed check with its link and the last lines of its log, for up to 4 checks. Yardbell
+leaves out GitHub review threads and GitLab comments that are marked resolved. Use `{report}` in the Fix
+step's instructions. It arrives quoted, because logs and comments are written by others.
+
+**No agent waits.** The step takes no slot on any machine, and while it waits the run's sessions stop.
+The worktree stays. The Fix step then starts a new session in the same folder, so it works from the
+report and the code, without its earlier conversation.
+
+**Its time limit** is the step's `minutes`, or the `minutes` setting. When it runs out, the run waits for
+you and says what it last saw. A wait that may need a person's approval usually wants a longer one, up
+to 1440. Pending runs and their counts are kept in `runs.json`, so a restart carries on.
+
+**Stopping loops.** A failure is sent down the fail line only when it holds something not sent before:
+a check that fails in a new way, or a new review or comment while changes are requested. A Fix that
+pushes nothing, or a reviewer who has not looked again, leaves the step waiting. The run waits for you
+when:
+
+- the same check fails the same way on two commits. "The same way" compares the log's lines that mention
+  an error or failure, with ids, times and numbers taken out. A log that could not be read never counts
+  as a repeat;
+- any check fails on four commits in a row, whichever check it is. CI passing starts this count again.
+
+**Continue on fail**, **Continue on pass** and **Retry step** start the counts again, so the step can go
+round once more if you say so. A step also still has its **Runs at most**, on this step and on Fix, Push
+and anything else in the loop, so raise those for a longer loop. A new one of these steps allows 5.
+
+**Dispatch cards.** While a run with this step is going, its pull or merge request posts no CI or review
+cards, so one failure never becomes both a card and a Fix step. It counts as the run's when its address is
+the run's, or when it is on a folder a step of the run works in. Badges stay. What happened during the run
+does not turn into cards later; a new failure or comment after the run ended does. A pipeline without this
+step keeps its cards as before.
+
+While a run is at this step, the **CI is still pending** health check leaves that pull or merge request
+alone, because the step has its own time limit and tells you itself. **A run is waiting** still counts it.
+
+The step uses no tokens and is not held for memory, so it goes on past a run's token limit and does not
+count towards the one start a minute. A Fix it sends is an ordinary agent step, so past the limit the run
+waits at Fix instead of spending.
+
+Reading CI and reviews changes nothing, so no Dispatch rule decides it. The Fix step and the Push after
+it are still put to your rules, and this step never merges.
 
 ### When a run waits for you
 
@@ -694,6 +784,8 @@ A run waits under **Waiting for me**, with a phone notification, when:
 - Plan has questions, or an agent asks something or waits on a prompt (its screen is shown);
 - a step reached its `max_runs`, ran past its minutes, or ended without a result;
 - the run passed its token limit, or cannot tell what a step used;
+- a wait for CI ran out of time, saw the same failure on two commits or failures on four in a row,
+  found no checks at all, or found a check that was cancelled, went stale or waits for someone to act;
 - the push or a step was refused, by the secret check or a rule;
 - its machine stayed offline for 30 minutes, or the ticket was closed meanwhile.
 
@@ -723,7 +815,7 @@ pipeline stops its runs' sessions but runs no teardown, so stop a run first if i
    every path, and the machines and MCP servers exist.
 4. Switch it on. Switching on checks the trigger too, such as a GitLab host you have not added.
 5. Run `yardbell doctor`. For each pipeline that is on, it says whether Linear answers, the GitLab
-   host signs you in, `gh` is logged in where it pushes, and its machines are reachable.
+   host signs you in, `gh` is logged in where it pushes or waits for CI, and its machines are reachable.
 
 ### Start a run
 
@@ -855,7 +947,7 @@ The **Settings** button on the Pipelines page writes the `pipelines` section of 
 ```yaml
 pipelines:
   per_machine: 2      # agent steps at once on each machine, 1 to 6
-  minutes: 120        # an agent step running longer waits for you, 10 to 1440
+  minutes: 120        # an agent step or a wait for CI running longer waits for you, 10 to 1440
   memory_limit: 0     # off; or the percent of memory in use that holds new agent steps, 50 to 99
   token_limit: 500000 # optional: tokens one run may use, 0 for no limit; a pipeline can set its own
   qa_notes:           # added to every agent step working in that folder

@@ -155,6 +155,8 @@ pub struct StepState {
     // A person passed this step although its command failed.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub overridden: bool,
+    #[serde(skip_serializing_if = "super::checks::Watch::is_empty")]
+    pub watch: super::checks::Watch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -193,6 +195,7 @@ pub enum WaitKind {
     Unchanged,
     TokenLimit,
     TokenUnknown,
+    CiUnsettled,
 }
 
 impl WaitKind {
@@ -340,6 +343,9 @@ pub enum Effect {
     OpenPull {
         step: String,
     },
+    Checks {
+        step: String,
+    },
     Linear {
         step: String,
     },
@@ -408,6 +414,11 @@ pub enum Seen {
     Sent(Result<(), String>),
     Pushed(Result<(), String>),
     Opened(Result<PullRef, String>),
+    ChecksRead {
+        step: String,
+        read: super::checks::Read,
+        every_seconds: u64,
+    },
     Linear(Result<(), String>),
     Reported(Result<String, String>),
     Called(Result<String, String>),
