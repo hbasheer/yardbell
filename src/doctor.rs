@@ -81,6 +81,29 @@ fn connectors_of(def: &Definition) -> Vec<String> {
     .collect()
 }
 
+// What each filtered Linear trigger finds. A name with a typo matches nothing and raises no error,
+// so an empty answer is worth saying.
+pub fn linear_filter_lines(
+    defs: &[Definition],
+    found: &[(String, Result<usize, String>)],
+) -> Vec<(bool, String)> {
+    defs.iter()
+        .filter(|d| d.enabled)
+        .filter_map(|d| found.iter().find(|(id, _)| id == &d.id).map(|(_, f)| (d, f)))
+        .map(|(d, found)| match found {
+            Ok(0) => (
+                true,
+                format!(
+                    "{}: no open ticket of yours matches its filter now. Check the names if you expected some",
+                    d.name
+                ),
+            ),
+            Ok(n) => (true, format!("{}: {n} open tickets match its filter", d.name)),
+            Err(e) => (false, format!("{}: its filter failed: {e}", d.name)),
+        })
+        .collect()
+}
+
 pub fn mcp_sign_in_lines(cfg: &Config, secrets: &crate::secrets::Secrets) -> Vec<(bool, String)> {
     cfg.mcp_servers
         .iter()
@@ -89,6 +112,30 @@ pub fn mcp_sign_in_lines(cfg: &Config, secrets: &crate::secrets::Secrets) -> Vec
             (
                 false,
                 format!("{}: sign in again under Settings, Connections", s.name),
+            )
+        })
+        .collect()
+}
+
+// A host under pull_requests.gitlab has its own line above; a run on any other remote asks GitHub.
+fn checks_lines(
+    cfg: &Config,
+    name: &str,
+    gh: &[(String, bool)],
+    machines: &[String],
+) -> Vec<(bool, String)> {
+    if cfg.pull_requests.github_via == crate::config::GithubVia::Token {
+        return vec![(
+            !cfg.pull_requests.github_token.trim().is_empty(),
+            format!("{name}: a wait for CI reads GitHub with the token in Settings"),
+        )];
+    }
+    gh.iter()
+        .filter(|(m, ok)| !ok && machines.contains(m))
+        .map(|(m, _)| {
+            (
+                false,
+                format!("{name}: gh is not logged in on {m}, so a wait for CI cannot read a GitHub pull request there"),
             )
         })
         .collect()
@@ -106,11 +153,39 @@ pub fn pipelines_lines(
     let mut lines = Vec::new();
     for def in defs.iter().filter(|d| d.enabled) {
         let name = &def.name;
+        for problem in crate::pipeline::definition::filter_problems(def, cfg) {
+            lines.push((false, format!("{name}: {problem}")));
+        }
+        if let Some(limit) = crate::pipeline::tokens::limit_for(def, &cfg.pipelines) {
+            let limit = crate::pipeline::tokens::group(limit);
+            for s in &def.steps {
+                let StepKind::Agent { agent, .. } = &s.kind else {
+                    continue;
+                };
+                if !cfg.agent_reports_tokens(agent) {
+                    lines.push((false, format!(
+                        "{name}: {} cannot report tokens, so a run waits for you before it. The limit of {limit} cannot be checked for that step",
+                        s.name
+                    )));
+                }
+            }
+        }
         for id in connectors_of(def) {
             match connectors.iter().find(|(c, _)| c == &id) {
                 Some((_, Ok(n))) => lines.push((true, format!("{name}: {id} answers, {n} items"))),
                 Some((_, Err(e))) => lines.push((false, format!("{name}: {e}"))),
                 None => lines.push((false, format!("{name}: {id} was not checked"))),
+            }
+        }
+        for s in &def.steps {
+            if matches!(&s.kind, StepKind::Command { command, approved } if command != approved) {
+                lines.push((
+                    false,
+                    format!(
+                        "{name}: nobody has approved the command in {}, so a run waits there until you accept it",
+                        s.name
+                    ),
+                ));
             }
         }
         let machines = machines_of(cfg, def);
@@ -161,6 +236,13 @@ pub fn pipelines_lines(
                 ));
             }
         }
+        if def
+            .steps
+            .iter()
+            .any(|s| matches!(s.kind, StepKind::Checks { .. }))
+        {
+            lines.extend(checks_lines(cfg, name, gh, &machines));
+        }
         let down: Vec<&String> = machines
             .iter()
             .filter(|m| up.iter().any(|(n, ok)| n == *m && !ok))
@@ -176,6 +258,31 @@ pub fn pipelines_lines(
         }
     }
     lines
+}
+
+fn memory_lines(limit: u32, readings: &[(String, Option<u64>)]) -> Vec<(bool, String)> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let say = |(m, reading): &(String, Option<u64>)| {
+        match reading {
+        None => (
+            false,
+            format!("{m}: no memory reading, so pipeline steps there are not held for memory"),
+        ),
+        Some(used) if *used >= u64::from(limit) => (
+            false,
+            format!(
+                "{m}: {used}% of memory is in use, so new pipeline steps there wait (limit {limit}%)"
+            ),
+        ),
+        Some(used) => (
+            true,
+            format!("{m}: {used}% of memory is in use, under the pipeline limit of {limit}%"),
+        ),
+    }
+    };
+    readings.iter().map(say).collect()
 }
 
 fn line(ok: bool, text: &str) {
@@ -216,10 +323,14 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
     if let Some(hint) = &mesh.hint {
         println!("  fix: {hint}");
     }
+    for (ok, text) in crate::health::doctor_lines(&cfg, &state_dir) {
+        line(ok, &text);
+    }
     let defs = crate::pipeline::library::Library::load(state_dir.join("pipelines")).list();
     let ssh = Ssh::new(state_dir);
     let probe = Probe::new(runner.clone(), ssh.clone());
     let mut up = Vec::new();
+    let mut memory = Vec::new();
     for m in &cfg.machines {
         let st = probe.check(&cfg, m).await;
         let detail = match (&st.reason, &st.snapshot) {
@@ -233,6 +344,10 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
         };
         line(st.up, &format!("{}: {detail}", m.name));
         up.push((m.name.clone(), st.up));
+        if st.up {
+            let health = st.snapshot.as_ref().and_then(|s| s.health);
+            memory.push((m.name.clone(), health.and_then(|h| h.pressure())));
+        }
     }
     let mut signed_in = Vec::new();
     if !cfg.pull_requests.gitlab.is_empty() {
@@ -307,6 +422,30 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
         for (ok, text) in pipelines_lines(&cfg, &defs, &linear, &gh, &signed_in, &up, &connectors) {
             line(ok, &text);
         }
+        for (ok, text) in memory_lines(cfg.pipelines.memory_limit, &memory) {
+            line(ok, &text);
+        }
+        let mut filtered = Vec::new();
+        if let Some(key) = secrets
+            .as_ref()
+            .ok()
+            .and_then(|s| s.get(crate::triggers::LINEAR_SECRET))
+        {
+            for def in defs.iter().filter(|d| d.enabled) {
+                if let Trigger::Linear { filter, .. } = &def.trigger {
+                    if !filter.is_empty() {
+                        let found = crate::pipeline::linear::Linear::new()
+                            .open_where(key, filter)
+                            .await
+                            .map(|t| t.len());
+                        filtered.push((def.id.clone(), found));
+                    }
+                }
+            }
+        }
+        for (ok, text) in linear_filter_lines(&defs, &filtered) {
+            line(ok, &text);
+        }
         if let Ok(secrets) = &secrets {
             for (ok, text) in mcp_sign_in_lines(&cfg, secrets) {
                 line(ok, &text);
@@ -355,6 +494,35 @@ mod tests {
     use std::path::Path;
 
     #[test]
+    fn a_wait_for_ci_names_who_cannot_read_github() {
+        let mut cfg = crate::pipeline::definition::tests::cfg();
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "ci", "name": "CI", "kind": "checks",
+            }))
+            .unwrap(),
+        );
+        let gh = [("hp".to_string(), false)];
+        let lines = pipelines_lines(&cfg, &[def.clone()], &None, &gh, &[], &[], &[]);
+        assert!(
+            lines.iter().any(|(ok, text)| !ok
+                && text.contains("a wait for CI cannot read a GitHub pull request")),
+            "{lines:?}"
+        );
+        cfg.pull_requests.github_via = crate::config::GithubVia::Token;
+        cfg.pull_requests.github_token = "${github}".into();
+        let lines = pipelines_lines(&cfg, &[def], &None, &gh, &[], &[], &[]);
+        assert!(
+            lines
+                .iter()
+                .any(|(ok, text)| *ok && text.contains("reads GitHub with the token")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
     fn gitlab_lines_name_the_account_or_the_problem() {
         assert_eq!(
             gitlab_line("git.commslayer.com", &Ok("hbasheer".into())),
@@ -399,6 +567,67 @@ mod tests {
     }
 
     #[test]
+    fn doctor_says_what_a_linear_filter_finds() {
+        let mut def = crate::pipeline::templates::all().remove(0);
+        def.enabled = true;
+        let say = |found: Result<usize, String>| {
+            linear_filter_lines(std::slice::from_ref(&def), &[(def.id.clone(), found)])
+        };
+        assert_eq!(
+            say(Ok(2))[0],
+            (
+                true,
+                format!("{}: 2 open tickets match its filter", def.name)
+            )
+        );
+        assert!(say(Ok(0))[0].0 && say(Ok(0))[0].1.contains("Check the names"));
+        let failed = say(Err("Linear said: bad".into()));
+        assert!(!failed[0].0 && failed[0].1.contains("Linear said: bad"));
+    }
+
+    #[test]
+    fn doctor_names_a_filter_the_connection_dropped() {
+        let mut cfg = crate::pipeline::definition::tests::cfg();
+        cfg.connectors = vec![crate::connectors::template("trello").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = crate::pipeline::definition::Trigger::Connector {
+            connector: "trello".into(),
+            params: [("priority".to_string(), "high".to_string())].into(),
+            states: vec![],
+        };
+        let lines = pipelines_lines(&cfg, &[def], &None, &[], &[], &[], &[]);
+        assert!(
+            lines
+                .iter()
+                .any(|(ok, t)| !ok && t.contains("filters by priority")),
+            "{lines:?}"
+        );
+    }
+
+    #[test]
+    fn doctor_names_a_limited_pipelines_agent_that_cannot_report() {
+        let mut cfg = crate::pipeline::definition::tests::cfg();
+        cfg.default_agent = Some("codex".into());
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        let lines = |cfg: &Config, def: &Definition| {
+            pipelines_lines(cfg, std::slice::from_ref(def), &None, &[], &[], &[], &[])
+        };
+        let says = |lines: &[(bool, String)]| {
+            lines
+                .iter()
+                .any(|(ok, text)| !ok && text.contains("cannot report tokens"))
+        };
+        assert!(!says(&lines(&cfg, &def)), "no limit, nothing to say");
+        def.token_limit = Some(5000);
+        let warned = lines(&cfg, &def);
+        assert!(says(&warned), "{warned:?}");
+        cfg.default_agent = Some("claude".into());
+        assert!(!says(&lines(&cfg, &def)), "Claude Code reports");
+    }
+
+    #[test]
     fn doctor_names_a_connector_that_fails() {
         let cfg = crate::pipeline::definition::tests::cfg();
         let mut def = crate::pipeline::templates::all().remove(1);
@@ -426,6 +655,32 @@ mod tests {
                 .any(|(ok, t)| !ok && t.contains("the secret t is not set")),
             "{lines:?}"
         );
+    }
+
+    #[test]
+    fn a_command_nobody_approved_is_named() {
+        let cfg = crate::pipeline::definition::tests::cfg();
+        let mut def = crate::pipeline::templates::all().remove(0);
+        def.enabled = true;
+        let step = |approved: &str| {
+            serde_json::from_value(serde_json::json!({
+                "id": "test", "name": "Test", "kind": "command",
+                "command": "make test", "approved": approved,
+            }))
+            .unwrap()
+        };
+        def.steps.push(step(""));
+        let lines = pipelines_lines(&cfg, std::slice::from_ref(&def), &None, &[], &[], &[], &[]);
+        let named = |lines: &[(bool, String)]| {
+            lines
+                .iter()
+                .any(|(ok, l)| !ok && l.contains("nobody has approved the command in Test"))
+        };
+        assert!(named(&lines), "{lines:?}");
+        def.steps.pop();
+        def.steps.push(step("make test"));
+        let lines = pipelines_lines(&cfg, &[def], &None, &[], &[], &[], &[]);
+        assert!(!named(&lines), "{lines:?}");
     }
 
     #[test]
@@ -507,6 +762,21 @@ mod tests {
             missing[0],
             (false, "Review my merge requests: git.commslayer.com was not checked; add it under pull_requests.gitlab".into())
         );
+    }
+
+    #[test]
+    fn the_memory_lines_say_what_the_hold_will_do() {
+        let readings = [
+            ("hp".to_string(), Some(40)),
+            ("mini".to_string(), Some(95)),
+            ("devbox".to_string(), None),
+        ];
+        let oks: Vec<bool> = memory_lines(90, &readings).iter().map(|l| l.0).collect();
+        assert_eq!(oks, vec![true, false, false]);
+        assert!(memory_lines(90, &readings)[2]
+            .1
+            .contains("no memory reading"));
+        assert!(memory_lines(0, &readings).is_empty());
     }
 
     #[test]

@@ -6,12 +6,16 @@ headers:
   Accept: application/vnd.github+json
 params:
   - { name: repo, label: Repository, options: repos }
+  - { name: label, label: Label, options: labels, filter: true }
 calls:
   repos:
     request: { method: GET, path: /user/repos, query: { per_page: '100', sort: updated } }
     map: { id: full_name, name: full_name }
+  labels:
+    request: { method: GET, path: '/repos/{{repo}}/labels', query: { per_page: '100' } }
+    map: { id: name, name: name }
   list:
-    request: { method: GET, path: '/repos/{{repo}}/issues', query: { state: open, per_page: '100' } }
+    request: { method: GET, path: '/repos/{{repo}}/issues', query: { state: open, per_page: '100', labels: '{{label}}' } }
     map: { item_id: number, id: number, title: title, url: html_url, description: body, state: state }
     page: { style: link, max_pages: 5 }
   read:

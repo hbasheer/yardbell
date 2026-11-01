@@ -111,6 +111,10 @@ pub enum StepKind {
         machines: Vec<String>,
     },
     Push,
+    Checks {
+        #[serde(default)]
+        require_approval: bool,
+    },
     #[serde(rename = "update", alias = "linear")]
     Update {
         action: UpdateAction,
@@ -138,6 +142,45 @@ pub enum StepKind {
         #[serde(default)]
         message: String,
     },
+    Command {
+        command: String,
+        // The exact text a person accepted. Only this text runs, so a command an agent proposed
+        // or changed waits for a person the first time a run reaches it.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        approved: String,
+    },
+}
+
+pub const COMMAND_MINUTES: u64 = 10;
+const COMMAND_MAX: usize = 4000;
+
+// The command reaches the shell exactly as it was approved, so nothing from a ticket can get in.
+fn command_problem(command: &str) -> Option<String> {
+    if command.trim().is_empty() {
+        return Some("the command is empty".into());
+    }
+    if command.chars().count() > COMMAND_MAX {
+        return Some(format!(
+            "the command must be at most {COMMAND_MAX} characters"
+        ));
+    }
+    if command
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Some(
+            "the command has control characters that would not show when you read it".into(),
+        );
+    }
+    let placeholder =
+        Regex::new(r"(?:^|[^$])(\{(?:ticket|title|url|description|branch|pr|report)(?::[^}]*)?\})")
+            .expect("static regex");
+    placeholder.captures(command).map(|c| {
+        format!(
+            "a command does not fill in {}, because a ticket's text must never reach a shell",
+            &c[1]
+        )
+    })
 }
 
 fn changes() -> crate::connectors::CallKind {
@@ -191,6 +234,11 @@ pub enum Trigger {
         assigned: bool,
         #[serde(default)]
         states: Vec<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::triggers::LinearFilter::is_empty"
+        )]
+        filter: crate::triggers::LinearFilter,
     },
     Webhook {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -214,6 +262,8 @@ pub struct Definition {
     pub trigger: Trigger,
     pub start: String,
     pub steps: Vec<Step>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub token_limit: Option<u64>,
 }
 
 impl Definition {
@@ -296,10 +346,49 @@ impl Definition {
     }
 }
 
+// A choice the connection no longer knows would quietly let every item through.
+pub fn filter_problems(def: &Definition, cfg: &Config) -> Vec<String> {
+    let Trigger::Connector {
+        connector, params, ..
+    } = &def.trigger
+    else {
+        return Vec::new();
+    };
+    let Some(c) = cfg.connectors.iter().find(|c| &c.id == connector) else {
+        return Vec::new();
+    };
+    let list = c.calls.get("list");
+    let needs = list.map(crate::connectors::client::needs_of);
+    params
+        .keys()
+        .filter(|name| {
+            !c.params.iter().any(|p| &p.name == *name)
+                && !needs.as_ref().is_some_and(|n| n.contains(*name))
+                && !list.is_some_and(|l| l.map.contains_key(*name))
+        })
+        .map(|name| {
+            format!(
+                "the trigger filters by {name}, which {} no longer offers",
+                c.name
+            )
+        })
+        .collect()
+}
+
 pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
     let mut out = Vec::new();
     if def.name.trim().is_empty() {
         out.push("the pipeline needs a name".to_string());
+    }
+    if def
+        .token_limit
+        .is_some_and(|limit| !super::tokens::valid_limit(limit))
+    {
+        out.push(format!(
+            "the token limit must be 0 for none, or from {} to {}",
+            super::tokens::group(super::tokens::LIMIT_MIN),
+            super::tokens::group(super::tokens::LIMIT_MAX)
+        ));
     }
     let known = |name: &str| cfg.machine(name).is_some();
     let source = match &def.trigger {
@@ -381,12 +470,13 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         if let (Some(c), Some(chosen)) = (connector, chosen) {
             let needs = c.calls.get("list").map(crate::connectors::client::needs_of);
             for p in &c.params {
-                let needed = needs.as_ref().is_some_and(|n| n.contains(&p.name));
+                let needed = !p.filter && needs.as_ref().is_some_and(|n| n.contains(&p.name));
                 if needed && !chosen.contains_key(&p.name) {
                     out.push(format!("Pick a {} for the trigger", p.label));
                 }
             }
         }
+        out.extend(filter_problems(def, cfg));
         match source.map(|id| (id, cfg.connectors.iter().find(|c| c.id == id))) {
             Some((id, None)) => out.push(format!(
                 "the trigger names connector {id}, which is not in Settings"
@@ -402,7 +492,9 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                     out.push(format!("schedule: {e}"));
                 }
             }
-            Trigger::Linear { assigned, states } if !assigned && states.is_empty() => {
+            Trigger::Linear {
+                assigned, states, ..
+            } if !assigned && states.is_empty() => {
                 out.push("the Linear trigger needs assigned or a list of states".into());
             }
             Trigger::GitlabReviewer { host } if host.trim().is_empty() => {
@@ -467,8 +559,12 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         if !(1..=10).contains(&s.max_runs) {
             out.push(format!("{name}: max_runs must be from 1 to 10"));
         }
-        if s.minutes.is_some_and(|m| !(10..=1440).contains(&m)) {
-            out.push(format!("{name}: minutes must be from 10 to 1440"));
+        let shortest = match s.kind {
+            StepKind::Command { .. } => 1,
+            _ => 10,
+        };
+        if s.minutes.is_some_and(|m| !(shortest..=1440).contains(&m)) {
+            out.push(format!("{name}: minutes must be from {shortest} to 1440"));
         }
         let earlier = before.get(&s.id).cloned().unwrap_or_default();
         let comes_before = |word: &str, other: &str, out: &mut Vec<String>| {
@@ -541,7 +637,7 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                     out.push(format!("{name}: machine {m} does not exist"));
                 }
             }
-            StepKind::Push => {
+            StepKind::Push | StepKind::Checks { .. } => {
                 let worktree = |id: &String| {
                     def.step(id).is_some_and(|x| {
                         matches!(
@@ -556,6 +652,27 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                 if !earlier.iter().any(worktree) {
                     out.push(format!(
                         "{name}: needs a step that works in a new worktree before it on every path"
+                    ));
+                }
+            }
+            StepKind::Command { command, .. } => {
+                if let Some(problem) = command_problem(command) {
+                    out.push(format!("{name}: {problem}"));
+                }
+                let worktree = |id: &String| {
+                    def.step(id).is_some_and(|x| {
+                        matches!(
+                            x.kind,
+                            StepKind::Agent {
+                                workspace: Workspace::NewWorktree,
+                                ..
+                            }
+                        )
+                    })
+                };
+                if !earlier.iter().any(worktree) {
+                    out.push(format!(
+                        "{name}: a command runs in the run's worktree, so it needs a step that works in a new worktree before it on every path"
                     ));
                 }
             }
@@ -678,6 +795,55 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_filter_is_never_a_required_pick() {
+        let mut cfg = cfg();
+        cfg.connectors = vec![crate::connectors::template("github").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = Trigger::Connector {
+            connector: "github-issues".into(),
+            params: [("repo".to_string(), "acme/app".to_string())].into(),
+            states: vec![],
+        };
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            !problems.iter().any(|p| p.contains("Pick a")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_filter_the_connection_dropped_is_named() {
+        let mut cfg = cfg();
+        cfg.connectors = vec![crate::connectors::template("trello").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = Trigger::Connector {
+            connector: "trello".into(),
+            params: [
+                ("board".to_string(), "B1".to_string()),
+                ("priority".to_string(), "high".to_string()),
+            ]
+            .into(),
+            states: vec![],
+        };
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            problems.contains(
+                &"the trigger filters by priority, which Trello no longer offers".to_string()
+            ),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_saved_trigger_reads_and_writes_as_it_was() {
+        let linear = r#"{"kind":"linear","assigned":true,"states":[]}"#;
+        let read: Trigger = serde_json::from_str(linear).unwrap();
+        assert_eq!(serde_json::to_string(&read).unwrap(), linear);
+    }
+
+    #[test]
     fn definition_check_knows_connectors() {
         let mut cfg = cfg();
         let mut def = crate::pipeline::templates::all().remove(0);
@@ -748,6 +914,7 @@ pub(crate) mod tests {
             trigger: Trigger::Manual,
             start: steps[0].id.clone(),
             steps,
+            token_limit: None,
         }
     }
 
@@ -821,6 +988,36 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn a_wait_for_ci_needs_a_worktree_before_it_and_a_time_limit_in_range() {
+        let wait = |minutes| Step {
+            kind: StepKind::Checks {
+                require_approval: true,
+            },
+            minutes,
+            ..agent("ci", "CI", MachineChoice::Name("hp".into()))
+        };
+        let mut alone = vec![plan_step("plan"), wait(None)];
+        alone[0].next.pass = "ci".into();
+        assert_eq!(
+            problems(&def(alone)),
+            vec!["CI: needs a step that works in a new worktree before it on every path"]
+        );
+        let mut steps = vec![
+            plan_step("plan"),
+            agent("a", "Implement", MachineChoice::Name("hp".into())),
+            wait(Some(5)),
+        ];
+        steps[0].next.pass = "a".into();
+        steps[1].next.pass = "ci".into();
+        assert_eq!(
+            problems(&def(steps.clone())),
+            vec!["CI: minutes must be from 10 to 1440"]
+        );
+        steps[2].minutes = Some(600);
+        assert!(problems(&def(steps)).is_empty());
+    }
+
+    #[test]
     fn check_names_each_problem() {
         let mut root = agent("root-cause", "Root cause", MachineChoice::Name("hp".into()));
         root.next.fail = "nowhere".into();
@@ -851,6 +1048,15 @@ pub(crate) mod tests {
         ));
 
         let mut review = agent("review", "Review", MachineChoice::Name("hp".into()));
+        let mut limited = def(vec![plan_step("plan")]);
+        limited.token_limit = Some(500);
+        assert!(problems(&limited)
+            .iter()
+            .any(|p| p.contains("token limit must be 0 for none")));
+        for fine in [0, 1000, 500_000] {
+            limited.token_limit = Some(fine);
+            assert!(!problems(&limited).iter().any(|p| p.contains("token limit")));
+        }
         review.max_runs = 11;
         assert!(problems(&def(vec![review]))
             .contains(&"Review: max_runs must be from 1 to 10".to_string()));
@@ -891,6 +1097,118 @@ pub(crate) mod tests {
         assert!(problems(&gl).contains(&"gitlab_reviewer needs a host".to_string()));
         gl.enabled = false;
         assert!(problems(&gl).is_empty());
+    }
+
+    fn command_step(id: &str, command: &str) -> Step {
+        Step {
+            kind: StepKind::Command {
+                command: command.into(),
+                approved: command.into(),
+            },
+            ..agent(id, "Test", MachineChoice::Name("hp".into()))
+        }
+    }
+
+    fn after_worktree(command: Step) -> Definition {
+        let mut steps = vec![
+            plan_step("plan"),
+            agent("work", "Work", MachineChoice::SameAs("plan".into())),
+            command,
+        ];
+        steps[1].kind = StepKind::Agent {
+            instructions: "do it".into(),
+            agent: String::new(),
+            machine: MachineChoice::Pick(vec![]),
+            workspace: Workspace::NewWorktree,
+            session: SessionChoice::New,
+            read_only: false,
+            mcp_servers: vec![],
+        };
+        steps[0].next.pass = "work".into();
+        steps[1].next.pass = steps[2].id.clone();
+        def(steps)
+    }
+
+    #[test]
+    fn a_saved_command_step_reads_back_and_needs_no_approval_field() {
+        let step: Step = serde_json::from_value(serde_json::json!({
+            "id": "test", "name": "Test", "kind": "command", "command": "make test",
+        }))
+        .unwrap();
+        assert!(
+            matches!(&step.kind, StepKind::Command { command, approved } if command == "make test" && approved.is_empty())
+        );
+        let again: Step = serde_json::from_value(serde_json::to_value(&step).unwrap()).unwrap();
+        assert_eq!(again, step);
+    }
+
+    #[test]
+    fn a_good_command_step_passes_the_checks() {
+        for fine in [
+            "make test",
+            "cargo test\ncargo clippy",
+            "docker inspect --format '{{.State}}' x",
+            "echo ${branch} {a,b}",
+        ] {
+            assert_eq!(
+                problems(&after_worktree(command_step("test", fine))),
+                Vec::<String>::new(),
+                "{fine}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_names_a_bad_command() {
+        let cases: [(String, &str); 5] = [
+            ("  ".into(), "Test: the command is empty"),
+            (
+                "x".repeat(COMMAND_MAX + 1),
+                "Test: the command must be at most 4000 characters",
+            ),
+            (
+                "make\u{1b}[2K test".into(),
+                "Test: the command has control characters that would not show when you read it",
+            ),
+            (
+                "git push origin {branch}".into(),
+                "Test: a command does not fill in {branch}, because a ticket's text must never reach a shell",
+            ),
+            (
+                "echo {report:Review}".into(),
+                "Test: a command does not fill in {report:Review}, because a ticket's text must never reach a shell",
+            ),
+        ];
+        for (command, message) in cases {
+            assert_eq!(
+                problems(&after_worktree(command_step("test", &command))),
+                vec![message.to_string()]
+            );
+        }
+    }
+
+    #[test]
+    fn a_command_needs_a_worktree_before_it_on_every_path() {
+        let alone = def(vec![command_step("test", "make test")]);
+        assert_eq!(
+            problems(&alone),
+            vec!["Test: a command runs in the run's worktree, so it needs a step that works in a new worktree before it on every path"]
+        );
+    }
+
+    #[test]
+    fn a_command_may_be_stopped_sooner_than_an_agent() {
+        let mut quick = command_step("test", "make test");
+        quick.minutes = Some(1);
+        assert_eq!(
+            problems(&after_worktree(quick.clone())),
+            Vec::<String>::new()
+        );
+        quick.minutes = Some(0);
+        assert_eq!(
+            problems(&after_worktree(quick)),
+            vec!["Test: minutes must be from 1 to 1440"]
+        );
     }
 
     #[test]

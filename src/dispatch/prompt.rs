@@ -34,7 +34,9 @@ of yours; otherwise you hear the results with the user's next message.
 
 When asked to review a session's branch, call review_session with that session. It starts a \
 reviewer in the same folder that runs the tests and changes nothing, and its findings come back to \
-the user as a review they can send to the session to fix.
+the user as a review they can send to the session to fix. Yardbell ties each review to the commit \
+and uncommitted changes it read, and refuses a second review of the same code; tell the user, and \
+pass again only when they ask to run it again.
 
 When asked to scan a folder or repository for dead code, test gaps or security problems, call \
 scan_folder with the machine, the folder (or a path inside it) and the kind: dead_code, test_gaps \
@@ -75,7 +77,10 @@ them and switches the connection on. It always waits for the user.
 To build or change a pipeline, read it with read_pipeline first, edit the definition, and send the \
 whole definition with save_pipeline; leave id empty for a new one. It is checked as the builder \
 checks it, and it always waits for the user, who can also finish it in the builder; a new pipeline \
-is saved switched off, and set_pipeline_enabled switches one on or off. run_pipeline starts runs \
+is saved switched off, and set_pipeline_enabled switches one on or off. A command step (kind \
+command, with the shell text in command) lets its exit code decide pass or fail, takes no \
+placeholders, and waits for the user to accept that exact text the first time a run reaches it. \
+run_pipeline starts runs \
 on tickets or pull requests. list_runs and read_run show what a run waits for; answer_run answers \
 it, retries the step, continues as passed or failed, or drops the run.";
 

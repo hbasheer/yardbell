@@ -672,6 +672,13 @@ async fn logout(AxState(app): AxState<Arc<AppState>>, headers: HeaderMap) -> Res
     (jar, Json(json!({ "ok": true }))).into_response()
 }
 
+#[derive(serde::Serialize)]
+struct StateReply {
+    #[serde(flatten)]
+    view: crate::state::StateView,
+    problems: Vec<crate::health::Problem>,
+}
+
 async fn state_json(
     AxState(app): AxState<Arc<AppState>>,
     headers: HeaderMap,
@@ -683,7 +690,11 @@ async fn state_json(
     view.mesh = Some(app.host_mesh.check(&cfg).await);
     view.server = Some(server_view(&cfg));
     view.proposals = app.proposals.waiting();
-    Ok(([(BUILD_HEADER, page_build())], Json(view)).into_response())
+    let reply = StateReply {
+        view,
+        problems: app.state.problems(),
+    };
+    Ok(([(BUILD_HEADER, page_build())], Json(reply)).into_response())
 }
 
 const LIVE_SETTLE: Duration = Duration::from_millis(100);
@@ -1158,6 +1169,9 @@ pub(super) struct Decision {
     pub(super) decision: String,
     #[serde(default)]
     pub(super) input: Option<Value>,
+    // Review again on a review of code that has one already.
+    #[serde(default)]
+    pub(super) again: bool,
 }
 
 // Work that must finish and be recorded even when the page that asked for it goes away, like a
@@ -1205,10 +1219,30 @@ async fn decide(
                     }
                 }
             }
-            let (tool, mut input) = app
+            let review = app
                 .dispatch
-                .approve(id, action, req.input.clone())
-                .map_err(refused)?;
+                .step(id, action)
+                .filter(|s| s["review"].is_object() && !s["review"]["scan"].is_string());
+            let (tool, mut input) = match review {
+                Some(step) => {
+                    let of = &step["review"];
+                    let text = |k: &str| of[k].as_str().unwrap_or_default();
+                    let m = find_machine(&app.config()?, text("machine"))?;
+                    let pin = crate::dispatch::read_pin(&app.folders, &m, text("path")).await;
+                    match app
+                        .dispatch
+                        .approve_review(id, action, req.input.clone(), &pin, req.again)
+                        .map_err(refused)?
+                    {
+                        Ok(claimed) => claimed,
+                        Err(waiting) => return Ok(waiting),
+                    }
+                }
+                None => app
+                    .dispatch
+                    .approve(id, action, req.input.clone())
+                    .map_err(refused)?,
+            };
             // A reviewer or scanner stays read-only even when its step was edited.
             if app
                 .dispatch
@@ -1342,6 +1376,8 @@ async fn dispatch_request_review(
         "",
         "",
     )?;
+    let m = find_machine(&cfg, &of.machine)?;
+    let pin = crate::dispatch::read_pin(&app.folders, &m, &of.path).await;
     let event = app
         .dispatch
         .propose(
@@ -1353,6 +1389,13 @@ async fn dispatch_request_review(
             None,
         )
         .map_err(refused)?;
+    let event = match app.dispatch.earlier_review(&m.name, &pin) {
+        Some(earlier) => app
+            .dispatch
+            .note_already(id, event["id"].as_str().unwrap_or_default(), earlier)
+            .map_err(refused)?,
+        None => event,
+    };
     Ok(Json(event).into_response())
 }
 

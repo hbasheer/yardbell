@@ -1,5 +1,7 @@
 use super::{card_of, conversation_id, find_machine, ApiError, AppState};
-use crate::dispatch::{review_file, review_files, valid_review_path, ReviewAnchor};
+use crate::dispatch::{
+    pin_standing, read_pin, review_file, review_files, valid_review_path, ReviewAnchor, ReviewPin,
+};
 use axum::extract::{Path as UrlPath, Query, State as AxState};
 use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
@@ -19,6 +21,31 @@ pub fn routes() -> Router<Arc<AppState>> {
             "/dispatch/conversations/{id}/reviews/{card}/evidence/{file}",
             get(evidence),
         )
+        .route(
+            "/dispatch/conversations/{id}/reviews/{card}/commit",
+            get(commit),
+        )
+}
+
+// Where the code stands now against what the review read, read on the session's machine.
+async fn commit(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((id, card)): UrlPath<(String, usize)>,
+) -> Result<Response, ApiError> {
+    let id = conversation_id(&id)?;
+    let review = card_of(&app, id, card, "review")?;
+    let of = &review["of"];
+    let read: ReviewPin = serde_json::from_value(of["pin"].clone()).map_err(|_| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            "this review does not say which commit it read".into(),
+        )
+    })?;
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, of["machine"].as_str().unwrap_or_default())?;
+    let now = read_pin(&app.folders, &m, of["path"].as_str().unwrap_or_default()).await;
+    let standing = pin_standing(&read, &now);
+    Ok(Json(json!({ "standing": standing, "now": now })).into_response())
 }
 
 #[derive(Deserialize)]

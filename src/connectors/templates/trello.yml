@@ -5,6 +5,7 @@ headers:
   Authorization: 'OAuth oauth_consumer_key="${secret:trello_key}", oauth_token="${secret:trello_token}"'
 params:
   - { name: board, label: Board, options: boards }
+  - { name: label, label: Label, options: labels, filter: true }
 calls:
   boards:
     request: { method: GET, path: /members/me/boards, query: { filter: open, fields: 'id,name' } }
@@ -12,9 +13,12 @@ calls:
   states:
     request: { method: GET, path: '/boards/{{board}}/lists', query: { fields: 'id,name' } }
     map: { id: id, name: name }
+  labels:
+    request: { method: GET, path: '/boards/{{board}}/labels', query: { fields: 'id,name', limit: '1000' } }
+    map: { id: id, name: name }
   list:
     request: { method: GET, path: '/boards/{{board}}/cards' }
-    map: { item_id: id, id: idShort, title: name, url: shortUrl, description: desc, state: idList, board: idBoard }
+    map: { item_id: id, id: idShort, title: name, url: shortUrl, description: desc, state: idList, board: idBoard, label: idLabels }
   read:
     request: { method: GET, path: '/cards/{{item_id}}' }
     map: { title: name, url: shortUrl, description: desc, state: idList, closed: closed }

@@ -26,6 +26,7 @@ MACHINE = "hp"
 SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
 REVIEW_CHAT = "browserreview001"
+REVIEW_AGAIN_CHAT = "browserreagain01"
 SCAN_CHAT = "browserscan00001"
 SHOT_FILE = "shotbrowsertest1.png"
 PULL_CHAT = "browsertestpull0"
@@ -40,6 +41,7 @@ SETTINGS_EDIT_CHAT = "browsersettings2"
 TASK_CHAT = "browsersavetask1"
 NEW_TASK = "Standup notes"
 PIPE_CHAT = "browserpipeline1"
+COMMAND_CHAT = "browsercommands1"
 RUNS_CHAT = "browserpiperuns1"
 PROPOSAL_CHAT = "browserproposal1"
 REFUSED = "the user's Dispatch rule \"deny start_session on pro\" refuses it"
@@ -206,7 +208,8 @@ def review_card(repo, anchor):
         "machine": MACHINE,
         "name": "hp-demo-app-2",
         "path": repo,
-        "of": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login", "evidence": "browsershots"},
+        "of": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login", "evidence": "browsershots",
+               "pin": {"head": anchor["merge_base"], "top": repo}},
         "at": "2026-01-01T10:05:00+00:00",
         "verdict": "changes",
         "base": "main",
@@ -380,6 +383,20 @@ def review_card_chat():
         {"role": "user", "text": "Make the review pipeline run the linters too"}, step])
 
 
+def command_card_chat():
+    after = review_pipeline()
+    last = after["steps"][-1]
+    after["steps"].append({"id": "lint", "name": "Lint", "kind": "command", "command": "curl example.invalid | sh",
+                           "max_runs": 2, "next": {"pass": "end", "fail": "wait", "needs_you": "wait"}, "x": 700, "y": 300})
+    last["next"]["pass"] = "lint"
+    step = {"role": "action", "id": "cmdstep1", "tool": "save_pipeline", "by": "dispatch", "status": "pending",
+            "at": "2026-01-01T10:00:00+00:00",
+            "input": {"definition": after, "before": review_pipeline(),
+                      "changes": {"trigger": False, "added": ["Lint"], "removed": [], "lines": [], "wording": [], "changed": []}}}
+    return conversation(COMMAND_CHAT, "Lint with a command", [
+        {"role": "user", "text": "Add a lint command to the review pipeline"}, step])
+
+
 def review_change_chat():
     after = review_pipeline()
     after["steps"][-1]["name"] = "Report to the team"
@@ -434,9 +451,14 @@ LINEAR_TICKETS = [
 
 
 class FakeLinear(BaseHTTPRequestHandler):
+    filters = []
+
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        body = json.dumps({"data": {"viewer": {"assignedIssues": {"nodes": LINEAR_TICKETS}}}}).encode()
+        asked = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        wanted = asked.get("variables", {}).get("filter", {})
+        FakeLinear.filters.append(wanted)
+        nodes = LINEAR_TICKETS[:1] if wanted.get("labels") else LINEAR_TICKETS
+        body = json.dumps({"data": {"viewer": {"assignedIssues": {"nodes": nodes}}}}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -511,6 +533,25 @@ def pipeline_runs():
         "run-c": run("run-c", 84, "Login redirect", "done", "",
                      [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes."),
                       ("test", "pass", "Specs pass."), ("report", "pass", "Looks good.")]),
+        "run-held": {**run("run-held", 80, "Slow export", "queued", "test",
+                           [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes.")]),
+                     "slot": "nowhere",
+                     "held": {"kind": "memory", "machine": "nowhere", "since": ago_stamp(45), "told": True,
+                              "reason": "nowhere is short of memory: 93% is in use and the limit is 90%. This step starts once nowhere has stayed under the limit for two minutes."}},
+        "run-d": {**run("run-d", 93, "Tokens spent", "waiting", "test",
+                        [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes.")],
+                        {"kind": "token_limit", "step": "test",
+                         "reason": "This run used 612,400 tokens, and its limit is 500,000"}),
+                  "tokens": {"sources": {"nowhere:a.jsonl": {"input": 12400, "output": 100000, "cache_write": 500000,
+                                                              "cache_read": 3000000}},
+                             "limit": 500000, "raised": True}},
+        "run-e": {**run("run-e", 94, "Tokens unknown", "waiting", "test",
+                        [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes.")],
+                        {"kind": "token_unknown", "step": "test",
+                         "reason": "Test runs on codex, which does not report tokens, so the limit of 500,000 tokens cannot be checked"}),
+                  "tokens": {"sources": {"nowhere:a.jsonl": {"input": 1000, "output": 2000}},
+                             "unknown": {"test": "Test runs on codex, which does not report tokens"},
+                             "limit": 500000, "raised": True}},
     }
 
 
@@ -544,6 +585,10 @@ class Yardbell:
             json.dump({"history": [{"version": 1, "saved": ago_stamp(60), "definition": review_pipeline()}]}, f)
         with open(os.path.join(self.state, "runs.json"), "w") as f:
             json.dump(pipeline_runs(), f)
+        with open(os.path.join(self.state, "health.json"), "w") as f:
+            json.dump({"run_waiting:run-a:root-cause:NeedsYou": {
+                "check": "run_waiting", "title": "", "detail": "", "link": "", "since": ago_stamp(300), "notified": True,
+            }}, f)
         with open(os.path.join(self.state, "proposals.json"), "w") as f:
             json.dump(inbox_proposals(), f)
         self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
@@ -709,12 +754,19 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         with open(os.path.join(self.state, "insights.json"), "w") as f:
             json.dump({f"{MACHINE}:{OLD_RUN}": {"machine": MACHINE, "name": OLD_RUN, "agent": "shell", "folder": "demo-app",
                                                 "branch": "main", "marks": marks}}, f)
-        for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
+        review_again = conversation(REVIEW_AGAIN_CHAT, "Review the login fix again", [
+            {"role": "user", "text": "Review the login fix"},
+            {"role": "action", "id": "reagain1", "tool": "start_session", "by": "you", "status": "pending", "at": "2026-01-01T10:06:00+00:00",
+             "input": {"machine": MACHINE, "path": repo, "prompt": "Review it.", "read_only": True},
+             "review": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login"},
+             "already": {"text": "Commit ab12cd3 already has a finished review, which said ready, by hp-demo-app-2.", "conversation": REVIEW_CHAT}},
+        ])
+        for chat in (short, long, review, review_again, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
                      settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat(),
                      review_card_chat(), run_steps_chat(),
                      proposed_pipeline(PROPOSAL_CHAT, (("propstp1", "Built in the builder"),
                                                        ("propstp2", "Broken in the builder"))),
-                     review_change_chat()):
+                     review_change_chat(), command_card_chat()):
             with open(os.path.join(folder, chat["id"] + ".json"), "w") as f:
                 json.dump(chat, f)
 
@@ -787,6 +839,19 @@ class Suite:
             f"document.querySelector('section.mgroup:not(.down) h2#mg-{MACHINE}')?.textContent === {json.dumps(MACHINE)}",
             "the machine on the dashboard, connected",
         )
+
+    def test_dashboard_shows_what_looks_stuck(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait(
+            "document.querySelector('#health-banner:not([hidden]) .health-list a')?.getAttribute('href').includes('run=run-a')",
+            "the stuck run on the dashboard",
+        )
+        said = b.js("document.getElementById('health-banner').textContent")
+        for want in ("1 thing looks stuck", "is still waiting for you", "Root cause needs you", "5 h"):
+            if want not in said:
+                raise Failure(f"the banner does not say {want!r}: {said}")
+        b.wait("document.getElementById('nav-problems-count')?.textContent === '1'", "the count in the sidebar")
 
     def test_start_a_shell_session(self):
         b = self.b
@@ -1110,6 +1175,14 @@ class Suite:
             self.api("POST", "/api/settings/dispatch", before)
             os.remove(os.path.join(self.y.env["HOME"], ".codex", "models_cache.json"))
 
+    def test_a_review_of_reviewed_code_offers_review_again(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={REVIEW_AGAIN_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .review-commit')?.textContent.includes('already has a finished review')", "the note that this code has a review")
+        if b.js(f"document.querySelector('{card} .step-card-actions .btn.primary').textContent.trim()") != "Review again":
+            raise Failure("the button does not say Review again")
+
     def test_dispatch_review_card_diff_and_evidence(self):
         b = self.b
         b.goto(self.url(f"/dispatch?c={REVIEW_CHAT}"))
@@ -1126,6 +1199,9 @@ class Suite:
             raise Failure("the high and medium findings are not the ones ticked")
         if "/" in b.js(f"document.querySelector('{card} .step-card-where').textContent"):
             raise Failure("the card names the whole path instead of the folder")
+        b.wait(f"document.querySelector('{card} .review-commit')?.textContent.includes('The branch has moved on since this review')", "the card saying the branch moved on")
+        if not b.js(f"document.querySelector('{card} .review-commit').textContent.startsWith('Read ')"):
+            raise Failure("the card does not name the commit it read")
         b.click(f"{card} .finding-group.low .finding-group-head")
         b.wait(f"document.querySelector('{card}').textContent.includes('Mention passkeys')", "the low finding once opened")
         if b.js(f"document.querySelector('{card} .finding-group.low input').checked"):
@@ -1412,6 +1488,22 @@ class Suite:
         b.click("#rule-rows .rule-row:first-child [data-remove-rule]")
         b.click("#dispatch-form button[type=submit]")
         b.wait("(async () => (await (await fetch('/api/settings')).json()).dispatch.rules?.length === 1)()", "one rule saved after removing the other")
+
+    def test_settings_saves_health_checks(self):
+        b = self.b
+        b.goto(self.url("/settings#health"))
+        b.wait("document.querySelector('#health-form input[name=ci_pending_minutes]')?.value === '120'", "the defaults")
+        b.wait("document.querySelector('#health-form input[name=ci_pending]').checked", "the check on")
+        b.click("#health-form input[name=memory_short]")
+        self.set_field("#health-form input[name=ci_pending_minutes]", "45")
+        b.click("#health-form button[type=submit]")
+        b.wait("document.getElementById('undo-text').textContent.includes('Health checks updated')", "the checks saved")
+        with open(self.y.config) as f:
+            config = f.read()
+        for want in ("ci_pending_minutes: 45", "memory_short: false"):
+            if want not in config:
+                raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
+        b.wait("document.querySelector('#health-form input[name=ci_pending_minutes]').value === '45'", "the saved time shown")
 
     def test_settings_secrets(self):
         b = self.b
@@ -1940,7 +2032,7 @@ class Suite:
         b.wait(f"document.querySelector('{card}')", "the review pipeline's card")
         text = b.js(f"document.querySelector('{card}').textContent.replace(/\\s+/g, ' ')")
         for want in ("When a GitLab merge request on git.example.com adds me as reviewer",
-                     "Understand", "Test ⟲ Root cause", "v1", "2 waiting · 1 done", "Needs you"):
+                     "Understand", "Test ⟲ Root cause", "v1", "1 running · 4 waiting · 1 held a long time · 1 done", "Needs you"):
             if want not in text:
                 raise Failure(f"the card does not say {want!r}: {text}")
         if b.js(f"document.querySelector('{card} input[type=checkbox]').checked"):
@@ -1950,7 +2042,7 @@ class Suite:
                "the checks' problem when switching on")
         b.wait(f"!document.querySelector('{card} input[type=checkbox]').checked", "the switch back off")
         b.click("#pl-waiting-toggle")
-        b.wait("document.querySelectorAll('#pl-waiting .pl-wait-item').length === 2", "two runs waiting for me")
+        b.wait("document.querySelectorAll('#pl-waiting .pl-wait-item').length === 5", "four waiting runs and one held too long")
         if "!87 COM-1287 Fix the webhook dedup" not in b.js("document.getElementById('pl-waiting').textContent"):
             raise Failure("the waiting list does not name the merge request")
         self.check_errors("the Pipelines list")
@@ -2051,6 +2143,28 @@ class Suite:
         if b.js("document.getElementById('pl-save').classList.contains('pl-saved')"):
             raise Failure("Save stays off after adding a step")
         self.check_errors("dragging from the library")
+
+    def test_builder_wait_for_ci_step_saves_its_approval_and_minutes(self):
+        b = self.b
+        original = self.api("GET", "/api/pipelines/review")
+        self.open_builder()
+        b.click('.pl-node[data-step="test"]')
+        b.wait("document.querySelector('#pl-inspector .pl-step-form[data-step=\"test\"]')", "the Test step in the inspector")
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"checks\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-checks.selected')", "the new wait on Test's pass line")
+        if b.js("document.querySelector('#pl-inspector input[name=max_runs]').value") != "5":
+            raise Failure("a new wait should allow a Fix loop, with 5 runs")
+        b.click("#pl-inspector input[name=require_approval]")
+        b.wait("document.querySelector('.pl-node.kind-checks').textContent.includes('an approval')", "the card saying it waits for an approval")
+        self.set_field('#pl-inspector input[name=minutes]', "240")
+        b.click("#pl-save")
+        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {original['version'] + 1})()", "the pipeline saved")
+        saved = self.api("GET", "/api/pipelines/review")
+        step = next(s for s in saved["steps"] if s["kind"] == "checks")
+        if (step["require_approval"], step["minutes"]) != (True, 240):
+            raise Failure(f"the wait was saved as {step}")
+        self.check_errors("the wait for CI step")
+        self.api("PUT", "/api/pipelines/review", original)
 
     def test_builder_connect_ports_and_cut_a_line(self):
         b = self.b
@@ -2334,6 +2448,48 @@ class Suite:
                "run B back at Root cause")
         self.check_errors("the Runs tab")
 
+    def test_a_run_past_its_token_limit_shows_it_and_can_be_raised(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-d"))
+        b.wait("document.querySelector('#pl-need')?.textContent.includes('612,400 tokens')", "what it used and the limit")
+        use = b.js("document.getElementById('pl-tokens').textContent")
+        for want in ("612,400 tokens", "Limit 500,000", "3,000,000 more were read from cache"):
+            if want not in use:
+                raise Failure(f"the run's use does not say {want!r}: {use}")
+        words = b.js("document.getElementById('pl-need').textContent")
+        if "Continue on pass" in words or "Start this step anyway" not in words:
+            raise Failure(f"the waiting box offers the wrong choices: {words}")
+        self.set_field("#pl-raise", "100")
+        b.js("document.querySelector('.pl-raise button').click()")
+        b.wait("document.getElementById('toast').textContent.includes('Set a limit above the 612,400 tokens')", "a limit below the use refused")
+        self.set_field("#pl-raise", "900000")
+        b.js("document.querySelector('.pl-raise button').click()")
+        b.wait("(async () => { const r = (await (await fetch('/api/runs')).json()).runs.find((r) => r.id === 'run-d'); return r.tokens.limit === 900000 && r.state !== 'waiting'; })()",
+               "the limit raised and the run going on")
+        self.check_errors("the raised limit")
+
+    def test_a_run_that_cannot_measure_says_so(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-e"))
+        b.wait("document.getElementById('pl-tokens')?.textContent.includes('At least 3,000 tokens')", "the partial total")
+        use = b.js("document.getElementById('pl-tokens').textContent")
+        if "does not report tokens" not in use:
+            raise Failure(f"the run does not name the unknown step: {use}")
+        if not b.js("document.getElementById('pl-need').textContent.includes('Start this step anyway')"):
+            raise Failure("the waiting box does not offer to go on")
+        self.check_errors("the unknown use")
+
+    def test_a_limit_with_an_agent_that_cannot_report_warns_in_the_builder(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&tab=build"))
+        b.wait("document.querySelector('#pl-inspector input[name=token_limit]')", "the token limit in the builder")
+        if b.js("document.getElementById('pl-token-blind')"):
+            raise Failure("no limit is set, and the builder warns anyway")
+        self.set_field("#pl-inspector input[name=token_limit]", "500000")
+        b.wait("document.getElementById('pl-token-blind')?.textContent.includes('cannot report tokens')", "the warning about the agents")
+        self.set_field("#pl-inspector input[name=token_limit]", "")
+        self.check_errors("the builder's token limit")
+
     def test_canvas_zoom_controls(self):
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-c"))
@@ -2383,6 +2539,21 @@ class Suite:
         if self.api("GET", "/api/pipelines/review")["steps"][0]["name"] != first:
             raise Failure("restoring version 1 did not bring its step names back")
 
+    def test_pipeline_run_held_for_memory(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-held"))
+        b.wait("document.querySelector('#pl-held')?.textContent.includes('short of memory: 93%')", "why the run is held")
+        text = b.js("document.getElementById('pl-held').textContent")
+        if "still starts by itself" not in text:
+            raise Failure(f"a run held too long does not say what happens next: {text}")
+        if "held" not in b.js("document.querySelector('.pl-run-item[data-id=\"run-held\"] small').textContent"):
+            raise Failure("the run list does not say the run is held")
+        if "held" not in b.js("document.querySelector('.pl-node[data-step=\"test\"]').textContent"):
+            raise Failure("the step on the graph does not say held")
+        b.goto(self.url("/pipeline"))
+        b.click("#pl-waiting-toggle")
+        b.wait("[...document.querySelectorAll('#pl-waiting .pl-wait-why')].some((x) => x.textContent.includes('short of memory'))", "the held run under Waiting for me")
+
     def test_pipeline_settings_panel(self):
         b = self.b
         b.goto(self.url("/pipeline"))
@@ -2390,6 +2561,21 @@ class Suite:
         b.wait("document.querySelector('#pl-settings input[name=per_machine]')", "the settings form")
         self.set_field("#pl-settings input[name=per_machine]", "3")
         self.set_field("#pl-settings input[name=minutes]", "90")
+        off = b.js("""(() => {
+          const limit = document.querySelector('#pl-settings input[name=memory_limit]');
+          return { on: document.querySelector('#pl-settings input[name=memory_on]').checked, disabled: limit.disabled, value: limit.value };
+        })()""")
+        if off != {"on": False, "disabled": True, "value": ""}:
+            raise Failure(f"the memory limit is not off with no number by default: {off}")
+        help_text = b.js("document.querySelector('#pl-settings input[name=memory_limit]').parentElement.textContent")
+        if "tick it and enter" not in help_text or "On a Mac" not in help_text:
+            raise Failure(f"the settings do not say how to turn the hold on: {help_text}")
+        b.click("#pl-settings input[name=memory_on]")
+        b.wait("!document.querySelector('#pl-settings input[name=memory_limit]').disabled", "the limit enabled")
+        if not b.js("document.querySelector('#pl-settings input[name=memory_limit]').validity.valueMissing"):
+            raise Failure("the hold can be switched on with no limit")
+        self.set_field("#pl-settings input[name=memory_limit]", "85")
+        self.set_field("#pl-settings input[name=token_limit]", "400000")
         b.click("#pl-note-add")
         self.set_field("#pl-settings .pl-note:last-child input[name=folder]", "demo-app")
         self.set_field("#pl-settings .pl-note:last-child input[name=note]", "Run bin/rspec")
@@ -2397,9 +2583,20 @@ class Suite:
         b.wait("document.getElementById('toast').textContent.includes('Saved')", "the settings saved")
         with open(self.y.config) as f:
             config = f.read()
-        for want in ("per_machine: 3", "minutes: 90", "demo-app: Run bin/rspec"):
+        for want in ("per_machine: 3", "minutes: 90", "memory_limit: 85", "token_limit: 400000", "demo-app: Run bin/rspec"):
             if want not in config:
                 raise Failure(f"yardbell.yml does not hold {want!r}:\n{config}")
+        b.click("#pl-settings-open")
+        b.wait("document.querySelector('#pl-settings input[name=memory_on]')?.checked", "the hold switched on")
+        if b.js("document.querySelector('#pl-settings input[name=memory_limit]').value") != "85":
+            raise Failure("the saved memory limit is not shown again")
+        b.click("#pl-settings input[name=memory_on]")
+        b.wait("document.querySelector('#pl-settings input[name=memory_limit]').disabled", "the limit disabled while off")
+        b.click("#pl-settings-save")
+        b.wait("document.getElementById('pl-settings') === null", "the settings saved again")
+        with open(self.y.config) as f:
+            if "memory_limit: 0" not in f.read():
+                raise Failure("turning the hold off did not write memory_limit: 0")
 
     # Last, so the change it saves to the review pipeline comes after the Pipelines tests.
     def test_dispatch_save_pipeline_card(self):
@@ -2718,6 +2915,82 @@ class Suite:
             self.remove_connector()
         self.check_errors("the connector trigger")
 
+    def test_builder_linear_filter_and_preview(self):
+        b = self.b
+        self.api("POST", "/api/settings/secrets", {"name": "linear", "value": "lin_api_BROWSER"})
+        try:
+            self.open_builder()
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"linear\"][data-group=\"Start when\"]').click()")
+            b.wait("document.querySelector('#pl-inspector input[name=filter-labels]')", "the Linear filter fields")
+            self.set_field("#pl-inspector input[name=filter-labels]", "agent-ready, bug")
+            b.wait("document.querySelector('.pl-canvas').textContent.includes('label agent-ready or bug')", "the Start when card to name the filter")
+            b.click("#pl-preview-matches")
+            b.wait("document.querySelector('.pl-preview-result')?.textContent.includes('1 ticket matches now')", "the preview's count")
+            said = b.js("document.querySelector('.pl-trigger-preview').textContent")
+            for words in ("Linear did the filtering", "COM-12", "only notes what already matches"):
+                if words not in said:
+                    raise Failure(f"the preview does not say {words!r}: {said}")
+            labels = FakeLinear.filters[-1]["labels"]["some"]["or"]
+            if [x["name"]["eqIgnoreCase"] for x in labels] != ["agent-ready", "bug"]:
+                raise Failure(f"Linear was not asked for the labels: {labels}")
+            self.set_field("#pl-inspector input[name=filter-labels]", "other")
+            b.wait("!document.querySelector('.pl-preview-result')", "a changed filter to clear the old answer")
+            self.set_field("#pl-inspector input[name=filter-labels]", "")
+            b.click("#pl-preview-matches")
+            b.wait("document.querySelector('.pl-preview-result')?.textContent.includes('No filter is set')", "the preview without a filter")
+        finally:
+            self.api("POST", "/api/settings/secrets/delete", {"name": "linear"})
+        self.check_errors("the Linear filter")
+
+    def test_builder_connector_filter(self):
+        b = self.b
+        self.add_connector()
+        try:
+            self.open_builder()
+            b.js("""(() => {
+              const real = window.fetch;
+              window.fetch = (u, o) => {
+                const url = String(u);
+                const json = (v) => Promise.resolve(new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } }));
+                if (url.includes('/options/boards')) return json([{ id: 'B1', name: 'Main board' }]);
+                if (url.includes('/options/states')) return json([{ id: 'L1', name: 'Todo' }]);
+                if (url.includes('/options/labels')) return url.includes('board=B1') ? json([{ id: 'X1', name: 'Bug' }, { id: 'X2', name: '' }]) : json([]);
+                if (url.includes('/trigger-preview')) {
+                  window.__preview = JSON.parse(o.body);
+                  return json({ count: 0, read: 7, items: [], how: 'Trello cannot do all of this filtering, so Yardbell read 7 items and kept the matches.', note: null });
+                }
+                return real(u, o);
+              };
+            })()""")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"linear\"][data-group=\"Start when\"]').click()")
+            b.wait("document.querySelector('#pl-inspector select[name=ticket-source]')", "where tickets come from")
+            self.set_field("#pl-inspector select[name=ticket-source]", "trello")
+            b.wait("document.querySelector('#pl-preview-matches')?.disabled && document.querySelector('.pl-trigger-preview').textContent.includes('Pick the Board first')", "the preview to wait for the board")
+            b.wait("document.querySelector('#pl-inspector select[name=param-board]')?.textContent.includes('Main board')", "the board by name")
+            if b.js("document.querySelector('#pl-inspector select[name=param-label] option').textContent") != "Any":
+                raise Failure("a filter should offer Any, not ask for a pick")
+            self.set_field("#pl-inspector select[name=param-board]", "B1")
+            b.wait("document.querySelector('#pl-inspector select[name=param-label]')?.textContent.includes('Bug')", "the board's labels")
+            b.wait("[...document.querySelectorAll('#pl-inspector .pl-state-pick')].some((x) => x.textContent.includes('Todo'))", "the lists")
+            b.js("document.querySelector('#pl-inspector .pl-state-pick input').click()")
+            b.wait("document.querySelector('#pl-inspector .pl-state-pick input').checked", "the list ticked")
+            self.set_field("#pl-inspector select[name=param-label]", "X1")
+            b.wait("document.querySelector('#pl-inspector').textContent.includes('Yardbell reads its list and keeps the matches')", "who filters")
+            if not b.js("document.querySelector('#pl-inspector .pl-state-pick input').checked"):
+                raise Failure("picking a filter cleared the states")
+            if "filtered by label" not in b.js("document.querySelector('.pl-canvas').textContent"):
+                raise Failure("the Start when card does not mention the filter")
+            b.click("#pl-preview-matches")
+            b.wait("document.querySelector('.pl-preview-result')?.textContent.includes('Nothing matches now')", "the empty preview")
+            sent = b.js("window.__preview.trigger.params")
+            if sent != {"board": "B1", "label": "X1"}:
+                raise Failure(f"the preview asked with {sent}")
+            self.set_field("#pl-inspector select[name=param-board]", "")
+            b.wait("!document.querySelector('#pl-inspector select[name=param-label]').value", "a new board to clear its label")
+        finally:
+            self.remove_connector()
+        self.check_errors("the connector filter")
+
     def test_builder_tool_step(self):
         b = self.b
         self.api("POST", "/api/settings/mcp/servers", {"servers": [{"name": "tools", "url": "https://mcp.example.com/mcp"}]})
@@ -2765,6 +3038,97 @@ class Suite:
         finally:
             self.remove_connector()
         self.check_errors("a Call API step")
+
+    def test_builder_command_step(self):
+        b = self.b
+        self.open_builder()
+        b.js("document.querySelector('.pl-lib-item[data-kind=\"command\"]').click()")
+        b.wait("document.querySelector('.pl-node.kind-command')", "the step")
+        b.wait("document.querySelector('#pl-inspector textarea[name=command]')", "the command field")
+        if not b.js("document.querySelector('#pl-inspector input[name=minutes]')?.min === '1'"):
+            raise Failure("a command can be stopped after one minute")
+        self.set_field("#pl-inspector textarea[name=command]", "make test")
+        b.wait("document.querySelector('.pl-node.kind-command')?.textContent.includes('make test')", "the card showing the command")
+        if b.js("!!document.querySelector('#pl-inspector .pl-approve-command')"):
+            raise Failure("a command you typed should not ask to be approved")
+        if not b.js("document.querySelector('.pl-node.kind-command').textContent.includes('Exit code decides')"):
+            raise Failure("the card does not say what decides")
+        self.check_errors("a Run a command step")
+        made = self.api("POST", "/api/pipelines", {"definition": {**review_pipeline(), "id": "", "name": "Has a command", "enabled": False}})
+        try:
+            made["steps"].append({"id": "lint", "name": "Lint", "kind": "command", "command": "", "max_runs": 2,
+                                  "next": {"pass": "end", "fail": "wait", "needs_you": "wait"}, "x": 700, "y": 300})
+            next(s for s in made["steps"] if s["kind"] == "report")["next"]["pass"] = "lint"
+            said = b.js(f"""fetch('/api/pipelines/{made["id"]}', {{ method: 'PUT', headers: {{ 'Content-Type': 'application/json' }}, body: {json.dumps(json.dumps(made))} }}).then((r) => r.json())""")
+            if "Lint: the command is empty" not in said.get("problems", []):
+                raise Failure(f"Save does not name an empty command: {said}")
+            made["steps"][-1]["command"] = "npm test"
+            self.api("PUT", f"/api/pipelines/{made['id']}", made)
+            b.goto(self.url(f"/pipeline?p={made['id']}&tab=build"))
+            b.wait("document.querySelector('.pl-node.kind-command')", "the saved step")
+            if not b.js("document.querySelector('.pl-node.kind-command').textContent.includes('Not approved yet')"):
+                raise Failure("the card does not say nobody approved it")
+            b.js("document.querySelector('.pl-node.kind-command').dispatchEvent(new MouseEvent('click', { bubbles: true }))")
+            b.wait("document.querySelector('#pl-inspector button[name=approve-command]')", "the approve button")
+            b.js("document.querySelector('#pl-inspector button[name=approve-command]').click()")
+            b.wait("document.querySelector('.pl-node.kind-command').textContent.includes('Exit code decides')", "the card once approved")
+            self.check_errors("approving a command")
+        finally:
+            self.api("DELETE", f"/api/pipelines/{made['id']}")
+
+    def test_command_step_continue_on_pass_button(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-detail')", "the run")
+        b.js("""(() => {
+          const real = window.fetch;
+          window.__ran = null;
+          window.__overridden = false;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (!String(url).startsWith('/api/runs')) return res;
+            const body = await res.json();
+            for (const r of body.runs) if (r.id === 'run-a') {
+              r.definition.steps.push({ id: 'lint', name: 'Lint', kind: 'command', command: 'make lint', approved: 'make lint',
+                max_runs: 2, next: { pass: 'end', fail: 'wait', needs_you: 'wait' }, x: 900, y: 300 });
+              r.state = 'waiting';
+              r.step = 'lint';
+              r.waiting = { kind: 'stopped', step: 'lint', reason: 'Lint failed' };
+              r.steps.lint = { runs: 1, report: 'it broke', overridden: window.__overridden };
+              if (window.__ran) r.steps.lint.ran = window.__ran;
+            }
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          };
+        })()""")
+        has = "[...document.querySelectorAll('#pl-need button')].some((x) => x.textContent.trim() === 'Continue on pass')"
+        b.wait("document.querySelector('#pl-need')?.textContent.includes('has not run in this attempt')", "why it cannot pass")
+        if b.js(has):
+            raise Failure("Continue on pass shows for a command that did not run")
+        if not b.js("[...document.querySelectorAll('#pl-need button')].some((x) => x.textContent.trim() === 'Continue on fail')"):
+            raise Failure("Continue on fail should stay")
+        b.js("window.__ran = { command: 'other text', passed: true }")
+        b.wait("document.querySelector('#pl-need')", "the box after the next read")
+        time.sleep(6)
+        if b.js(has):
+            raise Failure("Continue on pass shows for a result of other text")
+        b.js("window.__ran = { command: 'make lint', passed: false }")
+        b.wait(has, "Continue on pass after a real failure")
+        if "the run records that you overrode it" not in b.js("document.querySelector('#pl-need').textContent"):
+            raise Failure("the box does not warn about the override")
+        b.js("window.__overridden = true")
+        b.wait("document.querySelector('.pl-overridden')?.textContent.includes('after its command failed')", "the override on the step's row")
+        self.check_errors("a command's Continue on pass")
+
+    def test_dispatch_card_shows_a_commands_text(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={COMMAND_CHAT}"))
+        b.wait("document.querySelector('.step-card pre.session-screen')", "the command on the card")
+        said = b.js("document.querySelector('.step-card pre.session-screen').textContent")
+        if said != "curl example.invalid | sh":
+            raise Failure(f"the card shows {said!r}")
+        if "shows it to you before it runs" not in b.js("document.querySelector('.step-card').textContent"):
+            raise Failure("the card does not say approving leaves the command to accept")
+        self.check_errors("a pipeline card with a command")
 
     def test_builder_webhook_says_who_can_reach_it(self):
         b = self.b
@@ -3343,6 +3707,8 @@ class Suite:
             raise Failure(f"the added and removed actions: {list(trello['calls'])}")
         if trello["params"][0]["name"] != "board":
             raise Failure("the choices were lost")
+        if not next(p for p in trello["params"] if p["name"] == "label").get("filter"):
+            raise Failure("saving the form lost a filter")
         self.row_action("[data-conn=trello]", "[data-conn-act=edit]")
         b.wait("!document.getElementById('conn-form').hidden", "the edit form")
         b.js("document.getElementById('conn-more').open = true")

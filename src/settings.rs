@@ -588,6 +588,14 @@ impl Settings {
         self.save(&cfg, backup, None)
     }
 
+    pub fn update_health(&self, edit: &crate::config::HealthChecks) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.health_checks = edit.clone();
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
     pub fn change_passcode(&self, current: &str, new: &str) -> Result<String, String> {
         let mut cfg = self.load()?;
         let stored = cfg.passcode_hash.clone().unwrap_or_default();

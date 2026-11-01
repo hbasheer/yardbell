@@ -17,6 +17,10 @@ default_agent: claude            # preselected in New session; built in: claude,
 #     command: amp
 #     resume: amp threads continue
 
+# health_checks:                 # plain checks for stuck automation, see docs/automation.md
+#   run_queued_minutes: 120
+#   memory_short: false
+
 # phone_notifications:           # notify your phone through ntfy; off until topic is set
 #   server: https://ntfy.sh      # any ntfy server, including your own
 #   topic: ""                    # keep it secret; "Set up" on the Settings page writes it

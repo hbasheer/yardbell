@@ -198,6 +198,7 @@ async fn insights_carry_the_sessions_pull_request() {
         review: "approved".into(),
         ci: crate::pulls::Ci::Passing,
         failed: Vec::new(),
+        head: String::new(),
     };
     r.app.state.set_pulls(
         [(("hp".to_string(), path, s.branch.clone()), view)]

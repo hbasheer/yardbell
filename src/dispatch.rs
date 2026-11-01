@@ -29,9 +29,9 @@ pub use memory::{Memory, MemoryChange};
 pub(crate) use review::{bullet, clip, is_marker, unframed, value_of};
 pub use review::{
     changed_file as review_file, changed_files as review_files, evidence_folder, file_view,
-    fix_request, found_by, picked as review_picked, places as finding_files,
-    prompt as review_prompt, scan_prompt, valid_path as valid_review_path, Anchor as ReviewAnchor,
-    ReviewOf, ScanKind, Screenshots,
+    fix_request, found_by, picked as review_picked, pin_standing, places as finding_files,
+    prompt as review_prompt, read_pin, scan_prompt, valid_path as valid_review_path,
+    Anchor as ReviewAnchor, Pin as ReviewPin, ReviewOf, ScanKind, Screenshots,
 };
 pub use rules::{
     decide as decide_step, decide_always_wait, decide_memory, folder_matches, valid_folder_pattern,
@@ -167,6 +167,10 @@ impl Dispatch {
                 "backend": c.stored.backend,
             }))
             .collect::<Vec<_>>())
+    }
+
+    pub fn tokens_of(&self, id: &str) -> Option<crate::pipeline::tokens::Tokens> {
+        self.shared.lock().get(id)?.stored.tokens
     }
 
     pub fn get(&self, id: &str) -> Option<Value> {
@@ -357,22 +361,64 @@ impl Dispatch {
         action: &str,
         edited: Option<Value>,
     ) -> Result<(String, Value), Refusal> {
-        let at = now();
         self.shared.edit(id, |s| {
             let a = undecided(&mut s.events, action)?;
-            match edited.filter(|input| *input != a["input"]) {
-                Some(input) => {
-                    a["original"] = a["input"].take();
-                    a["input"] = input;
-                    a["status"] = json!("edited");
+            Ok(claimed(a, edited))
+        })
+    }
+
+    // A review of code that has one already stays waiting and says so, unless the person asked for
+    // it again. The check and the claim share one lock, so two approvals cannot both pass it.
+    pub fn approve_review(
+        &self,
+        id: &str,
+        action: &str,
+        edited: Option<Value>,
+        pin: &ReviewPin,
+        again: bool,
+    ) -> Result<Result<(String, Value), Value>, Refusal> {
+        let out = {
+            let mut chats = self.shared.lock();
+            let c = chats.get(id).ok_or_else(|| missing("conversation"))?;
+            let step = c.stored.events.iter().find(|e| e["id"] == action);
+            let asked = again || step.is_some_and(|e| e["review"]["again"] == true);
+            let machine = step
+                .and_then(|e| e["review"]["machine"].as_str())
+                .unwrap_or_default();
+            let earlier = (!asked)
+                .then(|| earlier_review_in(&chats, machine, pin))
+                .flatten();
+            let c = chats.get_mut(id).ok_or_else(|| missing("conversation"))?;
+            let a = undecided(&mut c.stored.events, action)?;
+            let out = match earlier {
+                Some(earlier) => {
+                    a["already"] = earlier;
+                    Err(a.clone())
                 }
-                None => a["status"] = json!("approved"),
-            }
-            a["decided"] = json!(at);
-            Ok((
-                a["tool"].as_str().unwrap_or_default().to_string(),
-                a["input"].clone(),
-            ))
+                None => {
+                    a["review"]["pin"] = json!(pin);
+                    if let Some(o) = a.as_object_mut() {
+                        o.remove("already");
+                    }
+                    Ok(claimed(a, edited))
+                }
+            };
+            c.stored.updated = now();
+            out
+        };
+        self.shared.save(id);
+        Ok(out)
+    }
+
+    pub fn earlier_review(&self, machine: &str, pin: &ReviewPin) -> Option<Value> {
+        earlier_review_in(&self.shared.lock(), machine, pin)
+    }
+
+    pub fn note_already(&self, id: &str, action: &str, earlier: Value) -> Result<Value, Refusal> {
+        self.shared.edit(id, |s| {
+            let a = actions::find(&mut s.events, action).ok_or_else(|| missing("step"))?;
+            a["already"] = earlier;
+            Ok(a.clone())
         })
     }
 
@@ -489,7 +535,13 @@ impl Dispatch {
             Some(scan) if scan["of"]["scan"].is_string() => scan,
             Some(review) => {
                 let store = self.evidence_dir(&change.conversation);
-                review::gather(review, &store, folders, m).await
+                let mut card = review::gather(review, &store, folders, m).await;
+                if let Some(read) = change.review.as_ref().and_then(|of| of.pin.as_ref()) {
+                    let path = change.review.as_ref().map_or("", |of| of.path.as_str());
+                    let now = review::read_pin(folders, m, path).await;
+                    card["read_changed"] = json!(review::pin_standing(read, &now));
+                }
+                card
             }
             None => follow::event(change, screen),
         };
@@ -595,6 +647,38 @@ impl Dispatch {
         }
         Ok(self.shared.lock().len())
     }
+}
+
+fn claimed(a: &mut Value, edited: Option<Value>) -> (String, Value) {
+    match edited.filter(|input| *input != a["input"]) {
+        Some(input) => {
+            a["original"] = a["input"].take();
+            a["input"] = input;
+            a["status"] = json!("edited");
+        }
+        None => a["status"] = json!("approved"),
+    }
+    a["decided"] = json!(now());
+    (
+        a["tool"].as_str().unwrap_or_default().to_string(),
+        a["input"].clone(),
+    )
+}
+
+// A reviewer that went quiet or ended without a report is not running, so it blocks nothing.
+fn earlier_review_in(
+    chats: &HashMap<String, store::Conversation>,
+    machine: &str,
+    pin: &ReviewPin,
+) -> Option<Value> {
+    chats.values().find_map(|c| {
+        let running = c.stored.sessions.iter().filter_map(|t| {
+            let of = t.review.as_ref()?;
+            matches!(t.last.as_str(), "" | "working" | "blocked")
+                .then(|| (t.name.clone(), json!(of)))
+        });
+        review::earlier_in(&c.stored.id, &c.stored.events, running, machine, pin)
+    })
 }
 
 fn undecided<'a>(events: &'a mut [Value], action: &str) -> Result<&'a mut Value, Refusal> {
@@ -989,6 +1073,8 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             branch: "eng-1".into(),
             evidence: String::new(),
             scan: String::new(),
+            pin: None,
+            again: false,
         };
         let step = dispatch
             .propose(
@@ -1071,6 +1157,8 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             branch: String::new(),
             evidence: String::new(),
             scan: "security".into(),
+            pin: None,
+            again: false,
         };
         let input = json!({ "machine": "hp", "path": "/r/app", "prompt": scan_prompt(ScanKind::Security, "") });
         let step = dispatch

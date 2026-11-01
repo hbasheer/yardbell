@@ -1,4 +1,5 @@
 use super::definition::{Definition, Outcome};
+use crate::dispatch::ReviewPin;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -117,6 +118,13 @@ pub struct Place {
     pub path: String,
 }
 
+// A command that really ran to its end in this attempt, and the text it ran.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct CommandRan {
+    pub command: String,
+    pub passed: bool,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(default)]
 pub struct StepState {
@@ -134,6 +142,21 @@ pub struct StepState {
     pub started: String,
     pub ended: String,
     pub answer: String,
+    // A read-only step's code: what this run of it read, what its last result was about, and
+    // whether the person asked for the same code to be read again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin: Option<ReviewPin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judged: Option<ReviewPin>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub again: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub ran: Option<CommandRan>,
+    // A person passed this step although its command failed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub overridden: bool,
+    #[serde(skip_serializing_if = "super::checks::Watch::is_empty")]
+    pub watch: super::checks::Watch,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -169,6 +192,10 @@ pub enum WaitKind {
     Questions,
     Push,
     ToolChanged,
+    Unchanged,
+    TokenLimit,
+    TokenUnknown,
+    CiUnsettled,
 }
 
 impl WaitKind {
@@ -189,6 +216,25 @@ pub struct Waiting {
     pub screen: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub tool_hash: String,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum HoldKind {
+    Memory,
+    Settling,
+    Spacing,
+}
+
+// Why a queued agent step is not starting although its machine is up.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct Held {
+    pub kind: HoldKind,
+    pub machine: String,
+    pub reason: String,
+    pub since: String,
+    #[serde(default)]
+    pub told: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -241,12 +287,15 @@ pub struct Run {
     pub next_try: Option<String>,
     pub slot: Option<String>,
     pub offline_since: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub held: Option<Held>,
     pub teardown_problem: String,
     pub deleting: bool,
     pub questions: Vec<Question>,
     pub pull: Option<PullRef>,
     pub notes: Vec<String>,
     pub report: String,
+    pub tokens: super::tokens::TokenUse,
 }
 
 impl Run {
@@ -294,6 +343,9 @@ pub enum Effect {
     OpenPull {
         step: String,
     },
+    Checks {
+        step: String,
+    },
     Linear {
         step: String,
     },
@@ -304,6 +356,9 @@ pub enum Effect {
         step: String,
     },
     Tool {
+        step: String,
+    },
+    Command {
         step: String,
     },
     Notify {
@@ -325,10 +380,19 @@ pub enum Seen {
     PersonStopped(String),
     Tick,
     Admitted,
+    Held(Option<(HoldKind, String, String)>),
     Offline,
     Closed(String),
     Refused(String),
     Planned(Result<Plan, String>),
+    Pinned {
+        step: String,
+        pin: ReviewPin,
+    },
+    Unchanged {
+        step: String,
+        reason: String,
+    },
     Started {
         step: String,
         result: Result<(String, String, String), String>,
@@ -350,6 +414,11 @@ pub enum Seen {
     Sent(Result<(), String>),
     Pushed(Result<(), String>),
     Opened(Result<PullRef, String>),
+    ChecksRead {
+        step: String,
+        read: super::checks::Read,
+        every_seconds: u64,
+    },
     Linear(Result<(), String>),
     Reported(Result<String, String>),
     Called(Result<String, String>),
@@ -359,7 +428,19 @@ pub enum Seen {
         reason: String,
         shown: String,
     },
+    TokensRead {
+        found: Vec<(String, super::tokens::Tokens)>,
+        known: Vec<String>,
+        unknown: Vec<(String, String)>,
+        ending: bool,
+    },
+    TokenBlind {
+        step: String,
+        why: String,
+    },
+    RaiseLimit(u64),
     AcceptTool,
+    CommandDone(Result<String, String>),
     Answer(String),
     Retry,
     Continue(Outcome),

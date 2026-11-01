@@ -245,6 +245,8 @@ pub async fn serve(
             });
         }
     });
+    let pipelines = Arc::new(crate::pipeline::Pipelines::new(dir.clone()));
+    let owners = pipelines.clone();
     Arc::new(
         crate::pulls::Pulls::new(
             Arc::new(crate::pulls::github_api::GitHubEither::new(
@@ -257,10 +259,12 @@ pub async fn serve(
             crate::pulls::Remotes::new(runner.clone(), ssh.clone()),
             dir.join("pulls.json"),
         )
-        .with_insights(insights.clone()),
+        .with_insights(insights.clone())
+        .with_owner(Box::new(move |n| {
+            owners.owns_pull(&n.pull.url, &n.machine, &n.path)
+        })),
     )
     .start(path.clone(), state.clone(), dispatch.clone());
-    let pipelines = Arc::new(crate::pipeline::Pipelines::new(dir.clone()));
     let triggers = Arc::new(crate::triggers::Triggers::new(
         Arc::new(crate::triggers::Live::new(runner.clone())),
         dir.join("triggers.json"),
@@ -321,6 +325,7 @@ pub async fn serve(
         }),
     };
     let app = Arc::new(AppState::new(path, services, &cfg, Arc::new(Instant::now)));
+    crate::health::Ledger::load(dir.join("health.json")).start_loop(app.clone());
     pipelines.clone().start_loop(
         app.clone(),
         crate::pipeline::forge::Forge::new(runner.clone(), ssh.clone()),

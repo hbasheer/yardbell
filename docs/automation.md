@@ -158,9 +158,10 @@ is no ticket to fill them with and they stay as written.
   or a reviewer comments, a card appears in Dispatch with **Send to session**. That is set under
   [`pull_requests`](configuration.md#pull_requests-optional), see the end of
   [Dispatch](usage.md#dispatch).
-- **Linear filters** beyond "assigned to me" and states, such as a team, a label or a project, are
-  not available. Every ticket assigned to you starts a conversation, but the task can tell
-  Dispatch to stop there ("if the ticket is not in the Web team, start nothing and say so").
+- **Linear filters** on these triggers go no further than "assigned to me" and states. Every ticket
+  assigned to you starts a conversation, but the task can tell Dispatch to stop there ("if the ticket
+  is not in the Web team, start nothing and say so"). A [pipeline trigger can filter](#filter-which-tickets-start-a-run)
+  by label, team or project.
 - **Stacking.** While a trigger's last conversation is still working, a scheduled time is skipped
   and new tickets wait. Tickets start one at a time, one per check.
 
@@ -530,6 +531,14 @@ you; if it is busy, the task goes in once it is quiet. A session nothing needs a
 itself: everything but the current step's and the newest writer's. So a reviewer stops when Fix
 starts, and a Review run again starts a new one that reads the code afresh.
 
+**A review reached again with nothing new.** A read-only step notes the commit and uncommitted changes it
+read, and the run's page shows the commit. If the step is reached again and the code is exactly what its
+last result was about, as when Fix made no new commit and changed no files, Yardbell does not start a
+reviewer and does not reuse the old verdict. A second read of the same code could only repeat itself, or
+pass by chance. The run waits and says so. **Run it again** reads the same code anyway, and **Continue on
+pass** or **Continue on fail** takes that line. This try does not count towards the step's limit. New
+commits or new uncommitted changes run the step as usual, and so does a folder whose code cannot be read.
+
 **Session names.** A run's sessions end with the end of its id, like `hp-com-1-ab12cd`, so a run can
 never stop or type into a session someone else started under a name it remembers.
 
@@ -550,6 +559,27 @@ Code it also reads the session's transcript in `~/.claude/projects`, because age
 alternate screen, where only what fits in the pane can be seen. A long result, a small terminal or a
 view scrolled up cannot hide it there.
 
+**Result files.** So a result never has to fit on the screen, the task also asks the agent to save the
+same block with a shell command to the file that `git rev-parse --git-path yardbell-result/<step line>`
+prints. That is inside the worktree's git folder, so the branch does not change. When the agent goes
+quiet, Yardbell reads the file first, then the screen, then the transcript. The `step:` line must still
+match, so an old file or another try's file is never accepted. The file is read the same way as the
+screen and trusted no more: it is limited to 64 KB, a symbolic link is refused, and one that does not
+hold up is ignored. An agent that does not write it reports as it always did. When the run ends, its
+own files are removed, and the folder too once it is empty, whoever else works in that worktree.
+
+Whether the task asks for the file depends on the agent, since asking must not stop a step at a prompt
+or take an agent past its read-only limit:
+
+| Agent | Asked for the file? |
+|---|---|
+| Claude Code | Only when its command turns permissions off, with `--dangerously-skip-permissions` or `--permission-mode bypassPermissions`. In every other mode it prompts before any write to `.git`, whatever your allow rules say, and the transcript already has its result. A reviewer's `--disallowed-tools` does not block shell commands, so a reviewer can write it. |
+| Codex | Only when not read only and its command has `--sandbox danger-full-access`, `--yolo` or `--dangerously-bypass-approvals-and-sandbox`. Its result is otherwise read from the screen. `--sandbox read-only` blocks the write, so a read-only Codex is never asked. |
+| Any other agent | Always, also when read only, since those are read only by instruction. An agent that asks before running a shell command will ask here too, and the run waits for you as it does for any other prompt. |
+
+A permission mode set in a settings file rather than in the command cannot be seen, so that agent is not
+asked and reports as before.
+
 If a step goes quiet with no result, it gets one more try after a 2 minute wait: a reviewer is asked to
 print its result again, and a writer gets its task again. After that the run waits and says **ended
 without a result**, and **Show terminal** shows what the agent did. Your **Retry step** starts a
@@ -562,8 +592,10 @@ reviewer afresh.
 | Agent | Starts an agent with your instructions. It works in a new worktree on the run's branch, in another step's folder, or in a copy of another step's branch on another machine; in a new session or by continuing another step's session; optionally read only. Its machine is a fixed one, the machine of another step, or one Dispatch picks. It ends with a result block saying pass, fail or needs you. |
 | Plan | Dispatch reads the ticket and its comments and picks the machine, folder and branch, from all machines or the ones you tick. Unclear tickets come back to you as questions. |
 | Push and draft PR | Pushes the run's branch (with the secret check, never forced) and opens a draft pull or merge request. |
+| Wait for CI and reviews | Waits for the run's pull or merge request without an agent, then follows pass or fail. See [below](#wait-for-ci-and-reviews). |
 | Linear | Moves the ticket to a state, or drafts a comment that you post yourself. |
 | Use a connected tool | Does one action in a [connection](#connectors): reads from or changes an outside tool. Its reply goes on the pass line and an error on the fail line. |
+| Run a command | Runs a saved shell command in the run's worktree, with no agent. Exit 0 goes on the pass line and anything else on the fail line. See [Run a command](#run-a-command). |
 | Report to me | Dispatch writes what the run did and found, and your phone gets the first line. |
 | Wait for me | Stops with your message until you continue it. |
 
@@ -575,9 +607,174 @@ A step runs at most `max_runs` times in one run (2 unless you change it, up to 1
 step may run for its `minutes`, or the `minutes` setting, before it waits for you. At most
 `per_machine` agent steps run at once on each machine; the rest queue.
 
+New agent steps can also wait while a machine is short of memory. This is off unless you set a
+`memory_limit`. With a limit set, from that percent of memory in use, steps on that machine are held, and
+they are released only once it has stayed under the limit for two minutes. At most one step then starts
+a minute on each machine. This counts every start from the queue, including a step's second try and
+**Retry step**. A step already running is never stopped. The reading is the fuller of the machine's memory
+and the account's own limit, the same figure as the high memory notification. A machine that answers but
+gives no memory reading is not held, because a figure that may never come would stop its work for good,
+and `yardbell doctor` flags it.
+
+No single limit suits every machine. On a Mac the figure can read well above what macOS itself reports,
+so look at each machine's figure when it is idle before you choose.
+
+The run's page says it is held and why. A run held for 30 minutes also shows under **Waiting for me**
+and sends one phone notification. It stays queued and still starts by itself when the machine recovers.
+
+A pipeline can also limit how many tokens one run may use, set under **Token limit** in its builder or
+as a default in **Settings**. See [Token limits](#token-limits).
+
 Each run gets one Dispatch conversation, where every step shows as a card marked **Ran as part of
 the pipeline run started at 09:40**. Starting a run is the one approval: your Dispatch rules still
 refuse what they refuse, and a refused step waits for you with the rule's reason.
+
+### Run a command
+
+An agent's pass is its own word. A **Run a command** step lets code decide instead: it runs a command such
+as `make test` and follows its exit code. It starts no agent and spends no tokens, so it suits a loop like
+this:
+
+```text
+Implement  pass  Test
+Test       pass  Push and draft PR
+Test       fail  Fix
+Fix        pass  Test
+```
+
+- It runs through your login shell, as an agent does, in the worktree of the first step that made one, on
+  that machine. Save refuses a command with no such step before it on every path.
+- The shell's exit code is the last command's, so on several lines an earlier failure does not count. Join
+  them with `&&`, as in `make test && make lint`.
+- Exit 0 goes down the pass line. Any other exit, or running past its **Stop after minutes** (10 unless you
+  change it, 1 to 1440), goes down the fail line. At the limit the machine stops the command and everything
+  it started.
+- The last 20,000 bytes of its output, with saved secrets and known token shapes hidden, are the step's
+  report. A Fix step reads them with `{report}`, quoted as data.
+- If Yardbell cannot tell how it ended, such as when ssh dropped, that is not a fail. It tries once more,
+  then waits for you with **Retry step**, and neither try counts against `max_runs`.
+- `max_runs` counts as for any step, so a Test and Fix loop stops and waits when either reaches its limit.
+- If Yardbell restarts during a command, the step runs again from the start and tells the copy left behind
+  to stop. Choose commands that are safe to run twice. Dropping the run stops the command too.
+- A command takes no placeholders. `{branch}` or `{report}` would be refused on save, because text from a
+  ticket must never reach a shell. It can read `YARDBELL_WORKTREE` and `YARDBELL_MAIN_CHECKOUT`.
+
+**A command step never passes without running.** **Continue on pass** on this step depends on what happened
+in this attempt, which starts each time a run enters the step:
+
+- If the exact approved command has not run, as when it waits to be accepted, a rule refused it, ssh dropped
+  or the run limit stopped the loop, nobody can continue on pass, including through `answer_run` under an
+  `allow` rule. The button is hidden. **Accept and run** or **Retry step** is the way forward.
+- If it ran and failed, you can still press **Continue on pass** on the run's page. The run keeps a note
+  that you overrode it, the step's row says so, and the final report lists it. `answer_run` is refused here
+  too, even with an `allow` rule or a card you approve, so this takes the run's page.
+- If it ran and passed, anyone can continue on pass.
+
+**Continue on fail** and **Drop** always work. Continue on fail follows the fail line as if the step failed,
+so it runs nothing, and a later step that reads `{report}` finds no output if the command never ran.
+
+**Who approves a command.** Only text a person has accepted runs:
+
+- A command you type in the builder counts as approved when you save it.
+- A pipeline Dispatch or an MCP client proposes always waits for you, and its card shows each command.
+  Approving the card saves the pipeline but does not approve the commands. The first time a run reaches one,
+  it waits and shows the whole command, and **Accept and run** goes on and remembers it. You can also press
+  **Approve this command** in the builder.
+- If an agent changes a command, the approval is gone and the run waits again. What an agent sends in the
+  `approved` field is ignored.
+
+**Dispatch rules.** A rule on the action `run_command` matches the machine, and the folder either as its name
+such as `acme/web` or as the worktree's path. A `deny` rule makes the run wait with the rule's reason. As with
+the other steps of a run, starting the run is the one approval, so `prompt` does not stop it.
+### Wait for CI and reviews
+
+Put this step after **Push and draft PR**, with its fail line going to a Fix step, and Fix's pass line
+going back to Push:
+
+```
+ Push and draft PR --> Wait for CI and reviews --pass--> Report to me
+        ^                      |
+        |                     fail
+        |                      v
+        +------- pass ------- Fix    "Fix what this found: {report}"
+```
+
+Every `poll_seconds` (Settings, Connections, GitHub and GitLab) it reads the branch's pull or merge
+request the same way badges and cards do, through `gh`, a GitHub token, a GitLab token or `glab`. The
+switches for badges and cards do not turn it off, since you put the step there.
+
+| What it reads | What it does |
+|---|---|
+| CI green on the same commit at two reads in a row | Follows **pass**. The second read catches a check that registers late. |
+| CI green, **Also wait for an approval** on, and no approval yet | Keeps waiting. |
+| A failed check, or a reviewer asking for changes | Follows **fail**, once per set of failures. |
+| A check that was cancelled, went stale or waits for someone, with nothing failing and nothing still running | Waits for you and names the check. See below. |
+| CI still running | Keeps waiting. |
+| No checks at all after 10 minutes | Waits for you, because nothing says it passed. **Continue on pass** carries on. |
+| The pull or merge request was merged | Follows **pass**. |
+| It was closed, `gh` is logged out, or GitLab refused the token | Waits for you. |
+
+Plain comments do not fail the step. They come along in its report, so a pass can show them too.
+
+**Checks that ended with no result.** A check that was cancelled, went stale or waits for someone to act
+on it is not green, and it gives an agent nothing to fix, so it sends no Fix. This covers a GitHub check run
+that ended `CANCELLED`, `STALE` or `ACTION_REQUIRED`, and a GitLab pipeline that is `canceled` or `canceling`.
+The run waits for you with **Retry step** and **Continue on pass** or **Continue on fail**, and says what
+happened to each check. You do not have to answer if the check is run again or someone deals with it: until
+the step's time limit the wait keeps reading, without telling you again, and a later read with the check
+running or green carries on as usual with a fresh time limit. Green still takes two reads, and a read from
+before does not count. A check that was run again under the same name goes by its other result. After the
+limit the wait stops reading and only you can move it on. If a check failed as well, the failure takes the
+fail line, and the others are listed in the report. These checks neither pass nor add to the count of
+failing commits. Badges and cards do not treat them differently.
+
+Other results keep their meaning. On GitHub, `SUCCESS`, `SKIPPED` and `NEUTRAL` count as green, and `FAILURE`,
+`TIMED_OUT` and `STARTUP_FAILURE` as failed. So a pull request whose checks were all skipped passes. On
+GitLab, a pipeline that is `skipped` or waiting on a `manual` job counts as no checks, so the run waits for
+you after 10 minutes.
+
+**Its report** starts with what failed, then lists the unresolved comments with who said them and
+where, then each failed check with its link and the last lines of its log, for up to 4 checks. Yardbell
+leaves out GitHub review threads and GitLab comments that are marked resolved. Use `{report}` in the Fix
+step's instructions. It arrives quoted, because logs and comments are written by others.
+
+**No agent waits.** The step takes no slot on any machine, and while it waits the run's sessions stop.
+The worktree stays. The Fix step then starts a new session in the same folder, so it works from the
+report and the code, without its earlier conversation.
+
+**Its time limit** is the step's `minutes`, or the `minutes` setting. When it runs out, the run waits for
+you and says what it last saw. A wait that may need a person's approval usually wants a longer one, up
+to 1440. Pending runs and their counts are kept in `runs.json`, so a restart carries on.
+
+**Stopping loops.** A failure is sent down the fail line only when it holds something not sent before:
+a check that fails in a new way, or a new review or comment while changes are requested. A Fix that
+pushes nothing, or a reviewer who has not looked again, leaves the step waiting. The run waits for you
+when:
+
+- the same check fails the same way on two commits. "The same way" compares the log's lines that mention
+  an error or failure, with ids, times and numbers taken out. A log that could not be read never counts
+  as a repeat;
+- any check fails on four commits in a row, whichever check it is. CI passing starts this count again.
+
+**Continue on fail**, **Continue on pass** and **Retry step** start the counts again, so the step can go
+round once more if you say so. A step also still has its **Runs at most**, on this step and on Fix, Push
+and anything else in the loop, so raise those for a longer loop. A new one of these steps allows 5.
+
+**Dispatch cards.** While a run with this step is going, its pull or merge request posts no CI or review
+cards, so one failure never becomes both a card and a Fix step. It counts as the run's when its address is
+the run's, or when it is on a folder a step of the run works in. Badges stay. What happened during the run
+does not turn into cards later; a new failure or comment after the run ended does. A pipeline without this
+step keeps its cards as before.
+
+While a run is at this step, the **CI is still pending** health check leaves that pull or merge request
+alone, because the step has its own time limit and tells you itself. **A run is waiting** still counts it.
+
+The step uses no tokens and is not held for memory, so it goes on past a run's token limit and does not
+count towards the one start a minute. A Fix it sends is an ordinary agent step, so past the limit the run
+waits at Fix instead of spending.
+
+Reading CI and reviews changes nothing, so no Dispatch rule decides it. The Fix step and the Push after
+it are still put to your rules, and this step never merges.
 
 ### When a run waits for you
 
@@ -586,6 +783,9 @@ A run waits under **Waiting for me**, with a phone notification, when:
 - a step's line goes to Wait for me, such as a step that says it needs you;
 - Plan has questions, or an agent asks something or waits on a prompt (its screen is shown);
 - a step reached its `max_runs`, ran past its minutes, or ended without a result;
+- the run passed its token limit, or cannot tell what a step used;
+- a wait for CI ran out of time, saw the same failure on two commits or failures on four in a row,
+  found no checks at all, or found a check that was cancelled, went stale or waits for someone to act;
 - the push or a step was refused, by the secret check or a rule;
 - its machine stayed offline for 30 minutes, or the ticket was closed meanwhile.
 
@@ -615,7 +815,7 @@ pipeline stops its runs' sessions but runs no teardown, so stop a run first if i
    every path, and the machines and MCP servers exist.
 4. Switch it on. Switching on checks the trigger too, such as a GitLab host you have not added.
 5. Run `yardbell doctor`. For each pipeline that is on, it says whether Linear answers, the GitLab
-   host signs you in, `gh` is logged in where it pushes, and its machines are reachable.
+   host signs you in, `gh` is logged in where it pushes or waits for CI, and its machines are reachable.
 
 ### Start a run
 
@@ -630,6 +830,116 @@ A ticket or link that is already in a run of the same pipeline is not started tw
 kept in `pipelines/` and runs in `runs.json` in the state folder, so a restart carries on where each
 run was. A run keeps the version it started with, so saving a pipeline never changes a run halfway.
 
+### Filter which tickets start a run
+
+A **New ticket** trigger can narrow which tickets start a run, on the **Build** tab under **Start when**.
+What you can filter on depends on where the tickets come from:
+
+| From | Filter on | Who filters |
+|---|---|---|
+| Linear | labels, teams (key or name), projects | Linear |
+| GitHub Issues | label | GitHub |
+| GitLab Issues | label | GitLab |
+| Trello with a token | label | Yardbell, on the board's cards it reads |
+| Jira | label, project key | Yardbell, on what your search returns |
+| Asana | tag, project | Yardbell, on your tasks it reads |
+| Trello by sign-in, and any other connection | what its **Choices** offer, often nothing | as the choice is set up |
+
+Under Linear, names in one box mean any of them, and a ticket must match every box. Names ignore case.
+A connection's filter takes one value.
+
+**See what matches now** reads the tickets, shows how many match with the first few, and says who did
+the filtering. It changes nothing and starts nothing.
+
+```yaml
+trigger:
+  kind: linear
+  assigned: true
+  filter:
+    labels: [agent-ready, bug]
+    teams: [ENG]
+    projects: [Billing]
+```
+
+**A filter never floods you.** The first check after you switch a pipeline on, or change its filter, only
+notes what matches and starts nothing. A ticket that comes to match later starts one run, such as one
+that gets the label today. That holds when you widen or remove a filter too.
+
+Limits:
+
+- Linear only shows Yardbell open tickets assigned to you, the 100 most recently updated, so a team
+  filter narrows those. It does not bring in your teammates' tickets.
+- Yardbell filtering needs the whole list read first, up to the [paging limits](#paging). To have Jira
+  filter, write it into the `jql` of the connection's `list` action instead.
+- A name with a typo matches nothing, and the tool does not say so. **See what matches now** tells you
+  when nothing matches, and so does `yardbell doctor` for Linear.
+- A connection saved before filters existed has none until you add them. The builder says so.
+- A schedule reading a connection uses its filters. A schedule reading Linear and the GitHub and GitLab
+  review triggers have none.
+- **Run now** with a ticket you name ignores the filter, since you picked that ticket.
+
+### Token limits
+
+A run's page shows what it has used. Each agent session's figures come from its Claude Code transcript
+on its machine, and Plan and Report come from what Dispatch reports for its own turn. Yardbell reads the
+transcripts about once a minute and when a step ends. It counts input, output and cache writes. Cache
+reads are shown apart and left out, because every turn of a long session reads its whole conversation
+again. These are tokens, not money: Yardbell has no price list.
+
+Each transcript is counted once however many steps share its session, and subagents' transcripts are
+included. The figures are saved with the run, so a restart loses nothing and adds nothing.
+
+Once a run with a limit has used it:
+
+- it starts no new step that uses tokens and waits for you, with a phone notification, showing what it
+  used and the limit;
+- steps that use no tokens go through, and the run waits at the next step that does. If none is left, the
+  run ends, and your phone has still been told it passed its limit;
+- a step already going finishes first, and your phone hears when the limit is passed while it runs;
+- **Raise the limit** sets a new limit for this run and goes on, and **Start this step anyway** runs one
+  step, after which the run waits again.
+
+| Step | Past the limit | Why |
+|---|---|---|
+| Agent | waits | an agent session uses tokens |
+| Plan, Report | wait | each is a Dispatch turn |
+| Push and draft PR | goes through | git and the forge, with no model |
+| Update the ticket | goes through | a call to Linear or a connection, and its comment is built from reports |
+| Call, Use a connected tool | go through | Yardbell calls them with no model. If the far side runs a model of its own, that is not counted |
+| Wait for me | is its own wait | it already asks you |
+
+Unknown is never counted as zero. Only Claude Code reports tokens, so:
+
+- a pipeline with a limit and a step on another agent says so in the builder and in `yardbell doctor`;
+- a limited run waits before starting that step. **Start this step anyway** goes on, leaves that step out
+  of the total and does not ask again in that run. The run's page then says "at least" and names the step;
+- if a Claude Code step ends and its transcript cannot be read, or a Dispatch turn reports nothing, the run
+  waits the same way before its next step that uses tokens;
+- if `/clear` is run in one of the run's sessions, the same happens, and the page says the session moved to
+  a new transcript.
+
+`/clear` needs that care because it gives the session a new transcript with nothing in it that names the
+old one. Yardbell finds a run's transcripts by the step markers in them, so it cannot find that one by
+itself. It asks Claude Code's own record of each live session, `sessions/<pid>.json` in its config folder,
+which transcript the session is on now. If that transcript holds no marker from this run, the session has
+moved.
+
+Yardbell warns and does not count that transcript, since the record cannot tell `/clear` from `/resume`, and
+a resumed transcript holds tokens from another session. If the session later gets a step of this run, its
+marker is in that transcript, so the transcript is counted and the warning goes.
+
+This has limits, and a move can still be missed when:
+
+- the session ends before the next read, about a minute at most, since the record goes with the process;
+- the session's Claude Code keeps no such record, or Yardbell's process id for it is not the one the record
+  is named after;
+- the session started a new transcript in another folder.
+
+This was read from Claude Code 2.1.316 and tested with files shaped like its own. It has not been seen
+working on a real `/clear`.
+
+A run without a limit never waits for this, and its page still shows what is known.
+
 ### Settings
 
 The **Settings** button on the Pipelines page writes the `pipelines` section of `yardbell.yml`:
@@ -637,7 +947,9 @@ The **Settings** button on the Pipelines page writes the `pipelines` section of 
 ```yaml
 pipelines:
   per_machine: 2      # agent steps at once on each machine, 1 to 6
-  minutes: 120        # an agent step running longer waits for you, 10 to 1440
+  minutes: 120        # an agent step or a wait for CI running longer waits for you, 10 to 1440
+  memory_limit: 0     # off; or the percent of memory in use that holds new agent steps, 50 to 99
+  token_limit: 500000 # optional: tokens one run may use, 0 for no limit; a pipeline can set its own
   qa_notes:           # added to every agent step working in that folder
     acme/web: |
       Run specs with: docker compose exec web bin/rspec <files>
@@ -648,8 +960,43 @@ pipelines:
 
 - Plan can only pick a folder a machine already has; otherwise it says so and waits.
 - An agent step reports through its result block. One that ends without it gets one more try, then
-  waits for you. Only Claude Code's result is also read from its transcript; other agents' results
-  must fit on the terminal's screen.
+  waits for you. Only Claude Code's result is also read from its transcript. An agent that is not asked
+  for a result file, or does not write one, and has no transcript must fit its result on the terminal's
+  screen. **Result files** under [How a run works](#how-a-run-works) says which agents are asked.
+
+## Health checks
+
+Health checks are plain tests of what Yardbell already reads from its machines, pipelines, triggers and
+pull requests. They use no tokens and run no commands of their own. A check starts no agent, types into
+nothing and changes nothing. It only tells you.
+
+They cover what the other notifications do not. An agent waiting, a session ended, a machine down or back,
+memory at 95%, a pipeline run that starts waiting or finishes, and a proposal already have a
+[phone notification](apps.md#phone-notifications), so these checks do not repeat them.
+
+| Check | Speaks when | Default |
+|---|---|---|
+| A run stays queued | A run has waited that long for a free slot on a machine that is up | 120 minutes |
+| A run stays waiting for you | A run has waited that long at the same step for the same reason. It was told once when it started waiting, and this is the one reminder | 240 minutes |
+| A step near its limit has an unchanged screen | An agent step's session has shown exactly the same screen that long, and the step is past three quarters of its minutes | 30 minutes |
+| CI stays pending | The same commit of an open pull or merge request has been pending that long. Yardbell reads only branches with a live session | 120 minutes |
+| A trigger keeps failing | A trigger or a pipeline's trigger cannot read what it watches for that long, or a trigger's last start failed. A failure that stands until the next scheduled try, meaning a failed start or a failed read by a pipeline's schedule, stops counting 24 hours after it happened, or sooner if a later try works. The trigger's own row in Settings or on the Pipelines page still shows it | 60 minutes |
+| A machine stays short of memory | A machine has stayed at 90% memory or more that long | 60 minutes |
+
+Current problems show at the top of the dashboard, with a count on **Dashboard** in the sidebar. Each one
+links to the run, pull request, trigger or machine it is about, and leaves as soon as it clears.
+
+Each problem notifies your phone once. It notifies again only after it has been clear for 5 minutes and then
+comes back, and a restart does not change that, since Yardbell keeps what it told you in `health.json` in its
+state folder. More than 3 new problems at once arrive as one notification. While a machine is down, or a
+pull request cannot be read, what is known about it stays as it is rather than counting as cleared. A failed
+start or scheduled read that has passed its 24 hours does not come back, also after a restart, and only
+another failure is a new problem. A schedule that fails at every try, such as every hour, moves that time on
+at each try, so it stays one open problem. With this check's time set to 24 hours or more, one such failure
+never shows here.
+
+**Settings, Health checks** has an on or off and a time for each. `yardbell doctor` lists problems you have
+been told about that are still open.
 
 ## Connectors
 
@@ -792,6 +1139,30 @@ Each call has:
 
 `list` and `read` make a connector a source of work. `states` and any call named by `params` fill the
 builder's lists with names. Only mapped fields are kept: the rest of a reply is never stored.
+
+### Add a filter to a connection
+
+A choice marked as a filter is optional, and narrows which items [start a run](#filter-which-tickets-start-a-run).
+In the form it is the **Filter** box under **Choices**. There are two ways to apply one:
+
+```yaml
+params:
+  - { name: repo, label: Repository, options: repos }
+  - { name: label, label: Label, options: labels, filter: true }   # the tool filters
+  - { name: team, label: Team, filter: true }                      # Yardbell filters
+calls:
+  labels:
+    request: { method: GET, path: '/repos/{{repo}}/labels' }
+    map: { id: name, name: name }
+  list:
+    request: { method: GET, path: '/repos/{{repo}}/issues', query: { labels: '{{label}}' } }
+    map: { item_id: number, title: title, team: 'assignee.team' }
+```
+
+Use the tool's own filter when it has one, because it reads less. The slot must be the whole value of a
+query field or tool argument, and it is left out when no filter is picked. Otherwise map a field with the
+filter's name, and Yardbell keeps the items whose field matches, ignoring case. The field can be a list,
+like `labels[].name`, and an item without it does not match. **Save** refuses a filter that does neither.
 
 ### Paging
 

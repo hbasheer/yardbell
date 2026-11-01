@@ -1,6 +1,7 @@
+use super::checks::Read;
 use super::record::PullRef;
 use crate::config::Machine;
-use crate::pulls::{GitLabAccess, Remotes};
+use crate::pulls::{Answer, Fetched, Forge as _, GitHub, GitLab, GitLabAccess, Pull, Remotes};
 use crate::shell::{quote, Duration, Runner};
 use crate::ssh::Ssh;
 use serde_json::{json, Value};
@@ -9,6 +10,7 @@ use std::sync::Arc;
 const GH_TIMEOUT: Duration = Duration::from_secs(60);
 const HTTP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30);
 const NO_GH: i32 = 127;
+const CHECKS_WITH_LOGS: usize = 4;
 const NOT_LOGGED_IN: i32 = 4;
 const QUIET: &str = "GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 GH_PAGER=cat NO_COLOR=1; \
 export GH_PROMPT_DISABLED GH_NO_UPDATE_NOTIFIER GH_PAGER NO_COLOR; ";
@@ -41,6 +43,90 @@ impl Forge {
 
     pub fn remotes(&self) -> Remotes {
         Remotes::new(self.runner.clone(), self.ssh.clone())
+    }
+
+    fn gitlab(&self) -> GitLab {
+        GitLab::new().with_runner(self.runner.clone(), self.ssh.clone())
+    }
+
+    // Only a host listed under pull_requests.gitlab goes to GitLab; the switches for badges and
+    // cards do not stop a step someone put in a pipeline.
+    async fn gitlab_place(
+        &self,
+        m: &Machine,
+        path: &str,
+        branch: &str,
+        gitlab: &[GitLabAccess],
+    ) -> Option<(GitLabAccess, String)> {
+        if gitlab.is_empty() {
+            return None;
+        }
+        let repo = self.remotes().read(m, path, branch).await?;
+        let access = gitlab.iter().find(|g| g.host == repo.host)?;
+        Some((access.on(m), repo.project))
+    }
+
+    pub async fn read_pull(
+        &self,
+        m: &Machine,
+        path: &str,
+        branch: &str,
+        gitlab: &[GitLabAccess],
+        github: Option<&crate::pulls::github_api::GitHubApi>,
+    ) -> Read {
+        if let Some((access, project)) = self.gitlab_place(m, path, branch, gitlab).await {
+            let host = &access.host;
+            return match self.gitlab().fetch(&access, &project, branch).await {
+                Answer::Pull(pull) | Answer::Partial(pull) => Read::Found(pull),
+                Answer::NoPull => Read::NoPull,
+                Answer::Failed(why) => Read::Problem(format!("{host} could not be read: {why}")),
+                Answer::Refused(why) => Read::Blocked(format!("{host} refused the token: {why}")),
+            };
+        }
+        let fetched = match github {
+            Some(api) => api.fetch(m, path, branch).await,
+            None => {
+                let gh = GitHub::new(self.runner.clone(), self.ssh.clone());
+                gh.fetch(m, path, branch).await
+            }
+        };
+        match fetched {
+            Fetched::Found(pull) => Read::Found(pull),
+            Fetched::NoPull => Read::NoPull,
+            Fetched::NoTool => Read::Blocked(crate::pulls::no_gh(&m.name)),
+            Fetched::Failed(why) => Read::Problem(crate::pulls::gh_failed(&why)),
+        }
+    }
+
+    // The failed logs, the comments on lines and which of them are resolved cost a call each, so
+    // only a reading that will say something asks for them.
+    pub async fn pull_detail(
+        &self,
+        m: &Machine,
+        path: &str,
+        branch: &str,
+        mut pull: Pull,
+        gitlab: &[GitLabAccess],
+        github: Option<&crate::pulls::github_api::GitHubApi>,
+    ) -> Pull {
+        if let Some((access, project)) = self.gitlab_place(m, path, branch, gitlab).await {
+            let reader = self.gitlab();
+            for check in pull.failed.iter_mut().take(CHECKS_WITH_LOGS) {
+                check.log = reader.failure_log(&access, &project, check).await;
+            }
+            return pull;
+        }
+        let gh = GitHub::new(self.runner.clone(), self.ssh.clone());
+        let forge: &dyn crate::pulls::Forge = match github {
+            Some(api) => api,
+            None => &gh,
+        };
+        for check in pull.failed.iter_mut().take(CHECKS_WITH_LOGS) {
+            check.log = forge.failure_log(m, path, check).await;
+        }
+        pull.notes = crate::pulls::with_comments_on_lines(forge, m, path, &pull.notes, false).await;
+        pull.resolved = forge.resolved_comments(m, path, pull.number).await;
+        pull
     }
 
     // GitHub through gh on the machine the branch was pushed from; a host listed under
@@ -337,6 +423,86 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err, "gh is not logged in on hp");
+    }
+
+    const VIEW: &str = r#"{"number":12,"url":"https://github.com/acme/app/pull/12","state":"OPEN","headRefOid":"abc","author":{"login":"me"},
+        "statusCheckRollup":[{"__typename":"CheckRun","name":"test","status":"COMPLETED","conclusion":"FAILURE","detailsUrl":"https://github.com/acme/app/actions/runs/5/job/6"}],
+        "reviews":[{"id":"r1","author":{"login":"alice"},"state":"CHANGES_REQUESTED","body":""}],
+        "comments":[{"id":"c1","author":{"login":"alice"},"body":"Rename it","url":"cu"}]}"#;
+
+    #[tokio::test]
+    async fn a_github_pull_is_read_with_its_logs_lines_and_resolved_comments() {
+        let runner = Arc::new(FakeRunner::default());
+        runner.stub("gh pr view", Output::ok_with(VIEW));
+        runner.stub("gh run view", Output::ok_with("step\tjob\terror: boom\n"));
+        runner.stub(
+            "PullRequestReview",
+            Output::ok_with(
+                r#"{"data":{"node":{"comments":{"nodes":[{"id":"i1","path":"a.rs","line":3,"body":"Wrong","url":"iu"},{"id":"i2","path":"b.rs","line":4,"body":"Fixed","url":"iu2"}]}}}}"#,
+            ),
+        );
+        runner.stub(
+            "reviewThreads",
+            Output::ok_with(
+                r#"{"data":{"repository":{"pullRequest":{"reviewThreads":{"nodes":[{"isResolved":true,"comments":{"nodes":[{"id":"i2"}]}}]}}}}}"#,
+            ),
+        );
+        let f = forge(&runner);
+        let m = machine("hp");
+        let Read::Found(pull) = f.read_pull(&m, "/r/w", "b", &[], None).await else {
+            panic!("no pull")
+        };
+        assert_eq!(pull.failed[0].log, "", "logs only when asked for");
+        let pull = f.pull_detail(&m, "/r/w", "b", *pull, &[], None).await;
+        assert_eq!(pull.failed[0].log, "error: boom");
+        assert_eq!(pull.asking, vec!["r1"]);
+        assert_eq!(pull.resolved, vec!["i2"]);
+        let ids: Vec<&str> = pull.notes.iter().map(|n| n.id.as_str()).collect();
+        assert_eq!(ids, vec!["c1", "i1", "i2"]);
+    }
+
+    #[tokio::test]
+    async fn no_gh_blocks_the_wait_and_a_failure_is_asked_again() {
+        let runner = Arc::new(FakeRunner::default());
+        runner.stub("gh pr view", Output::failed(4, "log in"));
+        let f = forge(&runner);
+        assert_eq!(
+            f.read_pull(&machine("hp"), "/r/w", "b", &[], None).await,
+            Read::Blocked("gh is not installed or not signed in on hp".into())
+        );
+        let runner = Arc::new(FakeRunner::default());
+        runner.stub("gh pr view", Output::failed(1, "network down"));
+        assert_eq!(
+            forge(&runner)
+                .read_pull(&machine("hp"), "/r/w", "b", &[], None)
+                .await,
+            Read::Problem("gh could not read this branch: network down".into())
+        );
+    }
+
+    #[tokio::test]
+    async fn a_gitlab_merge_request_is_read_with_its_failed_job_log() {
+        use crate::pulls::gitlab_stub::{serve, Answers};
+        let stub = serve(Answers::default()).await;
+        let runner = Arc::new(FakeRunner::default());
+        runner.stub(
+            "remote get-url",
+            Output::ok_with("git@git.commslayer.com:commslayer/app.git\n"),
+        );
+        let f = forge(&runner);
+        let hosts = [stub.access("glpat-good")];
+        let m = machine("hp");
+        let read = f.read_pull(&m, "/r/w", "b", &hosts, None).await;
+        let Read::Found(pull) = read else {
+            panic!("no merge request: {read:?}")
+        };
+        assert_eq!(pull.forge, "gitlab");
+        let pull = f.pull_detail(&m, "/r/w", "b", *pull, &hosts, None).await;
+        assert!(
+            !pull.failed.is_empty() && !pull.failed[0].log.is_empty(),
+            "{pull:?}"
+        );
+        assert!(!runner.calls().iter().any(|c| c.join(" ").contains("gh ")));
     }
 
     type Requests = Arc<Mutex<Vec<(String, String, String, String)>>>;

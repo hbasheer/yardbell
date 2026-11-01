@@ -1,5 +1,9 @@
+use super::checks::{self, Read, Verdict};
 use super::definition::{MachineChoice, Outcome, Step, StepKind, END, WAIT};
-use super::record::{Effect, Entry, Question, Run, RunState, Seen, WaitKind, Waiting};
+use super::record::{
+    CommandRan, Effect, Entry, Held, HoldKind, Question, Run, RunState, Seen, WaitKind, Waiting,
+};
+use super::tokens;
 use crate::config::Pipelines as Cfg;
 use chrono::{DateTime, Duration, Local};
 use std::collections::HashMap;
@@ -7,6 +11,9 @@ use std::collections::HashMap;
 const OFFLINE_MINUTES: i64 = 30;
 const RETRY_MINUTES: [i64; 4] = [1, 2, 4, 8];
 const SCREEN_LINES: usize = 10;
+const SETTLE_SECONDS: i64 = 120;
+const SPACING_SECONDS: i64 = 60;
+const HELD_TOO_LONG_MINUTES: i64 = 30;
 
 fn tail(text: &str, lines: usize) -> String {
     let all: Vec<&str> = text.trim_end().lines().collect();
@@ -23,6 +30,55 @@ fn duration(minutes: i64) -> String {
         format!("{minutes} min")
     } else {
         format!("{} h", minutes / 60)
+    }
+}
+
+// Who asks to continue a waiting run: a person on the run's page, or an agent's tool call, whatever
+// a rule or an approved card says about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Who {
+    Person,
+    Agent,
+}
+
+// Why this outcome may not be followed from the Command step a run waits at. A pass has to rest on
+// the exact approved text having run in this attempt, so nobody can pass a command that did not
+// run, and only a person can pass one that failed.
+pub fn continue_refused(run: &Run, outcome: Outcome, who: Who) -> Option<String> {
+    let w = run.waiting.as_ref()?;
+    let step = run.definition.as_ref()?.step(&w.step)?;
+    let StepKind::Command { command, approved } = &step.kind else {
+        return None;
+    };
+    let name = &step.name;
+    match outcome {
+        Outcome::Fail => None,
+        Outcome::NeedsYou => Some(format!(
+            "{name} runs a command, which passes or fails and never needs you"
+        )),
+        Outcome::Pass => {
+            let ran = run
+                .steps
+                .get(&w.step)
+                .and_then(|st| st.ran.as_ref())
+                .filter(|r| r.command == *command && approved == command);
+            match ran {
+                None => {
+                    let way = if w.kind == WaitKind::ToolChanged {
+                        "Accept and run"
+                    } else {
+                        "Retry step"
+                    };
+                    Some(format!(
+                        "{name} cannot continue on pass because its command has not run in this attempt. {way} runs it"
+                    ))
+                }
+                Some(r) if r.passed || who == Who::Person => None,
+                Some(_) => Some(format!(
+                    "{name}'s command failed, and only a person on the run's page can continue on pass after that"
+                )),
+            }
+        }
     }
 }
 
@@ -53,6 +109,7 @@ fn wait(
     run.state = RunState::Waiting;
     run.step = step.to_string();
     run.slot = None;
+    run.held = None;
     run.waiting = Some(Waiting {
         kind,
         step: step.to_string(),
@@ -78,12 +135,64 @@ fn machine_for(run: &Run, step: &Step) -> String {
     }
 }
 
+// Why a run with a limit may not start another step without the person saying so.
+fn held(run: &Run) -> Option<(WaitKind, String)> {
+    let limit = run.tokens.limit?;
+    if run.tokens.passed() {
+        return Some((
+            WaitKind::TokenLimit,
+            tokens::over_limit(run.tokens.used(), limit),
+        ));
+    }
+    if run.tokens.go_on_unknown {
+        return None;
+    }
+    let why = run.tokens.unknown.values().next()?;
+    Some((WaitKind::TokenUnknown, tokens::cannot_check(why, limit)))
+}
+
+// A step that uses no tokens goes through past the limit, and nothing else may then say so: the
+// run could end without ever waiting.
+fn enter(run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Run, Vec<Effect>) {
+    let free = run
+        .def()
+        .step(id)
+        .is_some_and(|s| !tokens::uses_tokens(&s.kind));
+    let (mut run, mut effects) = enter_step(run, id, now, past_limit);
+    if free && run.tokens.passed() && !run.tokens.told {
+        run.tokens.told = true;
+        let text = format!(
+            "{}: {}. Steps that use tokens wait for you",
+            run.subject.label(),
+            tokens::over_limit(run.tokens.used(), run.tokens.limit.unwrap_or_default())
+        );
+        effects.push(Effect::Notify { text });
+    }
+    (run, effects)
+}
+
 // Enters a step: an agent step waits for a slot on its machine, a built-in step runs at once.
-fn enter(mut run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Run, Vec<Effect>) {
+fn enter_step(
+    mut run: Run,
+    id: &str,
+    now: &DateTime<Local>,
+    past_limit: bool,
+) -> (Run, Vec<Effect>) {
     let Some(step) = run.def().step(id).cloned() else {
         let reason = format!("the step {id} does not exist in this version");
         return wait(run, WaitKind::Stopped, id, reason, "");
     };
+    if let Some((kind, reason)) =
+        held(&run).filter(|_| !past_limit && tokens::uses_tokens(&step.kind))
+    {
+        return wait(run, kind, id, reason, "");
+    }
+    // Comes ahead of the limit: a loop stopped here has not run the command since the last Fix.
+    if matches!(step.kind, StepKind::Command { .. }) {
+        let st = run.state_of(id);
+        st.ran = None;
+        st.overridden = false;
+    }
     let runs = run.steps.get(id).map_or(0, |s| s.runs);
     if runs >= step.max_runs && !past_limit {
         let times = if runs == 1 { "time" } else { "times" };
@@ -93,8 +202,10 @@ fn enter(mut run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Ru
     run.step = id.to_string();
     run.step_since = now.to_rfc3339();
     run.retried = false;
+    run.next_try = None;
     run.waiting = None;
     run.slot = None;
+    run.held = None;
     run.history.push(Entry {
         step: id.to_string(),
         outcome: None,
@@ -117,10 +228,12 @@ fn enter(mut run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Ru
         }
         StepKind::Plan { .. } => Effect::Plan { step: id.into() },
         StepKind::Push => Effect::Push { step: id.into() },
+        StepKind::Checks { .. } => Effect::Checks { step: id.into() },
         StepKind::Update { .. } => Effect::Linear { step: id.into() },
         StepKind::Report => Effect::Report { step: id.into() },
         StepKind::Call { .. } => Effect::Call { step: id.into() },
         StepKind::Tool { .. } => Effect::Tool { step: id.into() },
+        StepKind::Command { .. } => Effect::Command { step: id.into() },
     };
     let st = run.state_of(id);
     st.runs += 1;
@@ -173,17 +286,34 @@ fn follow(mut run: Run, outcome: Outcome, now: &DateTime<Local>) -> (Run, Vec<Ef
 // A step that ended without a usable result runs once more before the run waits.
 fn again(mut run: Run, screen: &str, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
     let id = run.step.clone();
+    let kind = current(&run).map(|s| s.kind);
     if run.retried {
+        if matches!(kind, Some(StepKind::Command { .. })) {
+            let reason = format!("{} could not run", name_of(&run, &id));
+            return wait(run, WaitKind::Stopped, &id, reason, screen);
+        }
         let reason = format!("{} ended without a result", name_of(&run, &id));
         return wait(run, WaitKind::NoResult, &id, reason, screen);
     }
+    let spends = current(&run).is_none_or(|s| tokens::uses_tokens(&s.kind));
+    if let Some((kind, reason)) = held(&run).filter(|_| spends) {
+        return wait(run, kind, &id, reason, screen);
+    }
     run.retried = true;
     run.step_since = now.to_rfc3339();
-    let effect = match current(&run).map(|s| s.kind) {
-        Some(StepKind::Plan { .. }) => Effect::Plan { step: id },
-        _ => Effect::Agent { step: id },
-    };
-    (run, vec![effect])
+    match kind {
+        Some(StepKind::Plan { .. }) => return (run, vec![Effect::Plan { step: id }]),
+        // Starts no agent, so it never queues for a slot or waits for memory.
+        Some(StepKind::Command { .. }) => return (run, vec![Effect::Command { step: id }]),
+        _ => {}
+    }
+    // A step whose agent died may have died of the memory the hold watches, so its second try
+    // queues like any other start.
+    if run.slot.is_none() {
+        run.slot = run.steps.get(&id).map(|s| s.machine.clone());
+    }
+    run.state = RunState::Queued;
+    (run, vec![])
 }
 
 fn tick(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
@@ -204,30 +334,197 @@ fn tick(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
                 "",
             );
         }
-        return (run, vec![]);
+        return held_too_long(run, now);
     }
     if run.state != RunState::Running {
         return (run, vec![]);
     }
+    let watching = current(&run).is_some_and(|s| matches!(s.kind, StepKind::Checks { .. }));
     if let Some(at) = run.next_try.clone() {
-        if elapsed(&at, now).is_some_and(|m| m >= 0) {
+        if DateTime::parse_from_rfc3339(&at).is_ok_and(|at| *now >= at) {
             run.next_try = None;
-            return (run, vec![Effect::Plan { step: id }]);
+            let effect = if watching {
+                Effect::Checks { step: id }
+            } else {
+                Effect::Plan { step: id }
+            };
+            return (run, vec![effect]);
         }
     }
     let Some(step) = current(&run) else {
         return (run, vec![]);
     };
-    if !matches!(step.kind, StepKind::Agent { .. } | StepKind::Plan { .. }) {
+    if !watching && !matches!(step.kind, StepKind::Agent { .. } | StepKind::Plan { .. }) {
         return (run, vec![]);
     }
     let limit = step.minutes.unwrap_or(cfg.minutes) as i64;
     match elapsed(&run.step_since, now).filter(|m| *m > limit) {
+        Some(m) if watching => {
+            let waited = duration(m);
+            let reason = match run.steps.get(&id).map(|s| s.watch.status.as_str()) {
+                Some(status) if !status.is_empty() => {
+                    format!("{} waited {waited}: {status}", step.name)
+                }
+                _ => format!("{} waited {waited}", step.name),
+            };
+            wait(run, WaitKind::TimeLimit, &id, reason, "")
+        }
         Some(m) => {
             let reason = format!("{} has run for {}", step.name, duration(m));
             wait(run, WaitKind::TimeLimit, &id, reason, "")
         }
+        // A restart between a read and what came of it leaves nothing due, so the wait asks again.
+        None if watching && run.next_try.is_none() => (run, vec![Effect::Checks { step: id }]),
         None => (run, vec![]),
+    }
+}
+
+// The run stays queued so it starts by itself, but the person hears of it once.
+fn held_too_long(mut run: Run, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
+    let label = run.subject.label();
+    let Some(held) = run.held.as_mut().filter(|h| !h.told) else {
+        return (run, vec![]);
+    };
+    let minutes = elapsed(&held.since, now).unwrap_or_default();
+    if minutes < HELD_TOO_LONG_MINUTES {
+        return (run, vec![]);
+    }
+    held.told = true;
+    let text = format!(
+        "{label} has been held for {}: {}",
+        duration(minutes),
+        held.reason
+    );
+    (run, vec![Effect::Notify { text }])
+}
+
+// A person who answers a stopped wait starts its count again, or the next commit would stop it.
+fn count_again(run: &mut Run, step: &str) {
+    let watches = run
+        .def()
+        .step(step)
+        .is_some_and(|s| matches!(s.kind, StepKind::Checks { .. }));
+    if watches {
+        run.state_of(step).watch = checks::Watch::default();
+    }
+}
+
+// The report opens with the reason, which the run page already shows above this text.
+fn under_reason<'a>(report: &'a str, reason: &str) -> &'a str {
+    report
+        .strip_prefix(reason)
+        .map_or(report, |rest| rest.trim_start_matches('.').trim_start())
+}
+
+fn waits_on_an_unsettled_check(run: &Run) -> bool {
+    run.waiting
+        .as_ref()
+        .is_some_and(|w| w.kind == WaitKind::CiUnsettled)
+}
+
+// The person has been told, and a re-run needs nothing from them, so the wait keeps reading until
+// its time limit, and then only they can move it on.
+fn tick_unsettled(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
+    let Some(step) = current(&run) else {
+        return (run, vec![]);
+    };
+    let limit = step.minutes.unwrap_or(cfg.minutes) as i64;
+    if let Some(m) = elapsed(&run.step_since, now).filter(|m| *m > limit) {
+        run.next_try = None;
+        if let Some(w) = run.waiting.as_mut() {
+            w.kind = WaitKind::TimeLimit;
+            w.reason = format!("{} waited {}: {}", step.name, duration(m), w.reason);
+        }
+        return (run, vec![]);
+    }
+    let due = match &run.next_try {
+        Some(at) => DateTime::parse_from_rfc3339(at).is_ok_and(|at| *now >= at),
+        None => true,
+    };
+    if !due {
+        return (run, vec![]);
+    }
+    run.next_try = None;
+    (run, vec![Effect::Checks { step: step.id }])
+}
+
+fn checks_read(
+    mut run: Run,
+    read: Read,
+    every_seconds: u64,
+    now: &DateTime<Local>,
+) -> (Run, Vec<Effect>) {
+    let id = run.step.clone();
+    let Some(StepKind::Checks { require_approval }) = current(&run).map(|s| s.kind) else {
+        return (run, vec![]);
+    };
+    let next_read = (*now + Duration::seconds(every_seconds as i64)).to_rfc3339();
+    let open = waits_on_an_unsettled_check(&run);
+    if open && !matches!(read, Read::Found(_)) {
+        run.next_try = Some(next_read);
+        return (run, vec![]);
+    }
+    let verdict = match read {
+        Read::Found(pull) => {
+            if run.pull.is_none() {
+                run.pull = Some(super::record::PullRef {
+                    url: pull.url.clone(),
+                    number: pull.number,
+                });
+            }
+            checks::judge(&mut run.state_of(&id).watch, &pull, require_approval, now)
+        }
+        Read::NoPull => {
+            Verdict::Hold("No pull or merge request is open for this branch yet".into())
+        }
+        Read::Problem(e) => Verdict::Hold(e),
+        Read::Blocked(reason) => Verdict::Stop {
+            reason,
+            report: String::new(),
+        },
+    };
+    if open && !matches!(verdict, Verdict::Unsettled { .. }) {
+        run.waiting = None;
+        run.state = RunState::Running;
+        run.step_since = now.to_rfc3339();
+    }
+    match verdict {
+        Verdict::Hold(status) => {
+            run.state_of(&id).watch.status = status;
+            run.next_try = Some(next_read);
+            (run, vec![])
+        }
+        Verdict::Unsettled { reason, report } if open => {
+            run.state_of(&id).report.clone_from(&report);
+            let screen = tail(under_reason(&report, &reason), SCREEN_LINES);
+            if let Some(w) = run.waiting.as_mut() {
+                w.reason = reason;
+                w.screen = screen;
+            }
+            run.next_try = Some(next_read);
+            (run, vec![])
+        }
+        Verdict::Unsettled { reason, report } => {
+            run.state_of(&id).report.clone_from(&report);
+            let screen = under_reason(&report, &reason).to_string();
+            let (mut run, effects) = wait(run, WaitKind::CiUnsettled, &id, reason, &screen);
+            run.next_try = Some(next_read);
+            (run, effects)
+        }
+        Verdict::Pass(report) => {
+            run.state_of(&id).report = report;
+            follow(run, Outcome::Pass, now)
+        }
+        Verdict::Fail(report) => {
+            run.state_of(&id).report = report;
+            follow(run, Outcome::Fail, now)
+        }
+        Verdict::Stop { reason, report } => {
+            if !report.is_empty() {
+                run.state_of(&id).report = report.clone();
+            }
+            wait(run, WaitKind::Stopped, &id, reason, &report)
+        }
     }
 }
 
@@ -252,7 +549,9 @@ fn answer(mut run: Run, text: String, now: &DateTime<Local>) -> (Run, Vec<Effect
             (run, vec![Effect::Answer { step: w.step, text }])
         }
         _ => {
-            run.state_of(&w.step).answer = text;
+            let st = run.state_of(&w.step);
+            st.answer = text;
+            st.again = true;
             enter(run, &w.step, now, true)
         }
     }
@@ -265,6 +564,12 @@ pub fn start(run: Run, now: DateTime<Local>) -> (Run, Vec<Effect>) {
 
 pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, Vec<Effect>) {
     let now = &now;
+    if !run.tokens.raised {
+        run.tokens.limit = run
+            .definition
+            .as_ref()
+            .and_then(|def| tokens::limit_for(def, cfg));
+    }
     // Teardown runs after a run has ended, so its answer comes to a run that is no longer active.
     let seen = match seen {
         Seen::TornDown(problem) => {
@@ -278,6 +583,38 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             st.repo = repo;
             return (run, vec![]);
         }
+        Seen::Pinned { step, pin } => {
+            let st = run.state_of(&step);
+            st.pin = Some(pin);
+            st.again = false;
+            return (run, vec![]);
+        }
+        Seen::TokensRead {
+            found,
+            known,
+            unknown,
+            ending,
+        } => {
+            run.tokens.note(found, known);
+            run.tokens.unknown.extend(unknown);
+            run.tokens.read_at = now.to_rfc3339();
+            // A step already going finishes, since stopping it could throw its work away. When
+            // it ends the run waits, and saying so then is enough.
+            let crossed = !ending
+                && !run.tokens.told
+                && run.tokens.passed()
+                && run.state == RunState::Running;
+            if !crossed {
+                return (run, vec![]);
+            }
+            run.tokens.told = true;
+            let text = format!(
+                "{}: {}. This step finishes, and the next step that uses tokens waits for you",
+                run.subject.label(),
+                tokens::over_limit(run.tokens.used(), run.tokens.limit.unwrap_or_default())
+            );
+            return (run, vec![Effect::Notify { text }]);
+        }
         other => other,
     };
     if !run.state.active() {
@@ -285,10 +622,12 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
     }
     let waiting = run.state == RunState::Waiting;
     let id = run.step.clone();
+    let ran_command = matches!(seen, Seen::CommandDone(_));
     match seen {
         Seen::Drop => {
             run.state = RunState::Dropped;
             run.slot = None;
+            run.held = None;
             (run, vec![Effect::StopSessions])
         }
         Seen::AcceptTool if waiting => {
@@ -297,27 +636,75 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             };
             if let Some(def) = run.definition.as_mut() {
                 let saved = def.steps.iter_mut().find(|s| s.id == w.step);
-                if let Some(Step {
-                    kind: StepKind::Tool { schema_hash, .. },
-                    ..
-                }) = saved
-                {
-                    schema_hash.clone_from(&w.tool_hash);
+                match saved.map(|s| &mut s.kind) {
+                    Some(StepKind::Tool { schema_hash, .. }) => {
+                        schema_hash.clone_from(&w.tool_hash);
+                    }
+                    Some(StepKind::Command { command, approved }) => {
+                        approved.clone_from(command);
+                        // It waited instead of running, so that entry does not count.
+                        let st = run.state_of(&w.step);
+                        st.runs = st.runs.saturating_sub(1);
+                    }
+                    _ => {}
                 }
             }
             enter(run, &w.step, now, true)
         }
         Seen::Retry if waiting => {
+            let w = run.waiting.take();
+            let kind = w.as_ref().map(|w| w.kind);
+            if kind == Some(WaitKind::TokenUnknown) {
+                run.tokens.go_on_unknown = true;
+            }
+            let at = w.map_or(id, |w| w.step);
+            // Going on past a token wait says nothing about the code, so a review of code it
+            // already judged still stops and asks.
+            if !matches!(kind, Some(WaitKind::TokenLimit | WaitKind::TokenUnknown)) {
+                run.state_of(&at).again = true;
+            }
+            count_again(&mut run, &at);
+            enter(run, &at, now, true)
+        }
+        Seen::RaiseLimit(limit) if waiting => {
+            run.tokens.limit = Some(limit);
+            run.tokens.raised = true;
+            run.tokens.told = false;
             let at = run.waiting.take().map_or(id, |w| w.step);
             enter(run, &at, now, true)
         }
         Seen::Continue(outcome) if waiting => {
+            if continue_refused(&run, outcome, Who::Person).is_some() {
+                return (run, vec![]);
+            }
             if let Some(w) = run.waiting.take() {
+                count_again(&mut run, &w.step);
                 run.step = w.step;
+            }
+            let at = run.step.clone();
+            let failed = run
+                .steps
+                .get(&at)
+                .and_then(|st| st.ran.as_ref())
+                .is_some_and(|r| !r.passed);
+            if outcome == Outcome::Pass && failed {
+                run.state_of(&at).overridden = true;
+                let name = name_of(&run, &at);
+                run.notes.push(format!(
+                    "{name}'s command failed, and a person continued on pass anyway"
+                ));
             }
             follow(run, outcome, now)
         }
         Seen::Answer(text) if waiting => answer(run, text, now),
+        Seen::Tick if waits_on_an_unsettled_check(&run) => tick_unsettled(run, cfg, now),
+        Seen::ChecksRead {
+            step,
+            read,
+            every_seconds,
+        } if step == id && waits_on_an_unsettled_check(&run) => {
+            checks_read(run, read, every_seconds, now)
+        }
         _ if waiting => (run, vec![]),
         Seen::Tick => tick(run, cfg, now),
         Seen::Offline if run.state == RunState::Queued => {
@@ -326,14 +713,55 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
         }
         Seen::Admitted if run.state == RunState::Queued => {
             run.offline_since = None;
+            run.held = None;
             run.state = RunState::Running;
             run.step_since = now.to_rfc3339();
             let machine = run.slot.clone().unwrap_or_default();
+            let retried = run.retried;
             let st = run.state_of(&id);
-            st.runs += 1;
+            if !retried {
+                st.runs += 1;
+            }
             st.started = now.to_rfc3339();
             st.machine = machine;
             (run, vec![Effect::Agent { step: id }])
+        }
+        Seen::Held(hold) if run.state == RunState::Queued => {
+            // Only a machine that answers is judged, and held is what keeps a run off a machine
+            // that came back, so an old offline note must not stop it later.
+            run.offline_since = None;
+            let was = run.held.take();
+            run.held = hold.map(|(kind, machine, reason)| Held {
+                kind,
+                machine,
+                reason,
+                since: was
+                    .as_ref()
+                    .map_or_else(|| now.to_rfc3339(), |h| h.since.clone()),
+                told: was.as_ref().is_some_and(|h| h.told),
+            });
+            (run, vec![])
+        }
+        // Nothing started, so this try does not count towards the step's limit.
+        Seen::Unchanged { step, reason } => {
+            let st = run.state_of(&step);
+            st.runs = st.runs.saturating_sub(1);
+            wait(run, WaitKind::Unchanged, &step, reason, "")
+        }
+        Seen::TokenBlind { step, why } => {
+            run.tokens.unknown.insert(step.clone(), why.clone());
+            let Some(limit) = run.tokens.limit.filter(|_| !run.tokens.go_on_unknown) else {
+                return (run, vec![]);
+            };
+            let st = run.state_of(&step);
+            st.runs = st.runs.saturating_sub(1);
+            wait(
+                run,
+                WaitKind::TokenUnknown,
+                &step,
+                tokens::cannot_check(&why, limit),
+                "",
+            )
         }
         Seen::Closed(_) => {
             let reason = format!("{} was closed in Linear", run.subject.label());
@@ -348,6 +776,8 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             let (mut run, effects) = wait(run, WaitKind::ToolChanged, &id, reason, &shown);
             if let Some(w) = run.waiting.as_mut() {
                 w.tool_hash = hash;
+                // What the person accepts must show whole, not only its last lines.
+                w.screen = shown;
             }
             (run, effects)
         }
@@ -415,9 +845,13 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             let st = run.state_of(&step);
             st.report = report;
             st.details = details;
+            st.judged = st.pin.clone();
+            st.again = false;
             run.step = step;
             follow(run, outcome, now)
         }
+        // A fix pushed again goes to the pull or merge request the first push opened.
+        Seen::Pushed(Ok(())) if run.pull.is_some() => follow(run, Outcome::Pass, now),
         Seen::Pushed(Ok(())) => (run, vec![Effect::OpenPull { step: id }]),
         Seen::Pushed(Err(e)) => wait(run, WaitKind::Push, &id, e, ""),
         Seen::Opened(opened) => {
@@ -427,12 +861,25 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             }
             follow(run, Outcome::Pass, now)
         }
+        Seen::ChecksRead {
+            step,
+            read,
+            every_seconds,
+        } if step == id => checks_read(run, read, every_seconds, now),
         Seen::Linear(Ok(())) => follow(run, Outcome::Pass, now),
         Seen::Linear(Err(e)) => {
             run.notes.push(format!("Linear: {e}"));
             follow(run, Outcome::Fail, now)
         }
-        Seen::Called(result) | Seen::ToolDone(result) => {
+        Seen::Called(result) | Seen::ToolDone(result) | Seen::CommandDone(result) => {
+            if ran_command {
+                if let Some(StepKind::Command { command, .. }) = current(&run).map(|s| s.kind) {
+                    run.state_of(&id).ran = Some(CommandRan {
+                        command,
+                        passed: result.is_ok(),
+                    });
+                }
+            }
             let (outcome, report) = match result {
                 Ok(report) => (Outcome::Pass, report),
                 Err(e) => (Outcome::Fail, e),
@@ -451,9 +898,107 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
     }
 }
 
+// What the start gate knows of each machine's memory. The last time over the limit is kept
+// between rounds, for the two minutes a machine must then stay under.
+#[derive(Debug, Default)]
+pub struct MemoryWatch {
+    readings: HashMap<String, u64>,
+    over_at: HashMap<String, DateTime<Local>>,
+}
+
+impl MemoryWatch {
+    pub fn read(
+        &mut self,
+        readings: impl IntoIterator<Item = (String, u64)>,
+        runs: &[Run],
+        limit: u32,
+        now: DateTime<Local>,
+    ) {
+        self.readings = readings.into_iter().collect();
+        if limit == 0 {
+            return;
+        }
+        for (machine, used) in &self.readings {
+            if *used >= u64::from(limit) {
+                self.over_at.insert(machine.clone(), now);
+            }
+        }
+        // A restart forgets when a machine was last over, so a run held for memory starts the
+        // two minutes again rather than slipping through.
+        for run in runs.iter().filter(|r| r.state == RunState::Queued) {
+            if let Some(h) = &run.held {
+                if h.kind != HoldKind::Spacing {
+                    self.over_at.entry(h.machine.clone()).or_insert(now);
+                }
+            }
+        }
+    }
+
+    // A machine with no reading is not held for memory: it answers, and waiting for a figure
+    // that may never come would stop its work for good. The two minutes after a reading over the
+    // limit still run out first.
+    pub fn hold(
+        &self,
+        machine: &str,
+        limit: u32,
+        now: &DateTime<Local>,
+    ) -> Option<(HoldKind, String)> {
+        if limit == 0 {
+            return None;
+        }
+        if let Some(used) = self
+            .readings
+            .get(machine)
+            .filter(|u| **u >= u64::from(limit))
+        {
+            let reason = format!(
+                "{machine} is short of memory: {used}% is in use and the limit is {limit}%. This step starts once {machine} has stayed under the limit for two minutes."
+            );
+            return Some((HoldKind::Memory, reason));
+        }
+        let settling = self
+            .over_at
+            .get(machine)
+            .is_some_and(|at| (*now - *at).num_seconds() < SETTLE_SECONDS);
+        settling.then(|| {
+            let reason = format!(
+                "{machine} is back under its {limit}% memory limit. This step starts once it has stayed there for two minutes."
+            );
+            (HoldKind::Settling, reason)
+        })
+    }
+}
+
+fn last_starts(runs: &[Run]) -> HashMap<&str, DateTime<Local>> {
+    let mut last: HashMap<&str, DateTime<Local>> = HashMap::new();
+    for st in runs.iter().flat_map(|r| r.steps.values()) {
+        let Ok(at) = DateTime::parse_from_rfc3339(&st.started) else {
+            continue;
+        };
+        let at = at.with_timezone(&Local);
+        if !st.machine.is_empty() && last.get(st.machine.as_str()).is_none_or(|l| *l < at) {
+            last.insert(st.machine.as_str(), at);
+        }
+    }
+    last
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct Admission {
+    pub start: Vec<String>,
+    pub held: HashMap<String, (HoldKind, String, String)>,
+}
+
 // Which queued runs may start their agent step now, oldest first, as slots on their machines
-// allow.
-pub fn admit(runs: &[Run], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<String> {
+// allow, and why the rest on a machine that answers are held. A run only short of a slot is not
+// held: it is plainly queued.
+pub fn admit(
+    runs: &[Run],
+    cfg: &Cfg,
+    up: &dyn Fn(&str) -> bool,
+    memory: &MemoryWatch,
+    now: &DateTime<Local>,
+) -> Admission {
     let since = |r: &Run| DateTime::parse_from_rfc3339(&r.step_since).ok();
     let mut busy: HashMap<&str, u32> = HashMap::new();
     for r in runs.iter().filter(|r| r.state == RunState::Running) {
@@ -466,16 +1011,38 @@ pub fn admit(runs: &[Run], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<String> 
         .filter(|r| r.state == RunState::Queued)
         .collect();
     queued.sort_by_key(|r| since(r));
-    let mut out = Vec::new();
+    let mut last = last_starts(runs);
+    let mut out = Admission::default();
     for r in queued {
         let Some(m) = r.slot.as_deref() else {
             continue;
         };
-        let used = busy.entry(m).or_default();
-        if up(m) && *used < cfg.per_machine {
-            *used += 1;
-            out.push(r.id.clone());
+        if !up(m) {
+            continue;
         }
+        if let Some((kind, reason)) = memory.hold(m, cfg.memory_limit, now) {
+            out.held.insert(r.id.clone(), (kind, m.to_string(), reason));
+            continue;
+        }
+        let used = busy.entry(m).or_default();
+        if *used >= cfg.per_machine {
+            continue;
+        }
+        let spaced = cfg.memory_limit > 0
+            && last
+                .get(m)
+                .is_some_and(|at| (*now - *at).num_seconds() < SPACING_SECONDS);
+        if spaced {
+            let reason = format!(
+                "{m} started a step less than a minute ago. Yardbell starts at most one step a minute on each machine."
+            );
+            out.held
+                .insert(r.id.clone(), (HoldKind::Spacing, m.to_string(), reason));
+            continue;
+        }
+        *used += 1;
+        last.insert(m, *now);
+        out.start.push(r.id.clone());
     }
     out
 }
@@ -674,7 +1241,7 @@ pub(crate) mod tests {
         assert_eq!(run.steps["root-cause"].report, "root-cause failed");
     }
 
-    fn at_step(template: &str, id: &str) -> Run {
+    pub(crate) fn at_step(template: &str, id: &str) -> Run {
         let mut run = run_of(template);
         run.place.machine = "hp".into();
         run.step = id.into();
@@ -770,6 +1337,434 @@ pub(crate) mod tests {
                 step: "update".into()
             }]
         );
+    }
+
+    fn with_command(run: &mut Run) {
+        let def = run.definition.as_mut().unwrap();
+        def.steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "test", "name": "Test", "kind": "command", "command": "make test",
+                "approved": "make test",
+                "next": { "pass": "report", "fail": "fix", "needs_you": "wait" },
+            }))
+            .unwrap(),
+        );
+        def.steps
+            .iter_mut()
+            .find(|s| s.id == "fix")
+            .unwrap()
+            .next
+            .pass = "test".into();
+    }
+
+    #[test]
+    fn entering_a_command_step_runs_it_and_counts_the_run() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let (run, did) = enter(run, "test", &at(5), false);
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(run.state, RunState::Running);
+        assert_eq!(run.steps["test"].runs, 1);
+        assert_eq!(run.slot, None, "a command starts no agent");
+    }
+
+    #[test]
+    fn a_command_loops_through_fix_until_it_passes() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let (run, _) = enter(run, "test", &at(5), false);
+        let seen = Seen::CommandDone(Err("Failed with exit code 1: make test".into()));
+        let (run, did) = step(run, seen, &cfg(), at(6));
+        assert_eq!((run.step.as_str(), run.state), ("fix", RunState::Queued));
+        assert_eq!(did, vec![]);
+        assert_eq!(run.steps["test"].outcome, Some(Outcome::Fail));
+        assert!(run.steps["test"].report.contains("exit code 1"));
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(7));
+        let (run, did) = step(run, ended("fix", Outcome::Pass), &cfg(), at(8));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(run.steps["test"].runs, 2);
+        let seen = Seen::CommandDone(Ok("Passed: make test".into()));
+        let (run, did) = step(run, seen, &cfg(), at(9));
+        assert_eq!(run.steps["test"].outcome, Some(Outcome::Pass));
+        assert_eq!(
+            did,
+            vec![Effect::Report {
+                step: "report".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_failing_command_stops_at_its_run_limit() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let (mut run, _) = enter(run, "test", &at(5), false);
+        run.state_of("test").runs = 2;
+        run.state_of("fix").runs = 1;
+        let (run, _) = step(run, Seen::CommandDone(Err("failed".into())), &cfg(), at(6));
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(7));
+        let (run, _) = step(run, ended("fix", Outcome::Pass), &cfg(), at(8));
+        assert_eq!(
+            waiting(&run),
+            (WaitKind::RunLimit, "test".into(), "Test ran 2 times".into())
+        );
+    }
+
+    #[test]
+    fn a_command_that_could_not_run_tries_once_more_then_waits() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let (run, _) = enter(run, "test", &at(5), false);
+        let lost = || Seen::Started {
+            step: "test".into(),
+            result: Err("hp did not answer in time".into()),
+        };
+        let (run, did) = step(run, lost(), &cfg(), at(6));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(run.steps["test"].runs, 1, "a lost try is not a run");
+        let (run, _) = step(run, lost(), &cfg(), at(7));
+        assert_eq!(
+            waiting(&run),
+            (
+                WaitKind::Stopped,
+                "test".into(),
+                "Test could not run".into()
+            )
+        );
+        assert_eq!(run.steps["test"].outcome, None, "it did not fail");
+        assert!(run.waiting.unwrap().screen.contains("did not answer"));
+    }
+
+    #[test]
+    fn accepting_a_command_approves_what_the_run_holds_and_shows_it_whole() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let long = (1..=30)
+            .map(|n| format!("step{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if let StepKind::Command { command, approved } = &mut run
+            .definition
+            .as_mut()
+            .unwrap()
+            .steps
+            .last_mut()
+            .unwrap()
+            .kind
+        {
+            command.clone_from(&long);
+            approved.clear();
+        }
+        let (run, _) = enter(run, "test", &at(5), false);
+        let seen = Seen::ToolChanged {
+            hash: String::new(),
+            reason: "not approved".into(),
+            shown: long.clone(),
+        };
+        let (run, _) = step(run, seen, &cfg(), at(6));
+        assert_eq!(waiting(&run).0, WaitKind::ToolChanged);
+        assert_eq!(run.waiting.as_ref().unwrap().screen, long);
+        let (run, did) = step(run, Seen::AcceptTool, &cfg(), at(7));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(
+            run.steps["test"].runs, 1,
+            "waiting to be accepted is not a run"
+        );
+        assert!(
+            matches!(&run.def().step("test").unwrap().kind, StepKind::Command { command, approved } if *approved == *command && *command == long)
+        );
+    }
+
+    fn test_entered() -> Run {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        enter(run, "test", &at(5), false).0
+    }
+
+    fn failed_test() -> Run {
+        let mut run = test_entered();
+        let def = run.definition.as_mut().unwrap();
+        def.steps.last_mut().unwrap().next.fail = "wait".into();
+        let seen = Seen::CommandDone(Err("Failed with exit code 1: make test".into()));
+        step(run, seen, &cfg(), at(6)).0
+    }
+
+    fn lost() -> Seen {
+        Seen::Started {
+            step: "test".into(),
+            result: Err("hp did not answer in time".into()),
+        }
+    }
+
+    // Nobody passes it, the engine leaves it waiting, and the other ways on still work.
+    fn cannot_pass(run: Run, way: &str) {
+        assert_eq!(run.state, RunState::Waiting);
+        for who in [Who::Person, Who::Agent] {
+            let said = continue_refused(&run, Outcome::Pass, who).expect("refused");
+            assert!(said.contains("has not run in this attempt"), "{said}");
+            assert!(said.contains(way), "{said}");
+            assert_eq!(continue_refused(&run, Outcome::Fail, who), None);
+        }
+        let (still, did) = step(run.clone(), Seen::Continue(Outcome::Pass), &cfg(), at(9));
+        assert_eq!(did, vec![]);
+        assert_eq!(still, run, "a refused pass changes nothing");
+        let (on_fail, _) = step(run.clone(), Seen::Continue(Outcome::Fail), &cfg(), at(9));
+        assert_eq!(on_fail.steps["test"].outcome, Some(Outcome::Fail));
+        let (dropped, _) = step(run, Seen::Drop, &cfg(), at(9));
+        assert_eq!(dropped.state, RunState::Dropped);
+    }
+
+    #[test]
+    fn a_command_waiting_to_be_accepted_cannot_pass() {
+        let seen = Seen::ToolChanged {
+            hash: String::new(),
+            reason: "not approved".into(),
+            shown: "make test".into(),
+        };
+        let (run, _) = step(test_entered(), seen, &cfg(), at(6));
+        cannot_pass(run, "Accept and run");
+    }
+
+    #[test]
+    fn a_command_a_rule_refused_cannot_pass() {
+        let seen = Seen::Refused("Your rule".into());
+        let (run, _) = step(test_entered(), seen, &cfg(), at(6));
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn a_command_that_could_not_run_cannot_pass() {
+        let (run, _) = step(test_entered(), lost(), &cfg(), at(6));
+        let (run, _) = step(run, lost(), &cfg(), at(7));
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn a_command_stopped_by_its_run_limit_has_not_run_again() {
+        let mut run = test_entered();
+        run.state_of("test").runs = 2;
+        let seen = Seen::CommandDone(Err("failed".into()));
+        let (run, _) = step(run, seen, &cfg(), at(6));
+        assert!(run.steps["test"].ran.is_some());
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(7));
+        let (run, _) = step(run, ended("fix", Outcome::Pass), &cfg(), at(8));
+        assert_eq!(waiting(&run).0, WaitKind::RunLimit);
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn retrying_a_failed_command_starts_a_new_attempt() {
+        let (run, did) = step(failed_test(), Seen::Retry, &cfg(), at(7));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(
+            run.steps["test"].ran, None,
+            "the old result no longer counts"
+        );
+        let (run, _) = step(run, lost(), &cfg(), at(8));
+        let (run, _) = step(run, lost(), &cfg(), at(9));
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn accepting_a_command_does_not_count_as_running_it() {
+        let seen = Seen::ToolChanged {
+            hash: String::new(),
+            reason: "not approved".into(),
+            shown: "make test".into(),
+        };
+        let (run, _) = step(test_entered(), seen, &cfg(), at(6));
+        let (run, _) = step(run, Seen::AcceptTool, &cfg(), at(7));
+        assert_eq!(run.state, RunState::Running);
+        assert_eq!(run.steps["test"].ran, None);
+        let (run, _) = step(run, lost(), &cfg(), at(8));
+        let (run, _) = step(run, lost(), &cfg(), at(9));
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn a_result_for_other_text_does_not_count() {
+        let mut run = failed_test();
+        run.state_of("test").ran = Some(CommandRan {
+            command: "true".into(),
+            passed: true,
+        });
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn only_a_person_can_pass_a_command_that_failed_and_the_run_records_it() {
+        let run = failed_test();
+        assert_eq!(continue_refused(&run, Outcome::Pass, Who::Person), None);
+        let said = continue_refused(&run, Outcome::Pass, Who::Agent).expect("refused");
+        assert!(said.contains("only a person"), "{said}");
+        assert_eq!(continue_refused(&run, Outcome::Fail, Who::Agent), None);
+        let (run, did) = step(run, Seen::Continue(Outcome::Pass), &cfg(), at(7));
+        assert_eq!(
+            did,
+            vec![Effect::Report {
+                step: "report".into()
+            }]
+        );
+        let st = &run.steps["test"];
+        assert_eq!(st.outcome, Some(Outcome::Pass));
+        assert!(st.overridden);
+        assert_eq!(
+            run.notes,
+            ["Test's command failed, and a person continued on pass anyway"]
+        );
+    }
+
+    #[test]
+    fn an_override_is_cleared_by_a_new_attempt_but_stays_in_the_notes() {
+        let (run, _) = step(failed_test(), Seen::Continue(Outcome::Pass), &cfg(), at(7));
+        let (run, _) = enter(run, "test", &at(8), false);
+        assert!(!run.steps["test"].overridden);
+        assert_eq!(run.notes.len(), 1);
+    }
+
+    #[test]
+    fn continuing_on_fail_after_a_failure_is_not_an_override() {
+        let (run, _) = step(failed_test(), Seen::Continue(Outcome::Fail), &cfg(), at(7));
+        assert!(!run.steps["test"].overridden);
+        assert!(run.notes.is_empty());
+    }
+
+    #[test]
+    fn anyone_can_continue_on_pass_once_the_command_passed() {
+        let mut run = test_entered();
+        let def = run.definition.as_mut().unwrap();
+        def.steps.last_mut().unwrap().next.pass = "wait".into();
+        let seen = Seen::CommandDone(Ok("Passed: make test".into()));
+        let (run, _) = step(run, seen, &cfg(), at(6));
+        assert_eq!(run.state, RunState::Waiting);
+        assert_eq!(continue_refused(&run, Outcome::Pass, Who::Agent), None);
+        assert_eq!(continue_refused(&run, Outcome::Pass, Who::Person), None);
+        let (run, _) = step(run, Seen::Continue(Outcome::Pass), &cfg(), at(7));
+        assert!(!run.steps["test"].overridden);
+        assert!(run.notes.is_empty());
+    }
+
+    #[test]
+    fn the_needs_you_line_is_no_way_around_the_command() {
+        let mut run = failed_test();
+        let def = run.definition.as_mut().unwrap();
+        def.steps.last_mut().unwrap().next.needs_you = "report".into();
+        for who in [Who::Person, Who::Agent] {
+            assert!(continue_refused(&run, Outcome::NeedsYou, who).is_some());
+        }
+        let (still, did) = step(
+            run.clone(),
+            Seen::Continue(Outcome::NeedsYou),
+            &cfg(),
+            at(7),
+        );
+        assert_eq!((still, did), (run, vec![]));
+    }
+
+    #[test]
+    fn other_steps_continue_as_they_did() {
+        let run = at_step("Implement my tickets", "implement");
+        let (run, _) = step(run, ended("implement", Outcome::Fail), &cfg(), at(5));
+        assert_eq!(continue_refused(&run, Outcome::Pass, Who::Agent), None);
+    }
+
+    #[test]
+    fn a_command_goes_through_past_a_token_limit_and_still_has_to_run() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        run.tokens.limit = Some(1000);
+        run.tokens.raised = true;
+        run.tokens.sources.insert(
+            "hp:a.jsonl".into(),
+            tokens::Tokens {
+                input: 1500,
+                ..tokens::Tokens::default()
+            },
+        );
+        let (run, did) = enter(run, "test", &at(5), false);
+        assert_eq!(run.state, RunState::Running, "{:?}", run.waiting);
+        assert_eq!(
+            did[0],
+            Effect::Command {
+                step: "test".into()
+            }
+        );
+        let (run, did) = step(run, lost(), &cfg(), at(6));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }],
+            "its second try is not held by the limit"
+        );
+        let (run, _) = step(run, lost(), &cfg(), at(7));
+        assert_eq!(waiting(&run).0, WaitKind::Stopped);
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn a_commands_second_try_runs_at_once_instead_of_queueing_for_an_agent() {
+        let (run, did) = step(test_entered(), lost(), &cfg(), at(6));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!((run.state, run.slot.as_deref()), (RunState::Running, None));
+    }
+
+    #[test]
+    fn a_running_command_is_not_counted_in_a_machines_slots_or_spacing() {
+        let cfg = Cfg {
+            memory_limit: 90,
+            per_machine: 1,
+            ..Cfg::default()
+        };
+        let mut command = test_entered();
+        command.id = "r-command".into();
+        assert_eq!(command.steps["test"].machine, "");
+        let queued = Run {
+            id: "r-agent".into(),
+            state: RunState::Queued,
+            step_since: at(5).to_rfc3339(),
+            slot: Some("hp".into()),
+            ..Run::default()
+        };
+        let out = admit(
+            &[command, queued],
+            &cfg,
+            &|_| true,
+            &MemoryWatch::default(),
+            &at(5),
+        );
+        assert_eq!(out.start, vec!["r-agent"]);
+        assert!(out.held.is_empty(), "{:?}", out.held);
     }
 
     #[test]
@@ -988,7 +1983,14 @@ pub(crate) mod tests {
             &cfg(),
             at(5),
         );
+        assert_eq!((did, run.state), (vec![], RunState::Queued));
+        assert!(run.retried);
+        let (run, did) = step(run, Seen::Admitted, &cfg(), at(5));
         assert_eq!((did, run.state), (agent("implement"), RunState::Running));
+        assert_eq!(
+            run.steps["implement"].runs, 1,
+            "a second try is not a new run"
+        );
         let screen: String = (1..=20).map(|n| format!("line {n}\n")).collect();
         let (run, _) = step(
             run,
@@ -1063,6 +2065,369 @@ pub(crate) mod tests {
         );
     }
 
+    fn past_tokens(limit: u64, used: u64) -> Run {
+        let mut run = at_step("Implement my tickets", "implement");
+        run.definition.as_mut().unwrap().token_limit = Some(limit);
+        run.tokens.limit = Some(limit);
+        run.tokens.sources.insert(
+            "hp:a.jsonl".into(),
+            tokens::Tokens {
+                input: used,
+                ..Default::default()
+            },
+        );
+        run
+    }
+
+    #[test]
+    fn a_run_past_its_limit_starts_no_new_step_and_waits() {
+        let (run, did) = step(
+            past_tokens(1000, 1500),
+            ended("implement", Outcome::Pass),
+            &cfg(),
+            at(5),
+        );
+        let (kind, at_step, reason) = waiting(&run);
+        assert_eq!((kind, at_step.as_str()), (WaitKind::TokenLimit, "review"));
+        assert!(
+            reason.contains("1,500") && reason.contains("1,000"),
+            "{reason}"
+        );
+        assert_eq!(run.steps.get("review").map(|s| s.runs), None);
+        assert!(
+            matches!(&did[..], [Effect::Notify { text }] if text.contains("1,500") && text.contains("1,000")),
+            "{did:?}"
+        );
+    }
+
+    #[test]
+    fn under_the_limit_or_with_no_limit_nothing_changes() {
+        let (run, _) = step(
+            past_tokens(1000, 999),
+            ended("implement", Outcome::Pass),
+            &cfg(),
+            at(5),
+        );
+        assert_eq!((run.step.as_str(), run.state), ("review", RunState::Queued));
+        let mut free = at_step("Implement my tickets", "implement");
+        free.tokens.sources.insert(
+            "hp:a.jsonl".into(),
+            tokens::Tokens {
+                input: u64::MAX / 4,
+                ..Default::default()
+            },
+        );
+        free.tokens
+            .unknown
+            .insert("implement".into(), "not read".into());
+        let (free, _) = step(free, ended("implement", Outcome::Pass), &cfg(), at(5));
+        assert_eq!(free.state, RunState::Queued);
+        assert_eq!(free.tokens.limit, None);
+    }
+
+    #[test]
+    fn the_default_limit_applies_unless_the_pipeline_sets_its_own() {
+        let mut run = at_step("Implement my tickets", "implement");
+        run.tokens.sources.insert(
+            "hp:a.jsonl".into(),
+            tokens::Tokens {
+                input: 5000,
+                ..Default::default()
+            },
+        );
+        let settings = Cfg {
+            token_limit: 1000,
+            ..Cfg::default()
+        };
+        let (held, _) = step(
+            run.clone(),
+            ended("implement", Outcome::Pass),
+            &settings,
+            at(5),
+        );
+        assert_eq!(waiting(&held).0, WaitKind::TokenLimit);
+        run.definition.as_mut().unwrap().token_limit = Some(0);
+        let (free, _) = step(run, ended("implement", Outcome::Pass), &settings, at(5));
+        assert_eq!(free.state, RunState::Queued);
+    }
+
+    #[test]
+    fn starting_a_step_anyway_runs_one_then_the_run_waits_again() {
+        let (run, _) = step(
+            past_tokens(1000, 1500),
+            ended("implement", Outcome::Pass),
+            &cfg(),
+            at(5),
+        );
+        let (run, _) = step(run, Seen::Retry, &cfg(), at(6));
+        assert_eq!((run.step.as_str(), run.state), ("review", RunState::Queued));
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(6));
+        let (run, _) = step(run, ended("review", Outcome::Pass), &cfg(), at(7));
+        assert_eq!(
+            (waiting(&run).0, run.step.as_str()),
+            (WaitKind::TokenLimit, "qa")
+        );
+    }
+
+    #[test]
+    fn raising_the_limit_goes_on_and_later_settings_do_not_undo_it() {
+        let (run, _) = step(
+            past_tokens(1000, 1500),
+            ended("implement", Outcome::Pass),
+            &cfg(),
+            at(5),
+        );
+        let (run, _) = step(run, Seen::RaiseLimit(9000), &cfg(), at(6));
+        assert_eq!((run.step.as_str(), run.state), ("review", RunState::Queued));
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(6));
+        assert_eq!(run.tokens.limit, Some(9000));
+        let (run, _) = step(run, ended("review", Outcome::Pass), &cfg(), at(7));
+        assert_eq!(run.state, RunState::Queued, "{:?}", run.waiting);
+    }
+
+    fn past_limit_at(next: serde_json::Value) -> Run {
+        let mut run = past_tokens(1000, 1500);
+        let def = run.definition.as_mut().unwrap();
+        let step: Step = serde_json::from_value(next).unwrap();
+        def.steps
+            .iter_mut()
+            .find(|s| s.id == "implement")
+            .unwrap()
+            .next
+            .pass = step.id.clone();
+        def.steps.push(step);
+        run
+    }
+
+    #[test]
+    fn steps_that_use_no_tokens_go_through_past_the_limit_and_the_next_that_does_waits() {
+        let next = serde_json::json!({ "pass": "report", "fail": "wait", "needs_you": "wait" });
+        let kinds = [
+            (
+                serde_json::json!({ "id": "x", "name": "X", "kind": "update", "action": "move", "state": "Done", "next": next }),
+                "linear",
+            ),
+            (
+                serde_json::json!({ "id": "x", "name": "X", "kind": "call", "connector": "c", "call": "go", "next": next }),
+                "call",
+            ),
+            (
+                serde_json::json!({ "id": "x", "name": "X", "kind": "tool", "server": "s", "tool": "t", "schema_hash": "h", "next": next }),
+                "tool",
+            ),
+            (
+                serde_json::json!({ "id": "x", "name": "X", "kind": "push", "next": next }),
+                "push",
+            ),
+        ];
+        for (step_json, effect) in kinds {
+            let (run, did) = step(
+                past_limit_at(step_json),
+                ended("implement", Outcome::Pass),
+                &cfg(),
+                at(5),
+            );
+            assert_eq!(
+                (run.step.as_str(), run.state),
+                ("x", RunState::Running),
+                "{effect}"
+            );
+            let name = serde_json::to_value(&did[0]).unwrap();
+            assert_eq!(name["effect"], effect, "{did:?}");
+            assert!(
+                matches!(&did[1], Effect::Notify { text } if text.contains("1,500")),
+                "the phone hears, since this run may never wait: {did:?}"
+            );
+            assert!(run.tokens.told);
+            let done = match effect {
+                "linear" => Seen::Linear(Ok(())),
+                "call" => Seen::Called(Ok("ok".into())),
+                "tool" => Seen::ToolDone(Ok("ok".into())),
+                _ => Seen::Opened(Ok(PullRef {
+                    url: "u".into(),
+                    number: 1,
+                })),
+            };
+            let (run, _) = step(run, done, &cfg(), at(6));
+            assert_eq!(
+                (waiting(&run).0, run.step.as_str()),
+                (WaitKind::TokenLimit, "report"),
+                "{effect}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_wait_step_past_the_limit_is_its_own_wait() {
+        let next = serde_json::json!({ "pass": "qa", "fail": "wait", "needs_you": "wait" });
+        let (run, _) = step(
+            past_limit_at(
+                serde_json::json!({ "id": "x", "name": "X", "kind": "wait", "message": "Look", "next": next }),
+            ),
+            ended("implement", Outcome::Pass),
+            &cfg(),
+            at(5),
+        );
+        assert_eq!(
+            waiting(&run),
+            (WaitKind::WaitStep, "x".into(), "Look".into())
+        );
+    }
+
+    #[test]
+    fn unknown_use_does_not_hold_a_step_that_uses_no_tokens() {
+        let next = serde_json::json!({ "pass": "report", "fail": "wait", "needs_you": "wait" });
+        let mut run = past_limit_at(
+            serde_json::json!({ "id": "x", "name": "X", "kind": "push", "next": next }),
+        );
+        run.tokens.sources.clear();
+        run.tokens
+            .unknown
+            .insert("implement".into(), "Not read".into());
+        let (run, did) = step(run, ended("implement", Outcome::Pass), &cfg(), at(5));
+        assert_eq!(run.state, RunState::Running);
+        assert_eq!(did, vec![Effect::Push { step: "x".into() }]);
+        let (run, _) = step(
+            run,
+            Seen::Opened(Ok(PullRef {
+                url: "u".into(),
+                number: 1,
+            })),
+            &cfg(),
+            at(6),
+        );
+        assert_eq!(waiting(&run).0, WaitKind::TokenUnknown);
+    }
+
+    #[test]
+    fn the_second_try_follows_the_same_rule() {
+        let mut free = past_tokens(1000, 1500);
+        free.step = "push".into();
+        let (free, _) = step(free, Seen::Sent(Err("failed".into())), &cfg(), at(5));
+        assert_eq!(free.waiting, None);
+        let mut plan = past_tokens(1000, 1500);
+        plan.step = "plan".into();
+        let (plan, _) = step(plan, Seen::Planned(Err("bad".into())), &cfg(), at(5));
+        assert_eq!(waiting(&plan).0, WaitKind::TokenLimit);
+    }
+
+    #[test]
+    fn a_second_try_is_not_started_past_the_limit() {
+        let (run, did) = step(
+            past_tokens(1000, 1500),
+            Seen::NoResult {
+                step: "implement".into(),
+                screen: "quiet".into(),
+            },
+            &cfg(),
+            at(5),
+        );
+        assert_eq!(waiting(&run).0, WaitKind::TokenLimit);
+        assert!(!did.contains(&Effect::Agent {
+            step: "implement".into()
+        }));
+    }
+
+    #[test]
+    fn use_that_could_not_be_read_holds_a_limited_run_until_the_person_says() {
+        let mut run = past_tokens(1000, 10);
+        run.tokens
+            .unknown
+            .insert("implement".into(), "Could not read Implement".into());
+        let (run, did) = step(run, ended("implement", Outcome::Pass), &cfg(), at(5));
+        let (kind, _, reason) = waiting(&run);
+        assert_eq!(kind, WaitKind::TokenUnknown);
+        assert!(reason.contains("Could not read Implement") && reason.contains("1,000"));
+        assert_eq!(did.len(), 1, "one notification");
+        let (run, _) = step(run, Seen::Retry, &cfg(), at(6));
+        assert!(run.tokens.go_on_unknown);
+        assert_eq!(run.state, RunState::Queued);
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(6));
+        let (run, _) = step(run, ended("review", Outcome::Pass), &cfg(), at(7));
+        assert_eq!(run.state, RunState::Queued, "it does not ask twice");
+        assert_eq!(run.tokens.unknown.len(), 1, "the page still says so");
+    }
+
+    #[test]
+    fn an_agent_that_cannot_report_holds_a_limited_run_and_keeps_its_try() {
+        let blind = Seen::TokenBlind {
+            step: "implement".into(),
+            why: "Implement runs on codex, which does not report tokens".into(),
+        };
+        let (run, did) = step(past_tokens(1000, 10), blind.clone(), &cfg(), at(5));
+        assert_eq!(waiting(&run).0, WaitKind::TokenUnknown);
+        assert_eq!(run.steps["implement"].runs, 0, "it never started");
+        assert_eq!(did.len(), 1);
+        let mut free = at_step("Implement my tickets", "implement");
+        free.tokens.limit = None;
+        let (free, did) = step(free, blind, &cfg(), at(5));
+        assert_eq!((free.state, did), (RunState::Running, vec![]));
+        assert_eq!(free.steps["implement"].runs, 1);
+        assert_eq!(
+            free.tokens.unknown.len(),
+            1,
+            "no limit, but still not known"
+        );
+    }
+
+    #[test]
+    fn passing_the_limit_mid_step_tells_the_phone_once_and_the_step_goes_on() {
+        let over = || Seen::TokensRead {
+            found: vec![(
+                "hp:a.jsonl".to_string(),
+                tokens::Tokens {
+                    input: 2000,
+                    ..Default::default()
+                },
+            )],
+            known: vec![],
+            unknown: vec![],
+            ending: false,
+        };
+        let (run, did) = step(past_tokens(1000, 10), over(), &cfg(), at(5));
+        assert_eq!(run.state, RunState::Running);
+        assert!(
+            matches!(&did[..], [Effect::Notify { text }] if text.contains("2,000") && text.contains("next step that uses tokens")),
+            "{did:?}"
+        );
+        let (run, did) = step(run, over(), &cfg(), at(6));
+        assert_eq!((run.state, did), (RunState::Running, vec![]));
+        assert_eq!(run.tokens.read_at, at(6).to_rfc3339());
+    }
+
+    #[test]
+    fn a_figure_read_as_the_step_ends_leaves_the_telling_to_the_wait() {
+        let seen = Seen::TokensRead {
+            found: vec![(
+                "hp:a.jsonl".to_string(),
+                tokens::Tokens {
+                    input: 2000,
+                    ..Default::default()
+                },
+            )],
+            known: vec![],
+            unknown: vec![],
+            ending: true,
+        };
+        let (_, did) = step(past_tokens(1000, 10), seen, &cfg(), at(5));
+        assert_eq!(did, vec![]);
+    }
+
+    #[test]
+    fn a_saved_run_from_before_token_limits_still_loads() {
+        let run = serde_json::to_value(run_of("Implement my tickets")).unwrap();
+        let mut run = run.as_object().unwrap().clone();
+        run.remove("tokens");
+        let run: Run = serde_json::from_value(run.into()).unwrap();
+        assert_eq!(run.tokens, Default::default());
+        let def = crate::pipeline::templates::all().remove(0);
+        let json = serde_json::to_value(&def).unwrap();
+        assert!(
+            json.get("token_limit").is_none(),
+            "unset stays out of saves"
+        );
+    }
+
     #[test]
     fn admit_respects_slots_per_machine() {
         let queued = |id: &str, minute: u32, machine: &str| Run {
@@ -1081,8 +2446,229 @@ pub(crate) mod tests {
             busy,
             queued("r4", 4, "devbox"),
         ];
-        assert_eq!(admit(&runs, &cfg(), &|_| true), vec!["r1", "r4"]);
-        assert_eq!(admit(&runs, &cfg(), &|m| m == "devbox"), vec!["r4"]);
+        let none = MemoryWatch::default();
+        let starts = |up: &dyn Fn(&str) -> bool| admit(&runs, &cfg(), up, &none, &at(9)).start;
+        assert_eq!(starts(&|_| true), vec!["r1", "r4"]);
+        assert_eq!(starts(&|m| m == "devbox"), vec!["r4"]);
+    }
+
+    fn limited() -> Cfg {
+        Cfg {
+            memory_limit: 90,
+            ..cfg()
+        }
+    }
+
+    fn queued_on(id: &str, minute: u32, machine: &str) -> Run {
+        Run {
+            id: id.into(),
+            state: RunState::Queued,
+            step_since: at(minute).to_rfc3339(),
+            slot: Some(machine.into()),
+            ..Run::default()
+        }
+    }
+
+    fn watching(readings: &[(&str, u64)], when: DateTime<Local>) -> MemoryWatch {
+        let mut watch = MemoryWatch::default();
+        let read = readings.iter().map(|(m, u)| (m.to_string(), *u));
+        watch.read(read, &[], limited().memory_limit, when);
+        watch
+    }
+
+    fn secs(minute: u32, second: u32) -> DateTime<Local> {
+        at(minute) + Duration::seconds(i64::from(second))
+    }
+
+    #[test]
+    fn a_machine_over_the_memory_limit_holds_its_steps_and_only_its_own() {
+        let runs = vec![queued_on("r1", 1, "hp"), queued_on("r2", 2, "devbox")];
+        let watch = watching(&[("hp", 90), ("devbox", 89)], at(5));
+        let out = admit(&runs, &limited(), &|_| true, &watch, &at(5));
+        assert_eq!(out.start, vec!["r2"]);
+        let (kind, machine, reason) = &out.held["r1"];
+        assert_eq!((*kind, machine.as_str()), (HoldKind::Memory, "hp"));
+        assert!(reason.contains("hp is short of memory: 90%"), "{reason}");
+        assert!(reason.contains("the limit is 90%"), "{reason}");
+    }
+
+    #[test]
+    fn a_machine_under_the_limit_is_released_only_after_two_minutes() {
+        let runs = vec![queued_on("r1", 1, "hp")];
+        let mut watch = watching(&[("hp", 95)], at(5));
+        let start = |watch: &MemoryWatch, now| admit(&runs, &limited(), &|_| true, watch, &now);
+        let under = || [("hp".to_string(), 40)];
+
+        watch.read(under(), &runs, 90, secs(5, 10));
+        let out = start(&watch, secs(5, 10));
+        assert!(out.start.is_empty());
+        assert_eq!(out.held["r1"].0, HoldKind::Settling);
+        assert!(start(&watch, secs(6, 59)).start.is_empty());
+        assert_eq!(start(&watch, at(7)).start, vec!["r1"]);
+
+        // Going over again starts the two minutes afresh.
+        watch.read([("hp".to_string(), 91)], &runs, 90, secs(6, 30));
+        watch.read(under(), &runs, 90, secs(6, 40));
+        assert!(start(&watch, at(8)).start.is_empty());
+        assert_eq!(start(&watch, secs(8, 30)).start, vec!["r1"]);
+    }
+
+    #[test]
+    fn a_machine_with_no_reading_is_not_held_but_its_two_minutes_still_run() {
+        let runs = vec![queued_on("r1", 1, "hp")];
+        let start = |watch: &MemoryWatch, now| admit(&runs, &limited(), &|_| true, watch, &now);
+        assert_eq!(
+            start(&MemoryWatch::default(), at(5)).start,
+            vec!["r1"],
+            "never read"
+        );
+        let mut watch = watching(&[("hp", 95)], at(5));
+        watch.read([], &runs, 90, secs(5, 10));
+        assert_eq!(start(&watch, secs(5, 10)).held["r1"].0, HoldKind::Settling);
+        assert_eq!(start(&watch, at(7)).start, vec!["r1"]);
+    }
+
+    #[test]
+    fn a_restart_does_not_let_a_held_step_slip_through() {
+        let mut run = queued_on("r1", 1, "hp");
+        run.held = Some(Held {
+            kind: HoldKind::Memory,
+            machine: "hp".into(),
+            reason: "short".into(),
+            since: at(1).to_rfc3339(),
+            told: false,
+        });
+        let runs = vec![run];
+        let mut fresh = MemoryWatch::default();
+        fresh.read([("hp".to_string(), 40)], &runs, 90, at(5));
+        let out = admit(&runs, &limited(), &|_| true, &fresh, &at(5));
+        assert_eq!(out.held["r1"].0, HoldKind::Settling);
+        let later = admit(&runs, &limited(), &|_| true, &fresh, &at(7));
+        assert_eq!(later.start, vec!["r1"]);
+    }
+
+    #[test]
+    fn at_most_one_step_a_minute_starts_on_each_machine() {
+        let mut roomy = limited();
+        roomy.per_machine = 6;
+        let mut started = queued_on("r0", 0, "hp");
+        started.state = RunState::Running;
+        started.state_of("a").machine = "hp".into();
+        started.state_of("a").started = at(5).to_rfc3339();
+        let runs = vec![
+            started,
+            queued_on("r1", 1, "hp"),
+            queued_on("r2", 2, "devbox"),
+            queued_on("r3", 3, "devbox"),
+        ];
+        let none = MemoryWatch::default();
+        let out = admit(&runs, &roomy, &|_| true, &none, &secs(5, 59));
+        assert_eq!(out.start, vec!["r2"], "one a round, on each machine");
+        assert_eq!(out.held["r1"].0, HoldKind::Spacing);
+        assert_eq!(out.held["r3"].0, HoldKind::Spacing);
+        let out = admit(&runs, &roomy, &|_| true, &none, &at(6));
+        assert_eq!(out.start, vec!["r1", "r2"]);
+    }
+
+    #[test]
+    fn a_run_short_of_a_slot_is_plainly_queued() {
+        let mut full = queued_on("r0", 0, "hp");
+        full.state = RunState::Running;
+        let mut slots = limited();
+        slots.per_machine = 1;
+        let runs = vec![full, queued_on("r1", 1, "hp")];
+        let out = admit(&runs, &slots, &|_| true, &MemoryWatch::default(), &at(5));
+        assert_eq!(out, Admission::default());
+    }
+
+    #[test]
+    fn a_machine_that_is_down_is_not_judged() {
+        let runs = vec![queued_on("r1", 1, "hp")];
+        let watch = watching(&[("hp", 95)], at(5));
+        let out = admit(&runs, &limited(), &|_| false, &watch, &at(5));
+        assert_eq!(out, Admission::default());
+    }
+
+    #[test]
+    fn the_off_setting_holds_nothing_and_spaces_nothing() {
+        let mut off = cfg();
+        off.memory_limit = 0;
+        off.per_machine = 6;
+        let mut started = queued_on("r0", 0, "hp");
+        started.state = RunState::Running;
+        started.state_of("a").machine = "hp".into();
+        started.state_of("a").started = at(5).to_rfc3339();
+        let runs = vec![started, queued_on("r1", 1, "hp"), queued_on("r2", 2, "hp")];
+        let mut watch = MemoryWatch::default();
+        watch.read([("hp".to_string(), 99)], &runs, 0, at(5));
+        let out = admit(&runs, &off, &|_| true, &watch, &at(5));
+        assert_eq!(out.start, vec!["r1", "r2"]);
+        assert!(out.held.is_empty());
+    }
+
+    fn held_seen(kind: HoldKind) -> Seen {
+        Seen::Held(Some((kind, "hp".into(), "hp is short of memory".into())))
+    }
+
+    #[test]
+    fn a_held_run_keeps_its_since_and_tells_the_person_once() {
+        let run = queued_on("r1", 1, "hp");
+        let (run, _) = step(run, held_seen(HoldKind::Memory), &cfg(), at(1));
+        let (run, _) = step(run, held_seen(HoldKind::Settling), &cfg(), at(20));
+        assert_eq!(run.held.as_ref().unwrap().since, at(1).to_rfc3339());
+        let (run, did) = step(run, Seen::Tick, &cfg(), at(30));
+        assert_eq!(did, vec![]);
+        let (run, did) = step(run, Seen::Tick, &cfg(), at(31));
+        match &did[..] {
+            [Effect::Notify { text }] => {
+                assert!(text.contains("held for 30 min"), "{text}");
+                assert!(text.contains("hp is short of memory"), "{text}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(run.state, RunState::Queued, "it still starts by itself");
+        assert!(run.held.as_ref().unwrap().told);
+        let (run, did) = step(run, Seen::Tick, &cfg(), at(40));
+        assert_eq!(did, vec![]);
+        let (run, _) = step(run, held_seen(HoldKind::Memory), &cfg(), at(41));
+        assert!(run.held.as_ref().unwrap().told, "not told a second time");
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(42));
+        assert_eq!((run.state, run.held), (RunState::Running, None));
+    }
+
+    #[test]
+    fn being_judged_clears_an_old_offline_note() {
+        let mut run = queued_on("r1", 1, "hp");
+        run.offline_since = Some(at(1).to_rfc3339());
+        let (run, _) = step(run, held_seen(HoldKind::Memory), &cfg(), at(5));
+        assert_eq!(run.offline_since, None);
+        let (run, _) = step(run, Seen::Tick, &cfg(), at(40));
+        assert_eq!(run.state, RunState::Queued);
+    }
+
+    #[test]
+    fn a_saved_run_with_no_hold_still_loads() {
+        let run: Run = serde_json::from_str(r#"{"id":"r1","state":"queued"}"#).unwrap();
+        assert_eq!(run.held, None);
+    }
+
+    #[test]
+    fn a_second_try_queues_on_its_machine_so_the_gate_sees_it() {
+        let mut run = at_step("Implement my tickets", "implement");
+        run.slot = None;
+        let (run, _) = step(
+            run,
+            Seen::Started {
+                step: "implement".into(),
+                result: Err("no room".into()),
+            },
+            &cfg(),
+            at(5),
+        );
+        assert_eq!(
+            (run.state, run.slot.as_deref()),
+            (RunState::Queued, Some("hp"))
+        );
     }
 
     #[test]

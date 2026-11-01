@@ -1,4 +1,6 @@
-use super::{last_lines, Check, Ci, Note, Pull, LOG_BYTES, LOG_LINES, SEEN_NOTES};
+use super::{
+    last_lines, Check, Ci, Note, Pull, Unsettled, UnsettledCheck, LOG_BYTES, LOG_LINES, SEEN_NOTES,
+};
 use crate::config::PullRequests;
 use crate::secrets::Secrets;
 use crate::shell::{quote, Runner};
@@ -519,7 +521,19 @@ impl GitLab {
         let mut pull = parse_mr(&one).map_err(unreadable)?;
         if pull.ci == Ci::Failing {
             if let Some((id, web)) = pipeline(&one) {
-                pull.failed = self.failed_in(access, project, id, &web).await?;
+                pull.failed = self.jobs_in(access, project, id, &web, "failed").await?;
+            }
+        }
+        if was_cancelled(&one) {
+            if let Some((id, web)) = pipeline(&one) {
+                let jobs = self.jobs_in(access, project, id, &web, "canceled").await?;
+                pull.unsettled = jobs
+                    .into_iter()
+                    .map(|check| UnsettledCheck {
+                        check,
+                        how: Unsettled::Cancelled,
+                    })
+                    .collect();
             }
         }
         let part = |name: &'static str| [&mr[..], &[name]].concat();
@@ -540,8 +554,9 @@ impl GitLab {
             .discussions(access, &part("discussions"), &pull, &me)
             .await?
         {
-            Some(notes) => {
+            Some((notes, resolved)) => {
                 pull.notes = notes;
+                pull.resolved = resolved;
                 Ok(Some((pull, true)))
             }
             None => Ok(Some((pull, false))),
@@ -557,8 +572,9 @@ impl GitLab {
         segments: &[&str],
         pull: &Pull,
         me: &str,
-    ) -> Result<Option<Vec<Note>>, Problem> {
+    ) -> Result<Option<(Vec<Note>, Vec<String>)>, Problem> {
         let mut out = Vec::new();
+        let mut resolved = Vec::new();
         for page in 1..=PAGES {
             let page = page.to_string();
             let res = match self
@@ -582,25 +598,27 @@ impl GitLab {
                 return Ok(None);
             };
             out.extend(notes(&body, &pull.url, &pull.author, me));
+            resolved.extend(resolved_notes(&body));
             if !next {
                 break;
             }
         }
         out.drain(..out.len().saturating_sub(SEEN_NOTES));
-        Ok(Some(out))
+        Ok(Some((out, resolved)))
     }
 
     // A pipeline can fail through a downstream pipeline, which shows as a failed bridge rather
     // than a job, or before any job ran; the card then names what it can, down to the pipeline.
-    async fn failed_in(
+    async fn jobs_in(
         &self,
         access: &GitLabAccess,
         project: &str,
         id: u64,
         web: &str,
+        scope: &str,
     ) -> Result<Vec<Check>, Problem> {
         let id = id.to_string();
-        let failed = [("scope[]", "failed"), ("per_page", PAGE)];
+        let failed = [("scope[]", scope), ("per_page", PAGE)];
         let list = |what: &'static str| ["projects", project, "pipelines", id.as_str(), what];
         let mut checks = match self.text(access, &list("jobs"), &failed).await {
             Ok(jobs) => failed_checks(&jobs).map_err(unreadable)?,
@@ -657,6 +675,15 @@ impl GitLab {
         }
         excerpt(&String::from_utf8_lossy(&kept))
     }
+}
+
+fn was_cancelled(mr_json: &str) -> bool {
+    serde_json::from_str::<serde_json::Value>(mr_json).is_ok_and(|mr| {
+        matches!(
+            mr["head_pipeline"]["status"].as_str(),
+            Some("canceled" | "canceling")
+        )
+    })
 }
 
 pub(super) fn pipeline(mr_json: &str) -> Option<(u64, String)> {
@@ -768,6 +795,8 @@ struct RawNote {
     system: bool,
     #[serde(default)]
     position: Option<RawPosition>,
+    #[serde(default)]
+    resolved: bool,
 }
 
 #[derive(Deserialize)]
@@ -823,6 +852,9 @@ pub(super) fn parse_mr(json: &str) -> Result<Pull, String> {
         notes: Vec::new(),
         created: raw.created_at.unwrap_or_default(),
         approvers: Vec::new(),
+        asking: Vec::new(),
+        resolved: Vec::new(),
+        unsettled: Vec::new(),
     })
 }
 
@@ -927,6 +959,18 @@ pub(super) fn notes(discussions_json: &str, web_url: &str, author: &str, me: &st
                 place: n.position.as_ref().map(place).unwrap_or_default(),
             })
         })
+        .collect()
+}
+
+pub(super) fn resolved_notes(discussions_json: &str) -> Vec<String> {
+    let Ok(discussions) = serde_json::from_str::<Vec<RawDiscussion>>(discussions_json) else {
+        return Vec::new();
+    };
+    discussions
+        .into_iter()
+        .flat_map(|d| d.notes)
+        .filter(|n| n.resolved)
+        .map(|n| format!("gitlab:{}", n.id))
         .collect()
 }
 
@@ -1114,6 +1158,17 @@ mod tests {
     }
 
     #[test]
+    fn resolved_notes_are_named_and_stay_in_the_list() {
+        let body = r#"[{"notes":[
+            {"id":1,"body":"done","author":{"username":"a"},"resolved":true,"position":{"new_path":"x.rs","new_line":2}},
+            {"id":2,"body":"open","author":{"username":"a"},"resolved":false,"position":{"new_path":"x.rs","new_line":3}},
+            {"id":3,"body":"plain","author":{"username":"a"}}
+        ]}]"#;
+        assert_eq!(resolved_notes(body), vec!["gitlab:1"]);
+        assert_eq!(notes(body, "u", "me", "me").len(), 3, "cards are unchanged");
+    }
+
+    #[test]
     fn a_job_id_is_read_from_its_url() {
         assert_eq!(job_id("https://git.x/g/app/-/jobs/123"), Some(123));
         assert_eq!(
@@ -1289,6 +1344,49 @@ mod http_tests {
 
     fn failing_ci() -> Answers {
         Answers::default()
+    }
+
+    fn pipeline_status(status: &str) -> Answers {
+        let mut answers = Answers::default();
+        let mut mr: serde_json::Value =
+            serde_json::from_str(include_str!("../../tests/fixtures/gitlab_mr.json")).unwrap();
+        mr["head_pipeline"]["status"] = status.into();
+        answers.mr = (200, mr.to_string());
+        answers
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_pipeline_names_its_jobs_and_badges_stay_as_they_were() {
+        for status in ["canceled", "canceling"] {
+            let stub = serve(pipeline_status(status)).await;
+            let access = stub.access("glpat-good");
+            let Answer::Pull(p) = GitLab::new()
+                .fetch(&access, "commslayer/app", "eng-2")
+                .await
+            else {
+                panic!("no pull");
+            };
+            assert_eq!(p.ci, Ci::None, "{status}");
+            assert!(!p.unsettled.is_empty(), "{status}");
+            assert!(p.failed.is_empty(), "{status}");
+            assert!(stub.asked("=canceled") > 0, "{status}");
+        }
+    }
+
+    #[tokio::test]
+    async fn other_pipeline_statuses_read_no_cancelled_jobs() {
+        for status in ["skipped", "manual", "success", "running"] {
+            let stub = serve(pipeline_status(status)).await;
+            let access = stub.access("glpat-good");
+            let Answer::Pull(p) = GitLab::new()
+                .fetch(&access, "commslayer/app", "eng-2")
+                .await
+            else {
+                panic!("no pull");
+            };
+            assert!(p.unsettled.is_empty(), "{status}");
+            assert_eq!(stub.asked("=canceled"), 0, "{status}");
+        }
     }
 
     #[tokio::test]

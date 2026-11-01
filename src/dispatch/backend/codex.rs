@@ -145,6 +145,10 @@ impl Backend for Codex {
         None
     }
 
+    fn tokens_of(&self, line: &Value) -> Option<crate::pipeline::tokens::Tokens> {
+        crate::pipeline::tokens::from_codex_turn(line)
+    }
+
     fn keeps_instructions(&self) -> bool {
         true
     }

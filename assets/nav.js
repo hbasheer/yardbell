@@ -62,6 +62,24 @@
     if (!waiting) return;
     waiting.textContent = state.proposals ? String(state.proposals) : "";
     waiting.hidden = !state.proposals;
+    problemsBadge(state);
+  }
+
+  function problemsBadge(state) {
+    const home = document.querySelector('.side-foot .side-link[href="/"], .ws-nav .side-link[href="/"], .side-rail .side-link[href="/"]');
+    if (!home) return;
+    let count = document.getElementById("nav-problems-count");
+    const open = (state.problems || []).length;
+    if (!count) {
+      if (!open) return;
+      count = document.createElement("span");
+      count.id = "nav-problems-count";
+      count.className = "side-count";
+      home.append(count);
+    }
+    count.textContent = open ? String(open) : "";
+    count.title = open === 1 ? "1 thing looks stuck" : `${open} things look stuck`;
+    count.hidden = !open;
   }
 
   function render(state, selected) {

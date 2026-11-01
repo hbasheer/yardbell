@@ -1,11 +1,14 @@
 mod diff;
 mod evidence;
 mod files;
+mod pin;
 mod scan;
 
 pub use diff::{changed_file, changed_files, valid_base, valid_path, Anchor};
 pub use evidence::{gather, valid_file as valid_evidence_file};
 pub use files::{file_view, places};
+pub(in crate::dispatch) use pin::earlier_in;
+pub use pin::{read as read_pin, standing as pin_standing, Pin};
 pub use scan::{prompt as scan_prompt, Kind as ScanKind};
 
 use serde::{Deserialize, Serialize};
@@ -32,6 +35,12 @@ pub struct ReviewOf {
     // A scan looks through the whole folder for one kind of problem instead of reviewing a branch.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub scan: String,
+    // The code it read, noted as it starts. Reviews from before this have none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<Pin>,
+    // Asked to read code that already has a review.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub again: bool,
 }
 
 impl ReviewOf {

@@ -17,6 +17,7 @@ pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/api/pipelines", get(list).post(create))
         .route("/api/pipelines/tickets", get(tickets))
+        .route("/api/pipelines/trigger-preview", post(trigger_preview))
         .route("/api/pipelines/settings", put(settings))
         .route("/api/pipelines/{id}", get(show).put(save).delete(delete))
         .route("/api/pipelines/{id}/enabled", post(enabled))
@@ -30,6 +31,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/runs/{id}/answer", post(answer))
         .route("/api/runs/{id}/retry", post(retry))
         .route("/api/runs/{id}/accept-tool", post(accept_tool))
+        .route("/api/runs/{id}/token-limit", post(token_limit))
         .route("/api/runs/{id}/continue", post(continue_on))
         .route("/api/runs/{id}/drop", post(drop_run))
         .route("/api/runs/{id}/stop-session", post(stop_session))
@@ -87,6 +89,7 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
                 "runs": {
                     "running": count(&[RunState::Queued, RunState::Running]),
                     "waiting": count(&[RunState::Waiting]),
+                    "held": mine.iter().filter(|r| r.held.as_ref().is_some_and(|h| h.told)).count(),
                     "done": count(&[RunState::Done]),
                 },
                 "problem": problem,
@@ -99,6 +102,10 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         .collect();
     let machines: Vec<&str> = cfg.machines.iter().map(|m| m.name.as_str()).collect();
     let agents: Vec<String> = cfg.agents().into_iter().map(|a| a.name).collect();
+    let no_tokens: Vec<&String> = agents
+        .iter()
+        .filter(|a| !cfg.agent_reports_tokens(a))
+        .collect();
     let mcp_servers: Vec<&str> = cfg.mcp_servers.iter().map(|m| m.name.as_str()).collect();
     let gitlab_hosts: Vec<&str> = cfg
         .pull_requests
@@ -112,6 +119,8 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "settings": cfg.pipelines,
         "machines": machines,
         "agents": agents,
+        "agents_without_tokens": no_tokens,
+        "default_agent": cfg.default_agent(),
         "mcp_servers": mcp_servers,
         "gitlab_hosts": gitlab_hosts,
         "connectors": cfg.connectors.iter().map(|c| json!({
@@ -119,6 +128,7 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             "name": c.name,
             "enabled": c.enabled,
             "params": c.params,
+            "filters": c.params.iter().filter(|p| p.filter).map(|p| (p.name.clone(), json!(c.filter_by(&p.name)))).collect::<BTreeMap<_, _>>(),
             "calls": c.calls.iter().map(|(name, call)| json!({
                 "name": name,
                 "kind": call.kind(),
@@ -273,6 +283,8 @@ fn with_terminals(app: &AppState, runs: Vec<Run>) -> Result<Vec<Value>, ApiError
             }
             let mut out = json!(run);
             out["terminals"] = json!(terminals);
+            out["tokens_used"] = json!(run.tokens.used());
+            out["tokens_from_cache"] = json!(run.tokens.cache_read());
             out
         })
         .collect())
@@ -309,6 +321,137 @@ async fn open(app: &AppState) -> Result<Vec<Ticket>, ApiError> {
         .open(key)
         .await
         .map_err(ApiError::gateway)
+}
+
+#[derive(Deserialize)]
+struct PreviewReq {
+    trigger: Trigger,
+}
+
+const PREVIEW_SHOWN: usize = 5;
+const LINEAR_READS: usize = 100;
+
+fn preview_reply(found: Vec<Value>, read: usize, how: String, note: Option<String>) -> Response {
+    Json(json!({
+        "count": found.len(),
+        "read": read,
+        "items": found.into_iter().take(PREVIEW_SHOWN).collect::<Vec<_>>(),
+        "how": how,
+        "note": note,
+    }))
+    .into_response()
+}
+
+async fn linear_preview(
+    app: &AppState,
+    assigned: bool,
+    states: &[String],
+    filter: &crate::triggers::LinearFilter,
+) -> Result<Response, ApiError> {
+    let secrets = app.secrets()?;
+    let key = secrets.get(LINEAR_SECRET).ok_or_else(|| {
+        bad(format!(
+            "the secret {LINEAR_SECRET} is not set. Add your Linear API key under Settings, Connections"
+        ))
+    })?;
+    let tickets = app
+        .pipelines
+        .linear()
+        .open_where(key, filter)
+        .await
+        .map_err(ApiError::gateway)?;
+    let read = tickets.len();
+    let found = tickets
+        .into_iter()
+        .filter(|t| assigned || crate::pipeline::triggers::in_a_state(states, &t.state))
+        .map(|t| json!({ "id": t.id, "title": t.title, "url": t.url, "state": t.state }))
+        .collect();
+    let how = if filter.is_empty() {
+        "No filter is set, so this is every open ticket assigned to you."
+    } else {
+        "Linear did the filtering, among the open tickets assigned to you."
+    };
+    let note = (read >= LINEAR_READS).then(|| {
+        format!("Linear gives Yardbell the {LINEAR_READS} most recently updated tickets.")
+    });
+    Ok(preview_reply(found, read, how.to_string(), note))
+}
+
+async fn connector_preview(
+    app: &AppState,
+    connector: &str,
+    params: &BTreeMap<String, String>,
+    states: &[String],
+) -> Result<Response, ApiError> {
+    use crate::connectors::FilterBy;
+    let cfg = app.config()?;
+    let c = cfg
+        .connectors
+        .iter()
+        .find(|c| c.id == connector)
+        .ok_or_else(|| bad(format!("there is no connector {connector}")))?;
+    let secrets = crate::secrets::Secrets::for_config(&app.cfg_path).map_err(|e| e.to_string());
+    let client = crate::connectors::client_for(
+        &cfg.connectors,
+        connector,
+        &secrets,
+        crate::mcp_read::saved_values(app),
+        Some(crate::pipeline::run::AppTools::of(app)),
+    )
+    .map_err(bad)?;
+    if client.call_named("list").map_err(bad)?.kind() == crate::connectors::CallKind::Change {
+        return Err(bad(format!(
+            "{} cannot be previewed: its list call is not marked as only reading",
+            c.name
+        )));
+    }
+    let listed = client
+        .list(&crate::connectors::client::Vars(params.clone()))
+        .await
+        .map_err(ApiError::gateway)?;
+    let read = listed.items.len();
+    let found = listed
+        .items
+        .iter()
+        .filter(|i| crate::pipeline::triggers::item_matches(i, params))
+        .filter(|i| states.is_empty() || crate::pipeline::triggers::in_a_state(states, &i.state))
+        .map(|i| json!({ "id": i.id, "title": i.title, "url": i.url, "state": i.state }))
+        .collect();
+    let chosen: Vec<_> = c
+        .params
+        .iter()
+        .filter(|p| p.filter && params.get(&p.name).is_some_and(|v| !v.is_empty()))
+        .filter_map(|p| c.filter_by(&p.name))
+        .collect();
+    let name = &c.name;
+    let how = if chosen.is_empty() {
+        format!("No filter is set, so this is every item {name} lists.")
+    } else if chosen.iter().all(|by| *by == FilterBy::Source) {
+        format!("{name} did the filtering.")
+    } else {
+        format!("{name} cannot do all of this filtering, so Yardbell read {read} items and kept the matches.")
+    };
+    Ok(preview_reply(found, read, how, listed.cut_off))
+}
+
+// Only reads, and never touches what a trigger has noted.
+async fn trigger_preview(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<PreviewReq>,
+) -> Result<Response, ApiError> {
+    match &req.trigger {
+        Trigger::Linear {
+            assigned,
+            states,
+            filter,
+        } => linear_preview(&app, *assigned, states, filter).await,
+        Trigger::Connector {
+            connector,
+            params,
+            states,
+        } => connector_preview(&app, connector, params, states).await,
+        _ => Err(bad("Only a ticket trigger has tickets to preview".into())),
+    }
 }
 
 async fn tickets(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
@@ -487,6 +630,19 @@ async fn answer(
     acted(&app, app.pipelines.answer(&id, &req.text))
 }
 
+#[derive(Deserialize)]
+struct TokenLimitReq {
+    limit: u64,
+}
+
+async fn token_limit(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+    Json(req): Json<TokenLimitReq>,
+) -> Result<Response, ApiError> {
+    acted(&app, app.pipelines.raise_limit(&id, req.limit))
+}
+
 async fn accept_tool(
     AxState(app): AxState<Arc<AppState>>,
     Path(id): Path<String>,
@@ -509,30 +665,42 @@ fn keep_accepted_hash(
         return Ok(());
     };
     let ran = run.def().step(&w.step).map(|s| s.kind.clone());
-    let saved = def.steps.iter_mut().find(|s| s.id == w.step);
-    if let (
-        Some(StepKind::Tool {
-            server: s, tool: t, ..
-        }),
-        Some(step),
-    ) = (ran, saved)
-    {
-        if let StepKind::Tool {
-            server,
-            tool,
-            schema_hash,
-            ..
-        } = &mut step.kind
-        {
-            if *server == s && *tool == t {
-                schema_hash.clone_from(&w.tool_hash);
-                let cfg = app.config()?;
-                app.pipelines
-                    .library()
-                    .save(def, &cfg)
-                    .map_err(|e| bad(e.join("; ")))?;
-            }
+    let saved = def
+        .steps
+        .iter_mut()
+        .find(|s| s.id == w.step)
+        .map(|s| &mut s.kind);
+    let changed = match (ran, saved) {
+        (
+            Some(StepKind::Tool {
+                server: s, tool: t, ..
+            }),
+            Some(StepKind::Tool {
+                server,
+                tool,
+                schema_hash,
+                ..
+            }),
+        ) if *server == s && *tool == t => {
+            schema_hash.clone_from(&w.tool_hash);
+            true
         }
+        // The saved step may have been edited since; only the text the person read is approved.
+        (
+            Some(StepKind::Command { command: read, .. }),
+            Some(StepKind::Command { command, approved }),
+        ) if *command == read => {
+            approved.clone_from(&read);
+            true
+        }
+        _ => false,
+    };
+    if changed {
+        let cfg = app.config()?;
+        app.pipelines
+            .library()
+            .save(def, &cfg)
+            .map_err(|e| bad(e.join("; ")))?;
     }
     Ok(())
 }
@@ -554,7 +722,11 @@ async fn continue_on(
     Path(id): Path<String>,
     Json(req): Json<ContinueReq>,
 ) -> Result<Response, ApiError> {
-    acted(&app, app.pipelines.continue_on(&id, req.outcome))
+    acted(
+        &app,
+        app.pipelines
+            .continue_on(&id, req.outcome, crate::pipeline::engine::Who::Person),
+    )
 }
 
 async fn delete_run(

@@ -286,9 +286,11 @@ The Pipelines page shows your [pipelines](automation.md#pipelines), one card eac
 words, its steps in order (`Review ⟲ Fix` marks a loop back), an On/Off switch, its version, how many
 runs are running, waiting and done, and **Needs you** when one waits.
 
-- **Waiting for me** lists every run that waits for you, across all pipelines.
+- **Waiting for me** lists every run that waits for you, across all pipelines, and any run held for 30
+  minutes because its machine is short of memory.
 - **New pipeline** starts an **Empty pipeline** or copies a template, switched off.
-- **Settings** sets the agent steps at once per machine, a step's time limit and QA notes per folder.
+- **Settings** sets the agent steps at once per machine, a step's time limit, an optional memory limit
+  that holds new steps, and QA notes per folder.
 
 A run keeps to one agent session: its steps take turns in it, in one worktree. A step marked
 **Review: new read-only session** gets a reviewer of its own, which stops when nothing needs it, as
@@ -510,6 +512,9 @@ apply: it is sent at once, waits below for you to approve or edit it, or is refu
 (one commit) and each comment gets one card, also after a restart, and a pull request seen for the
 first time only sets what is known, so old comments never turn into cards.
 
+A pipeline run with a [Wait for CI and reviews](automation.md#wait-for-ci-and-reviews) step takes these
+for its own pull or merge request while it runs, so it gets no cards then.
+
 #### Triggers
 
 A trigger starts a Dispatch conversation from one of your saved tasks without you typing it. Add
@@ -559,6 +564,21 @@ High and medium findings start ticked; low ones start folded and unticked. Tick 
 and **Send** them to the session that did the work, which gets them as one request to fix them and run the tests, or
 **Dismiss** the review. Asking Dispatch to review a session proposes the same reviewer. A list at
 the top of the conversation shows every session it started and what each is doing now.
+
+Each review is tied to the code it read. When it starts, Yardbell reads the branch's commit and a hash
+of its uncommitted changes and new files with `git` on the session's machine, which changes nothing
+there, and the card says **Read `ab12cd3`**, with **with uncommitted changes** when there were some. When
+you look at the card it reads them again and says whether nothing has changed since, whether the branch
+has moved on (and to which commit), or whether it is at the same commit with different uncommitted
+changes, because the verdict may not hold then. It also says if the code changed while the review ran.
+A reviewer that runs the tests and leaves new files that are not ignored counts as such a change.
+
+The same commit with the same uncommitted changes in the same folder is not reviewed twice. Pressing
+**Review branch** on code that has a finished review, or one still running, prepares the card as usual
+but says so, and its button becomes **Review again**, which is how you ask for a second read. Dispatch
+is told the same thing when it proposes such a review, and passes `again` only when you ask it to. A
+review that ended without a report, a review during which the code changed, and a review whose code
+could not be read do not count. Files git ignores are not part of what is compared.
 
 A review card also has **Changes**, the branch's diff against the base the reviewer compared with.
 The reviewer names that base in its report; when it does not, Yardbell uses the same rule the

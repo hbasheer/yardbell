@@ -1,10 +1,12 @@
+use super::checks::{self, Read};
 use super::definition::{Outcome, Step, StepKind, UpdateAction, Workspace};
 use super::forge::{Draft, Forge};
 use super::linear::Linear;
 use super::prompts::{self, TicketText};
 use super::record::{Effect, PullRef, Run, Seen, StepState, TicketRef};
+use super::tokens::{self, Tokens};
 use crate::config::{Approval, Config, Pipelines as Cfg};
-use crate::dispatch::{By, ReviewOf};
+use crate::dispatch::{By, ReviewOf, ReviewPin};
 use crate::phone::Push;
 use crate::secrets::Secrets;
 use crate::state::{SessionView, StateView};
@@ -77,6 +79,14 @@ pub trait World: Send + Sync {
         tool: &'a str,
         arguments: Value,
     ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>>;
+    fn run_command<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        command: &'a str,
+        seconds: u64,
+    ) -> BoxFuture<'a, Result<crate::worktrees::command::CommandRun, String>>;
+    fn stop_command<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ()>;
     fn written_result<'a>(
         &'a self,
         machine: &'a str,
@@ -84,6 +94,19 @@ pub trait World: Send + Sync {
         path: &'a str,
         marker: &'a str,
     ) -> BoxFuture<'a, Option<String>>;
+    fn saves_result_file(&self, agent: &str, read_only: bool) -> bool;
+    fn result_file<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        name: &'a str,
+    ) -> BoxFuture<'a, Option<String>>;
+    fn remove_result_files<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        names: &'a [String],
+    ) -> BoxFuture<'a, Result<(), String>>;
     fn teardown<'a>(
         &'a self,
         machine: &'a str,
@@ -91,6 +114,30 @@ pub trait World: Send + Sync {
         path: &'a str,
     ) -> BoxFuture<'a, Result<(), String>>;
     fn other_runs(&self, id: &str) -> Vec<Run>;
+    fn read_pin<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ReviewPin>;
+    fn reports_tokens(&self, agent: &str) -> bool;
+    fn token_use<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        markers: &'a [String],
+        pids: &'a [u32],
+    ) -> BoxFuture<'a, Option<tokens::TranscriptRead>>;
+    fn dispatch_tokens(&self, conversation: &str) -> Option<Tokens>;
+    fn read_pull<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+    ) -> BoxFuture<'a, Read>;
+    fn pull_detail<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+        pull: crate::pulls::Pull,
+    ) -> BoxFuture<'a, crate::pulls::Pull>;
+    fn pull_poll_seconds(&self) -> u64;
 }
 
 // What a phone notification from a pipeline is about, for the switches in Settings.
@@ -164,6 +211,25 @@ fn work_path(run: &Run) -> Option<String> {
         .find(|p| !p.is_empty())
 }
 
+// Where the work is: the machine and folder of the first agent step that made a worktree.
+pub(super) fn work_place(run: &Run) -> Option<(String, String)> {
+    run.def()
+        .steps
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.kind,
+                StepKind::Agent {
+                    workspace: Workspace::NewWorktree,
+                    ..
+                }
+            )
+        })
+        .filter_map(|s| run.steps.get(&s.id))
+        .find(|st| !st.path.is_empty())
+        .map(|st| (st.machine.clone(), st.path.clone()))
+}
+
 async fn ticket_text(world: &dyn World, run: &Run) -> Result<TicketText, Seen> {
     let Some(t) = &run.subject.ticket else {
         return Ok(TicketText::default());
@@ -230,6 +296,53 @@ fn agent_of(step: &Step) -> Option<(&str, bool)> {
     }
 }
 
+fn saves_result(world: &dyn World, step: &Step) -> bool {
+    agent_of(step).is_some_and(|(agent, read_only)| world.saves_result_file(agent, read_only))
+}
+
+fn asking_for_file(world: &dyn World, step: &Step, marker: &str, mut text: String) -> String {
+    if saves_result(world, step) {
+        text.push_str(&prompts::result_file_request(marker).unwrap_or_default());
+    }
+    text
+}
+
+// This try's saved result, when its agent was asked for one and it holds up.
+pub async fn filed_result(
+    world: &dyn World,
+    run: &Run,
+    machine: &str,
+    path: &str,
+    marker: &str,
+) -> Option<String> {
+    let step = run.def().step(&run.step)?;
+    if !saves_result(world, step) {
+        return None;
+    }
+    let name = prompts::result_file_name(marker)?;
+    let raw = world.result_file(machine, path, name).await?;
+    prompts::filed_result(&raw, marker)
+}
+
+// Every file this run's agents were asked to save, by the folder each is in. The names hold the
+// run's tag and try, so they are this run's alone whoever else works in the folder.
+fn result_files(world: &dyn World, run: &Run) -> Vec<((String, String), Vec<String>)> {
+    let mut found: std::collections::BTreeMap<(String, String), Vec<String>> = Default::default();
+    for step in run.def().steps.iter().filter(|s| saves_result(world, s)) {
+        let Some(st) = run.steps.get(&step.id).filter(|st| !st.path.is_empty()) else {
+            continue;
+        };
+        let names = (1..=st.runs)
+            .map(|attempt| prompts::marker_of_try(run, &step.id, attempt))
+            .filter(|m| prompts::result_file_name(m).is_some());
+        found
+            .entry((st.machine.clone(), st.path.clone()))
+            .or_default()
+            .extend(names);
+    }
+    found.into_iter().filter(|(_, n)| !n.is_empty()).collect()
+}
+
 // The session this step can type into instead of starting one: the run's newest live session on
 // the same machine, with the same agent and the same read-only setting, which cannot change in a
 // running agent. A reviewer run again never reuses its own.
@@ -250,19 +363,25 @@ fn shared_session(run: &Run, view: &StateView, step: &Step, machine: &str) -> Op
 }
 
 // Sessions of a live run that nothing needs any more: everything but the current step's and the
-// newest writer's, which later steps type into.
+// newest writer's, which later steps type into. A wait for CI can last hours, so it keeps none, and
+// the step after it starts a new session in the run's folder.
 pub fn needless_sessions(run: &Run, view: &StateView) -> Vec<(String, String)> {
     let def = run.def();
+    let watching = def
+        .step(&run.step)
+        .is_some_and(|s| matches!(s.kind, StepKind::Checks { .. }));
     let current = run
         .steps
         .get(&run.step)
+        .filter(|_| !watching)
         .map(|s| s.session.as_str())
         .unwrap_or_default();
     let writer = run
         .steps
         .iter()
         .filter(|(id, st)| {
-            !st.session.is_empty()
+            !watching
+                && !st.session.is_empty()
                 && def
                     .step(id)
                     .and_then(agent_of)
@@ -294,7 +413,93 @@ fn folder_on(run: &Run, machine: &str) -> Option<String> {
         .map(|st| st.path.clone())
 }
 
+// The folder a step will work in, when it is known before the step starts.
+fn folder_before_start(run: &Run, step: &Step, machine: &str) -> Option<String> {
+    let StepKind::Agent { workspace, .. } = &step.kind else {
+        return None;
+    };
+    let path = match workspace {
+        Workspace::NewWorktree => folder_on(run, machine)?,
+        Workspace::SameAs { step: other } => run.steps.get(other)?.path.clone(),
+        Workspace::Copy { from } => {
+            let theirs = run.steps.get(from)?;
+            if theirs.machine != machine {
+                return None;
+            }
+            theirs.path.clone()
+        }
+    };
+    (!path.is_empty()).then_some(path)
+}
+
+fn nothing_new(run: &Run, step: &Step, pin: &ReviewPin) -> String {
+    let before = run
+        .history
+        .iter()
+        .rev()
+        .find(|e| e.step != step.id)
+        .and_then(|e| run.def().step(&e.step))
+        .map_or_else(|| "The last step".to_string(), |s| s.name.clone());
+    let said = run
+        .steps
+        .get(&step.id)
+        .and_then(|s| s.outcome)
+        .map_or("finished", |o| o.word());
+    format!(
+        "{before} made no new commit and changed no files, so {} has nothing new to read. It {said} on {}.",
+        step.name,
+        pin.words()
+    )
+}
+
+// A read-only step reached again on the code its last result was about stops here: a second read
+// of the same code could only repeat itself or flip by chance, and passing on the old verdict
+// would hide that the fix did nothing. The person decides. A second try after no result is
+// the same run of the step, so it keeps the pin it has.
 async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen> {
+    if !agent_of(step).is_some_and(|(_, read_only)| read_only) || run.retried {
+        return start_agent(world, cfg, run, step).await;
+    }
+    let state = run.steps.get(&step.id).cloned().unwrap_or_default();
+    let before = match folder_before_start(run, step, &state.machine) {
+        Some(path) => Some(world.read_pin(&state.machine, &path).await),
+        None => None,
+    };
+    if let Some(pin) = before.as_ref().filter(|_| !state.again) {
+        if state.judged.as_ref().is_some_and(|j| j.same_code(pin)) {
+            return vec![Seen::Unchanged {
+                step: step.id.clone(),
+                reason: nothing_new(run, step, pin),
+            }];
+        }
+    }
+    let started_seen = start_agent(world, cfg, run, step).await;
+    let pin = match before {
+        Some(pin) => Some(pin),
+        None => {
+            let place = started_seen.iter().find_map(|seen| match seen {
+                Seen::Started {
+                    result: Ok((_, machine, path)),
+                    ..
+                } => Some((machine.as_str(), path.as_str())),
+                _ => None,
+            });
+            match place {
+                Some((machine, path)) => Some(world.read_pin(machine, path).await),
+                None => None,
+            }
+        }
+    };
+    pin.map(|pin| Seen::Pinned {
+        step: step.id.clone(),
+        pin,
+    })
+    .into_iter()
+    .chain(started_seen)
+    .collect()
+}
+
+async fn start_agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen> {
     let StepKind::Agent {
         agent,
         workspace,
@@ -315,7 +520,9 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
         .cloned()
         .unwrap_or_else(|| world.notes(&run.place.folder));
     let answer = Some(state.answer.as_str()).filter(|a| !a.is_empty());
-    let prompt = prompts::agent(run, step, &text, answer, &notes);
+    let marker = prompts::marker(run, &step.id);
+    let task = prompts::agent(run, step, &text, answer, &notes);
+    let prompt = asking_for_file(world, step, &marker, task);
     let view = world.view();
     let machine = state.machine.clone();
     if let Some(shared) = shared_session(run, &view, step, &machine) {
@@ -349,7 +556,7 @@ async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen
                 if old.activity != crate::snapshot::Activity::Idle {
                     return vec![];
                 }
-                let text = prompts::result_reminder(&prompts::marker(run, &step.id));
+                let text = asking_for_file(world, step, &marker, prompts::result_reminder(&marker));
                 let input = json!({ "machine": old.machine, "name": state.session, "text": text });
                 return match run_step(world, run, "send_to_session", input).await {
                     Ok(_) => vec![Seen::Sent(Ok(()))],
@@ -594,6 +801,99 @@ async fn tool_step(world: &dyn World, run: &Run, call: ToolCall<'_>) -> Seen {
     }
 }
 
+fn blind_to(world: &dyn World, step: &Step) -> Option<Seen> {
+    let (agent, _) = agent_of(step)?;
+    (!world.reports_tokens(agent)).then(|| Seen::TokenBlind {
+        step: step.id.clone(),
+        why: tokens::blind_why(step, agent),
+    })
+}
+
+fn command_report(
+    command: &str,
+    minutes: u64,
+    done: &crate::worktrees::command::CommandRun,
+) -> String {
+    let label: String = command
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(80)
+        .collect();
+    let said = match (done.timed_out, done.exit) {
+        (true, _) => format!("Stopped after {} min, its time limit: {label}", minutes),
+        (false, Some(0)) => format!("Passed: {label}"),
+        (false, Some(code)) => format!("Failed with exit code {code}: {label}"),
+        (false, None) => format!("Ended without an exit code: {label}"),
+    };
+    match done.output.trim() {
+        "" => said,
+        output => format!("{said}\n\n{output}"),
+    }
+}
+
+async fn command_step(
+    world: &dyn World,
+    run: &Run,
+    step: &Step,
+    command: &str,
+    approved: &str,
+) -> Seen {
+    let Some((machine, path)) = work_place(run) else {
+        return Seen::Refused(format!(
+            "no step made a worktree, so {} has no folder to run in",
+            step.name
+        ));
+    };
+    let input = json!({
+        "machine": machine, "path": path, "folder": run.place.folder, "command": command,
+    });
+    if let Some(reason) = world.refused("run_command", &input) {
+        return Seen::Refused(reason);
+    }
+    if command != approved {
+        return Seen::ToolChanged {
+            hash: String::new(),
+            reason: format!(
+                "{} runs a command nobody has approved in this form. Read it, then accept it",
+                step.name
+            ),
+            shown: command.to_string(),
+        };
+    }
+    let minutes = step.minutes.unwrap_or(super::definition::COMMAND_MINUTES);
+    let done = world
+        .run_command(&machine, &path, command, minutes * 60)
+        .await;
+    let (recorded, seen) = match done {
+        Ok(done) => {
+            let report = command_report(command, minutes, &done);
+            if done.exit == Some(0) && !done.timed_out {
+                (Ok(json!(report)), Seen::CommandDone(Ok(report)))
+            } else {
+                (Err(report.clone()), Seen::CommandDone(Err(report)))
+            }
+        }
+        Err(e) => (
+            Err(e.clone()),
+            Seen::Started {
+                step: step.id.clone(),
+                result: Err(e),
+            },
+        ),
+    };
+    world.record(
+        &run.conversation,
+        "run_command",
+        input,
+        None,
+        &recorded,
+        &run.started,
+    );
+    seen
+}
+
 pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Vec<Seen> {
     let step_of = |id: &str| run.def().step(id).cloned();
     match effect {
@@ -610,15 +910,26 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             if machines.is_empty() {
                 machines = world.machines();
             }
+            let before = world.dispatch_tokens(&run.conversation);
             let reply = world
                 .ask(&run.conversation, &prompts::plan(run, &text, &machines))
                 .await;
-            vec![Seen::Planned(
-                reply.and_then(|t| prompts::parse_plan(&t, &machines, run)),
-            )]
+            vec![
+                tokens::after_turn(world, run, step, before),
+                Seen::Planned(reply.and_then(|t| prompts::parse_plan(&t, &machines, run))),
+            ]
         }
         Effect::Agent { step } => match step_of(step) {
-            Some(s) => agent(world, cfg, run, &s).await,
+            Some(s) => {
+                let Some(blind) = blind_to(world, &s) else {
+                    return agent(world, cfg, run, &s).await;
+                };
+                let mut seen = vec![blind];
+                if run.tokens.limit.is_none() || run.tokens.go_on_unknown {
+                    seen.extend(agent(world, cfg, run, &s).await);
+                }
+                seen
+            }
             None => vec![],
         },
         Effect::Answer { step, text } => {
@@ -650,6 +961,41 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             Some(path) => vec![Seen::Opened(world.open_draft(run, &path).await)],
             None => vec![Seen::Opened(Err("no step made a worktree".into()))],
         },
+        Effect::Checks { step } => {
+            let every_seconds = world.pull_poll_seconds();
+            let Some(path) = work_path(run) else {
+                let read = Read::Blocked("no step made a worktree to read the branch from".into());
+                return vec![Seen::ChecksRead {
+                    step: step.clone(),
+                    read,
+                    every_seconds,
+                }];
+            };
+            let (machine, wanted) = (&run.place.machine, branch(run));
+            let read = match world.read_pull(machine, &path, &wanted).await {
+                Read::Found(pull) => {
+                    let watch = run.steps.get(step).map(|s| s.watch.clone());
+                    let approval = matches!(
+                        step_of(step).map(|s| s.kind),
+                        Some(StepKind::Checks {
+                            require_approval: true
+                        })
+                    );
+                    if checks::wants_detail(&watch.unwrap_or_default(), &pull, approval) {
+                        let pull = world.pull_detail(machine, &path, &wanted, *pull).await;
+                        Read::Found(Box::new(pull))
+                    } else {
+                        Read::Found(pull)
+                    }
+                }
+                other => other,
+            };
+            vec![Seen::ChecksRead {
+                step: step.clone(),
+                read,
+                every_seconds,
+            }]
+        }
         Effect::Linear { step } => {
             let Some(StepKind::Update { action, state }) = step_of(step).map(|s| s.kind) else {
                 return vec![];
@@ -709,8 +1055,19 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
             }
             _ => vec![],
         },
-        Effect::Report { .. } => {
+        Effect::Command { step } => match step_of(step) {
+            Some(s) => match &s.kind {
+                StepKind::Command { command, approved } => {
+                    vec![command_step(world, run, &s, command, approved).await]
+                }
+                _ => vec![],
+            },
+            None => vec![],
+        },
+        Effect::Report { step } => {
+            let before = world.dispatch_tokens(&run.conversation);
             let reply = world.ask(&run.conversation, &prompts::report(run)).await;
+            let used = tokens::after_turn(world, run, step, before);
             let written = reply.and_then(|t| prompts::parse_report(&t));
             let line = written
                 .as_ref()
@@ -722,7 +1079,7 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 &format!("{}: {line}", run.subject.label()),
                 run,
             );
-            vec![Seen::Reported(written)]
+            vec![used, Seen::Reported(written)]
         }
         Effect::Notify { text } => {
             world.notify(Note::Waiting, text, run);
@@ -744,6 +1101,11 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 let input = json!({ "machine": machine, "name": name });
                 if let Err(e) = world.perform("stop_session", input).await {
                     problems.push(format!("{name} on {machine} did not stop: {e}"));
+                }
+            }
+            for ((machine, path), names) in result_files(world, run) {
+                if let Err(e) = world.remove_result_files(&machine, &path, &names).await {
+                    problems.push(format!("Result files stayed in {path}: {e}"));
                 }
             }
             let mut places: Vec<(&str, &str, &str)> = run
@@ -949,6 +1311,20 @@ impl Live {
 }
 
 impl Live {
+    fn github_api(&self) -> Option<crate::pulls::github_api::GitHubApi> {
+        (self.cfg.pull_requests.github_via == crate::config::GithubVia::Token).then(|| {
+            let api = crate::pulls::github_api::GitHubApi::new(self.forge.remotes());
+            let token = match &self.secrets {
+                Ok(s) => s
+                    .resolve(&self.cfg.pull_requests.github_token)
+                    .map_err(|e| e.to_string()),
+                Err(e) => Err(e.clone()),
+            };
+            api.set_token(token);
+            api
+        })
+    }
+
     async fn noting<T>(
         &self,
         server: &str,
@@ -999,6 +1375,15 @@ impl Live {
 }
 
 impl World for Live {
+    fn read_pin<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ReviewPin> {
+        Box::pin(async move {
+            match self.cfg.machine(machine) {
+                Some(m) => crate::dispatch::read_pin(&self.app.folders, m, path).await,
+                None => ReviewPin::failed(format!("{machine} is not a machine")),
+            }
+        })
+    }
+
     fn other_runs(&self, id: &str) -> Vec<Run> {
         self.app
             .pipelines
@@ -1006,6 +1391,44 @@ impl World for Live {
             .into_iter()
             .filter(|r| r.id != id)
             .collect()
+    }
+
+    fn saves_result_file(&self, agent: &str, read_only: bool) -> bool {
+        let name = if agent.is_empty() {
+            self.cfg.default_agent()
+        } else {
+            agent
+        };
+        self.cfg
+            .agent(name)
+            .is_some_and(|a| a.saves_result_file(read_only))
+    }
+
+    fn result_file<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        name: &'a str,
+    ) -> BoxFuture<'a, Option<String>> {
+        Box::pin(async move {
+            let m = self.cfg.machine(machine)?;
+            self.app.sessions.result_file(m, path, name).await
+        })
+    }
+
+    fn remove_result_files<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        names: &'a [String],
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let m = self
+                .cfg
+                .machine(machine)
+                .ok_or_else(|| format!("{machine} is not a machine"))?;
+            self.app.sessions.remove_result_files(m, path, names).await
+        })
     }
 
     fn teardown<'a>(
@@ -1025,6 +1448,73 @@ impl World for Live {
                 _ => Ok(()),
             }
         })
+    }
+
+    fn reports_tokens(&self, agent: &str) -> bool {
+        self.cfg.agent_reports_tokens(agent)
+    }
+
+    fn token_use<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        markers: &'a [String],
+        pids: &'a [u32],
+    ) -> BoxFuture<'a, Option<tokens::TranscriptRead>> {
+        Box::pin(async move {
+            let m = self.cfg.machine(machine)?;
+            let lines = self
+                .app
+                .sessions
+                .token_lines(m, path, markers, pids)
+                .await?;
+            Some(tokens::parse_lines(&lines))
+        })
+    }
+
+    fn dispatch_tokens(&self, conversation: &str) -> Option<Tokens> {
+        self.app.dispatch.tokens_of(conversation)
+    }
+
+    fn read_pull<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+    ) -> BoxFuture<'a, Read> {
+        Box::pin(async move {
+            let Some(m) = self.cfg.machine(machine) else {
+                return Read::Blocked(format!("{machine} is not a machine"));
+            };
+            let gitlab = crate::pulls::accesses_for(&self.cfg, &self.secrets);
+            let github = self.github_api();
+            self.forge
+                .read_pull(m, path, branch, &gitlab, github.as_ref())
+                .await
+        })
+    }
+
+    fn pull_detail<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        branch: &'a str,
+        pull: crate::pulls::Pull,
+    ) -> BoxFuture<'a, crate::pulls::Pull> {
+        Box::pin(async move {
+            let Some(m) = self.cfg.machine(machine) else {
+                return pull;
+            };
+            let gitlab = crate::pulls::accesses_for(&self.cfg, &self.secrets);
+            let github = self.github_api();
+            self.forge
+                .pull_detail(m, path, branch, pull, &gitlab, github.as_ref())
+                .await
+        })
+    }
+
+    fn pull_poll_seconds(&self) -> u64 {
+        self.cfg.pull_requests.poll_seconds
     }
 
     fn view(&self) -> StateView {
@@ -1216,21 +1706,43 @@ impl World for Live {
                 title: run.subject.label(),
                 body,
             };
-            let github = (self.cfg.pull_requests.github_via == crate::config::GithubVia::Token)
-                .then(|| {
-                    let api = crate::pulls::github_api::GitHubApi::new(self.forge.remotes());
-                    let token = match &self.secrets {
-                        Ok(s) => s
-                            .resolve(&self.cfg.pull_requests.github_token)
-                            .map_err(|e| e.to_string()),
-                        Err(e) => Err(e.clone()),
-                    };
-                    api.set_token(token);
-                    api
-                });
+            let github = self.github_api();
             self.forge
                 .open_draft(m, path, &draft, &gitlab, github.as_ref())
                 .await
+        })
+    }
+
+    fn run_command<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        command: &'a str,
+        seconds: u64,
+    ) -> BoxFuture<'a, Result<crate::worktrees::command::CommandRun, String>> {
+        Box::pin(async move {
+            let m = self
+                .cfg
+                .machine(machine)
+                .ok_or_else(|| format!("{machine} is not a machine"))?;
+            let mut done = self
+                .app
+                .worktrees
+                .run_command(m, path, command, seconds)
+                .await?;
+            let saved = crate::mcp_read::saved_values(&self.app);
+            if let Value::String(clean) = crate::mcp_read::sweep(json!(done.output), &saved) {
+                done.output = clean;
+            }
+            Ok(done)
+        })
+    }
+
+    fn stop_command<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(m) = self.cfg.machine(machine) {
+                self.app.worktrees.stop_command(m, path).await;
+            }
         })
     }
 

@@ -89,6 +89,16 @@ function renderPhone(p) {
   status.classList.toggle("ok", p.app_connected);
 }
 
+const HEALTH_CHECKS = ["run_queued", "run_waiting", "step_quiet", "ci_pending", "trigger_failing", "memory_short"];
+
+function renderHealthChecks(h) {
+  const f = $("health-form");
+  for (const name of HEALTH_CHECKS) {
+    f.elements[name].checked = h[name];
+    f.elements[`${name}_minutes`].value = h[`${name}_minutes`];
+  }
+}
+
 function renderMcp(m) {
   const on = Boolean(m.token);
   $("mcp-intro").hidden = on;
@@ -185,7 +195,7 @@ function renderDispatch() {
   loadInstalled();
 }
 
-const RULE_STEPS = { any: "Any step", call_connector: "Call a connected tool", call_tool: "Call an MCP tool", save_connector: "Save a connection", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
+const RULE_STEPS = { any: "Any step", call_connector: "Call a connected tool", call_tool: "Call an MCP tool", run_command: "Run a command", save_connector: "Save a connection", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
 const UNPLACED = new Set(["save_connector", "call_connector", "call_tool", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 const RULE_APPROVALS = { allow: "Allow", prompt: "Ask me", deny: "Deny" };
 let rules = [];
@@ -765,6 +775,7 @@ async function load() {
   $("mesh-current").textContent = `currently ${LABELS[data.mesh] || data.mesh}`;
   $("machine-forms").innerHTML = data.machines.map(machineForm).join("");
   renderPhone(data.phone);
+  renderHealthChecks(data.health_checks);
   renderMcp(data.mcp);
   renderServers();
   renderSecrets();
@@ -1186,6 +1197,7 @@ function renderChoices() {
     <input data-key="name" aria-label="Name" placeholder="board" value="${esc(c.name)}" autocapitalize="off" spellcheck="false">
     <input data-key="label" aria-label="Label" placeholder="Board" value="${esc(c.label)}">
     <select data-key="options" aria-label="Options from"><option value="">Typed in</option>${connCalls.filter((x) => x.name).map((x) => `<option value="${esc(x.name)}"${x.name === c.options ? " selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
+    <label class="choice" title="Optional. It narrows which items start a run."><input type="checkbox" data-key="filter"${c.filter ? " checked" : ""}>Filter</label>
     <button class="btn quiet danger" type="button" data-choice-remove="${i}" aria-label="Remove" title="Remove">${CROSS}</button>
   </li>`).join("");
 }
@@ -1260,13 +1272,13 @@ $("conn-call-list").addEventListener("click", (e) => {
 });
 
 $("conn-choice-add").addEventListener("click", () => {
-  connChoices.push({ name: "", label: "", options: "" });
+  connChoices.push({ name: "", label: "", options: "", filter: false });
   renderChoices();
 });
 
 $("conn-choice-list").addEventListener("input", (e) => {
   const row = e.target.closest("[data-choice]");
-  if (row && e.target.dataset.key) connChoices[Number(row.dataset.choice)][e.target.dataset.key] = e.target.value;
+  if (row && e.target.dataset.key) connChoices[Number(row.dataset.choice)][e.target.dataset.key] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
 });
 
 $("conn-choice-list").addEventListener("click", (e) => {
@@ -1288,7 +1300,7 @@ function openConnection(c, was) {
   connCalls = Object.entries(c.calls || {})
     .map(([name, saved]) => callFromSaved(name, saved))
     .sort((a, b) => rank(a.name) - rank(b.name));
-  connChoices = (c.params || []).map((p) => ({ name: p.name, label: p.label || "", options: p.options || "" }));
+  connChoices = (c.params || []).map((p) => ({ name: p.name, label: p.label || "", options: p.options || "", filter: !!p.filter }));
   connOpenCalls = new Set();
   renderCalls();
   renderChoices();
@@ -1455,7 +1467,7 @@ $("conn-form").addEventListener("submit", async (e) => {
     $("conn-note").textContent = err.message;
     return;
   }
-  const choices = connChoices.filter((c) => c.name.trim()).map((c) => ({ name: c.name.trim(), label: c.label, ...(c.options ? { options: c.options } : {}) }));
+  const choices = connChoices.filter((c) => c.name.trim()).map((c) => ({ name: c.name.trim(), label: c.label, ...(c.options ? { options: c.options } : {}), ...(c.filter ? { filter: true } : {}) }));
   const body = {
     was: connWas,
     id: freeConnectionId(f.elements.id.value.trim() || slugOf(name)),
@@ -1627,6 +1639,27 @@ $("phone-form").addEventListener("submit", async (e) => {
     toast(err.message);
   } finally {
     phoneBusy(false);
+  }
+});
+
+$("health-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = e.target;
+  const body = {};
+  for (const name of HEALTH_CHECKS) {
+    body[name] = f.elements[name].checked;
+    body[`${name}_minutes`] = Number(f.elements[`${name}_minutes`].value.trim());
+  }
+  const button = f.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("POST", "/api/settings/health", body);
+    saved("Health checks updated.");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
   }
 });
 

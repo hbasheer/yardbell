@@ -264,12 +264,13 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "review_session",
-            "Start a reviewer for a session's work: a new session in the same folder that reviews its branch against the branch it was made from, runs the tests, changes no files, and ends with a report of findings. name is the session to review.",
+            "Start a reviewer for a session's work: a new session in the same folder that reviews its branch against the branch it was made from, runs the tests, changes no files, and ends with a report of findings. name is the session to review. It is refused when the same commit and uncommitted changes already have a finished review or one running; say so to the user, and set again only if they ask to run it again.",
             json!({
                 "machine": machine,
                 "name": session,
                 "agent": { "type": "string", "description": "Agent for the reviewer; empty uses the default" },
                 "focus": { "type": "string", "description": "Anything the reviewer should look at closely" },
+                "again": { "type": "boolean", "description": "Review code that already has a review. Only when the user asked for that" },
             }),
             &["machine", "name"],
         ),
@@ -529,7 +530,7 @@ pipelines or runs. Report what you found instead."
         ));
     }
     let cfg = app.config()?;
-    let (tool, input, review) = plan(app, &cfg, name, args)?;
+    let (tool, input, mut review) = plan(app, &cfg, name, args)?;
     let step = step_of(app, name, &input);
     let (default, rules) = (cfg.dispatch.approval, &cfg.dispatch.rules);
     let verdict = match name {
@@ -545,6 +546,11 @@ pipelines or runs. Report what you found instead."
         }
         _ => crate::dispatch::decide_step(default, rules, &step),
     };
+    if verdict.approval != Approval::Deny {
+        if let Some(of) = review.as_mut() {
+            pin_review(app, &cfg, of).await?;
+        }
+    }
     match (verdict.approval, conversation) {
         (Approval::Deny, _) => Err(ApiError(
             StatusCode::FORBIDDEN,
@@ -579,6 +585,30 @@ pipelines or runs. Report what you found instead."
             outcome.map(|value| serde_json::to_string_pretty(&value).unwrap_or_default())
         }
     }
+}
+
+// Notes the code a reviewer is about to read, and refuses when that code has a review already. A
+// scan looks at a whole folder, not at a branch's work, so it is not tied to a commit.
+async fn pin_review(app: &AppState, cfg: &Config, of: &mut ReviewOf) -> Result<(), ApiError> {
+    if !of.scan.is_empty() {
+        return Ok(());
+    }
+    let m = find_machine(cfg, &of.machine)?;
+    let pin = crate::dispatch::read_pin(&app.folders, &m, &of.path).await;
+    if !of.again {
+        if let Some(earlier) = app.dispatch.earlier_review(&m.name, &pin) {
+            return Err(ApiError(
+                StatusCode::CONFLICT,
+                format!(
+                    "Not started: {} Tell the user. Call review_session again with again set to \
+true only if they ask to run it again.",
+                    earlier["text"].as_str().unwrap_or_default()
+                ),
+            ));
+        }
+    }
+    of.pin = Some(pin);
+    Ok(())
 }
 
 fn refusal(rule: Option<&Rule>, step: &Step) -> String {
@@ -791,6 +821,13 @@ pub(crate) fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
     let snap = app.state.snapshot(&machine).unwrap_or_default();
     let text = |key: &str| input[key].as_str().unwrap_or_default().trim().to_string();
     let folders = match called {
+        // A worktree can sit outside the folder it came from, and the run knows both.
+        "run_command" => Some(
+            [text("folder"), text("path")]
+                .into_iter()
+                .filter(|f| !f.is_empty())
+                .collect(),
+        ),
         "start_session" | "review_session" | "scan_folder" | "remove_worktree"
         | "integrate_branches" | "push_branch" => {
             let path = match text("path") {
@@ -842,6 +879,8 @@ struct ReviewArgs {
     agent: String,
     #[serde(default)]
     focus: String,
+    #[serde(default)]
+    again: bool,
 }
 
 // What a step will run: review_session and scan_folder become the start_session that starts the
@@ -854,7 +893,8 @@ pub(crate) fn plan(
 ) -> Result<(String, Value, Option<ReviewOf>), ApiError> {
     if name == "review_session" {
         let r: ReviewArgs = arg(args)?;
-        let (input, of) = review_plan(app, cfg, &r.machine, &r.name, "", &r.agent, &r.focus)?;
+        let (input, mut of) = review_plan(app, cfg, &r.machine, &r.name, "", &r.agent, &r.focus)?;
+        of.again = r.again;
         return Ok(("start_session".into(), input, Some(of)));
     }
     if name == "scan_folder" {
@@ -1072,6 +1112,8 @@ pub fn review_plan(
         branch,
         evidence: shots.map(|s| s.folder).unwrap_or_default(),
         scan: String::new(),
+        pin: None,
+        again: false,
     };
     Ok((input, of))
 }
@@ -1149,6 +1191,8 @@ pub fn scan_plan(
         branch,
         evidence: String::new(),
         scan: kind.key().to_string(),
+        pin: None,
+        again: false,
     };
     Ok((input, of))
 }
@@ -1369,7 +1413,10 @@ async fn run_tool(app: &AppState, name: &str, args: Value) -> Result<Value, ApiE
             Ok(started)
         }
         "review_session" | "scan_folder" => {
-            let (_, input, _) = plan(app, &cfg, name, args)?;
+            let (_, input, of) = plan(app, &cfg, name, args)?;
+            if let Some(mut of) = of {
+                pin_review(app, &cfg, &mut of).await?;
+            }
             let started = start_session(app, arg(input)?).await?;
             app.refresh().await;
             Ok(started)

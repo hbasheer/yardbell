@@ -4,6 +4,7 @@ use crate::detect::ScreenState;
 use crate::shell::quote;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -126,6 +127,8 @@ pub struct Snapshot {
     pub ports: BTreeMap<String, Vec<Port>>,
     // The tool calls and test runs each session's screen shows, by session id.
     pub runs: BTreeMap<String, Vec<crate::insights::runs::Run>>,
+    // A fingerprint of each session's screen, by session id.
+    pub screens: BTreeMap<String, String>,
 }
 
 #[derive(Deserialize)]
@@ -212,6 +215,11 @@ pub fn script_args(
     parts.join(" ")
 }
 
+fn fingerprint(screen: &str) -> String {
+    let digest = Sha256::digest(screen.as_bytes());
+    digest[..8].iter().map(|b| format!("{b:02x}")).collect()
+}
+
 pub fn ticket(branch: &str, re: Option<&Regex>) -> String {
     re.and_then(|re| re.find(branch))
         .map(|m| m.as_str().to_uppercase())
@@ -279,6 +287,7 @@ pub fn parse(
             .as_deref()
             .map(crate::insights::runs::runs)
             .unwrap_or_default();
+        let screen = c.screen.as_deref().map(fingerprint);
         let session = Session {
             machine: machine.name.clone(),
             agent: c.agent,
@@ -292,6 +301,9 @@ pub fn parse(
         };
         if !runs.is_empty() {
             snap.runs.insert(session.id(), runs);
+        }
+        if let Some(screen) = screen {
+            snap.screens.insert(session.id(), screen);
         }
         snap.sessions.push(session);
     }
@@ -556,6 +568,30 @@ mod tests {
             args,
             "bash -s -- '/home/u/My Projects' 'slots/slot*' -- 'rails' -- 'claude=claude' 'aider=aider'"
         );
+    }
+
+    #[test]
+    fn a_screen_is_kept_as_a_fingerprint_that_follows_its_text() {
+        let screens = |screen: &str| {
+            let json = serde_json::json!({
+                "agents": [{"agent": "claude", "pid": 1, "cwd": "/w/a", "cpu": 0.0, "tmux": "s", "screen": screen},
+                           {"agent": "claude", "pid": 2, "cwd": "/w/a", "cpu": 0.0, "tmux": null}],
+                "folders": [],
+                "ports": [],
+            });
+            parse(
+                &json.to_string(),
+                &machine("hp", "/w"),
+                Path::new("/w"),
+                None,
+            )
+            .unwrap()
+            .screens
+        };
+        let first = screens("thinking");
+        assert_eq!(first.len(), 1);
+        assert_eq!(first, screens("thinking"));
+        assert_ne!(first["hp:s"], screens("done")["hp:s"]);
     }
 
     #[test]

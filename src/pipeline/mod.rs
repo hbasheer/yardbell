@@ -1,3 +1,4 @@
+pub mod checks;
 pub mod definition;
 pub mod engine;
 pub mod forge;
@@ -8,6 +9,7 @@ pub mod record;
 pub mod run;
 pub mod store;
 pub mod templates;
+pub mod tokens;
 pub mod triggers;
 pub mod watch;
 
@@ -29,6 +31,7 @@ const HOOKS_PER_MINUTE: u32 = 30;
 // triggers are read. What was not reached is asked again on the next round.
 const DUE_LIMIT: std::time::Duration = std::time::Duration::from_secs(60);
 const TICK: std::time::Duration = std::time::Duration::from_secs(10);
+const COMMAND_WATCH: std::time::Duration = std::time::Duration::from_secs(2);
 pub const KEEP_FINISHED: usize = 50;
 
 pub struct Pipelines {
@@ -38,6 +41,7 @@ pub struct Pipelines {
     // Runs with a step being carried out; the tick leaves them alone until it ends.
     busy: Mutex<HashSet<String>>,
     cfg: Mutex<crate::config::Pipelines>,
+    memory: Mutex<engine::MemoryWatch>,
     ticking: tokio::sync::Mutex<()>,
     linear: Mutex<Arc<linear::Linear>>,
     // Sessions of runs that went with a deleted pipeline, stopped on the next round.
@@ -61,6 +65,15 @@ fn first_step(effects: Vec<Effect>) -> (Option<Effect>, Vec<String>) {
     (step, notes)
 }
 
+fn pull_of_run(run: &Run, url: &str, machine: &str, path: &str) -> bool {
+    run.pull.as_ref().is_some_and(|p| p.url == url)
+        || run.subject.pr.as_ref().is_some_and(|p| p.url == url)
+        || run
+            .steps
+            .values()
+            .any(|st| st.machine == machine && st.path == path)
+}
+
 impl Pipelines {
     pub fn new(dir: PathBuf) -> Pipelines {
         Pipelines {
@@ -69,6 +82,7 @@ impl Pipelines {
             watch: triggers::Watch::load(dir.join("watch.json")),
             busy: Mutex::new(HashSet::new()),
             cfg: Mutex::new(crate::config::Pipelines::default()),
+            memory: Mutex::new(Default::default()),
             ticking: tokio::sync::Mutex::new(()),
             linear: Mutex::new(Arc::new(linear::Linear::new())),
             orphans: Mutex::new(Vec::new()),
@@ -128,6 +142,32 @@ impl Pipelines {
 
     pub fn run(&self, id: &str) -> Option<Run> {
         self.store.get(id)
+    }
+
+    // A run with a wait for CI takes the failures and comments of its own pull or merge request,
+    // so the same failure does not also become a card with Send to session.
+    pub fn owns_pull(&self, url: &str, machine: &str, path: &str) -> bool {
+        self.store.all().iter().any(|run| {
+            let waits = run.definition.as_ref().is_some_and(|d| {
+                d.steps
+                    .iter()
+                    .any(|s| matches!(s.kind, definition::StepKind::Checks { .. }))
+            });
+            waits && run.state.active() && pull_of_run(run, url, machine, path)
+        })
+    }
+
+    // A run at its wait has its own time limit and says so itself, so a health check on the same
+    // pull request would only be a second alert.
+    pub fn waits_on_pull(&self, url: &str, machine: &str, path: &str) -> bool {
+        self.store.all().iter().any(|run| {
+            let at_wait = run
+                .definition
+                .as_ref()
+                .and_then(|d| d.step(&run.step))
+                .is_some_and(|s| matches!(s.kind, definition::StepKind::Checks { .. }));
+            at_wait && run.state.active() && pull_of_run(run, url, machine, path)
+        })
     }
 
     pub fn linear(&self) -> Arc<linear::Linear> {
@@ -279,6 +319,28 @@ impl Pipelines {
         self.person(id, Seen::Retry, Self::waiting)
     }
 
+    pub fn raise_limit(&self, id: &str, limit: u64) -> Result<Run, String> {
+        if limit > tokens::LIMIT_MAX {
+            return Err(format!(
+                "a limit can be at most {} tokens",
+                tokens::group(tokens::LIMIT_MAX)
+            ));
+        }
+        let allowed = |r: &Run| match &r.waiting {
+            Some(w) if r.state == RunState::Waiting && w.kind == record::WaitKind::TokenLimit => {
+                match r.tokens.used() < limit {
+                    true => Ok(()),
+                    false => Err(format!(
+                        "Set a limit above the {} tokens this run has used",
+                        tokens::group(r.tokens.used())
+                    )),
+                }
+            }
+            _ => Err(format!("{} is not waiting on its limit", r.subject.label())),
+        };
+        self.person(id, Seen::RaiseLimit(limit), allowed)
+    }
+
     pub fn accept_tool(&self, id: &str) -> Result<Run, String> {
         let at_tool = |r: &Run| match &r.waiting {
             Some(w) if r.state == RunState::Waiting && w.kind == record::WaitKind::ToolChanged => {
@@ -292,8 +354,11 @@ impl Pipelines {
         self.person(id, Seen::AcceptTool, at_tool)
     }
 
-    pub fn continue_on(&self, id: &str, outcome: Outcome) -> Result<Run, String> {
-        self.person(id, Seen::Continue(outcome), Self::waiting)
+    pub fn continue_on(&self, id: &str, outcome: Outcome, who: engine::Who) -> Result<Run, String> {
+        self.person(id, Seen::Continue(outcome), |r| {
+            Self::waiting(r)?;
+            engine::continue_refused(r, outcome, who).map_or(Ok(()), Err)
+        })
     }
 
     // A run still going is dropped first, so its sessions stop and its worktree is torn down as
@@ -384,9 +449,36 @@ impl Pipelines {
             self.finish_deleting(&run.id);
         }
         let up = |m: &str| view.machines.iter().any(|x| x.name == m && x.up);
-        for id in engine::admit(&self.store.all(), cfg, &up) {
+        let all = self.store.all();
+        let readings = view
+            .machines
+            .iter()
+            .filter_map(|m| Some((m.name.clone(), m.health?.pressure()?)));
+        let admission = {
+            let mut memory = self.memory.lock().expect("pipelines memory");
+            memory.read(readings, &all, cfg.memory_limit, now);
+            engine::admit(&all, cfg, &up, &memory, &now)
+        };
+        for id in admission.start {
             if !self.busy(&id) {
                 self.apply(world.as_ref(), &id, Seen::Admitted, now);
+            }
+        }
+        for run in all.iter().filter(|r| r.state == RunState::Queued) {
+            let on_a_live_machine = run.slot.as_deref().is_some_and(up);
+            if !on_a_live_machine || self.busy(&run.id) {
+                continue;
+            }
+            let wanted = admission.held.get(&run.id);
+            let same = match (&run.held, wanted) {
+                (None, None) => true,
+                (Some(h), Some((kind, machine, reason))) => {
+                    h.kind == *kind && h.machine == *machine && h.reason == *reason
+                }
+                _ => false,
+            };
+            if !same {
+                self.apply(world.as_ref(), &run.id, Seen::Held(wanted.cloned()), now);
             }
         }
         let mut handles = Vec::new();
@@ -414,7 +506,20 @@ impl Pipelines {
                     continue;
                 }
             }
-            let watched = matches!(run.state, RunState::Running | RunState::Queued);
+            if run.state.active()
+                && !self.busy(&run.id)
+                && run.pending.is_none()
+                && tokens::due(&run, now)
+            {
+                if let Some(seen) = tokens::read(world.as_ref(), &run, &view, false).await {
+                    self.apply(world.as_ref(), &run.id, seen, now);
+                }
+            }
+            let watched = matches!(run.state, RunState::Running | RunState::Queued)
+                || run
+                    .waiting
+                    .as_ref()
+                    .is_some_and(|w| w.kind == record::WaitKind::CiUnsettled);
             if !watched || self.busy(&run.id) || run.pending.is_some() {
                 continue;
             }
@@ -429,26 +534,41 @@ impl Pipelines {
                 .find(|s| !name.is_empty() && s.tmux.as_deref() == Some(name.as_str()));
             let screen = match shown {
                 Some(s) if s.activity != crate::snapshot::Activity::Active => {
-                    let on_screen = world.screen(&s.machine, &name).await;
                     let marker = prompts::marker(&run, &run.step);
-                    let seen_it = on_screen
-                        .as_deref()
-                        .is_some_and(|text| prompts::outcome(text, &marker).is_some());
-                    if run.state == RunState::Running
-                        && s.activity == crate::snapshot::Activity::Idle
-                        && !seen_it
-                    {
-                        world
-                            .written_result(&s.machine, &s.agent, &s.path, &marker)
-                            .await
-                            .or(on_screen)
+                    let quiet = run.state == RunState::Running
+                        && s.activity == crate::snapshot::Activity::Idle;
+                    let filed = match quiet {
+                        true => {
+                            run::filed_result(world.as_ref(), &run, &s.machine, &s.path, &marker)
+                                .await
+                        }
+                        false => None,
+                    };
+                    if filed.is_some() {
+                        filed
                     } else {
-                        on_screen
+                        let on_screen = world.screen(&s.machine, &name).await;
+                        let seen_it = on_screen
+                            .as_deref()
+                            .is_some_and(|text| prompts::outcome(text, &marker).is_some());
+                        if quiet && !seen_it {
+                            world
+                                .written_result(&s.machine, &s.agent, &s.path, &marker)
+                                .await
+                                .or(on_screen)
+                        } else {
+                            on_screen
+                        }
                     }
                 }
                 _ => None,
             };
             if let Some(seen) = watch::seen(&run, &view, screen.as_deref(), now) {
+                if matches!(seen, Seen::Ended { .. }) {
+                    if let Some(used) = tokens::read(world.as_ref(), &run, &view, true).await {
+                        self.apply(world.as_ref(), &run.id, used, now);
+                    }
+                }
                 self.apply(world.as_ref(), &run.id, seen, now);
             }
             if self.store.get(&run.id).is_some_and(|r| r.pending.is_none()) {
@@ -473,6 +593,33 @@ impl Pipelines {
         handles
     }
 
+    // A command can run for a long time, and a run dropped meanwhile must not wait for it. It is
+    // told to stop rather than abandoned, so the machine ends what it started.
+    async fn stoppable(
+        &self,
+        world: &dyn World,
+        cfg: &crate::config::Pipelines,
+        run: &Run,
+        effect: &Effect,
+    ) -> Vec<Seen> {
+        let work = run::act(world, cfg, run, effect);
+        tokio::pin!(work);
+        let mut told = false;
+        loop {
+            tokio::select! {
+                seen = &mut work => return seen,
+                () = tokio::time::sleep(COMMAND_WATCH), if !told => {
+                    if self.store.get(&run.id).is_none_or(|r| !r.state.active()) {
+                        told = true;
+                        if let Some((machine, path)) = run::work_place(run) {
+                            world.stop_command(&machine, &path).await;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     async fn chain(
         self: Arc<Self>,
         world: Arc<dyn World>,
@@ -488,7 +635,10 @@ impl Pipelines {
                 run.conversation = world.open_conversation(&title);
                 self.store.put(run.clone());
             }
-            let seen = run::act(world.as_ref(), &cfg, &run, &effect).await;
+            let seen = match &effect {
+                Effect::Command { .. } => self.stoppable(world.as_ref(), &cfg, &run, &effect).await,
+                _ => run::act(world.as_ref(), &cfg, &run, &effect).await,
+            };
             // A person may have dropped the run meanwhile and left a step of their own.
             self.store.update(&id, |now| {
                 if now.pending.as_ref() == Some(&effect) {

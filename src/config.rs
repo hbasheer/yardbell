@@ -135,6 +135,71 @@ impl PhoneNotifications {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct HealthChecks {
+    pub run_queued: bool,
+    pub run_queued_minutes: u64,
+    pub run_waiting: bool,
+    pub run_waiting_minutes: u64,
+    pub step_quiet: bool,
+    pub step_quiet_minutes: u64,
+    pub ci_pending: bool,
+    pub ci_pending_minutes: u64,
+    pub trigger_failing: bool,
+    pub trigger_failing_minutes: u64,
+    pub memory_short: bool,
+    pub memory_short_minutes: u64,
+}
+
+impl Default for HealthChecks {
+    fn default() -> Self {
+        HealthChecks {
+            run_queued: true,
+            run_queued_minutes: 120,
+            run_waiting: true,
+            run_waiting_minutes: 240,
+            step_quiet: true,
+            step_quiet_minutes: 30,
+            ci_pending: true,
+            ci_pending_minutes: 120,
+            trigger_failing: true,
+            trigger_failing_minutes: 60,
+            memory_short: true,
+            memory_short_minutes: 60,
+        }
+    }
+}
+
+pub const HEALTH_MINUTES_MIN: u64 = 5;
+pub const HEALTH_MINUTES_MAX: u64 = 10080;
+
+impl HealthChecks {
+    pub fn is_default(&self) -> bool {
+        *self == HealthChecks::default()
+    }
+
+    fn validate(&self) -> Result<(), String> {
+        let all = [
+            ("run_queued_minutes", self.run_queued_minutes),
+            ("run_waiting_minutes", self.run_waiting_minutes),
+            ("step_quiet_minutes", self.step_quiet_minutes),
+            ("ci_pending_minutes", self.ci_pending_minutes),
+            ("trigger_failing_minutes", self.trigger_failing_minutes),
+            ("memory_short_minutes", self.memory_short_minutes),
+        ];
+        match all
+            .iter()
+            .find(|(_, m)| !(HEALTH_MINUTES_MIN..=HEALTH_MINUTES_MAX).contains(m))
+        {
+            Some((name, _)) => Err(format!(
+                "health_checks.{name} must be from {HEALTH_MINUTES_MIN} to {HEALTH_MINUTES_MAX}"
+            )),
+            None => Ok(()),
+        }
+    }
+}
+
 pub const PULL_POLL_MIN: u64 = 30;
 
 fn is_on(on: &bool) -> bool {
@@ -212,8 +277,16 @@ impl GitLabHost {
 pub struct Pipelines {
     pub per_machine: u32,
     pub minutes: u64,
+    // Percent of memory in use from which new agent steps wait; 0 turns the hold off.
+    pub memory_limit: u32,
+    #[serde(skip_serializing_if = "is_zero")]
+    pub token_limit: u64,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub qa_notes: BTreeMap<String, String>,
+}
+
+fn is_zero(n: &u64) -> bool {
+    *n == 0
 }
 
 impl Default for Pipelines {
@@ -221,6 +294,8 @@ impl Default for Pipelines {
         Pipelines {
             per_machine: 2,
             minutes: 120,
+            memory_limit: 0,
+            token_limit: 0,
             qa_notes: BTreeMap::new(),
         }
     }
@@ -532,6 +607,8 @@ pub struct Config {
     pub agents: Vec<Agent>,
     #[serde(default, skip_serializing_if = "PhoneNotifications::is_default")]
     pub phone_notifications: PhoneNotifications,
+    #[serde(default, skip_serializing_if = "HealthChecks::is_default")]
+    pub health_checks: HealthChecks,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub mcp_servers: Vec<McpServer>,
     #[serde(default, skip_serializing_if = "DispatchSettings::is_default")]
@@ -669,6 +746,9 @@ impl Config {
         if self.phone_notifications.wait_minutes > 60 {
             return invalid("phone_notifications.wait_minutes must be from 0 to 60".into());
         }
+        self.health_checks
+            .validate()
+            .map_err(ConfigError::Invalid)?;
         if self.pull_requests.poll_seconds < PULL_POLL_MIN {
             return invalid(format!(
                 "pull_requests.poll_seconds must be at least {PULL_POLL_MIN}"
@@ -685,6 +765,17 @@ impl Config {
         }
         if !(10..=1440).contains(&self.pipelines.minutes) {
             return invalid("pipelines.minutes must be from 10 to 1440".into());
+        }
+        let limit = self.pipelines.memory_limit;
+        if limit != 0 && !(50..=99).contains(&limit) {
+            return invalid("pipelines.memory_limit must be 0 (off) or from 50 to 99".into());
+        }
+        if !crate::pipeline::tokens::valid_limit(self.pipelines.token_limit) {
+            return invalid(format!(
+                "pipelines.token_limit must be 0 for none, or from {} to {}",
+                crate::pipeline::tokens::LIMIT_MIN,
+                crate::pipeline::tokens::LIMIT_MAX
+            ));
         }
         crate::worktrees::setup::validate(&self.worktree_setup, |m| self.machine(m).is_some())
             .map_err(ConfigError::Invalid)?;
@@ -901,6 +992,17 @@ impl Config {
 
     pub fn agent(&self, name: &str) -> Option<Agent> {
         self.agents().into_iter().find(|a| a.name == name)
+    }
+
+    // Only Claude Code's transcripts say what a session used.
+    pub fn agent_reports_tokens(&self, name: &str) -> bool {
+        let name = if name.is_empty() {
+            self.default_agent()
+        } else {
+            name
+        };
+        self.agent(name)
+            .is_some_and(|a| a.process_name() == "claude")
     }
 
     pub fn default_agent(&self) -> &str {
@@ -1185,6 +1287,56 @@ mod tests {
     }
 
     #[test]
+    fn health_checks_default_quietly_and_a_partial_section_keeps_the_rest() {
+        let cfg = fixture();
+        assert_eq!(cfg.health_checks, HealthChecks::default());
+        assert!(cfg.health_checks.run_queued);
+        assert_eq!(cfg.health_checks.memory_short_minutes, 60);
+        let some = load_str(&format!(
+            "{BASE}health_checks:\n  run_queued: false\n  ci_pending_minutes: 30\n"
+        ))
+        .unwrap()
+        .health_checks;
+        assert!(!some.run_queued);
+        assert_eq!(some.run_queued_minutes, 120);
+        assert_eq!(some.ci_pending_minutes, 30);
+    }
+
+    #[test]
+    fn health_check_minutes_are_checked_and_defaults_are_not_written() {
+        for minutes in [4, 10081] {
+            match load_str(&format!(
+                "{BASE}health_checks:\n  step_quiet_minutes: {minutes}\n"
+            )) {
+                Err(ConfigError::Invalid(got)) => assert_eq!(
+                    got,
+                    "health_checks.step_quiet_minutes must be from 5 to 10080"
+                ),
+                other => panic!("{other:?}"),
+            }
+        }
+        for minutes in [5, 10080] {
+            load_str(&format!(
+                "{BASE}health_checks:\n  step_quiet_minutes: {minutes}\n"
+            ))
+            .unwrap();
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("y.yml");
+        let mut cfg = fixture();
+        cfg.save(&path).unwrap();
+        assert!(!std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("health_checks"));
+        cfg.health_checks.ci_pending = false;
+        cfg.save(&path).unwrap();
+        assert_eq!(
+            Config::load(&path).unwrap().health_checks,
+            cfg.health_checks
+        );
+    }
+
+    #[test]
     fn phone_notifications_wait_is_checked() {
         let refused = load_str(&format!("{BASE}phone_notifications:\n  wait_minutes: 61\n"));
         match refused {
@@ -1218,6 +1370,14 @@ mod tests {
     fn pipelines_settings_defaults_and_ranges() {
         let cfg = load_str(BASE).unwrap();
         assert_eq!((cfg.pipelines.per_machine, cfg.pipelines.minutes), (2, 120));
+        assert_eq!(cfg.pipelines.token_limit, 0);
+        assert!(cfg.pipelines.is_default());
+        let limited = load_str(&format!("{BASE}pipelines:\n  token_limit: 5000\n")).unwrap();
+        assert_eq!(limited.pipelines.token_limit, 5000);
+        match load_str(&format!("{BASE}pipelines:\n  token_limit: 5\n")) {
+            Err(ConfigError::Invalid(got)) => assert!(got.contains("token_limit"), "{got}"),
+            other => panic!("5 tokens was not refused: {other:?}"),
+        }
         let notes = load_str(&format!(
             "{BASE}pipelines:\n  qa_notes:\n    acme/web: Run bin/rspec\n"
         ))
@@ -1227,6 +1387,14 @@ mod tests {
             (
                 "per_machine: 0",
                 "pipelines.per_machine must be from 1 to 6",
+            ),
+            (
+                "memory_limit: 40",
+                "pipelines.memory_limit must be 0 (off) or from 50 to 99",
+            ),
+            (
+                "memory_limit: 100",
+                "pipelines.memory_limit must be 0 (off) or from 50 to 99",
             ),
             ("minutes: 5", "pipelines.minutes must be from 10 to 1440"),
         ] {
@@ -1301,6 +1469,20 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("cards: false"), "{text}");
         assert!(!text.contains("gitlab"), "{text}");
+    }
+
+    #[test]
+    fn the_memory_limit_is_off_unless_set_and_a_set_value_is_kept() {
+        assert_eq!(load_str(BASE).unwrap().pipelines.memory_limit, 0);
+        let section = |body: &str| format!("{BASE}pipelines:\n  {body}\n");
+        let no_limit = load_str(&section("per_machine: 3")).unwrap();
+        assert_eq!(no_limit.pipelines.memory_limit, 0);
+        for limit in [50, 85, 90, 99] {
+            let cfg = load_str(&section(&format!("memory_limit: {limit}"))).unwrap();
+            assert_eq!(cfg.pipelines.memory_limit, limit);
+            let saved = serde_yaml::to_string(&cfg).unwrap();
+            assert_eq!(load_str(&saved).unwrap().pipelines.memory_limit, limit);
+        }
     }
 
     #[test]

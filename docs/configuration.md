@@ -213,6 +213,30 @@ Every key is optional. The values above are the defaults. Older configs may stil
 | `pipeline_finished` | `true` | Notify with the first line of a pipeline run's report. |
 | `proposals` | `true` | Notify when a proposal waits in the Proposals inbox. |
 
+### `health_checks` (optional)
+
+Plain checks that tell you when automation is quietly stuck, explained in
+[Health checks](automation.md#health-checks). The **Health checks** section of the Settings page edits
+these.
+
+```yaml
+health_checks:
+  run_queued: true
+  run_queued_minutes: 120
+  run_waiting: true
+  run_waiting_minutes: 240
+  step_quiet: true
+  step_quiet_minutes: 30
+  ci_pending: true
+  ci_pending_minutes: 120
+  trigger_failing: true
+  trigger_failing_minutes: 60
+  memory_short: true
+  memory_short_minutes: 60
+```
+
+Every key is optional. The values above are the defaults. Each time can be from 5 to 10080 minutes.
+
 ### `connectors` (optional)
 
 Outside tools pipelines can take work from and call. **Settings, Connections** edits them, and
@@ -229,9 +253,10 @@ connectors:
       Authorization: 'Bearer ${secret:tracker}'  # a login header must use a secret
     params:
       - { name: board, label: Board, options: boards }  # a choice in the builder
+      - { name: label, label: Label, filter: true }     # optional, narrows what starts a run
     calls:
       list:
-        request: { method: GET, path: /items, query: { open: 'true' } }
+        request: { method: GET, path: /items, query: { open: 'true', label: '{{label}}' } }
         map: { item_id: id, title: name, state: status }
         page: { style: number, param: page, size: 50, max_pages: 20 }
 ```
@@ -377,7 +402,7 @@ and `deny`.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, `remember`, or `any` (the default). |
+| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, `remember`, `run_command` (a pipeline's [Run a command](automation.md#run-a-command) step, which only a `deny` stops), or `any` (the default). |
 | `machine` | no | A machine name, or `any` (the default). |
 | `folder` | no | A folder pattern. Empty matches every folder. |
 | `approval` | yes | `allow`, `prompt` or `deny`. |
@@ -471,7 +496,7 @@ Enterprise keeps working, and a GitLab host that is not listed shows no badge.
 # github_via: gh or token. token needs github_token, naming a saved secret.
 # gitlab_via: token or glab. glab needs no token on its hosts.
 pull_requests:
-  enabled: true        # false: no badges, no cards, gh and GitLab are never asked
+  enabled: true        # false: no badges, no cards; only a pipeline's Push and Wait for CI steps ask gh and GitLab
   poll_seconds: 120    # how often each branch is asked, at least 30
   cards: true          # false: badges only, no cards in Dispatch
   use_github: true     # false: gh is never asked for badges and cards
@@ -512,6 +537,8 @@ this section.
 pipelines:
   per_machine: 2      # agent steps at once on each machine, 1 to 6
   minutes: 120        # an agent step running longer waits for you, 10 to 1440; a step can set its own
+  memory_limit: 0     # off; or the percent of memory in use that holds new agent steps and limits starts to one a minute, 50 to 99
+  token_limit: 500000 # optional: tokens one run may use, 0 for no limit, or from 1000; a pipeline can set its own
   qa_notes:           # optional: added to every agent step working in that folder
     acme/web: |
       Run specs with: docker compose exec web bin/rspec <files>
@@ -654,7 +681,7 @@ yourself keeps its mode until Yardbell first saves it, so run `chmod 600` on it.
 
 | Change | Takes effect |
 |---|---|
-| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications`, `pull_requests`, `triggers` | on the next check, a few seconds |
+| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications`, `health_checks`, `pull_requests`, `triggers` | on the next check, a few seconds |
 | `worktree_setup` | for the next worktree Yardbell creates |
 | passcode, "Log out everywhere" (from Settings) | immediately |
 | `port`, `listen_ip`, the host machine's `mesh_ip` | after restarting Yardbell |
@@ -679,6 +706,7 @@ Yardbell refuses to start or save an invalid file and says why:
 | `default_agent "x" is not a known agent` | use a built-in name or add the agent under `agents` |
 | `phone_notifications.topic may only use letters, digits, - and _ (at most 64)` | rename the topic, or leave it empty to turn notifications off |
 | `phone_notifications.wait_minutes must be from 0 to 60` | use a whole number of minutes from 0 to 60 |
+| `health_checks.run_queued_minutes must be from 5 to 10080` | use a whole number of minutes in that range; the other `_minutes` keys say the same |
 | `pull_requests.poll_seconds must be at least 30` | ask GitHub less often, 120 is the default |
 | `pull_requests.gitlab entry 1 needs a host` | add `host:` |
 | `pull_requests.gitlab host "https://x/y" must be a host name only, like git.example.com` | drop the scheme and the path |

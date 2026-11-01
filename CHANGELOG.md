@@ -9,6 +9,58 @@ and the project uses [Semantic Versioning](https://semver.org).
   did, what it said or asked you, with every step one click away. This replaces the **What it's working
   on** section.
 
+## [0.10.1] - 2026-11-01
+
+- **Results in a file.** A pipeline step's task now also asks the agent to save its result block to a
+  file in the worktree's git folder, so a long result no longer has to fit on the screen. The screen
+  and the transcript still work for an agent that does not write it. Claude Code is only asked when its
+  command turns permissions off, and Codex when it has full access and is not read only, so neither
+  stops at a new prompt. See `docs/automation.md`.
+- **Health checks.** Plain checks now tell you when automation is quietly stuck: a run queued or waiting
+  too long, a step near its limit whose screen has stopped changing, CI pending too long on a pull or merge
+  request, a trigger that keeps failing or whose last start or scheduled read failed in the past day, and a
+  machine that stays short of memory. They use no tokens, start nothing and change nothing. Current problems
+  show on the dashboard, and each one notifies your phone once, and again only after it clears and comes back,
+  also across a restart. **Settings, Health checks** has an on or off and a time for each.
+- **Pipeline steps can wait while a machine is short of memory.** This is off unless you turn it on in the
+  Pipelines settings and enter a limit. From that percent of memory in use, new agent steps on that machine
+  are held until it has stayed under for two minutes, and at most one starts a minute on each machine.
+  Running steps are never stopped. The run's page says it is held and why, and a run held for 30 minutes
+  shows under **Waiting for me** with one phone notification while it stays queued.
+- **Filter which tickets start a run.** A **New ticket** trigger can filter by label, team or project.
+  Linear does the filtering itself, as do GitHub and GitLab for a label; for Trello, Jira and Asana,
+  Yardbell filters what it reads, and the builder says which. **See what matches now** shows what a
+  filter finds. The first check after a change only notes what matches, so old tickets never flood in.
+  Saved pipelines and connections are unchanged, and a connection can add its own filters under **Choices**.
+- **Reviews are tied to the code they read.** A review notes the branch's commit and a hash of its
+  uncommitted changes when it starts. Its card shows the commit and says plainly when the branch has
+  moved on or the uncommitted changes differ. Code that already has a finished review, or one still
+  running, is not reviewed again unless you press **Review again** or ask Dispatch to. In a pipeline, a
+  read-only step reached again on the code its last result was about no longer starts: the run waits and
+  says the fix changed nothing, and **Run it again** or **Continue** decides.
+- **Token limits for pipeline runs.** A run's page shows the tokens it has used, read from Claude Code's
+  transcripts and Dispatch's own turns. With a limit, set per pipeline in the builder or as a default in
+  Pipelines **Settings**, a run that passes it starts no new step that uses tokens and waits for you,
+  showing what it used and the limit, with a phone notification. Pushes, ticket updates and connected tools
+  still go through. Agents that cannot report tokens are named in the builder, in `yardbell doctor` and on
+  the run, and a limited run asks before starting one. A session that runs `/clear` makes the figure "at
+  least" and the run asks the same way. No limit means no change.
+- **Run a command.** This pipeline step runs a saved shell command in the run's worktree, with no agent
+  and no tokens. Exit 0 follows the pass line and anything else follows the fail line, so code rather
+  than an agent's word decides. The end of its output is the step's report, so a Fix step can read it
+  with `{report}`. A command an agent proposed runs only after you accept its exact text, and the
+  Dispatch rule action `run_command` can refuse it by machine or folder. The step can never pass unless its
+  command ran in that attempt. After a real failure only a person on the run's page can continue on pass,
+  and the run records the override.
+- **Wait for CI and reviews.** This new pipeline step goes after **Push and draft PR** and waits for the
+  run's pull or merge request on GitHub or GitLab. It follows pass when CI is green, optionally with an
+  approval, and fail when a check fails or a reviewer asks for changes. Its report holds the failed logs
+  and open comments for a Fix step's `{report}`. The wait keeps no agent session or slot, has a time limit
+  and survives a restart. It sends a failure only once, and stops for you when a check fails the same way
+  on two commits or checks fail on four commits in a row. A check that was cancelled, went stale or waits for
+  someone to act is not green and sends no Fix: the run waits for you, says what happened to it, and carries
+  on by itself once it is run again or dealt with. While a run has this step, its pull or merge request posts no Dispatch cards.
+
 ## [0.10.0] - 2026-11-01
 
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
