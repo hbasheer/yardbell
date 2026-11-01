@@ -1830,6 +1830,21 @@ class Suite:
         if self.wait_minutes() != 12:
             raise Failure(f"yardbell.yml waits {self.wait_minutes()} minutes")
 
+    def test_a_long_dispatch_conversation_never_moves_the_page(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={TASK_CHAT}"))
+        b.wait("document.querySelector('#dispatch-log .step-card .visually-hidden')", "a card with a hidden label")
+        seen = b.js("""(() => {
+          const log = document.getElementById('dispatch-log');
+          for (let i = 0; i < 60; i++) { const p = document.createElement('p'); p.textContent = 'line ' + i; log.prepend(p); }
+          const chat = document.querySelector('.dispatch-chat');
+          chat.scrollTo({ top: chat.scrollHeight });
+          window.scrollTo({ top: document.body.scrollHeight });
+          return { page: document.documentElement.scrollHeight - innerHeight, moved: scrollY };
+        })()""")
+        if seen["page"] > 0 or seen["moved"] > 0:
+            raise Failure(f"the conversation stretched the page: {seen}")
+
     def test_dispatch_save_task_card(self):
         b = self.b
         b.goto(self.url(f"/dispatch?c={TASK_CHAT}"))
@@ -3672,6 +3687,49 @@ class Suite:
         if "lin_api_BROWSER_KEY" in b.js("document.documentElement.outerHTML"):
             raise Failure("the key stayed on the page")
         self.check_errors("Linear as a connection")
+
+    def test_linear_is_one_row_with_its_agent_server(self):
+        b = self.b
+        before = self.api("GET", "/api/settings")["mcp_servers"]
+        servers = before + [
+            {"name": "linear", "url": "https://mcp.linear.app/mcp", "machines": [MACHINE]},
+            {"name": "notlinear", "url": "https://mcp.example.com/mcp"},
+        ]
+        self.api("POST", "/api/settings/mcp/servers", {"servers": servers})
+        try:
+            b.goto(self.url("/"))
+            b.goto(self.url("/settings#connections"))
+            b.wait("document.querySelector('#forge-rows [data-forge=linear]')?.textContent.includes('agents on')", "Linear saying agents use it")
+            row = b.js("document.querySelector('#forge-rows [data-forge=linear]').textContent")
+            if f"Pipelines, and agents on {MACHINE}" not in row:
+                raise Failure(f"the Linear row reads {row}")
+            names = b.js("[...document.querySelectorAll('#server-rows .conn-row strong')].map((x) => x.textContent)")
+            if "linear" in names or "notlinear" not in names:
+                raise Failure(f"the server rows are {names}")
+            b.click("#forge-rows [data-forge=linear]")
+            b.wait("!document.getElementById('forge-linear').hidden", "the Linear step")
+            said = b.js("document.getElementById('linear-agents').innerText")
+            if b.js("document.getElementById('linear-agents').hidden") or "mcp.linear.app" not in said or MACHINE not in said:
+                raise Failure(f"the agent section reads {said!r}")
+            b.click("#linear-agents [data-edit]")
+            b.wait("!document.getElementById('server-form').hidden", "the server form")
+            if b.js("document.getElementById('server-form').elements.name.value") != "linear":
+                raise Failure("Edit opened the wrong server")
+            b.js("document.getElementById('conn-flow').close()")
+            b.wait("!document.getElementById('conn-flow').open", "the dialog to close")
+            b.click("#forge-rows [data-forge=linear]")
+            b.wait("!document.getElementById('forge-linear').hidden", "the Linear step")
+            b.click("#linear-agents [data-remove]")
+            b.wait("document.querySelector('dialog.confirm[open]')", "the remove confirmation")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait("document.querySelector('#forge-rows [data-forge=linear]').textContent.includes('Tickets for pipelines')", "Linear back to pipelines only")
+            if not b.js("document.getElementById('linear-agents').hidden"):
+                raise Failure("the agent section stayed after the server went")
+            b.js("document.getElementById('conn-flow').close()")
+            self.check_errors("Linear as one row")
+        finally:
+            self.api("POST", "/api/settings/mcp/servers", {"servers": before})
+            b.goto(self.url("/"))
 
     def test_connection_actions_are_fields(self):
         b = self.b

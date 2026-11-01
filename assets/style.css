@@ -896,7 +896,7 @@ body.resizing { cursor: col-resize; user-select: none; }
 .task .delete { opacity: 0.5; }
 .convo:hover .delete, .convo.selected .delete, .convo .delete:focus-visible { opacity: 1; }
 .convo-empty { margin: 0; padding: 4px 10px; color: var(--muted); font-size: 13px; }
-.dispatch-chat { display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: 800px; margin: 0 auto; min-height: calc(100dvh - 100px); }
+.dispatch-chat { position: relative; display: flex; flex-direction: column; gap: 16px; width: 100%; max-width: 800px; margin: 0 auto; min-height: calc(100dvh - 100px); }
 /* One fixed-width column: an auto column grows to the widest unbreakable line in any message. */
 .dispatch-log { display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 14px; }
 .dispatch-thinking { display: flex; align-items: center; gap: 10px; margin-top: -6px; color: var(--muted); font-size: 0.875rem; }
@@ -1415,6 +1415,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
   .conn-call > summary .conn-badge { display: none; }
 }
 .conn-via { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
+.conn-linear-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .conn-step .form-foot { justify-content: flex-end; position: sticky; bottom: -20px; z-index: 2; margin: 0 -20px -20px; padding: 12px 20px; border-top: 1px solid var(--line); background: var(--surface); }
 .conn-via .conn-via-option { margin: 0; }
 .conn-via legend { padding: 0 0 6px; font-size: 13px; font-weight: 500; }
