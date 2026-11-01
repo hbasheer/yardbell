@@ -5,6 +5,8 @@ headers:
   Authorization: 'Bearer ${secret:asana_token}'
 params:
   - { name: workspace, label: Workspace, options: workspaces }
+  - { name: tag, label: Tag, filter: true }
+  - { name: project, label: Project, filter: true }
 calls:
   workspaces:
     request: { method: GET, path: /workspaces }
@@ -14,9 +16,9 @@ calls:
     request:
       method: GET
       path: /tasks
-      query: { assignee: me, workspace: '{{workspace}}', completed_since: now, limit: '100', opt_fields: 'name,notes,permalink_url,completed' }
+      query: { assignee: me, workspace: '{{workspace}}', completed_since: now, limit: '100', opt_fields: 'name,notes,permalink_url,completed,tags.name,projects.name' }
     items: data
-    map: { item_id: gid, title: name, url: permalink_url, description: notes }
+    map: { item_id: gid, title: name, url: permalink_url, description: notes, tag: 'tags[].name', project: 'projects[].name' }
     page: { style: cursor, param: offset, next: next_page.offset }
   read:
     request: { method: GET, path: '/tasks/{{item_id}}', query: { opt_fields: 'name,notes,permalink_url,completed' } }

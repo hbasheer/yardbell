@@ -1197,6 +1197,7 @@ function renderChoices() {
     <input data-key="name" aria-label="Name" placeholder="board" value="${esc(c.name)}" autocapitalize="off" spellcheck="false">
     <input data-key="label" aria-label="Label" placeholder="Board" value="${esc(c.label)}">
     <select data-key="options" aria-label="Options from"><option value="">Typed in</option>${connCalls.filter((x) => x.name).map((x) => `<option value="${esc(x.name)}"${x.name === c.options ? " selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
+    <label class="choice" title="Optional. It narrows which items start a run."><input type="checkbox" data-key="filter"${c.filter ? " checked" : ""}>Filter</label>
     <button class="btn quiet danger" type="button" data-choice-remove="${i}" aria-label="Remove" title="Remove">${CROSS}</button>
   </li>`).join("");
 }
@@ -1271,13 +1272,13 @@ $("conn-call-list").addEventListener("click", (e) => {
 });
 
 $("conn-choice-add").addEventListener("click", () => {
-  connChoices.push({ name: "", label: "", options: "" });
+  connChoices.push({ name: "", label: "", options: "", filter: false });
   renderChoices();
 });
 
 $("conn-choice-list").addEventListener("input", (e) => {
   const row = e.target.closest("[data-choice]");
-  if (row && e.target.dataset.key) connChoices[Number(row.dataset.choice)][e.target.dataset.key] = e.target.value;
+  if (row && e.target.dataset.key) connChoices[Number(row.dataset.choice)][e.target.dataset.key] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
 });
 
 $("conn-choice-list").addEventListener("click", (e) => {
@@ -1299,7 +1300,7 @@ function openConnection(c, was) {
   connCalls = Object.entries(c.calls || {})
     .map(([name, saved]) => callFromSaved(name, saved))
     .sort((a, b) => rank(a.name) - rank(b.name));
-  connChoices = (c.params || []).map((p) => ({ name: p.name, label: p.label || "", options: p.options || "" }));
+  connChoices = (c.params || []).map((p) => ({ name: p.name, label: p.label || "", options: p.options || "", filter: !!p.filter }));
   connOpenCalls = new Set();
   renderCalls();
   renderChoices();
@@ -1466,7 +1467,7 @@ $("conn-form").addEventListener("submit", async (e) => {
     $("conn-note").textContent = err.message;
     return;
   }
-  const choices = connChoices.filter((c) => c.name.trim()).map((c) => ({ name: c.name.trim(), label: c.label, ...(c.options ? { options: c.options } : {}) }));
+  const choices = connChoices.filter((c) => c.name.trim()).map((c) => ({ name: c.name.trim(), label: c.label, ...(c.options ? { options: c.options } : {}), ...(c.filter ? { filter: true } : {}) }));
   const body = {
     was: connWas,
     id: freeConnectionId(f.elements.id.value.trim() || slugOf(name)),

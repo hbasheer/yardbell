@@ -351,14 +351,24 @@ export function setConnectors(list) {
 const connectorOf = (id) => connectors.find((c) => c.id === id);
 const connectorName = (id) => connectorOf(id)?.name || id || "a connected tool";
 
+function filterWords(t) {
+  if (t?.kind === "connector") {
+    const chosen = (connectorOf(t.connector)?.params || []).filter((p) => p.filter && t.params?.[p.name]);
+    return chosen.length ? `filtered by ${chosen.map((p) => (p.label || p.name).toLowerCase()).join(" and ")}` : "";
+  }
+  const part = (word, list) => (list?.length ? `${word} ${list.join(" or ")}` : "");
+  return [part("label", t?.filter?.labels), part("team", t?.filter?.teams), part("project", t?.filter?.projects)].filter(Boolean).join(", ");
+}
+
 export function triggerWords(t) {
+  const narrowed = filterWords(t) ? `, ${filterWords(t)}` : "";
   switch (t?.kind) {
     case "schedule": return `On the schedule ${t.schedule || "(not set)"}${t.state ? `, my open ${t.connector ? `${connectorName(t.connector)} items` : "tickets"} in ${t.state}` : ""}`;
-    case "connector": return `When ${connectorName(t.connector)} has a new item${t.states?.length ? " in the states you picked" : ""}`;
+    case "connector": return `When ${connectorName(t.connector)} has a new item${t.states?.length ? " in the states you picked" : ""}${narrowed}`;
     case "webhook": return "When another system calls this pipeline's web address";
     case "linear":
-      if (t.states?.length) return `When a Linear ticket${t.assigned ? " of mine" : ""} moves to ${t.states.join(" or ")}`;
-      return "When a Linear ticket is assigned to me";
+      if (t.states?.length) return `When a Linear ticket${t.assigned ? " of mine" : ""} moves to ${t.states.join(" or ")}${narrowed}`;
+      return `When a Linear ticket is assigned to me${narrowed}`;
     case "github_review": return "When someone asks me to review a GitHub pull request";
     case "gitlab_reviewer": return `When a GitLab merge request on ${t.host || "a host you pick"} adds me as reviewer`;
     default: return "By hand, from Run now";

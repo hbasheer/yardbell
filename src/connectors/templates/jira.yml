@@ -4,6 +4,9 @@ base_url: https://your-site.atlassian.net/rest/api/3
 headers:
   Authorization: 'Basic ${secret:jira_basic}'
   Accept: application/json
+params:
+  - { name: label, label: Label, filter: true }
+  - { name: project, label: Project key, filter: true }
 calls:
   list:
     request:
@@ -11,10 +14,10 @@ calls:
       path: /search/jql
       query:
         jql: 'assignee = currentUser() AND statusCategory != Done'
-        fields: 'summary,status,description'
+        fields: 'summary,status,description,labels,project'
         maxResults: '100'
     items: issues
-    map: { item_id: id, id: key, title: fields.summary, description: fields.description, state: fields.status.name }
+    map: { item_id: id, id: key, title: fields.summary, description: fields.description, state: fields.status.name, label: fields.labels, project: fields.project.key }
     page: { style: cursor, param: nextPageToken, next: nextPageToken }
   read:
     request: { method: GET, path: '/issue/{{item_id}}', query: { fields: 'summary,status,description' } }

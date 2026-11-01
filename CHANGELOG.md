@@ -24,6 +24,12 @@ and the project uses [Semantic Versioning](https://semver.org).
   Running steps are never stopped. The run's page says it is held and why, and a run held for 30 minutes
   shows under **Waiting for me** with one phone notification while it stays queued.
 
+- **Filter which tickets start a run.** A **New ticket** trigger can filter by label, team or project.
+  Linear does the filtering itself, as do GitHub and GitLab for a label; for Trello, Jira and Asana,
+  Yardbell filters what it reads, and the builder says which. **See what matches now** shows what a
+  filter finds. The first check after a change only notes what matches, so old tickets never flood in.
+  Saved pipelines and connections are unchanged, and a connection can add its own filters under **Choices**.
+
 ## [0.10.0] - 2026-11-01
 
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing

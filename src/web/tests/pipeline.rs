@@ -873,3 +873,57 @@ async fn runs_list_their_live_terminals() {
     let (_, body) = call(&r, &c, "GET", &format!("/api/pipelines/{id}/runs"), None).await;
     assert_eq!(body["runs"][0]["terminals"][0]["name"], live.1);
 }
+
+#[tokio::test]
+async fn a_linear_preview_says_linear_filtered() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let at = "/api/pipelines/trigger-preview";
+    let trigger = |assigned: bool, states: serde_json::Value, labels: serde_json::Value| json!({ "trigger": { "kind": "linear", "assigned": assigned, "states": states, "filter": { "labels": labels } } });
+    let (status, out) = call(
+        &r,
+        &c,
+        "POST",
+        at,
+        Some(trigger(true, json!([]), json!(["bug"]))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{out}");
+    assert!(
+        out["error"].as_str().unwrap().contains("secret linear"),
+        "{out}"
+    );
+
+    with_linear(&r).await;
+    let (status, out) = call(
+        &r,
+        &c,
+        "POST",
+        at,
+        Some(trigger(true, json!([]), json!(["bug"]))),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{out}");
+    assert_eq!(out["count"], 2);
+    assert_eq!(out["items"][0]["id"], "COM-1");
+    assert!(
+        out["how"]
+            .as_str()
+            .unwrap()
+            .contains("Linear did the filtering"),
+        "{out}"
+    );
+    let (_, out) = call(
+        &r,
+        &c,
+        "POST",
+        at,
+        Some(trigger(false, json!(["todo"]), json!([]))),
+    )
+    .await;
+    assert_eq!(
+        out["count"], 1,
+        "the states count as in a real check: {out}"
+    );
+    assert!(out["how"].as_str().unwrap().contains("No filter"), "{out}");
+}

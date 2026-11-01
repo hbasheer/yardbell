@@ -434,9 +434,14 @@ LINEAR_TICKETS = [
 
 
 class FakeLinear(BaseHTTPRequestHandler):
+    filters = []
+
     def do_POST(self):
-        self.rfile.read(int(self.headers.get("Content-Length") or 0))
-        body = json.dumps({"data": {"viewer": {"assignedIssues": {"nodes": LINEAR_TICKETS}}}}).encode()
+        asked = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
+        wanted = asked.get("variables", {}).get("filter", {})
+        FakeLinear.filters.append(wanted)
+        nodes = LINEAR_TICKETS[:1] if wanted.get("labels") else LINEAR_TICKETS
+        body = json.dumps({"data": {"viewer": {"assignedIssues": {"nodes": nodes}}}}).encode()
         self.send_response(200)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
@@ -2768,6 +2773,82 @@ class Suite:
             self.remove_connector()
         self.check_errors("the connector trigger")
 
+    def test_builder_linear_filter_and_preview(self):
+        b = self.b
+        self.api("POST", "/api/settings/secrets", {"name": "linear", "value": "lin_api_BROWSER"})
+        try:
+            self.open_builder()
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"linear\"][data-group=\"Start when\"]').click()")
+            b.wait("document.querySelector('#pl-inspector input[name=filter-labels]')", "the Linear filter fields")
+            self.set_field("#pl-inspector input[name=filter-labels]", "agent-ready, bug")
+            b.wait("document.querySelector('.pl-canvas').textContent.includes('label agent-ready or bug')", "the Start when card to name the filter")
+            b.click("#pl-preview-matches")
+            b.wait("document.querySelector('.pl-preview-result')?.textContent.includes('1 ticket matches now')", "the preview's count")
+            said = b.js("document.querySelector('.pl-trigger-preview').textContent")
+            for words in ("Linear did the filtering", "COM-12", "only notes what already matches"):
+                if words not in said:
+                    raise Failure(f"the preview does not say {words!r}: {said}")
+            labels = FakeLinear.filters[-1]["labels"]["some"]["or"]
+            if [x["name"]["eqIgnoreCase"] for x in labels] != ["agent-ready", "bug"]:
+                raise Failure(f"Linear was not asked for the labels: {labels}")
+            self.set_field("#pl-inspector input[name=filter-labels]", "other")
+            b.wait("!document.querySelector('.pl-preview-result')", "a changed filter to clear the old answer")
+            self.set_field("#pl-inspector input[name=filter-labels]", "")
+            b.click("#pl-preview-matches")
+            b.wait("document.querySelector('.pl-preview-result')?.textContent.includes('No filter is set')", "the preview without a filter")
+        finally:
+            self.api("POST", "/api/settings/secrets/delete", {"name": "linear"})
+        self.check_errors("the Linear filter")
+
+    def test_builder_connector_filter(self):
+        b = self.b
+        self.add_connector()
+        try:
+            self.open_builder()
+            b.js("""(() => {
+              const real = window.fetch;
+              window.fetch = (u, o) => {
+                const url = String(u);
+                const json = (v) => Promise.resolve(new Response(JSON.stringify(v), { headers: { 'content-type': 'application/json' } }));
+                if (url.includes('/options/boards')) return json([{ id: 'B1', name: 'Main board' }]);
+                if (url.includes('/options/states')) return json([{ id: 'L1', name: 'Todo' }]);
+                if (url.includes('/options/labels')) return url.includes('board=B1') ? json([{ id: 'X1', name: 'Bug' }, { id: 'X2', name: '' }]) : json([]);
+                if (url.includes('/trigger-preview')) {
+                  window.__preview = JSON.parse(o.body);
+                  return json({ count: 0, read: 7, items: [], how: 'Trello cannot do all of this filtering, so Yardbell read 7 items and kept the matches.', note: null });
+                }
+                return real(u, o);
+              };
+            })()""")
+            b.js("document.querySelector('.pl-lib-item[data-kind=\"linear\"][data-group=\"Start when\"]').click()")
+            b.wait("document.querySelector('#pl-inspector select[name=ticket-source]')", "where tickets come from")
+            self.set_field("#pl-inspector select[name=ticket-source]", "trello")
+            b.wait("document.querySelector('#pl-preview-matches')?.disabled && document.querySelector('.pl-trigger-preview').textContent.includes('Pick the Board first')", "the preview to wait for the board")
+            b.wait("document.querySelector('#pl-inspector select[name=param-board]')?.textContent.includes('Main board')", "the board by name")
+            if b.js("document.querySelector('#pl-inspector select[name=param-label] option').textContent") != "Any":
+                raise Failure("a filter should offer Any, not ask for a pick")
+            self.set_field("#pl-inspector select[name=param-board]", "B1")
+            b.wait("document.querySelector('#pl-inspector select[name=param-label]')?.textContent.includes('Bug')", "the board's labels")
+            b.wait("[...document.querySelectorAll('#pl-inspector .pl-state-pick')].some((x) => x.textContent.includes('Todo'))", "the lists")
+            b.js("document.querySelector('#pl-inspector .pl-state-pick input').click()")
+            b.wait("document.querySelector('#pl-inspector .pl-state-pick input').checked", "the list ticked")
+            self.set_field("#pl-inspector select[name=param-label]", "X1")
+            b.wait("document.querySelector('#pl-inspector').textContent.includes('Yardbell reads its list and keeps the matches')", "who filters")
+            if not b.js("document.querySelector('#pl-inspector .pl-state-pick input').checked"):
+                raise Failure("picking a filter cleared the states")
+            if "filtered by label" not in b.js("document.querySelector('.pl-canvas').textContent"):
+                raise Failure("the Start when card does not mention the filter")
+            b.click("#pl-preview-matches")
+            b.wait("document.querySelector('.pl-preview-result')?.textContent.includes('Nothing matches now')", "the empty preview")
+            sent = b.js("window.__preview.trigger.params")
+            if sent != {"board": "B1", "label": "X1"}:
+                raise Failure(f"the preview asked with {sent}")
+            self.set_field("#pl-inspector select[name=param-board]", "")
+            b.wait("!document.querySelector('#pl-inspector select[name=param-label]').value", "a new board to clear its label")
+        finally:
+            self.remove_connector()
+        self.check_errors("the connector filter")
+
     def test_builder_tool_step(self):
         b = self.b
         self.api("POST", "/api/settings/mcp/servers", {"servers": [{"name": "tools", "url": "https://mcp.example.com/mcp"}]})
@@ -3393,6 +3474,8 @@ class Suite:
             raise Failure(f"the added and removed actions: {list(trello['calls'])}")
         if trello["params"][0]["name"] != "board":
             raise Failure("the choices were lost")
+        if not next(p for p in trello["params"] if p["name"] == "label").get("filter"):
+            raise Failure("saving the form lost a filter")
         self.row_action("[data-conn=trello]", "[data-conn-act=edit]")
         b.wait("!document.getElementById('conn-form').hidden", "the edit form")
         b.js("document.getElementById('conn-more').open = true")

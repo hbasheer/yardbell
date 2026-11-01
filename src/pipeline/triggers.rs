@@ -85,6 +85,23 @@ pub fn item_subject(
     }
 }
 
+pub fn item_matches(
+    item: &crate::connectors::client::Item,
+    params: &BTreeMap<String, String>,
+) -> bool {
+    params.iter().all(|(k, v)| {
+        v.is_empty()
+            || item
+                .fields
+                .get(k)
+                .is_none_or(|f| crate::connectors::client::field_holds(f, v))
+    })
+}
+
+pub fn in_a_state(states: &[String], state: &str) -> bool {
+    states.iter().any(|s| s.eq_ignore_ascii_case(state))
+}
+
 pub fn ticket_in(branch: &str, title: &str, pattern: Option<&Regex>) -> Option<String> {
     let shape = Regex::new(r"(?i)\b([a-z][a-z0-9]+-\d+)").expect("static regex");
     for text in [branch, title] {
@@ -298,6 +315,7 @@ impl Watch {
             return Some(
                 items
                     .iter()
+                    .filter(|i| item_matches(i, params))
                     .filter(|i| i.state.eq_ignore_ascii_case(state.trim()))
                     .map(|i| item_subject(connector, i, params))
                     .collect(),
@@ -341,15 +359,11 @@ impl Watch {
                 Ok(listed
                     .items
                     .iter()
-                    .filter(|i| {
-                        params
-                            .iter()
-                            .all(|(k, v)| i.fields.get(k).is_none_or(|f| f == v))
-                    })
+                    .filter(|i| item_matches(i, params))
                     .filter_map(|i| {
                         let key = if states.is_empty() {
                             format!("item:{connector}:{}", i.item_id)
-                        } else if states.iter().any(|s| s.eq_ignore_ascii_case(&i.state)) {
+                        } else if in_a_state(states, &i.state) {
                             format!("state:{connector}:{}:{}", i.item_id, i.state.to_lowercase())
                         } else {
                             return None;
@@ -358,10 +372,14 @@ impl Watch {
                     })
                     .collect())
             }
-            Trigger::Linear { assigned, states } => {
+            Trigger::Linear {
+                assigned,
+                states,
+                filter,
+            } => {
                 let key = src.linear_key.clone()?;
                 let mut items = Vec::new();
-                for t in src.feeds.linear(&key).await? {
+                for t in src.feeds.linear_where(&key, filter).await? {
                     let subject = Subject {
                         ticket: Some(TicketRef {
                             source: String::new(),
@@ -377,7 +395,7 @@ impl Watch {
                     if *assigned {
                         items.push((format!("assigned:{}", t.id), subject.clone()));
                     }
-                    if states.iter().any(|s| s.eq_ignore_ascii_case(&t.state)) {
+                    if in_a_state(states, &t.state) {
                         items.push((
                             format!("state:{}:{}", t.id, t.state.to_lowercase()),
                             subject,
@@ -470,13 +488,14 @@ impl Watch {
 pub(crate) mod tests {
     use super::*;
     use crate::pipeline::definition::{Definition, Trigger};
-    use crate::triggers::{GhList, Ticket};
+    use crate::triggers::{GhList, LinearFilter, Ticket};
     use chrono::TimeZone;
     use std::sync::Mutex as StdMutex;
 
     #[derive(Default)]
     pub(crate) struct Fakes {
         pub linear: StdMutex<Vec<Ticket>>,
+        pub linear_asked: StdMutex<Vec<LinearFilter>>,
         pub reviews: StdMutex<Vec<Ticket>>,
         pub mrs: StdMutex<Vec<Mr>>,
         pub cards: StdMutex<Vec<crate::connectors::client::Item>>,
@@ -511,6 +530,14 @@ pub(crate) mod tests {
         fn linear<'a>(&'a self, _key: &'a str) -> BoxFuture<'a, Result<Vec<Ticket>, String>> {
             let out = self.linear.lock().unwrap().clone();
             Box::pin(async move { Ok(out) })
+        }
+        fn linear_where<'a>(
+            &'a self,
+            key: &'a str,
+            filter: &'a LinearFilter,
+        ) -> BoxFuture<'a, Result<Vec<Ticket>, String>> {
+            self.linear_asked.lock().unwrap().push(filter.clone());
+            self.linear(key)
         }
         fn github(&self, list: GhList) -> BoxFuture<'_, Result<Vec<Ticket>, String>> {
             assert_eq!(list, GhList::ReviewRequested);
@@ -652,6 +679,169 @@ pub(crate) mod tests {
             item("c", "Todo", "B2"),
         ];
         let due = w.due(&defs, &sources(&f), at(9, 4)).await;
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].1.ticket.as_ref().unwrap().item_id, "a");
+    }
+
+    fn labelled(id: &str, labels: &str) -> crate::connectors::client::Item {
+        crate::connectors::client::Item {
+            item_id: id.into(),
+            id: id.to_uppercase(),
+            title: format!("Card {id}"),
+            fields: [("label".to_string(), labels.to_string())].into(),
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn a_filter_matches_one_of_many_labels_and_not_a_missing_one() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        let defs = vec![pipeline(connector_trigger(&[], &[("label", "BUG")]), true)];
+        assert!(w.due(&defs, &sources(&f), at(9, 0)).await.is_empty());
+        *f.cards.lock().unwrap() = vec![
+            labelled("a", r#"["ui","bug"]"#),
+            labelled("b", r#"["ui"]"#),
+            labelled("c", "[]"),
+            labelled("d", ""),
+        ];
+        let due = w.due(&defs, &sources(&f), at(9, 4)).await;
+        let ids: Vec<&str> = due
+            .iter()
+            .map(|(_, s)| s.ticket.as_ref().unwrap().item_id.as_str())
+            .collect();
+        assert_eq!(ids, ["a"]);
+    }
+
+    #[tokio::test]
+    async fn a_ticket_that_gains_the_label_later_starts_once() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        let defs = vec![pipeline(connector_trigger(&[], &[("label", "bug")]), true)];
+        *f.cards.lock().unwrap() = vec![labelled("a", r#"["ui"]"#)];
+        assert!(w.due(&defs, &sources(&f), at(9, 0)).await.is_empty());
+        *f.cards.lock().unwrap() = vec![labelled("a", r#"["ui","bug"]"#)];
+        assert_eq!(w.due(&defs, &sources(&f), at(9, 4)).await.len(), 1);
+        assert!(w.due(&defs, &sources(&f), at(9, 8)).await.is_empty());
+    }
+
+    #[tokio::test]
+    async fn changing_a_connector_filter_only_notes_what_matches() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        *f.cards.lock().unwrap() = vec![labelled("a", r#"["bug"]"#), labelled("b", r#"["ui"]"#)];
+        let narrow = vec![pipeline(connector_trigger(&[], &[("label", "bug")]), true)];
+        w.due(&narrow, &sources(&f), at(9, 0)).await;
+        let wide = vec![pipeline(connector_trigger(&[], &[("label", "ui")]), true)];
+        assert!(
+            w.due(&wide, &sources(&f), at(9, 4)).await.is_empty(),
+            "old tickets that now match are left alone"
+        );
+        let none = vec![pipeline(connector_trigger(&[], &[]), true)];
+        assert!(
+            w.due(&none, &sources(&f), at(9, 8)).await.is_empty(),
+            "removing the filter does not flood either"
+        );
+        f.cards.lock().unwrap().push(labelled("c", r#"["ui"]"#));
+        assert_eq!(w.due(&none, &sources(&f), at(9, 12)).await.len(), 1);
+    }
+
+    fn ticket(id: &str) -> Ticket {
+        Ticket {
+            id: id.into(),
+            ticket: id.to_uppercase(),
+            title: format!("Ticket {id}"),
+            url: String::new(),
+            state: "Todo".into(),
+            repo: String::new(),
+        }
+    }
+
+    fn linear_with(labels: &[&str]) -> Trigger {
+        Trigger::Linear {
+            assigned: true,
+            states: vec![],
+            filter: LinearFilter {
+                labels: labels.iter().map(|l| l.to_string()).collect(),
+                ..Default::default()
+            },
+        }
+    }
+
+    #[tokio::test]
+    async fn a_linear_filter_is_asked_of_linear_and_a_change_only_notes() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        *f.linear.lock().unwrap() = vec![ticket("a"), ticket("b")];
+        let bug = vec![pipeline(linear_with(&["bug"]), true)];
+        assert!(w.due(&bug, &sources(&f), at(9, 0)).await.is_empty());
+        assert_eq!(f.linear_asked.lock().unwrap()[0].labels, ["bug"]);
+        f.linear.lock().unwrap().push(ticket("c"));
+        assert_eq!(w.due(&bug, &sources(&f), at(9, 4)).await.len(), 1);
+        f.linear.lock().unwrap().push(ticket("d"));
+        let ui = vec![pipeline(linear_with(&["ui"]), true)];
+        assert!(
+            w.due(&ui, &sources(&f), at(9, 8)).await.is_empty(),
+            "a changed filter starts a new baseline"
+        );
+        f.linear.lock().unwrap().push(ticket("e"));
+        let due = w.due(&ui, &sources(&f), at(9, 12)).await;
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].1.ticket.as_ref().unwrap().item_id, "e");
+    }
+
+    #[tokio::test]
+    async fn a_pipeline_saved_before_filters_keeps_what_it_has_seen() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        let def = pipeline(linear_with(&[]), true);
+        let before = r#"{"kind":"linear","assigned":true,"states":[]}"#;
+        w.edit(&def.id, |k| {
+            k.trigger = before.to_string();
+            k.baseline = true;
+        });
+        *f.linear.lock().unwrap() = vec![ticket("a")];
+        assert_eq!(
+            w.due(std::slice::from_ref(&def), &sources(&f), at(9, 0))
+                .await
+                .len(),
+            1,
+            "its baseline survives, so the new ticket starts"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_filter_that_fails_notes_nothing_and_says_why() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        *f.card_problem.lock().unwrap() = Some("GitHub answered 422".into());
+        let def = pipeline(connector_trigger(&[], &[("label", "bug")]), true);
+        let defs = vec![def.clone()];
+        assert!(w.due(&defs, &sources(&f), at(9, 0)).await.is_empty());
+        assert!(!w.kept(&def.id).baseline);
+        assert!(w.kept(&def.id).problem.contains("422"));
+    }
+
+    #[tokio::test]
+    async fn a_schedule_applies_a_filter_the_tool_cannot() {
+        let (w, _dir) = watch();
+        let f = Fakes::default();
+        let mut a = labelled("a", r#"["bug"]"#);
+        a.state = "Todo".into();
+        let mut b = labelled("b", r#"["ui"]"#);
+        b.state = "Todo".into();
+        *f.cards.lock().unwrap() = vec![a, b];
+        let defs = vec![pipeline(
+            Trigger::Schedule {
+                schedule: "weekdays 09:00".into(),
+                state: "Todo".into(),
+                connector: "trello".into(),
+                params: [("label".to_string(), "bug".to_string())].into(),
+            },
+            true,
+        )];
+        w.due(&defs, &sources(&f), at(8, 0)).await;
+        let due = w.due(&defs, &sources(&f), at(9, 1)).await;
         assert_eq!(due.len(), 1);
         assert_eq!(due[0].1.ticket.as_ref().unwrap().item_id, "a");
     }
@@ -917,6 +1107,7 @@ pub(crate) mod tests {
             Trigger::Linear {
                 assigned: true,
                 states: vec![],
+                filter: Default::default(),
             },
             true,
         );

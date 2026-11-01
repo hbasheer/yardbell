@@ -191,6 +191,11 @@ pub enum Trigger {
         assigned: bool,
         #[serde(default)]
         states: Vec<String>,
+        #[serde(
+            default,
+            skip_serializing_if = "crate::triggers::LinearFilter::is_empty"
+        )]
+        filter: crate::triggers::LinearFilter,
     },
     Webhook {
         #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
@@ -296,6 +301,35 @@ impl Definition {
     }
 }
 
+// A choice the connection no longer knows would quietly let every item through.
+pub fn filter_problems(def: &Definition, cfg: &Config) -> Vec<String> {
+    let Trigger::Connector {
+        connector, params, ..
+    } = &def.trigger
+    else {
+        return Vec::new();
+    };
+    let Some(c) = cfg.connectors.iter().find(|c| &c.id == connector) else {
+        return Vec::new();
+    };
+    let list = c.calls.get("list");
+    let needs = list.map(crate::connectors::client::needs_of);
+    params
+        .keys()
+        .filter(|name| {
+            !c.params.iter().any(|p| &p.name == *name)
+                && !needs.as_ref().is_some_and(|n| n.contains(*name))
+                && !list.is_some_and(|l| l.map.contains_key(*name))
+        })
+        .map(|name| {
+            format!(
+                "the trigger filters by {name}, which {} no longer offers",
+                c.name
+            )
+        })
+        .collect()
+}
+
 pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
     let mut out = Vec::new();
     if def.name.trim().is_empty() {
@@ -381,12 +415,13 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         if let (Some(c), Some(chosen)) = (connector, chosen) {
             let needs = c.calls.get("list").map(crate::connectors::client::needs_of);
             for p in &c.params {
-                let needed = needs.as_ref().is_some_and(|n| n.contains(&p.name));
+                let needed = !p.filter && needs.as_ref().is_some_and(|n| n.contains(&p.name));
                 if needed && !chosen.contains_key(&p.name) {
                     out.push(format!("Pick a {} for the trigger", p.label));
                 }
             }
         }
+        out.extend(filter_problems(def, cfg));
         match source.map(|id| (id, cfg.connectors.iter().find(|c| c.id == id))) {
             Some((id, None)) => out.push(format!(
                 "the trigger names connector {id}, which is not in Settings"
@@ -402,7 +437,9 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                     out.push(format!("schedule: {e}"));
                 }
             }
-            Trigger::Linear { assigned, states } if !assigned && states.is_empty() => {
+            Trigger::Linear {
+                assigned, states, ..
+            } if !assigned && states.is_empty() => {
                 out.push("the Linear trigger needs assigned or a list of states".into());
             }
             Trigger::GitlabReviewer { host } if host.trim().is_empty() => {
@@ -675,6 +712,55 @@ pub(crate) mod tests {
             !problems.iter().any(|p| p.contains("Pick a")),
             "{problems:?}"
         );
+    }
+
+    #[test]
+    fn a_filter_is_never_a_required_pick() {
+        let mut cfg = cfg();
+        cfg.connectors = vec![crate::connectors::template("github").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = Trigger::Connector {
+            connector: "github-issues".into(),
+            params: [("repo".to_string(), "acme/app".to_string())].into(),
+            states: vec![],
+        };
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            !problems.iter().any(|p| p.contains("Pick a")),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_filter_the_connection_dropped_is_named() {
+        let mut cfg = cfg();
+        cfg.connectors = vec![crate::connectors::template("trello").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = Trigger::Connector {
+            connector: "trello".into(),
+            params: [
+                ("board".to_string(), "B1".to_string()),
+                ("priority".to_string(), "high".to_string()),
+            ]
+            .into(),
+            states: vec![],
+        };
+        let problems = check(&def, &cfg).err().unwrap_or_default();
+        assert!(
+            problems.contains(
+                &"the trigger filters by priority, which Trello no longer offers".to_string()
+            ),
+            "{problems:?}"
+        );
+    }
+
+    #[test]
+    fn a_saved_trigger_reads_and_writes_as_it_was() {
+        let linear = r#"{"kind":"linear","assigned":true,"states":[]}"#;
+        let read: Trigger = serde_json::from_str(linear).unwrap();
+        assert_eq!(serde_json::to_string(&read).unwrap(), linear);
     }
 
     #[test]

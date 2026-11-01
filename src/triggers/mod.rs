@@ -1,8 +1,8 @@
 mod feeds;
 mod schedule;
 
-pub(crate) use feeds::{parse_linear, LINEAR_API, LINEAR_QUERY};
-pub use feeds::{Feeds, GhList, Live, Ticket, LINEAR_SECRET};
+pub(crate) use feeds::{parse_linear, LINEAR_API};
+pub use feeds::{Feeds, GhList, LinearFilter, Live, Ticket, LINEAR_SECRET};
 pub use schedule::Schedule;
 
 use crate::config::{Config, DispatchSettings};

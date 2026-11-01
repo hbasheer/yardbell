@@ -1,6 +1,6 @@
 use crate::shell::{Duration, Output, Runner};
 use futures::future::BoxFuture;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 use std::sync::Arc;
 
@@ -17,6 +17,61 @@ pub(crate) const LINEAR_QUERY: &str =
     "query { viewer { assignedIssues(first: 100, orderBy: updatedAt, \
 filter: { state: { type: { nin: [\"completed\", \"canceled\"] } } }) { nodes { id identifier \
 title url state { name } } } } }";
+
+const LINEAR_WHERE: &str = "query($filter: IssueFilter) { viewer { assignedIssues(first: 100, \
+orderBy: updatedAt, filter: $filter) { nodes { id identifier title url state { name } } } } }";
+
+// Several names in one list mean any of them; different lists must all match.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct LinearFilter {
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub labels: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub teams: Vec<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<String>,
+}
+
+fn any_of(names: &[String], fields: &[&str]) -> Option<Value> {
+    let or: Vec<Value> = names
+        .iter()
+        .map(|n| n.trim())
+        .filter(|n| !n.is_empty())
+        .flat_map(|n| {
+            fields
+                .iter()
+                .map(move |f| json!({ *f: { "eqIgnoreCase": n } }))
+        })
+        .collect();
+    (!or.is_empty()).then(|| json!({ "or": or }))
+}
+
+impl LinearFilter {
+    pub fn is_empty(&self) -> bool {
+        [&self.labels, &self.teams, &self.projects]
+            .iter()
+            .all(|list| list.iter().all(|n| n.trim().is_empty()))
+    }
+
+    // Names travel as GraphQL variables, so a name can never change the query.
+    pub(crate) fn request(&self) -> (&'static str, Value) {
+        if self.is_empty() {
+            return (LINEAR_QUERY, json!({}));
+        }
+        let mut filter = json!({ "state": { "type": { "nin": ["completed", "canceled"] } } });
+        if let Some(labels) = any_of(&self.labels, &["name"]) {
+            filter["labels"] = json!({ "some": labels });
+        }
+        if let Some(teams) = any_of(&self.teams, &["key", "name"]) {
+            filter["team"] = teams;
+        }
+        if let Some(projects) = any_of(&self.projects, &["name"]) {
+            filter["project"] = projects;
+        }
+        (LINEAR_WHERE, json!({ "filter": filter }))
+    }
+}
 
 const QUIET: &str = "GH_PROMPT_DISABLED=1 GH_NO_UPDATE_NOTIFIER=1 GH_PAGER=cat NO_COLOR=1; \
 export GH_PROMPT_DISABLED GH_NO_UPDATE_NOTIFIER GH_PAGER NO_COLOR; ";
@@ -39,6 +94,11 @@ pub enum GhList {
 
 pub trait Feeds: Send + Sync {
     fn linear<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<Vec<Ticket>, String>>;
+    fn linear_where<'a>(
+        &'a self,
+        key: &'a str,
+        filter: &'a LinearFilter,
+    ) -> BoxFuture<'a, Result<Vec<Ticket>, String>>;
     fn github(&self, list: GhList) -> BoxFuture<'_, Result<Vec<Ticket>, String>>;
 }
 
@@ -64,31 +124,15 @@ impl Live {
 
 impl Feeds for Live {
     fn linear<'a>(&'a self, key: &'a str) -> BoxFuture<'a, Result<Vec<Ticket>, String>> {
-        Box::pin(async move {
-            let res = self
-                .http
-                .post(&self.linear_url)
-                .header("Authorization", key)
-                .timeout(LINEAR_TIMEOUT)
-                .json(&json!({ "query": LINEAR_QUERY }))
-                .send()
-                .await
-                .map_err(|e| format!("Linear did not answer: {e}"))?;
-            let status = res.status();
-            let body = res
-                .text()
-                .await
-                .map_err(|e| format!("Linear's answer could not be read: {e}"))?;
-            if status == reqwest::StatusCode::UNAUTHORIZED {
-                return Err(format!(
-                    "Linear refused the API key in the secret {LINEAR_SECRET}. Replace it under Settings, MCP servers, Secrets"
-                ));
-            }
-            if !status.is_success() && !body.trim_start().starts_with('{') {
-                return Err(format!("Linear answered {status}"));
-            }
-            parse_linear(&body)
-        })
+        Box::pin(async move { self.ask_linear(key, &LinearFilter::default()).await })
+    }
+
+    fn linear_where<'a>(
+        &'a self,
+        key: &'a str,
+        filter: &'a LinearFilter,
+    ) -> BoxFuture<'a, Result<Vec<Ticket>, String>> {
+        Box::pin(self.ask_linear(key, filter))
     }
 
     fn github(&self, list: GhList) -> BoxFuture<'_, Result<Vec<Ticket>, String>> {
@@ -103,6 +147,35 @@ impl Feeds for Live {
                 .await;
             read_gh(&out)
         })
+    }
+}
+
+impl Live {
+    async fn ask_linear(&self, key: &str, filter: &LinearFilter) -> Result<Vec<Ticket>, String> {
+        let (query, variables) = filter.request();
+        let res = self
+            .http
+            .post(&self.linear_url)
+            .header("Authorization", key)
+            .timeout(LINEAR_TIMEOUT)
+            .json(&json!({ "query": query, "variables": variables }))
+            .send()
+            .await
+            .map_err(|e| format!("Linear did not answer: {e}"))?;
+        let status = res.status();
+        let body = res
+            .text()
+            .await
+            .map_err(|e| format!("Linear's answer could not be read: {e}"))?;
+        if status == reqwest::StatusCode::UNAUTHORIZED {
+            return Err(format!(
+                    "Linear refused the API key in the secret {LINEAR_SECRET}. Replace it under Settings, MCP servers, Secrets"
+                ));
+        }
+        if !status.is_success() && !body.trim_start().starts_with('{') {
+            return Err(format!("Linear answered {status}"));
+        }
+        parse_linear(&body)
     }
 }
 
@@ -300,6 +373,37 @@ mod tests {
             .await
             .unwrap_err()
             .starts_with("Linear did not answer"));
+    }
+
+    #[test]
+    fn no_filter_asks_linear_what_it_always_did() {
+        assert_eq!(LinearFilter::default().request().0, LINEAR_QUERY);
+        let blank = LinearFilter {
+            labels: vec![" ".into()],
+            ..Default::default()
+        };
+        assert!(blank.is_empty());
+    }
+
+    #[test]
+    fn a_filter_asks_linear_with_names_as_variables() {
+        let filter = LinearFilter {
+            labels: vec!["agent-ready".into(), "bug\" } } { x".into()],
+            teams: vec!["ENG".into()],
+            projects: vec!["Billing".into()],
+        };
+        let (query, variables) = filter.request();
+        assert!(query.contains("$filter: IssueFilter"), "{query}");
+        assert!(!query.contains("agent-ready") && !query.contains("bug"));
+        let f = &variables["filter"];
+        assert_eq!(f["state"]["type"]["nin"][0], "completed", "still open only");
+        assert_eq!(
+            f["labels"]["some"]["or"][0]["name"]["eqIgnoreCase"],
+            "agent-ready"
+        );
+        assert_eq!(f["team"]["or"][0]["key"]["eqIgnoreCase"], "ENG");
+        assert_eq!(f["team"]["or"][1]["name"]["eqIgnoreCase"], "ENG");
+        assert_eq!(f["project"]["or"][0]["name"]["eqIgnoreCase"], "Billing");
     }
 
     #[test]

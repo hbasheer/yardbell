@@ -1399,7 +1399,8 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .conn-pair .btn, .conn-choice .btn { width: 32px; padding: 0; }
 .conn-pair-head, .conn-choice-head { color: var(--muted); font-size: 12px; font-weight: 500; }
 .conn-pair-head { grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) 32px; margin-bottom: -6px; }
-.conn-choice, .conn-choice-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 32px; gap: 6px; }
+.conn-choice, .conn-choice-head { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1fr) 64px 32px; gap: 6px; align-items: center; }
+.conn-choice-head::after { content: ""; width: 32px; }
 .conn-choice-head { margin-bottom: -6px; }
 .conn-call-foot { display: flex; justify-content: flex-end; }
 @media (max-width: 760px) {
@@ -1408,6 +1409,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
   .conn-choice { grid-template-columns: minmax(0, 1fr) 32px; }
   .conn-choice input, .conn-choice select { grid-column: 1; }
   .conn-choice .btn { grid-column: 2; grid-row: 1; }
+  .conn-choice .choice { grid-column: 1; }
   .conn-call > summary .conn-badge { display: none; }
 }
 .conn-via { display: grid; gap: 8px; margin: 0; padding: 0; border: 0; }
@@ -2080,6 +2082,11 @@ dialog.th-dialog .dialog-head h2 { overflow-wrap: anywhere; }
 .side-rail .side-count { position: absolute; top: 2px; right: 2px; min-width: 14px; padding: 0 3px; line-height: 14px; font-size: 10px; }
 .proposals-main .pr-intro { margin: -4px 0 16px; }
 .pl-state-list { display: grid; gap: 2px; }
+.pl-trigger-preview { display: grid; gap: 8px; justify-items: start; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--line); }
+.pl-trigger-preview .help, .pl-preview-result p { margin: 0; }
+.pl-preview-result { display: grid; gap: 6px; font-size: 13px; }
+.pl-preview-list { display: grid; gap: 4px; margin: 0; padding: 0; list-style: none; overflow-wrap: anywhere; }
+.pl-preview-problem { color: var(--bad-text); }
 .pl-hook-address code { overflow-wrap: anywhere; }
 .conn-add { display: flex; flex-wrap: wrap; gap: 6px; margin-left: auto; }
 #conn-header-add { justify-self: start; }

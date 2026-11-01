@@ -81,6 +81,29 @@ fn connectors_of(def: &Definition) -> Vec<String> {
     .collect()
 }
 
+// What each filtered Linear trigger finds. A name with a typo matches nothing and raises no error,
+// so an empty answer is worth saying.
+pub fn linear_filter_lines(
+    defs: &[Definition],
+    found: &[(String, Result<usize, String>)],
+) -> Vec<(bool, String)> {
+    defs.iter()
+        .filter(|d| d.enabled)
+        .filter_map(|d| found.iter().find(|(id, _)| id == &d.id).map(|(_, f)| (d, f)))
+        .map(|(d, found)| match found {
+            Ok(0) => (
+                true,
+                format!(
+                    "{}: no open ticket of yours matches its filter now. Check the names if you expected some",
+                    d.name
+                ),
+            ),
+            Ok(n) => (true, format!("{}: {n} open tickets match its filter", d.name)),
+            Err(e) => (false, format!("{}: its filter failed: {e}", d.name)),
+        })
+        .collect()
+}
+
 pub fn mcp_sign_in_lines(cfg: &Config, secrets: &crate::secrets::Secrets) -> Vec<(bool, String)> {
     cfg.mcp_servers
         .iter()
@@ -106,6 +129,9 @@ pub fn pipelines_lines(
     let mut lines = Vec::new();
     for def in defs.iter().filter(|d| d.enabled) {
         let name = &def.name;
+        for problem in crate::pipeline::definition::filter_problems(def, cfg) {
+            lines.push((false, format!("{name}: {problem}")));
+        }
         for id in connectors_of(def) {
             match connectors.iter().find(|(c, _)| c == &id) {
                 Some((_, Ok(n))) => lines.push((true, format!("{name}: {id} answers, {n} items"))),
@@ -343,6 +369,27 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
         for (ok, text) in memory_lines(cfg.pipelines.memory_limit, &memory) {
             line(ok, &text);
         }
+        let mut filtered = Vec::new();
+        if let Some(key) = secrets
+            .as_ref()
+            .ok()
+            .and_then(|s| s.get(crate::triggers::LINEAR_SECRET))
+        {
+            for def in defs.iter().filter(|d| d.enabled) {
+                if let Trigger::Linear { filter, .. } = &def.trigger {
+                    if !filter.is_empty() {
+                        let found = crate::pipeline::linear::Linear::new()
+                            .open_where(key, filter)
+                            .await
+                            .map(|t| t.len());
+                        filtered.push((def.id.clone(), found));
+                    }
+                }
+            }
+        }
+        for (ok, text) in linear_filter_lines(&defs, &filtered) {
+            line(ok, &text);
+        }
         if let Ok(secrets) = &secrets {
             for (ok, text) in mcp_sign_in_lines(&cfg, secrets) {
                 line(ok, &text);
@@ -431,6 +478,45 @@ mod tests {
                 false,
                 "tool: sign in again under Settings, Connections".to_string()
             )]
+        );
+    }
+
+    #[test]
+    fn doctor_says_what_a_linear_filter_finds() {
+        let mut def = crate::pipeline::templates::all().remove(0);
+        def.enabled = true;
+        let say = |found: Result<usize, String>| {
+            linear_filter_lines(std::slice::from_ref(&def), &[(def.id.clone(), found)])
+        };
+        assert_eq!(
+            say(Ok(2))[0],
+            (
+                true,
+                format!("{}: 2 open tickets match its filter", def.name)
+            )
+        );
+        assert!(say(Ok(0))[0].0 && say(Ok(0))[0].1.contains("Check the names"));
+        let failed = say(Err("Linear said: bad".into()));
+        assert!(!failed[0].0 && failed[0].1.contains("Linear said: bad"));
+    }
+
+    #[test]
+    fn doctor_names_a_filter_the_connection_dropped() {
+        let mut cfg = crate::pipeline::definition::tests::cfg();
+        cfg.connectors = vec![crate::connectors::template("trello").unwrap()];
+        let mut def = crate::pipeline::templates::all().remove(1);
+        def.enabled = true;
+        def.trigger = crate::pipeline::definition::Trigger::Connector {
+            connector: "trello".into(),
+            params: [("priority".to_string(), "high".to_string())].into(),
+            states: vec![],
+        };
+        let lines = pipelines_lines(&cfg, &[def], &None, &[], &[], &[], &[]);
+        assert!(
+            lines
+                .iter()
+                .any(|(ok, t)| !ok && t.contains("filters by priority")),
+            "{lines:?}"
         );
     }
 

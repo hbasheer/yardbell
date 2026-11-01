@@ -496,6 +496,12 @@ function choicesFor(id, call, params = {}) {
   return connectorChoices.get(url);
 }
 
+// Only what a list of choices depends on goes in its address, so picking a filter asks nothing again.
+function scopeOf(connector, call, params = {}) {
+  const needs = connector.calls.find((c) => c.name === call)?.needs || [];
+  return Object.fromEntries(needs.filter((n) => params[n]).map((n) => [n, params[n]]));
+}
+
 const NO_CONNECTIONS = html`<p class="help">No connections yet. Add one under <a href="/settings#connections">Settings, Connections</a>.</p>`;
 
 function connectionField(step, redraw) {
@@ -519,7 +525,7 @@ function updateFields(step, redraw) {
   const typed = field("To the state", html`<input name="state" .value=${step.state || ""} @input=${(e) => { step.state = e.target.value; redraw(); }}>`, "The state's name in Linear, or its id in another tool.");
   let target = typed;
   if (from?.calls.some((c) => c.name === "states")) {
-    const found = choicesFor(from.id, "states", t.params);
+    const found = choicesFor(from.id, "states", scopeOf(from, "states", t.params));
     if (found.list) {
       target = field("To the state", html`<select name="state" @change=${(e) => { step.state = e.target.value; redraw(); }}>
         <option value="" ?selected=${!step.state}>Pick a state</option>
@@ -548,7 +554,7 @@ function statePicks(t, connector, redraw) {
   const typed = field("In the states", html`<input name="states" placeholder="Empty means every item" .value=${(t.states || []).join(", ")}
     @change=${(e) => setStates(e.target.value.split(",").map((x) => x.trim()).filter(Boolean))}>`, "Empty means every item.");
   if (!connector.calls.some((c) => c.name === "states")) return typed;
-  const found = choicesFor(connector.id, "states", t.params);
+  const found = choicesFor(connector.id, "states", scopeOf(connector, "states", t.params));
   if (found.loading) return html`<p class="help">Reading ${connector.name}...</p>`;
   if (found.error) return html`${typed}<p class="help">The choices could not be read. Pick the other options first, or type the ids here.</p>`;
   const chosen = t.states || [];
@@ -563,27 +569,98 @@ function connectorFields(t, redraw) {
   const setParam = (name, value) => {
     if (value) params[name] = value;
     else delete params[name];
-    t.states = [];
+    const filters = (connector?.params || []).filter((p) => p.filter);
+    if (!filters.some((p) => p.name === name)) {
+      t.states = [];
+      for (const p of filters) delete params[p.name];
+    }
     redraw();
   };
+  const unfiltered = connector && !connector.params.some((p) => p.filter);
   return html`
     ${paramFields(connector, params, setParam)}
-    ${connector ? statePicks(t, connector, redraw) : nothing}`;
+    ${connector ? statePicks(t, connector, redraw) : nothing}
+    ${unfiltered ? html`<p class="help">${connector.name} has no filters, so every item it lists can start a run. Add one in its Choices under <a href="/settings#connections">Settings, Connections</a>.</p>` : nothing}`;
+}
+
+function filterHelp(connector, p) {
+  if (!p.filter) return "";
+  return connector.filters?.[p.name] === "source"
+    ? `Optional. ${connector.name} filters on this itself.`
+    : `Optional. ${connector.name} cannot filter on this, so Yardbell reads its list and keeps the matches.`;
 }
 
 function paramFields(connector, params, setParam) {
   const needed = connector?.calls?.find((c) => c.name === "list")?.needs || [];
   return html`${(connector?.params || []).map((p) => {
       if (!p.options) {
-        return field(p.label || p.name, html`<input name=${`param-${p.name}`} .value=${params[p.name] || ""} @change=${(e) => setParam(p.name, e.target.value.trim())}>`);
+        return field(p.label || p.name, html`<input name=${`param-${p.name}`} .value=${params[p.name] || ""} @change=${(e) => setParam(p.name, e.target.value.trim())}>`, filterHelp(connector, p));
       }
-      const found = choicesFor(connector.id, p.options);
+      const waits = (connector.calls.find((c) => c.name === p.options)?.needs || []).find((n) => !params[n]);
+      const found = waits ? { list: [] } : choicesFor(connector.id, p.options, scopeOf(connector, p.options, params));
       return field(p.label || p.name, html`<select name=${`param-${p.name}`} @change=${(e) => setParam(p.name, e.target.value)}>
-        <option value="" ?selected=${!params[p.name]}>${needed.includes(p.name) ? "Pick one" : "Any"}</option>
+        <option value="" ?selected=${!params[p.name]}>${needed.includes(p.name) && !p.filter ? "Pick one" : "Any"}</option>
         ${params[p.name] && !found.list?.some((o) => o.id === params[p.name]) ? html`<option value=${params[p.name]} selected>${params[p.name]}</option>` : nothing}
-        ${(found.list || []).map((o) => html`<option value=${o.id} ?selected=${o.id === params[p.name]}>${o.name}</option>`)}
-      </select>`, found.error ? "The choices could not be read. Test the connection in Settings." : "");
+        ${(found.list || []).map((o) => html`<option value=${o.id} ?selected=${o.id === params[p.name]}>${o.name || o.id}</option>`)}
+      </select>`, found.error ? "The choices could not be read. Test the connection in Settings." : filterHelp(connector, p));
     })}`;
+}
+
+function linearFilterFields(t, redraw) {
+  const input = (key, label, placeholder) => field(label, html`<input name=${`filter-${key}`} placeholder=${placeholder} .value=${(t.filter?.[key] || []).join(", ")}
+    @change=${(e) => {
+      const list = e.target.value.split(",").map((x) => x.trim()).filter(Boolean);
+      const next = { ...t.filter };
+      if (list.length) next[key] = list;
+      else delete next[key];
+      if (Object.keys(next).length) t.filter = next;
+      else delete t.filter;
+      redraw();
+    }}>`);
+  return html`${input("labels", "With a label", "bug, agent-ready")}
+    ${input("teams", "In a team", "ENG or Web team")}
+    ${input("projects", "In a project", "Billing")}
+    <p class="help">Optional. Linear filters on these itself. Names in one box mean any of them, and a ticket must match every box. Only your assigned tickets are read, so these narrow them further.</p>`;
+}
+
+let triggerPreview = null;
+
+function previewTrigger(t) {
+  const key = JSON.stringify(t);
+  triggerPreview = { key, loading: true };
+  draw();
+  api("POST", "/api/pipelines/trigger-preview", { trigger: t })
+    .then((result) => { triggerPreview = { key, result }; }, (err) => { triggerPreview = { key, error: err.message }; })
+    .finally(draw);
+}
+
+function previewResult(shown) {
+  if (shown.loading) return html`<p class="help">Reading the tickets...</p>`;
+  if (shown.error) return html`<p class="help pl-preview-problem" role="alert">${shown.error}</p>`;
+  const { count, items, how, note } = shown.result;
+  const hidden = count - items.length;
+  return html`<div class="pl-preview-result" aria-live="polite">
+    <p><strong>${count === 0 ? "Nothing matches now." : `${count} ${count === 1 ? "ticket matches" : "tickets match"} now.`}</strong> ${how}</p>
+    ${count === 0 ? html`<p class="help">If you expected some, check the names. A tool does not say when a name does not exist.</p>` : nothing}
+    ${items.length ? html`<ul class="pl-preview-list">${items.map((i) => html`<li>${i.url ? html`<a href=${i.url} target="_blank" rel="noopener">${i.id}</a>` : i.id} ${i.title}</li>`)}</ul>` : nothing}
+    ${hidden > 0 ? html`<p class="help">And ${hidden} more.</p>` : nothing}
+    ${note ? html`<p class="help">${note}</p>` : nothing}
+  </div>`;
+}
+
+function ticketPreview(t) {
+  const connector = t.kind === "connector" ? data.connectors.find((c) => c.id === t.connector) : null;
+  const list = connector?.calls.find((c) => c.name === "list");
+  const filters = (connector?.params || []).filter((p) => p.filter).map((p) => p.name);
+  const waiting = (list?.needs || []).find((n) => !filters.includes(n) && !t.params?.[n]);
+  const waitingFor = connector?.params.find((p) => p.name === waiting);
+  const shown = triggerPreview?.key === JSON.stringify(t) ? triggerPreview : null;
+  return html`<div class="pl-trigger-preview">
+    <button class="btn" type="button" id="pl-preview-matches" ?disabled=${shown?.loading || waiting || (t.kind === "connector" && !connector)} @click=${() => previewTrigger(t)}>See what matches now</button>
+    ${waiting ? html`<p class="help">Pick the ${waitingFor?.label || waiting} first.</p>` : nothing}
+    ${shown ? previewResult(shown) : nothing}
+    <p class="help">The first check only notes what already matches, and the same goes for the first check after a filter changes, so old tickets never flood in. A run starts when a ticket comes to match after that, such as when it gets the label.</p>
+  </div>`;
 }
 
 let hookAddress = null;
@@ -754,12 +831,14 @@ function triggerFields(d, redraw) {
       ${t.kind === "linear" ? field("In the states", html`<input name="states" placeholder="Todo, In Progress" .value=${(t.states || []).join(", ")}
         @change=${(e) => { t.states = e.target.value.split(",").map((x) => x.trim()).filter(Boolean); redraw(); }}>`, "Empty means when it is assigned to you.") : nothing}
       ${t.kind === "linear" ? html`<label class="check"><input type="checkbox" name="assigned" .checked=${!!t.assigned} @change=${(e) => { t.assigned = e.target.checked; redraw(); }}>Only tickets assigned to me</label>` : nothing}
+      ${t.kind === "linear" ? linearFilterFields(t, redraw) : nothing}
       ${t.kind === "gitlab_reviewer" ? field("GitLab host", data.gitlab_hosts.length
         ? html`<select name="host" @change=${(e) => { t.host = e.target.value; redraw(); }}>${data.gitlab_hosts.map((h) => html`<option value=${h} ?selected=${t.host === h}>${h}</option>`)}</select>`
         : html`<input name="host" .value=${t.host || ""} @input=${(e) => { t.host = e.target.value; redraw(); }}>`,
         data.gitlab_hosts.length ? "" : "Add the host under Settings, GitHub and GitLab first.") : nothing}
       ${field("First step", stepSelect(d.start, d.steps, (v) => { d.start = v; redraw(); }))}
     </div>
+    ${t.kind === "linear" || t.kind === "connector" ? ticketPreview(t) : nothing}
   </fieldset>`;
 }
 
