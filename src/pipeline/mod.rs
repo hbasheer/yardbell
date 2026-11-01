@@ -429,21 +429,31 @@ impl Pipelines {
                 .find(|s| !name.is_empty() && s.tmux.as_deref() == Some(name.as_str()));
             let screen = match shown {
                 Some(s) if s.activity != crate::snapshot::Activity::Active => {
-                    let on_screen = world.screen(&s.machine, &name).await;
                     let marker = prompts::marker(&run, &run.step);
-                    let seen_it = on_screen
-                        .as_deref()
-                        .is_some_and(|text| prompts::outcome(text, &marker).is_some());
-                    if run.state == RunState::Running
-                        && s.activity == crate::snapshot::Activity::Idle
-                        && !seen_it
-                    {
-                        world
-                            .written_result(&s.machine, &s.agent, &s.path, &marker)
-                            .await
-                            .or(on_screen)
+                    let quiet = run.state == RunState::Running
+                        && s.activity == crate::snapshot::Activity::Idle;
+                    let filed = match quiet {
+                        true => {
+                            run::filed_result(world.as_ref(), &run, &s.machine, &s.path, &marker)
+                                .await
+                        }
+                        false => None,
+                    };
+                    if filed.is_some() {
+                        filed
                     } else {
-                        on_screen
+                        let on_screen = world.screen(&s.machine, &name).await;
+                        let seen_it = on_screen
+                            .as_deref()
+                            .is_some_and(|text| prompts::outcome(text, &marker).is_some());
+                        if quiet && !seen_it {
+                            world
+                                .written_result(&s.machine, &s.agent, &s.path, &marker)
+                                .await
+                                .or(on_screen)
+                        } else {
+                            on_screen
+                        }
                     }
                 }
                 _ => None,
