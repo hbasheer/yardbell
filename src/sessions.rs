@@ -56,7 +56,7 @@ pub fn work_lines_command(path: &str) -> String {
          wc -c < \"$f\" | tr -d ' '; \
          head -c 1048576 -- \"$f\" | grep -E '\"type\":\"user\"' | awk 'length($0) < 100000' | head -n 5; \
          echo {}; \
-         tail -c {} -- \"$f\" | grep -E '\"type\":\"(user|assistant|ai-title)\"' | awk 'length($0) < 100000' | tail -n 150; true",
+         tail -c {} -- \"$f\" | grep -E '\"type\":\"(user|assistant|ai-title)\"' | awk 'length($0) < 100000' | tail -n 1500; true",
         quote(path),
         quote(crate::insights::work::LATEST_MARK),
         crate::insights::work::READ_WHOLE,
@@ -494,10 +494,10 @@ mod tests {
             "{{\"type\":\"assistant\",\"huge\":\"{}\"}}\n",
             "x".repeat(300_000)
         ));
-        for n in 2..300 {
+        for n in 2..2000 {
             text.push_str(&line("assistant", n));
         }
-        std::fs::write(dir.join("old.jsonl"), line("user", 99)).unwrap();
+        std::fs::write(dir.join("old.jsonl"), line("user", 99999)).unwrap();
         std::process::Command::new("touch")
             .args(["-t", "202601010000"])
             .arg(dir.join("old.jsonl"))
@@ -515,14 +515,17 @@ mod tests {
         assert_eq!(lines[0], text.len().to_string());
         assert_eq!(lines[1], "{\"type\":\"user\",\"n\":0}");
         assert!(lines.contains(&crate::insights::work::LATEST_MARK));
-        assert_eq!(*lines.last().unwrap(), "{\"type\":\"assistant\",\"n\":299}");
+        assert_eq!(
+            *lines.last().unwrap(),
+            "{\"type\":\"assistant\",\"n\":1999}"
+        );
         assert!(
             !said.contains("api-request-blob"),
             "request copies are skipped"
         );
         assert!(!said.contains("xxxx"), "a line too long to keep is skipped");
-        assert!(!said.contains("\"n\":99"), "only the newest transcript");
-        assert!(lines.len() < 200);
+        assert!(!said.contains("\"n\":99999"), "only the newest transcript");
+        assert!(lines.len() < 1600);
 
         let nothing = std::process::Command::new("sh")
             .args(["-c", &work_lines_command("/r/none")])

@@ -1785,7 +1785,7 @@ class Suite:
         if mine["version"] != 3:
             raise Failure(f"the task is at version {mine['version']}")
 
-    def test_insights_say_what_it_is_working_on(self):
+    def test_each_part_of_the_timeline_says_what_happened(self):
         b = self.b
         if not self.session:
             path = os.path.join(self.y.root, "demo-app")
@@ -1793,31 +1793,59 @@ class Suite:
         row = f".s-row [data-act=insights][data-name={json.dumps(self.session)}]"
         b.goto(self.url("/"))
         b.wait(f"document.querySelector('{row}')", "Insights on a session row", timeout=15)
-        work = {"title": "Fix the login", "first_prompt": "Fix the login bug", "last_prompt": "Now add a test <img src=x onerror=window.__bad=1>",
-                "message": "The tests pass now.", "actions": [{"tool": "Bash", "what": "Ran the tests"}, {"tool": "Edit", "what": "Edited src/login.rs"}],
-                "files": ["src/login.rs"], "partial": True, "shared": True, "screen": ""}
-        b.js("""window.__ins_real = window.fetch; window.__work = %s; window.fetch = (u, o) => String(u).endsWith('/insights')
-          ? window.__ins_real(u, o).then((r) => r.json()).then((d) => { d.work = window.__work; d.task = ''; return new Response(JSON.stringify(d), { headers: { 'content-type': 'application/json' } }); })
-          : window.__ins_real(u, o)""" % json.dumps(work))
+        none = {"asked": [], "question": "", "stopped_at": "", "summary": "", "did": [], "more": 0, "files": [], "said": ""}
+        working = {**none, "asked": ["Now add a test <img src=x onerror=window.__bad=1>"], "summary": "Edited 1 file, ran 1 command",
+                   "did": [{"tool": "Bash", "what": "Ran the tests"}, {"tool": "Edit", "what": "Edited src/login.rs"}],
+                   "files": ["src/login.rs"], "said": "The tests pass now."}
+        waiting = {**none, "question": "Which database?"}
+        now = "new Date().toISOString()"
+        b.js("""window.__ins_real = window.fetch; window.fetch = (u, o) => String(u).endsWith('/insights')
+          ? window.__ins_real(u, o).then((r) => r.json()).then((d) => {
+              const at = %s;
+              d.task = '';
+              d.work = window.__work;
+              d.parts = window.__parts;
+              d.timeline = { ...(d.timeline || {}), since: at, started: true, ended: null, dropped: 0, totals: { working: 60, waiting: 60, idle: 0 },
+                runs: [{ at, kind: 'tool', text: 'Bash: from the screen' }], folder: '', branch: '', agent: 'claude',
+                periods: [{ state: 'working', from: at, to: at, seconds: 60 }, { state: 'waiting', from: at, to: null, seconds: 60 }] };
+              return new Response(JSON.stringify(d), { headers: { 'content-type': 'application/json' } });
+            })
+          : window.__ins_real(u, o);
+          window.__work = %s; window.__parts = %s;""" % (now, json.dumps({"title": "Fix the login", "first_prompt": "Fix the login bug", "partial": True, "shared": True, "screen": ""}),
+                                                        json.dumps({"before": none, "periods": [working, waiting]})))
         try:
             b.click(row)
-            b.wait("document.querySelector('.ins-dialog .ins-work')", "the section")
-            said = b.js("document.querySelector('.ins-work').textContent")
-            for want in ("What it's working on", "Fix the login", "Fix the login bug", "Now add a test <img", "The tests pass now.", "Ran the tests", "Edited src/login.rs", "src/login.rs", "Another session", "latest part"):
-                if want not in said:
-                    raise Failure(f"the section does not say {want!r}: {said}")
-            if b.js("window.__bad || document.querySelector('.ins-work img')"):
+            b.wait("document.querySelector('.ins-dialog .ins-part')", "the detail of a part")
+            first = b.js("document.querySelector('.ins-period.working').innerText")
+            for want in ("You said", "Now add a test <img", "Edited 1 file, ran 1 command", "The tests pass now.", "Show 2 steps"):
+                if want not in first:
+                    raise Failure(f"the working part does not say {want!r}: {first}")
+            if "Which database?" not in b.js("document.querySelector('.ins-period.waiting').innerText"):
+                raise Failure("the wait does not say what the agent asked")
+            if b.js("window.__bad || document.querySelector('.ins-part img')"):
                 raise Failure("text from the transcript was not escaped")
-            first = b.js("document.querySelector('.ins-body h3').textContent")
-            if first != "What it's working on":
-                raise Failure(f"the first section is {first}")
+            if b.js("document.querySelector('.ins-dialog .ins-run.is-tool')"):
+                raise Failure("a tool call from the screen repeats what the part already says")
+            if b.js("document.querySelector('.ins-about').textContent") != "Fix the login":
+                raise Failure("the dialog does not open with what the session is about")
+            heads = b.js("[...document.querySelectorAll('.ins-body h3')].map((h) => h.textContent)")
+            if heads[0] != "Time spent" or "Timeline" not in heads:
+                raise Failure(f"the sections read {heads}")
+            note = b.js("[...document.querySelectorAll('.ins-note')].map((n) => n.textContent).join(' ')")
+            for want in ("Another session runs in this folder", "older stretches may have no detail"):
+                if want not in note:
+                    raise Failure(f"the timeline does not warn {want!r}: {note}")
+            b.js("document.querySelector('.ins-steps summary').click()")
+            b.wait("document.querySelector('.ins-steps[open] li')?.textContent === 'Ran the tests'", "the steps to open")
             b.click(".ins-dialog [data-ins=close]")
             b.wait("!document.querySelector('.ins-dialog')", "the dialog to close")
-            b.js("window.__work = { actions: [], files: [], screen: 'last line on screen' }")
+            b.js("window.__work = { title: '', first_prompt: '', screen: 'last line on screen' }; window.__parts = null")
             b.click(row)
             b.wait("document.querySelector('.ins-work pre')?.textContent.includes('last line on screen')", "the end of the terminal")
+            if not b.js("document.querySelector('.ins-dialog .ins-run.is-tool')"):
+                raise Failure("with no transcript, tool calls from the screen should stay")
             b.click(".ins-dialog [data-ins=close]")
-            self.check_errors("what it is working on")
+            self.check_errors("the parts of the timeline")
         finally:
             b.js("window.fetch = window.__ins_real")
 

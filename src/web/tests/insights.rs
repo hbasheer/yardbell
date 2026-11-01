@@ -212,8 +212,9 @@ async fn insights_carry_the_sessions_pull_request() {
 }
 
 fn transcript(prompt: &str, command: &str) -> String {
-    let user = json!({ "type": "user", "message": { "content": prompt } });
-    let tool = json!({ "type": "assistant", "message": { "content": [
+    let now = chrono::Local::now().to_rfc3339();
+    let user = json!({ "type": "user", "timestamp": now, "message": { "content": prompt } });
+    let tool = json!({ "type": "assistant", "timestamp": now, "message": { "content": [
         { "type": "tool_use", "name": "Bash", "input": { "command": command } },
         { "type": "tool_use", "name": "Edit", "input": { "file_path": "/r/src/inbox.rs" } },
         { "type": "text", "text": "Working on the inbox filter." },
@@ -247,11 +248,12 @@ fn set_snapshot(r: &Rig, snap: crate::snapshot::Snapshot) {
 }
 
 #[tokio::test]
-async fn insights_say_what_the_agent_is_working_on() {
+async fn each_part_of_the_timeline_says_what_happened_in_it() {
     let r = rig();
     let c = cookie(&r.app).await;
     set_agent(&r, "claude");
     stub_screen(&r);
+    observe(&r, Activity::Active, "", 5);
     r.fake.stub(
         "/projects/",
         Output::ok_with(&transcript("Fix the inbox filter", "cargo test")),
@@ -260,10 +262,13 @@ async fn insights_say_what_the_agent_is_working_on() {
     assert_eq!(status, StatusCode::OK, "{body}");
     let work = &body["work"];
     assert_eq!(work["first_prompt"], "Fix the inbox filter");
-    assert_eq!(work["message"], "Working on the inbox filter.");
-    assert_eq!(work["actions"][1]["what"], "Ran cargo test");
-    assert!(work["files"][0].as_str().unwrap().ends_with("src/inbox.rs"));
     assert_eq!(work["screen"], "");
+    assert!(work.get("moments").is_none());
+    let part = &body["parts"]["periods"][0];
+    assert_eq!(part["asked"][0], "Fix the inbox filter");
+    assert_eq!(part["said"], "Working on the inbox filter.");
+    assert_eq!(part["did"][0]["what"], "Ran cargo test");
+    assert_eq!(part["summary"], "Edited 1 file, ran 1 command");
 }
 
 #[tokio::test]
@@ -279,7 +284,7 @@ async fn saved_secrets_stay_out_of_what_it_is_working_on() {
     );
     let (_, body) = get_json(&r, &c, "/sessions/hp/hp-eng-1301/insights").await;
     assert!(body["work"]["first_prompt"].is_string());
-    assert!(!body["work"].to_string().contains("shh-secret-1"), "{body}");
+    assert!(!body.to_string().contains("shh-secret-1"), "{body}");
 }
 
 #[tokio::test]

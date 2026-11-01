@@ -105,6 +105,10 @@ async fn insights_route(
         (Vec::new(), None)
     };
     let work = work_of(&app, &m, &name, live.as_ref(), screen).await;
+    let parts = match (&work, &timeline) {
+        (Some(w), Some(t)) if w.screen.is_empty() => Some(work::parts(&t.periods, &w.moments)),
+        _ => None,
+    };
     let pull = live
         .as_ref()
         .map(|s| (s.folder.clone(), s.branch.clone()))
@@ -144,6 +148,7 @@ async fn insights_route(
         "attachable": attachable,
         "activity": live.as_ref().map(|s| s.activity),
         "work": work,
+        "parts": parts,
         "timeline": timeline,
         "earlier": earlier,
         "scrollback_error": scrollback,

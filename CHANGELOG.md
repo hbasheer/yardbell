@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- Insights: each stretch of the timeline now says what happened in it: what you said, what the agent
+  did, what it said or asked you, with every step one click away. This replaces the **What it's working
+  on** section.
+
 ## [0.10.0] - 2026-11-01
 
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
