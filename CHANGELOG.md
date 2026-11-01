@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.402] - 2026-11-01
+
 - **Build from a diagram.** **Build from this** on a diagram, or **Run now** on a by-hand pipeline, starts a run that
   works from it, with its own copy of the diagram's source. The new template **Implement from a diagram** writes a task
   list and waits for your approval before changing any code. Steps can quote the diagram with `{diagram}`.
