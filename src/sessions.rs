@@ -434,6 +434,17 @@ impl Sessions {
         self.output(m, &work_lines_command(path)).await.ok()
     }
 
+    pub async fn script(&self, m: &Machine, cmd: &str, wait: Duration) -> Result<String, String> {
+        let out = self.runner.run(self.ssh.command(m, cmd), None, wait).await;
+        if out.ok() {
+            return Ok(out.stdout);
+        }
+        if out.timed_out {
+            return Err(format!("{} did not answer in time", m.name));
+        }
+        Err(without_shell_noise(&out.stderr))
+    }
+
     pub async fn send(&self, m: &Machine, name: &str, text: &str) -> Result<(), String> {
         self.output_with_input(m, &send_script(name), Some(text.to_string()))
             .await

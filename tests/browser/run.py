@@ -2025,7 +2025,7 @@ class Suite:
             self.b.goto(self.url(page))
             self.b.wait("document.querySelector('.side-link[href=\"/pipeline\"]')", f"the Pipeline link on {page}")
             order = self.b.js("[...document.querySelectorAll('a.side-link[href]')].map((a) => a.getAttribute('href')).join(' ')")
-            if "/workspace /pipeline /dispatch" not in order:
+            if "/workspace /pipeline /diagrams /dispatch" not in order:
                 raise Failure(f"the sidebar on {page} reads {order}")
 
     def set_field(self, selector, value):
@@ -3731,6 +3731,106 @@ class Suite:
             self.api("POST", "/api/settings/mcp/servers", {"servers": before})
             b.goto(self.url("/"))
 
+    def seed_diagram(self, body):
+        folder = os.path.join(self.y.root, "demo-app", ".archify", "architecture-billing-20260101-000000")
+        os.makedirs(folder, exist_ok=True)
+        with open(os.path.join(folder, "out.html"), "w") as f:
+            f.write(body)
+        return folder
+
+    def test_a_diagram_cannot_reach_yardbell(self):
+        b = self.b
+        hostile = """<!doctype html><title>x</title><body>drawn<script>
+          (async () => {
+            const seen = {};
+            try { seen.cookie = document.cookie; } catch (e) { seen.cookie = 'blocked'; }
+            try { localStorage.setItem('x', '1'); seen.storage = 'open'; } catch (e) { seen.storage = 'blocked'; }
+            try { const r = await fetch('/api/settings'); seen.api = String(r.status); } catch (e) { seen.api = 'blocked'; }
+            try { const r = await fetch('https://example.com/'); seen.net = String(r.status); } catch (e) { seen.net = 'blocked'; }
+            try { seen.parent = parent.document.title; } catch (e) { seen.parent = 'blocked'; }
+            parent.postMessage({ diagram: seen }, '*');
+          })();
+        </script></body>"""
+        folder = self.seed_diagram(hostile)
+        try:
+            found = [d for d in self.api("GET", "/api/diagrams")["diagrams"] if d["folder"] == "demo-app"]
+            if len(found) != 1 or found[0]["file"] != "out.html":
+                raise Failure(f"the list reads {found}")
+            d = found[0]
+            b.goto(self.url("/diagrams"))
+            b.js("window.__seen = null; addEventListener('message', (e) => { if (e.data?.diagram) window.__seen = e.data.diagram; })")
+            b.wait("document.querySelector('.dg-open')", "the diagram in the list")
+            if b.js("document.querySelector('.dg-open').textContent").strip() != "architecture billing":
+                raise Failure("the diagram's name reads wrong")
+            b.click(".dg-open")
+            b.wait("document.querySelector('iframe.dg-frame')", "the diagram's frame")
+            if "allow-same-origin" in b.js("document.querySelector('iframe.dg-frame').getAttribute('sandbox')"):
+                raise Failure("the frame shares Yardbell's origin")
+            b.wait("window.__seen", "the diagram's script to report")
+            seen = b.js("window.__seen")
+            if seen["storage"] != "blocked" or seen["api"] != "blocked" or seen["net"] != "blocked" or seen["parent"] != "blocked" or seen["cookie"] not in ("", "blocked"):
+                raise Failure(f"a diagram could reach out: {seen}")
+            b.goto(self.url(f"/diagrams/view?machine={d['machine']}&folder={d['folder']}&dir={d['dir']}&file=out.html"))
+            alone = b.js("(() => { try { return document.cookie; } catch (e) { return 'blocked'; } })()")
+            if alone not in ("", "blocked"):
+                raise Failure(f"opened at its own address, a diagram sees {alone!r}")
+            b.goto(self.url("/"))
+            blocked = [e for e in b.errors if "Content-Security-Policy" in e]
+            if not blocked:
+                raise Failure("the browser refused nothing, so the diagram's calls failed some other way")
+            b.errors = [e for e in b.errors if e not in blocked]
+            self.check_errors("a locked down diagram")
+        finally:
+            shutil.rmtree(os.path.dirname(folder), ignore_errors=True)
+
+    def test_diagrams_page_shows_each_machine_and_draws(self):
+        b = self.b
+        folder = self.seed_diagram("<!doctype html><title>x</title>drawn")
+        try:
+            b.goto(self.url("/diagrams"))
+            b.wait("document.querySelector('.dg-open')", "the diagram in the list")
+            state = self.api("GET", "/api/diagrams")["machines"][0]["state"]
+            if state == "needs_node" and "Needs Node 18" not in b.js("document.querySelector('.dg-setup').innerText"):
+                raise Failure("the page does not say Node is needed")
+            if state != "installed" and not b.js("document.getElementById('draw-new').disabled"):
+                raise Failure("Draw should wait for Archify")
+            b.js("""(() => {
+              const real = window.fetch;
+              window.fetch = (u, o) => String(u).endsWith('/api/diagrams')
+                ? real(u, o).then((r) => r.json()).then((d) => { d.machines.forEach((m) => { m.state = 'installed'; }); return new Response(JSON.stringify(d), { headers: { 'content-type': 'application/json' } }); })
+                : real(u, o);
+              document.dispatchEvent(new Event('visibilitychange'));
+            })()""")
+            b.wait("!document.getElementById('draw-new').disabled", "Draw to be ready")
+            b.click("#draw-new")
+            b.wait("document.getElementById('draw-dialog')?.open", "the draw dialog")
+            said = b.js("document.getElementById('draw-dialog').innerText")
+            for want in ("uses that agent's tokens", "check it before sharing", "What to focus on"):
+                if want not in said:
+                    raise Failure(f"the dialog does not say {want!r}: {said}")
+            if "demo-app" not in b.js("document.getElementById('draw-dialog').innerHTML"):
+                raise Failure("the folder is not offered")
+            b.js("[...document.querySelectorAll('#draw-dialog button')].find((x) => x.textContent === 'Cancel').click()")
+            b.wait("!document.getElementById('draw-dialog')?.open", "the dialog to close")
+            b.js("[...document.querySelectorAll('.dg-list .btn')].find((x) => x.textContent === 'Delete').click()")
+            b.wait("document.querySelector('dialog.confirm[open]')", "the delete confirmation")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait("!document.querySelector('.dg-open')", "the diagram gone")
+            if os.path.exists(folder):
+                raise Failure("the diagram's folder is still there")
+            self.check_errors("the diagrams page")
+        finally:
+            shutil.rmtree(os.path.dirname(folder), ignore_errors=True)
+
+    def test_settings_shows_archify_on_each_machine(self):
+        b = self.b
+        b.goto(self.url("/settings#diagrams"))
+        b.wait("document.querySelector('#diagram-machines .dg-machine')", "the machine in the section")
+        said = b.js("document.getElementById('diagram-machines').innerText")
+        if MACHINE not in said or not any(w in said for w in ("Installed", "Not installed", "Needs Node")):
+            raise Failure(f"the section reads {said}")
+        self.check_errors("Archify in Settings")
+
     def test_connection_actions_are_fields(self):
         b = self.b
         b.goto(self.url("/"))
@@ -4165,7 +4265,7 @@ class Suite:
           const main = document.querySelector('.main, .ws-side');
           return {
             bottom: Math.round(rect(bar).bottom), height: innerHeight, wide: Math.round(rect(bar).width), page: innerWidth,
-            tabs: tabs.map((t) => t.textContent.trim().replace(/[0-9]+$/, '')),
+            tabs: tabs.map((t) => t.textContent.trim().replace(/\\s*[0-9]+$/, '')),
             row: new Set(tabs.map((t) => Math.round(rect(t).top))).size,
             inside: tabs.every((t) => rect(t).left >= 0 && rect(t).right <= innerWidth),
             hit: tabs.every((t) => { const r = rect(t); return t.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }),
@@ -4173,7 +4273,7 @@ class Suite:
             sideways: document.documentElement.scrollWidth > innerWidth,
           };
         })()"""
-        want = ["Dashboard", "Workspace", "Pipelines", "Dispatch", "Proposals", "Settings"]
+        want = ["Dashboard", "Workspace", "Pipelines", "Diagrams", "Dispatch", "Proposals", "Settings"]
         try:
             for path in ("/", "/pipeline", "/settings", "/dispatch", "/proposals", "/workspace"):
                 b.goto(self.url(path))

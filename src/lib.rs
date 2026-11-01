@@ -5,6 +5,7 @@ pub mod cli;
 pub mod config;
 pub mod connectors;
 pub mod detect;
+pub mod diagrams;
 pub mod discover;
 pub mod dispatch;
 pub mod doctor;

@@ -167,6 +167,24 @@ function codexModelNote() {
   note.textContent = `Codex does not list ${model} for your account, so it may refuse it. Dispatch then shows Codex's error in the conversation.`;
 }
 
+const DIAGRAM_WORDS = { installed: "Installed", not_installed: "Not installed", needs_node: "Needs Node 18 or later", offline: "Did not answer" };
+
+async function loadDiagramMachines() {
+  const list = $("diagram-machines");
+  try {
+    const { version, machines } = await api("GET", "/api/diagrams");
+    list.innerHTML = machines.map((m) => {
+      const tone = { installed: "ok", needs_node: "warn", offline: "bad" }[m.state] || "";
+      const button = m.state === "not_installed" ? `<button class="btn" type="button" data-diagram-install="${esc(m.name)}">Install</button>`
+        : m.state === "installed" ? `<button class="btn quiet" type="button" data-diagram-remove="${esc(m.name)}">Remove</button>` : "";
+      const detail = m.state === "installed" ? `Archify ${version}` : m.problem || "";
+      return `<li class="row dg-machine"><span class="dg-where"><strong>${esc(m.name)}</strong>${detail ? `<small>${esc(detail)}</small>` : ""}</span><span class="pr-badge ${tone}">${DIAGRAM_WORDS[m.state]}</span>${button}</li>`;
+    }).join("");
+  } catch (err) {
+    list.innerHTML = `<li class="row"><span class="wt-error">${esc(err.message)}</span></li>`;
+  }
+}
+
 async function loadInstalled() {
   const names = (data.machines || []).map((m) => m.name);
   const answers = await Promise.all(names.map((name) =>
@@ -193,6 +211,7 @@ function renderDispatch() {
   rules = (d.rules || []).map((r) => ({ action: "any", machine: "any", folder: "", ...r }));
   renderRules();
   loadInstalled();
+  loadDiagramMachines();
 }
 
 const RULE_STEPS = { any: "Any step", call_connector: "Call a connected tool", call_tool: "Call an MCP tool", run_command: "Run a command", save_connector: "Save a connection", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
@@ -2504,4 +2523,21 @@ $("setup-form").addEventListener("submit", async (e) => {
   } finally {
     button.disabled = false;
   }
+});
+
+$("diagram-machines").addEventListener("click", async (e) => {
+  const button = e.target.closest("[data-diagram-install], [data-diagram-remove]");
+  if (!button) return;
+  const removing = "diagramRemove" in button.dataset;
+  const machine = removing ? button.dataset.diagramRemove : button.dataset.diagramInstall;
+  if (removing && !(await Nav.confirm(`Remove Archify from ${machine}?`, "Diagrams already drawn stay in their folders. You can install it again.", { confirm: "Remove", danger: true }))) return;
+  button.disabled = true;
+  button.textContent = removing ? "Removing…" : "Installing…";
+  try {
+    await api("POST", `/api/diagrams/${removing ? "remove" : "install"}`, { machine });
+    saved(removing ? `Archify removed from ${machine}.` : `Archify installed on ${machine}.`);
+  } catch (err) {
+    toast(err.message);
+  }
+  await loadDiagramMachines();
 });
