@@ -673,6 +673,40 @@ pipelines:
   for a result file, or does not write one, and has no transcript must fit its result on the terminal's
   screen. **Result files** under [How a run works](#how-a-run-works) says which agents are asked.
 
+## Health checks
+
+Health checks are plain tests of what Yardbell already reads from its machines, pipelines, triggers and
+pull requests. They use no tokens and run no commands of their own. A check starts no agent, types into
+nothing and changes nothing. It only tells you.
+
+They cover what the other notifications do not. An agent waiting, a session ended, a machine down or back,
+memory at 95%, a pipeline run that starts waiting or finishes, and a proposal already have a
+[phone notification](apps.md#phone-notifications), so these checks do not repeat them.
+
+| Check | Speaks when | Default |
+|---|---|---|
+| A run stays queued | A run has waited that long for a free slot on a machine that is up | 120 minutes |
+| A run stays waiting for you | A run has waited that long at the same step for the same reason. It was told once when it started waiting, and this is the one reminder | 240 minutes |
+| A step near its limit has an unchanged screen | An agent step's session has shown exactly the same screen that long, and the step is past three quarters of its minutes | 30 minutes |
+| CI stays pending | The same commit of an open pull or merge request has been pending that long. Yardbell reads only branches with a live session | 120 minutes |
+| A trigger keeps failing | A trigger or a pipeline's trigger cannot read what it watches for that long, or a trigger's last start failed. A failure that stands until the next scheduled try, meaning a failed start or a failed read by a pipeline's schedule, stops counting 24 hours after it happened, or sooner if a later try works. The trigger's own row in Settings or on the Pipelines page still shows it | 60 minutes |
+| A machine stays short of memory | A machine has stayed at 90% memory or more that long | 60 minutes |
+
+Current problems show at the top of the dashboard, with a count on **Dashboard** in the sidebar. Each one
+links to the run, pull request, trigger or machine it is about, and leaves as soon as it clears.
+
+Each problem notifies your phone once. It notifies again only after it has been clear for 5 minutes and then
+comes back, and a restart does not change that, since Yardbell keeps what it told you in `health.json` in its
+state folder. More than 3 new problems at once arrive as one notification. While a machine is down, or a
+pull request cannot be read, what is known about it stays as it is rather than counting as cleared. A failed
+start or scheduled read that has passed its 24 hours does not come back, also after a restart, and only
+another failure is a new problem. A schedule that fails at every try, such as every hour, moves that time on
+at each try, so it stays one open problem. With this check's time set to 24 hours or more, one such failure
+never shows here.
+
+**Settings, Health checks** has an on or off and a time for each. `yardbell doctor` lists problems you have
+been told about that are still open.
+
 ## Connectors
 
 ### What a connector is

@@ -4,13 +4,14 @@ use crate::settings::{edit_machine, MachineEdit, Settings};
 use serde::de::DeserializeOwned;
 use serde_json::{json, Value};
 
-pub const CHANGEABLE: [&str; 9] = [
+pub const CHANGEABLE: [&str; 10] = [
     "dispatch",
     "triggers",
     "worktree_setup",
     "agents",
     "session_mcp_servers",
     "phone",
+    "health_checks",
     "machines",
     "pipelines",
     "pull_requests",
@@ -27,6 +28,7 @@ pub fn stored(cfg: &Config, area: &str) -> Value {
         "agents" => json!({ "default_agent": cfg.default_agent(), "custom": to(&cfg.agents) }),
         "session_mcp_servers" => to(&cfg.mcp_servers),
         "phone" => to(&cfg.phone_notifications),
+        "health_checks" => to(&cfg.health_checks),
         "machines" => json!(cfg
             .machines
             .iter()
@@ -362,6 +364,10 @@ fn put(cfg: &mut Config, area: &str, value: Value) -> Result<(), String> {
         "phone" => {
             known::<crate::config::PhoneNotifications>(&value, area, &[])?;
             cfg.phone_notifications = read(area, value)?;
+        }
+        "health_checks" => {
+            known::<crate::config::HealthChecks>(&value, area, &[])?;
+            cfg.health_checks = read(area, value)?;
         }
         "machines" => {
             let sent: Vec<Value> =

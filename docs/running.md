@@ -85,6 +85,7 @@ Quick reference:
 | `workspaces` | Folder globs under each machine's root that hold git checkouts |
 | `default_agent` | Agent preselected in New session (default `claude`) |
 | `agents` | Extra agents, or changed commands for built-in ones, see [AI agents](agents.md#ai-agents) |
+| `health_checks` | Which [health checks](automation.md#health-checks) are on and how long each waits; keys in the [configuration guide](configuration.md#health_checks-optional) |
 | `phone_notifications` | Which notifications the Android app shows, see [Phone notifications](apps.md#phone-notifications); keys in the [configuration guide](configuration.md#phone_notifications-optional) |
 | `listen_ip` | Address to listen on besides 127.0.0.1; defaults to the local machine's `mesh_ip` |
 | `machines[].name` | Short name, `[a-z0-9-]+` |

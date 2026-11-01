@@ -216,6 +216,9 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
     if let Some(hint) = &mesh.hint {
         println!("  fix: {hint}");
     }
+    for (ok, text) in crate::health::doctor_lines(&cfg, &state_dir) {
+        line(ok, &text);
+    }
     let defs = crate::pipeline::library::Library::load(state_dir.join("pipelines")).list();
     let ssh = Ssh::new(state_dir);
     let probe = Probe::new(runner.clone(), ssh.clone());

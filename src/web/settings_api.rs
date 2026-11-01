@@ -23,6 +23,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/mesh/apply", post(mesh_apply))
         .route("/api/settings/machines/{name}", post(machine))
         .route("/api/settings/phone", post(phone_save))
+        .route("/api/settings/health", post(health_save))
         .route("/api/settings/pull-requests", post(pull_requests_save))
         .route("/api/settings/pull-requests/folders", get(pull_folders))
         .route("/api/settings/agents", post(add_agent))
@@ -99,6 +100,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             "pipeline_finished": phone.pipeline_finished,
             "proposals": phone.proposals,
         },
+        "health_checks": cfg.health_checks,
         "mcp_servers": cfg.mcp_servers,
         "mcp_auth": mcp_auth,
         "secrets": secrets,
@@ -368,6 +370,14 @@ async fn phone_save(
     Json(edit): Json<PhoneEdit>,
 ) -> Result<Response, ApiError> {
     app.settings.update_phone(&edit).map_err(bad)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+async fn health_save(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(edit): Json<crate::config::HealthChecks>,
+) -> Result<Response, ApiError> {
+    app.settings.update_health(&edit).map_err(bad)?;
     Ok(Json(json!({ "ok": true })).into_response())
 }
 

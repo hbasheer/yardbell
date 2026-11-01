@@ -23,6 +23,7 @@ struct Inner {
     pulls: HashMap<crate::pulls::Key, crate::pulls::PullView>,
     pull_whys: HashMap<crate::pulls::Key, String>,
     pull_health: crate::pulls::PullHealth,
+    problems: Vec<crate::health::Problem>,
 }
 
 // The checkout an ended session ran in, as the last check before it ended saw it.
@@ -268,6 +269,34 @@ impl State {
             return;
         }
         inner.pulls = pulls;
+        drop(inner);
+        self.touch();
+    }
+
+    pub fn unread_pulls(&self) -> Vec<crate::pulls::Key> {
+        let inner = self.inner.read().expect("state lock");
+        inner.pull_whys.keys().cloned().collect()
+    }
+
+    pub fn screens(&self) -> BTreeMap<String, String> {
+        let inner = self.inner.read().expect("state lock");
+        inner
+            .snapshots
+            .values()
+            .flat_map(|snap| snap.screens.clone())
+            .collect()
+    }
+
+    pub fn problems(&self) -> Vec<crate::health::Problem> {
+        self.inner.read().expect("state lock").problems.clone()
+    }
+
+    pub fn set_problems(&self, problems: Vec<crate::health::Problem>) {
+        let mut inner = self.inner.write().expect("state lock");
+        if inner.problems == problems {
+            return;
+        }
+        inner.problems = problems;
         drop(inner);
         self.touch();
     }

@@ -101,6 +101,28 @@ function connection(m) {
   return `${reason[0].toUpperCase()}${reason.slice(1)}${seen}`;
 }
 
+function lasted(since) {
+  const mins = Math.max(0, Math.floor((Date.now() - new Date(since).getTime()) / 60000));
+  return mins < 60 ? `${mins} min` : `${Math.floor(mins / 60)} h`;
+}
+
+function renderHealthBanner(problems) {
+  const banner = $("health-banner");
+  const list = problems || [];
+  banner.hidden = !list.length;
+  if (banner.hidden) return;
+  const outside = (link) => /^https?:/.test(link);
+  litRender(html`<div class="banner-text">
+    <strong>${list.length === 1 ? "1 thing looks stuck" : `${list.length} things look stuck`}</strong>
+    <ul class="health-list">${repeat(list, (p) => p.key, (p) => html`<li>
+      <a href=${p.link} target=${outside(p.link) ? "_blank" : "_self"} rel="noopener">${p.title}</a>
+      <span class="health-lasted">${lasted(p.since)}</span>
+      <span class="health-detail">${p.detail}</span>
+    </li>`)}</ul>
+  </div>
+  <a class="btn" href="/settings#health">Change checks</a>`, banner);
+}
+
 function renderMeshBanner(mesh) {
   const banner = $("mesh-banner");
   banner.hidden = !mesh || mesh.on !== false;
@@ -395,6 +417,7 @@ function render(state) {
   if (selected && !state.machines.some((m) => m.name === selected)) selected = "";
   Nav.render(state, selected);
   renderMeshBanner(state.mesh);
+  renderHealthBanner(state.problems);
   renderGroups(state);
 }
 

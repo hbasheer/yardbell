@@ -99,6 +99,8 @@ pub struct PullView {
     pub ci: Ci,
     #[serde(default)]
     pub failed: Vec<String>,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub head: String,
 }
 
 impl From<&Pull> for PullView {
@@ -113,6 +115,7 @@ impl From<&Pull> for PullView {
             review: p.review.clone(),
             ci: p.ci,
             failed: p.failed.iter().map(|c| c.name.clone()).collect(),
+            head: p.head.clone(),
         }
     }
 }

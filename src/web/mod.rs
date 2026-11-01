@@ -672,6 +672,13 @@ async fn logout(AxState(app): AxState<Arc<AppState>>, headers: HeaderMap) -> Res
     (jar, Json(json!({ "ok": true }))).into_response()
 }
 
+#[derive(serde::Serialize)]
+struct StateReply {
+    #[serde(flatten)]
+    view: crate::state::StateView,
+    problems: Vec<crate::health::Problem>,
+}
+
 async fn state_json(
     AxState(app): AxState<Arc<AppState>>,
     headers: HeaderMap,
@@ -683,7 +690,11 @@ async fn state_json(
     view.mesh = Some(app.host_mesh.check(&cfg).await);
     view.server = Some(server_view(&cfg));
     view.proposals = app.proposals.waiting();
-    Ok(([(BUILD_HEADER, page_build())], Json(view)).into_response())
+    let reply = StateReply {
+        view,
+        problems: app.state.problems(),
+    };
+    Ok(([(BUILD_HEADER, page_build())], Json(reply)).into_response())
 }
 
 const LIVE_SETTLE: Duration = Duration::from_millis(100);

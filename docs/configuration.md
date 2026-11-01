@@ -213,6 +213,30 @@ Every key is optional. The values above are the defaults. Older configs may stil
 | `pipeline_finished` | `true` | Notify with the first line of a pipeline run's report. |
 | `proposals` | `true` | Notify when a proposal waits in the Proposals inbox. |
 
+### `health_checks` (optional)
+
+Plain checks that tell you when automation is quietly stuck, explained in
+[Health checks](automation.md#health-checks). The **Health checks** section of the Settings page edits
+these.
+
+```yaml
+health_checks:
+  run_queued: true
+  run_queued_minutes: 120
+  run_waiting: true
+  run_waiting_minutes: 240
+  step_quiet: true
+  step_quiet_minutes: 30
+  ci_pending: true
+  ci_pending_minutes: 120
+  trigger_failing: true
+  trigger_failing_minutes: 60
+  memory_short: true
+  memory_short_minutes: 60
+```
+
+Every key is optional. The values above are the defaults. Each time can be from 5 to 10080 minutes.
+
 ### `connectors` (optional)
 
 Outside tools pipelines can take work from and call. **Settings, Connections** edits them, and
@@ -654,7 +678,7 @@ yourself keeps its mode until Yardbell first saves it, so run `chmod 600` on it.
 
 | Change | Takes effect |
 |---|---|
-| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications`, `pull_requests`, `triggers` | on the next check, a few seconds |
+| machines, `mesh`, `agents`, `default_agent`, `ticket_pattern`, `forward_services`, `workspaces`, `poll_seconds`, `phone_notifications`, `health_checks`, `pull_requests`, `triggers` | on the next check, a few seconds |
 | `worktree_setup` | for the next worktree Yardbell creates |
 | passcode, "Log out everywhere" (from Settings) | immediately |
 | `port`, `listen_ip`, the host machine's `mesh_ip` | after restarting Yardbell |
@@ -679,6 +703,7 @@ Yardbell refuses to start or save an invalid file and says why:
 | `default_agent "x" is not a known agent` | use a built-in name or add the agent under `agents` |
 | `phone_notifications.topic may only use letters, digits, - and _ (at most 64)` | rename the topic, or leave it empty to turn notifications off |
 | `phone_notifications.wait_minutes must be from 0 to 60` | use a whole number of minutes from 0 to 60 |
+| `health_checks.run_queued_minutes must be from 5 to 10080` | use a whole number of minutes in that range; the other `_minutes` keys say the same |
 | `pull_requests.poll_seconds must be at least 30` | ask GitHub less often, 120 is the default |
 | `pull_requests.gitlab entry 1 needs a host` | add `host:` |
 | `pull_requests.gitlab host "https://x/y" must be a host name only, like git.example.com` | drop the scheme and the path |

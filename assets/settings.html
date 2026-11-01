@@ -66,6 +66,7 @@
       <p class="nav-label">Phone</p>
       <a href="#pair">Connect a phone</a>
       <a href="#phone">Notifications</a>
+      <a href="#health">Health checks</a>
       <p class="nav-label">Agents</p>
       <a href="#dispatch">Dispatch</a>
       <a href="#triggers">Triggers</a>
@@ -170,6 +171,43 @@
       </div>
       <div class="form-foot">
         <p class="help" id="phone-status" role="status"></p>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </section>
+
+  <section id="health">
+    <div class="section-head"><h2>Health checks</h2></div>
+    <p class="help phone-app">Plain checks on what Yardbell already reads, to tell you when automation is quietly stuck. They use no tokens, start nothing and change nothing. A problem shows on the dashboard and notifies your phone once, and again only after it clears and comes back.</p>
+    <form class="panel" id="health-form">
+      <div class="phone-switches">
+        <div class="phone-switch">
+          <label class="choice"><input type="checkbox" name="run_queued">A run stays queued</label>
+          <label class="choice phone-wait">for <input type="number" name="run_queued_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        </div>
+        <div class="phone-switch">
+          <label class="choice"><input type="checkbox" name="run_waiting">A run stays waiting for you</label>
+          <label class="choice phone-wait">for <input type="number" name="run_waiting_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        </div>
+        <div class="phone-switch">
+          <label class="choice"><input type="checkbox" name="step_quiet">A step near its limit has an unchanged screen</label>
+          <label class="choice phone-wait">for <input type="number" name="step_quiet_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        </div>
+        <div class="phone-switch">
+          <label class="choice"><input type="checkbox" name="ci_pending">CI stays pending on a pull or merge request</label>
+          <label class="choice phone-wait">for <input type="number" name="ci_pending_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        </div>
+        <div class="phone-switch">
+          <label class="choice"><input type="checkbox" name="trigger_failing">A trigger keeps failing</label>
+          <label class="choice phone-wait">for <input type="number" name="trigger_failing_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        </div>
+        <div class="phone-switch">
+          <label class="choice"><input type="checkbox" name="memory_short">A machine stays at 90% memory or more</label>
+          <label class="choice phone-wait">for <input type="number" name="memory_short_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        </div>
+      </div>
+      <div class="form-foot">
+        <p class="help">Each time can be from 5 to 10080 minutes.</p>
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
