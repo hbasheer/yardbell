@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.2] - 2026-11-01
+
 - Insights: each stretch of the timeline now says what happened in it: what you said, what the agent
   did, what it said or asked you, with every step one click away. This replaces the **What it's working
   on** section.
