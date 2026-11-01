@@ -292,12 +292,13 @@ function needBox(run, d) {
     <p>${(w.reason || "").startsWith(nameOf(d, w.step)) ? html`<b>${w.reason}</b>` : html`<b>${nameOf(d, w.step)}</b> · ${w.reason}`}</p>
     ${w.kind === "questions" && open.length ? html`<ol class="pl-questions">${open.map((q) => html`<li>${q.asked}</li>`)}</ol>` : nothing}
     ${w.kind === "no_result" ? html`<p class="help">The agent went quiet and Yardbell could not read a result from it. Show the terminal to see what it did, then retry the step, continue on pass or fail, or answer it.</p>` : nothing}
+    ${w.kind === "unchanged" ? html`<p class="help">Yardbell did not start this step and did not reuse its last verdict. Run it again to read the same code, or continue on pass or fail to take that line yourself.</p>` : nothing}
     ${w.screen ? html`<pre class="session-screen">${w.screen}</pre>` : nothing}
     ${answerable ? html`<label class="visually-hidden" for="pl-answer">Your answer</label>
       <textarea id="pl-answer" rows="3" placeholder="Your answer" .value=${text} @input=${(e) => { answers.set(run.id, e.target.value); draw(); }}></textarea>` : nothing}
     <div class="pl-need-actions">
       <button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Drop</button>
-      ${w.kind === "tool_changed" ? html`<button class="btn primary" type="button" ?disabled=${busy} @click=${() => act(run, "accept-tool")}>Accept and run</button>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>Retry step</button>`}
+      ${w.kind === "tool_changed" ? html`<button class="btn primary" type="button" ?disabled=${busy} @click=${() => act(run, "accept-tool")}>Accept and run</button>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "retry")}>${w.kind === "unchanged" ? "Run it again" : "Retry step"}</button>`}
       <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "fail" })}>Continue on fail</button>
       <button class="btn" type="button" ?disabled=${busy} @click=${() => act(run, "continue", { outcome: "pass" })}>Continue on pass</button>
       ${answerable ? html`<button class="btn primary" type="button" ?disabled=${busy || !text.trim()} @click=${() => act(run, "answer", { text })}>Send answer</button>` : nothing}
@@ -337,7 +338,7 @@ function detail(run, d) {
       const n = nodeState(run, st);
       return html`<li class=${`pl-st ${n.cls}`}>
         <span class="pl-mark" aria-hidden="true">${n.mark}</span>
-        <div><span class="pl-st-name">${st.name}</span> <small>${n.note}</small>${state.report ? report(state.report) : nothing}</div>
+        <div><span class="pl-st-name">${st.name}</span> <small>${n.note}</small>${state.pin?.head ? html`<small class="pl-st-commit">Read <code title=${state.pin.head}>${state.pin.head.slice(0, 7)}</code>${state.pin.changes ? " with uncommitted changes" : ""}</small>` : nothing}${state.report ? report(state.report) : nothing}</div>
         <time>${clock(state.ended || state.started)}</time>
       </li>`;
     })}</ol>

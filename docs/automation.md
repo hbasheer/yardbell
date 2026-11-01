@@ -530,6 +530,14 @@ you; if it is busy, the task goes in once it is quiet. A session nothing needs a
 itself: everything but the current step's and the newest writer's. So a reviewer stops when Fix
 starts, and a Review run again starts a new one that reads the code afresh.
 
+**A review reached again with nothing new.** A read-only step notes the commit and uncommitted changes it
+read, and the run's page shows the commit. If the step is reached again and the code is exactly what its
+last result was about, as when Fix made no new commit and changed no files, Yardbell does not start a
+reviewer and does not reuse the old verdict. A second read of the same code could only repeat itself, or
+pass by chance. The run waits and says so. **Run it again** reads the same code anyway, and **Continue on
+pass** or **Continue on fail** takes that line. This try does not count towards the step's limit. New
+commits or new uncommitted changes run the step as usual, and so does a folder whose code cannot be read.
+
 **Session names.** A run's sessions end with the end of its id, like `hp-com-1-ab12cd`, so a run can
 never stop or type into a session someone else started under a name it remembers.
 

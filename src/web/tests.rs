@@ -2514,6 +2514,8 @@ async fn a_review_card_shows_its_diff_and_screenshots() {
         branch: "eng-1301-inbox".into(),
         evidence: "abcdef123456".into(),
         scan: String::new(),
+        pin: None,
+        again: false,
     };
     let screen = "⏺ YARDBELL REVIEW\n  verdict: changes needed\n  base: main\n  summary: One.\n  - high: src/inbox.rs:2: The count is wrong. [screenshot: login.png]\n  END REVIEW";
     let cfg = r.app.config().unwrap();
@@ -3815,6 +3817,8 @@ async fn a_scan_card_shows_the_files_its_findings_name_and_sends_them() {
         branch: "eng-1301-inbox".into(),
         evidence: String::new(),
         scan: "security".into(),
+        pin: None,
+        again: false,
     };
     let screen = "⏺ YARDBELL SCAN\n  verdict: 2 issues found\n  summary: A token and an injection.\n  - high: config/deploy.yml:3: A token is committed.\n  - medium: src/run.rs:2: The branch goes into sh -c.\n  END SCAN";
     let card = finished_scan(&r, &id, of.clone(), screen);
@@ -4167,4 +4171,278 @@ async fn pull_request_settings_are_saved_with_tokens_kept_hidden() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
     assert!(body.contains("poll_seconds must be at least 30"), "{body}");
+}
+
+const PIN_A: &str = "aaaaaaaa11111111111111111111111111111111";
+const PIN_B: &str = "bbbbbbbb22222222222222222222222222222222";
+
+fn stub_pin(r: &Rig, head: &str, changes: &str) {
+    r.fake.restub(
+        "diff-index",
+        Output::ok_with(&format!(
+            "HEAD\t{head}\nTOP\t/r/slots/slot2\nCHANGES\t{changes}\n"
+        )),
+    );
+}
+
+fn finished_review(r: &Rig, id: &str, pin: Value) -> usize {
+    let of: crate::dispatch::ReviewOf = serde_json::from_value(json!({
+        "machine": "hp", "name": "hp-eng-1301", "path": "/r/slots/slot2",
+        "branch": "eng-1301-inbox", "pin": pin,
+    }))
+    .unwrap();
+    r.app.dispatch.report(
+        &crate::dispatch::Change {
+            conversation: id.to_string(),
+            machine: "hp".into(),
+            name: "hp-eng-1301-2".into(),
+            path: "/r/slots/slot2".into(),
+            state: "idle",
+            review: Some(of),
+        },
+        "YARDBELL REVIEW\nverdict: ready\nsummary: Fine.\n- none\nEND REVIEW",
+    );
+    r.app.dispatch.get(id).unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .len()
+        - 1
+}
+
+fn session_card(r: &Rig, id: &str) -> usize {
+    r.app.dispatch.report(
+        &crate::dispatch::Change {
+            conversation: id.to_string(),
+            machine: "hp".into(),
+            name: "hp-eng-1301".into(),
+            path: "/r/slots/slot2".into(),
+            state: "idle",
+            review: None,
+        },
+        "done",
+    );
+    r.app.dispatch.get(id).unwrap()["events"]
+        .as_array()
+        .unwrap()
+        .len()
+        - 1
+}
+
+#[tokio::test]
+async fn an_approved_review_notes_its_commit_and_a_second_is_refused_while_it_runs() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    r.fake.stub("tmux new", Output::ok_with("hp-x\n"));
+    stub_pin(&r, PIN_A, "");
+    let args = json!({ "machine": "hp", "name": "hp-eng-1301" });
+    let first = dispatch_tool(&r, Some(&id), "review_session", args.clone()).await;
+    assert_eq!(first["isError"], false, "{first}");
+    let step = last_event(&r, &id);
+    let action = step["id"].as_str().unwrap();
+
+    stub_pin(&r, PIN_B, "");
+    let url = format!("/dispatch/conversations/{id}/actions/{action}");
+    let (status, done) = step_post(&r, &c, &url, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "approved", "{done}");
+    assert_eq!(
+        done["review"]["pin"]["head"], PIN_B,
+        "the commit when it started, not when it was proposed"
+    );
+    let convo = r.app.dispatch.get(&id).unwrap();
+    assert_eq!(convo["sessions"][0]["review"]["pin"]["head"], PIN_B);
+
+    let again = dispatch_tool(&r, Some(&id), "review_session", args.clone()).await;
+    assert_eq!(again["isError"], true, "{again}");
+    let said = again["content"][0]["text"].as_str().unwrap();
+    assert!(said.contains("already has a review running"), "{said}");
+    assert!(said.contains("again set to true"), "{said}");
+
+    stub_pin(&r, PIN_B, "edited");
+    let dirty = dispatch_tool(&r, Some(&id), "review_session", args.clone()).await;
+    assert_eq!(dirty["isError"], false, "new uncommitted changes: {dirty}");
+
+    stub_pin(&r, PIN_B, "");
+    let mut asked = args;
+    asked["again"] = json!(true);
+    let asked = dispatch_tool(&r, Some(&id), "review_session", asked).await;
+    assert_eq!(asked["isError"], false, "{asked}");
+    let step = last_event(&r, &id);
+    assert_eq!(step["review"]["again"], true);
+    let url = format!(
+        "/dispatch/conversations/{id}/actions/{}",
+        step["id"].as_str().unwrap()
+    );
+    let (status, done) = step_post(&r, &c, &url, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "approved", "{done}");
+}
+
+#[tokio::test]
+async fn review_branch_on_reviewed_code_waits_until_the_person_asks_again() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    r.fake.stub("tmux new", Output::ok_with("hp-x\n"));
+    stub_pin(&r, PIN_A, "hash");
+    finished_review(
+        &r,
+        &id,
+        json!({ "head": PIN_A, "top": "/r/slots/slot2", "changes": "hash" }),
+    );
+    let card = session_card(&r, &id);
+    let reviews = format!("/dispatch/conversations/{id}/reviews");
+    let (status, step) = step_post(&r, &c, &reviews, json!({ "card": card })).await;
+    assert_eq!(status, StatusCode::OK, "{step}");
+    let text = step["already"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("with uncommitted changes already has a finished review"),
+        "{text}"
+    );
+    assert!(text.contains("said ready"), "{text}");
+
+    let url = format!(
+        "/dispatch/conversations/{id}/actions/{}",
+        step["id"].as_str().unwrap()
+    );
+    let starts = |r: &Rig| {
+        r.fake
+            .calls()
+            .iter()
+            .filter(|c| c.join(" ").contains("tmux new"))
+            .count()
+    };
+    let before = starts(&r);
+    let (status, held) = step_post(&r, &c, &url, json!({ "decision": "approve" })).await;
+    assert_eq!(status, StatusCode::OK, "{held}");
+    assert_eq!(held["status"], "pending", "{held}");
+    assert_eq!(starts(&r), before, "nothing started");
+
+    let (status, done) = step_post(
+        &r,
+        &c,
+        &url,
+        json!({ "decision": "approve", "again": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{done}");
+    assert_eq!(done["status"], "approved", "{done}");
+    assert!(done.get("already").is_none(), "{done}");
+    assert_eq!(starts(&r), before + 1, "the person asked");
+
+    stub_pin(&r, PIN_A, "other");
+    let (_, fresh) = step_post(&r, &c, &reviews, json!({ "card": card })).await;
+    assert!(fresh.get("already").is_none(), "other changes: {fresh}");
+}
+
+async fn get_json(r: &Rig, url: String, c: String) -> (StatusCode, Value) {
+    let req = Request::get(url)
+        .header(header::ACCEPT, "application/json")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    (
+        status,
+        serde_json::from_str::<Value>(&body).unwrap_or_default(),
+    )
+}
+
+#[tokio::test]
+async fn a_review_card_says_when_the_branch_moved_on() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = dispatch_conversation(&r).await;
+    let card = finished_review(&r, &id, json!({ "head": PIN_A, "top": "/r/slots/slot2" }));
+    let url = format!("/dispatch/conversations/{id}/reviews/{card}/commit");
+    stub_pin(&r, PIN_A, "");
+    let (status, now) = get_json(&r, url.clone(), c.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{now}");
+    assert_eq!(now["standing"], "same");
+    stub_pin(&r, PIN_A, "edited");
+    assert_eq!(
+        get_json(&r, url.clone(), c.clone()).await.1["standing"],
+        "uncommitted"
+    );
+    stub_pin(&r, PIN_B, "");
+    let (_, now) = get_json(&r, url.clone(), c.clone()).await;
+    assert_eq!(now["standing"], "moved");
+    assert_eq!(now["now"]["head"], PIN_B);
+    r.fake.restub(
+        "diff-index",
+        Output::ok_with("ERR the folder /r/slots/slot2 is gone\n"),
+    );
+    let (_, now) = get_json(&r, url.clone(), c.clone()).await;
+    assert_eq!(now["standing"], "unknown");
+    assert_eq!(now["now"]["error"], "the folder /r/slots/slot2 is gone");
+
+    let old = {
+        r.app.dispatch.report(
+            &crate::dispatch::Change {
+                conversation: id.clone(),
+                machine: "hp".into(),
+                name: "hp-old".into(),
+                path: "/r/slots/slot2".into(),
+                state: "idle",
+                review: Some(
+                    serde_json::from_value(json!({ "machine": "hp", "name": "x", "path": "/r" }))
+                        .unwrap(),
+                ),
+            },
+            "YARDBELL REVIEW\nverdict: ready\nsummary: Old.\n- none\nEND REVIEW",
+        );
+        r.app.dispatch.get(&id).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .len()
+            - 1
+    };
+    let url = format!("/dispatch/conversations/{id}/reviews/{old}/commit");
+    assert_eq!(
+        get_json(&r, url, c.clone()).await.0,
+        StatusCode::NOT_FOUND,
+        "a card from before this"
+    );
+}
+
+#[tokio::test]
+async fn a_finished_review_notes_when_the_code_changed_while_it_ran() {
+    let r = rig();
+    let id = dispatch_conversation(&r).await;
+    let cfg = r.app.config().unwrap();
+    let m = cfg.machine("hp").unwrap().clone();
+    let read = crate::dispatch::ReviewPin {
+        head: PIN_A.into(),
+        top: "/r/slots/slot2".into(),
+        ..Default::default()
+    };
+    let of: crate::dispatch::ReviewOf = serde_json::from_value(json!({
+        "machine": "hp", "name": "hp-eng-1301", "path": "/r/slots/slot2", "pin": read,
+    }))
+    .unwrap();
+    let change = crate::dispatch::Change {
+        conversation: id.clone(),
+        machine: "hp".into(),
+        name: "hp-eng-1301-2".into(),
+        path: "/r/slots/slot2".into(),
+        state: "idle",
+        review: Some(of),
+    };
+    stub_pin(&r, PIN_B, "");
+    r.app
+        .dispatch
+        .report_from(
+            &change,
+            "YARDBELL REVIEW\nverdict: ready\nsummary: Fine.\n- none\nEND REVIEW",
+            &r.app.folders,
+            &m,
+        )
+        .await;
+    assert_eq!(last_event(&r, &id)["read_changed"], "moved");
+    assert_eq!(
+        r.app.dispatch.earlier_review("hp", &read),
+        None,
+        "it does not count"
+    );
 }

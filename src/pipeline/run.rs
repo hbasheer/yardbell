@@ -4,7 +4,7 @@ use super::linear::Linear;
 use super::prompts::{self, TicketText};
 use super::record::{Effect, PullRef, Run, Seen, StepState, TicketRef};
 use crate::config::{Approval, Config, Pipelines as Cfg};
-use crate::dispatch::{By, ReviewOf};
+use crate::dispatch::{By, ReviewOf, ReviewPin};
 use crate::phone::Push;
 use crate::secrets::Secrets;
 use crate::state::{SessionView, StateView};
@@ -91,6 +91,7 @@ pub trait World: Send + Sync {
         path: &'a str,
     ) -> BoxFuture<'a, Result<(), String>>;
     fn other_runs(&self, id: &str) -> Vec<Run>;
+    fn read_pin<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ReviewPin>;
 }
 
 // What a phone notification from a pipeline is about, for the switches in Settings.
@@ -294,7 +295,93 @@ fn folder_on(run: &Run, machine: &str) -> Option<String> {
         .map(|st| st.path.clone())
 }
 
+// The folder a step will work in, when it is known before the step starts.
+fn folder_before_start(run: &Run, step: &Step, machine: &str) -> Option<String> {
+    let StepKind::Agent { workspace, .. } = &step.kind else {
+        return None;
+    };
+    let path = match workspace {
+        Workspace::NewWorktree => folder_on(run, machine)?,
+        Workspace::SameAs { step: other } => run.steps.get(other)?.path.clone(),
+        Workspace::Copy { from } => {
+            let theirs = run.steps.get(from)?;
+            if theirs.machine != machine {
+                return None;
+            }
+            theirs.path.clone()
+        }
+    };
+    (!path.is_empty()).then_some(path)
+}
+
+fn nothing_new(run: &Run, step: &Step, pin: &ReviewPin) -> String {
+    let before = run
+        .history
+        .iter()
+        .rev()
+        .find(|e| e.step != step.id)
+        .and_then(|e| run.def().step(&e.step))
+        .map_or_else(|| "The last step".to_string(), |s| s.name.clone());
+    let said = run
+        .steps
+        .get(&step.id)
+        .and_then(|s| s.outcome)
+        .map_or("finished", |o| o.word());
+    format!(
+        "{before} made no new commit and changed no files, so {} has nothing new to read. It {said} on {}.",
+        step.name,
+        pin.words()
+    )
+}
+
+// A read-only step reached again on the code its last result was about stops here: a second read
+// of the same code could only repeat itself or flip by chance, and passing on the old verdict
+// would hide that the fix did nothing. The person decides. A second try after no result is
+// the same run of the step, so it keeps the pin it has.
 async fn agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen> {
+    if !agent_of(step).is_some_and(|(_, read_only)| read_only) || run.retried {
+        return start_agent(world, cfg, run, step).await;
+    }
+    let state = run.steps.get(&step.id).cloned().unwrap_or_default();
+    let before = match folder_before_start(run, step, &state.machine) {
+        Some(path) => Some(world.read_pin(&state.machine, &path).await),
+        None => None,
+    };
+    if let Some(pin) = before.as_ref().filter(|_| !state.again) {
+        if state.judged.as_ref().is_some_and(|j| j.same_code(pin)) {
+            return vec![Seen::Unchanged {
+                step: step.id.clone(),
+                reason: nothing_new(run, step, pin),
+            }];
+        }
+    }
+    let started_seen = start_agent(world, cfg, run, step).await;
+    let pin = match before {
+        Some(pin) => Some(pin),
+        None => {
+            let place = started_seen.iter().find_map(|seen| match seen {
+                Seen::Started {
+                    result: Ok((_, machine, path)),
+                    ..
+                } => Some((machine.as_str(), path.as_str())),
+                _ => None,
+            });
+            match place {
+                Some((machine, path)) => Some(world.read_pin(machine, path).await),
+                None => None,
+            }
+        }
+    };
+    pin.map(|pin| Seen::Pinned {
+        step: step.id.clone(),
+        pin,
+    })
+    .into_iter()
+    .chain(started_seen)
+    .collect()
+}
+
+async fn start_agent(world: &dyn World, cfg: &Cfg, run: &Run, step: &Step) -> Vec<Seen> {
     let StepKind::Agent {
         agent,
         workspace,
@@ -999,6 +1086,15 @@ impl Live {
 }
 
 impl World for Live {
+    fn read_pin<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ReviewPin> {
+        Box::pin(async move {
+            match self.cfg.machine(machine) {
+                Some(m) => crate::dispatch::read_pin(&self.app.folders, m, path).await,
+                None => ReviewPin::failed(format!("{machine} is not a machine")),
+            }
+        })
+    }
+
     fn other_runs(&self, id: &str) -> Vec<Run> {
         self.app
             .pipelines

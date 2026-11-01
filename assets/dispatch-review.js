@@ -85,6 +85,8 @@ const expanded = new Set();
 const picks = new Map();
 const sending = new Set();
 const diffs = new Map();
+const commits = new Map();
+const COMMIT_CHECK_MS = 30000;
 const targets = new Map();
 const lowOpen = new Set();
 
@@ -115,6 +117,7 @@ export function reset() {
   picks.clear();
   sending.clear();
   diffs.clear();
+  commits.clear();
   targets.clear();
   lowOpen.clear();
 }
@@ -236,6 +239,7 @@ function body(e) {
   if (e.review) {
     return html`<div class="step-card-body">
       <p class="step-card-text">A new session in <code>${ctx.short(i.path)}</code> reviews this branch, runs the tests and changes no files. Its findings come back here.</p>
+      ${e.already && e.status === "pending" ? html`<p class="step-card-text review-commit warn" role="status"><strong>${e.already.text}</strong> Nothing has changed since, so a new review would read the same code.${e.already.conversation && e.already.conversation !== ctx.conversation() ? html` <a href=${`/dispatch?c=${encodeURIComponent(e.already.conversation)}`}>Open that conversation</a>` : nothing}</p>` : nothing}
       ${readOnlyNote(i)}
       <details class="step-card-more"><summary>Instructions for the reviewer</summary><p class="step-card-text step-card-mono">${i.prompt}</p></details>
     </div>`;
@@ -459,7 +463,8 @@ export async function decide(e, decision) {
   working.set(e.id, decision);
   ctx.draw();
   try {
-    const step = await ctx.api("POST", stepUrl(e), { decision, ...(input ? { input } : {}) });
+    const again = decision === "approve" && e.already ? { again: true } : {};
+    const step = await ctx.api("POST", stepUrl(e), { decision, ...again, ...(input ? { input } : {}) });
     drafts.delete(e.id);
     problems.delete(e.id);
     ctx.replaceStep(step);
@@ -606,7 +611,7 @@ function actions(e, state) {
   if (editingNow) {
     return html`<div class="step-card-actions">
       <button class="btn quiet" type="button" ?disabled=${busy} @click=${() => { drafts.delete(e.id); ctx.draw(); }}>Cancel</button>
-      <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve with changes"}</button>
+      <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${e.already ? "Review again" : mine ? mineWords(e).go : "Approve with changes"}</button>
     </div>`;
   }
   const editable = ["start_session", "send_to_session", "change_settings", "save_task"].includes(e.tool) || (e.tool === "remember" && e.input?.change !== "forget");
@@ -615,7 +620,7 @@ function actions(e, state) {
     ${e.tool === "change_settings" ? html`<a class="btn quiet" href=${areaLink(e.input?.area)}>Open in Settings</a>` : nothing}
     ${e.tool === "save_pipeline" ? html`<a class="btn" href=${`/pipeline?proposal=${encodeURIComponent(builderKey(e))}`}>${ICONS.edit}Edit in the builder</a>` : nothing}
     ${editable ? html`<button class="btn" type="button" ?disabled=${busy} @click=${() => startEditing(e)}>${ICONS.edit}Edit</button>` : nothing}
-    <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${mine ? mineWords(e).go : "Approve"}</button>
+    <button class="btn primary" type="button" ?disabled=${busy} @click=${() => decide(e, "approve")}>${ICONS.check}${e.already ? "Review again" : mine ? mineWords(e).go : "Approve"}</button>
   </div>`;
 }
 
@@ -1143,6 +1148,37 @@ function scanCard(e, index) {
   </article>`;
 }
 
+function loadCommit(index) {
+  const seen = commits.get(index);
+  if (seen && (seen.loading || Date.now() - seen.at < COMMIT_CHECK_MS)) return;
+  commits.set(index, { ...seen, loading: true, at: Date.now() });
+  ctx.api("GET", `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/commit`)
+    .then((now) => commits.set(index, { now, at: Date.now() }))
+    .catch((err) => commits.set(index, { error: err.message, at: Date.now() }))
+    .finally(() => ctx.draw());
+}
+
+function commitStanding(read, seen) {
+  if (seen?.error || seen?.now?.standing === "unknown") return html` <span class="muted">Yardbell could not check the branch now: ${seen.error || seen.now.now.error}</span>`;
+  switch (seen?.now?.standing) {
+    case "same": return html` Nothing has changed since.`;
+    case "moved": return html` <strong>The branch has moved on since this review: it is now at <code>${seen.now.now.head.slice(0, 7)}</code>, so this verdict is about older code.</strong>`;
+    case "uncommitted": return html` <strong>It is still at this commit, but the uncommitted changes are different now, so this verdict may not hold.</strong>`;
+    default: return nothing;
+  }
+}
+
+function commitLine(e, index) {
+  const read = e.of?.pin;
+  if (!read) return nothing;
+  if (read.error) return html`<p class="step-card-text muted review-commit">Yardbell could not read which commit this review started on: ${read.error}</p>`;
+  loadCommit(index);
+  const seen = commits.get(index);
+  const stale = ["moved", "uncommitted"].includes(seen?.now?.standing);
+  const during = { moved: "The branch moved while this review ran, so it may have read either commit.", uncommitted: "Files changed while this review ran, so it may not have read them all as they are here." }[e.read_changed];
+  return html`<p class="step-card-text review-commit ${stale ? "warn" : ""}">Read <code title=${read.head}>${read.head.slice(0, 7)}</code>${read.changes ? " with uncommitted changes" : ""}.${during ? html` ${during}` : nothing}${commitStanding(read, seen)}</p>`;
+}
+
 export function reviewCard(e, index) {
   if (scanOf(e.of)) return scanCard(e, index);
   const findings = e.findings || [];
@@ -1172,6 +1208,7 @@ export function reviewCard(e, index) {
     </header>
     <div class="step-card-body">
       ${e.summary ? longText(`summary:${index}`, e.summary, true) : nothing}
+      ${commitLine(e, index)}
       ${findingList(e, index, chosen, "No problems found.")}
       ${diffPanel(e, index)}
     </div>
