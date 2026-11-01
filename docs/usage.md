@@ -285,9 +285,11 @@ The Pipelines page shows your [pipelines](automation.md#pipelines), one card eac
 words, its steps in order (`Review ⟲ Fix` marks a loop back), an On/Off switch, its version, how many
 runs are running, waiting and done, and **Needs you** when one waits.
 
-- **Waiting for me** lists every run that waits for you, across all pipelines.
+- **Waiting for me** lists every run that waits for you, across all pipelines, and any run held for 30
+  minutes because its machine is short of memory.
 - **New pipeline** starts an **Empty pipeline** or copies a template, switched off.
-- **Settings** sets the agent steps at once per machine, a step's time limit and QA notes per folder.
+- **Settings** sets the agent steps at once per machine, a step's time limit, an optional memory limit
+  that holds new steps, and QA notes per folder.
 
 A run keeps to one agent session: its steps take turns in it, in one worktree. A step marked
 **Review: new read-only session** gets a reviewer of its own, which stops when nothing needs it, as

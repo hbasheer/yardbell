@@ -212,6 +212,8 @@ impl GitLabHost {
 pub struct Pipelines {
     pub per_machine: u32,
     pub minutes: u64,
+    // Percent of memory in use from which new agent steps wait; 0 turns the hold off.
+    pub memory_limit: u32,
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub qa_notes: BTreeMap<String, String>,
 }
@@ -221,6 +223,7 @@ impl Default for Pipelines {
         Pipelines {
             per_machine: 2,
             minutes: 120,
+            memory_limit: 0,
             qa_notes: BTreeMap::new(),
         }
     }
@@ -685,6 +688,10 @@ impl Config {
         }
         if !(10..=1440).contains(&self.pipelines.minutes) {
             return invalid("pipelines.minutes must be from 10 to 1440".into());
+        }
+        let limit = self.pipelines.memory_limit;
+        if limit != 0 && !(50..=99).contains(&limit) {
+            return invalid("pipelines.memory_limit must be 0 (off) or from 50 to 99".into());
         }
         crate::worktrees::setup::validate(&self.worktree_setup, |m| self.machine(m).is_some())
             .map_err(ConfigError::Invalid)?;
@@ -1228,6 +1235,14 @@ mod tests {
                 "per_machine: 0",
                 "pipelines.per_machine must be from 1 to 6",
             ),
+            (
+                "memory_limit: 40",
+                "pipelines.memory_limit must be 0 (off) or from 50 to 99",
+            ),
+            (
+                "memory_limit: 100",
+                "pipelines.memory_limit must be 0 (off) or from 50 to 99",
+            ),
             ("minutes: 5", "pipelines.minutes must be from 10 to 1440"),
         ] {
             let err = load_str(&format!("{BASE}pipelines:\n  {line}\n"))
@@ -1301,6 +1316,20 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("cards: false"), "{text}");
         assert!(!text.contains("gitlab"), "{text}");
+    }
+
+    #[test]
+    fn the_memory_limit_is_off_unless_set_and_a_set_value_is_kept() {
+        assert_eq!(load_str(BASE).unwrap().pipelines.memory_limit, 0);
+        let section = |body: &str| format!("{BASE}pipelines:\n  {body}\n");
+        let no_limit = load_str(&section("per_machine: 3")).unwrap();
+        assert_eq!(no_limit.pipelines.memory_limit, 0);
+        for limit in [50, 85, 90, 99] {
+            let cfg = load_str(&section(&format!("memory_limit: {limit}"))).unwrap();
+            assert_eq!(cfg.pipelines.memory_limit, limit);
+            let saved = serde_yaml::to_string(&cfg).unwrap();
+            assert_eq!(load_str(&saved).unwrap().pipelines.memory_limit, limit);
+        }
     }
 
     #[test]

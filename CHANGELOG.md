@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Pipeline steps can wait while a machine is short of memory.** This is off unless you turn it on in the
+  Pipelines settings and enter a limit. From that percent of memory in use, new agent steps on that machine
+  are held until it has stayed under for two minutes, and at most one starts a minute on each machine.
+  Running steps are never stopped. The run's page says it is held and why, and a run held for 30 minutes
+  shows under **Waiting for me** with one phone notification while it stays queued.
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing
   in with your browser. **New connection** has **Sign in**, **MCP server** and **Token** tabs, and lists 23
   common tools. Trello, Jira and Sentry have been tried with real accounts; the list says the rest have

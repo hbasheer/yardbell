@@ -178,6 +178,31 @@ pub fn pipelines_lines(
     lines
 }
 
+fn memory_lines(limit: u32, readings: &[(String, Option<u64>)]) -> Vec<(bool, String)> {
+    if limit == 0 {
+        return Vec::new();
+    }
+    let say = |(m, reading): &(String, Option<u64>)| {
+        match reading {
+        None => (
+            false,
+            format!("{m}: no memory reading, so pipeline steps there are not held for memory"),
+        ),
+        Some(used) if *used >= u64::from(limit) => (
+            false,
+            format!(
+                "{m}: {used}% of memory is in use, so new pipeline steps there wait (limit {limit}%)"
+            ),
+        ),
+        Some(used) => (
+            true,
+            format!("{m}: {used}% of memory is in use, under the pipeline limit of {limit}%"),
+        ),
+    }
+    };
+    readings.iter().map(say).collect()
+}
+
 fn line(ok: bool, text: &str) {
     println!("{} {text}", if ok { "✓" } else { "✗" });
 }
@@ -220,6 +245,7 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
     let ssh = Ssh::new(state_dir);
     let probe = Probe::new(runner.clone(), ssh.clone());
     let mut up = Vec::new();
+    let mut memory = Vec::new();
     for m in &cfg.machines {
         let st = probe.check(&cfg, m).await;
         let detail = match (&st.reason, &st.snapshot) {
@@ -233,6 +259,10 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
         };
         line(st.up, &format!("{}: {detail}", m.name));
         up.push((m.name.clone(), st.up));
+        if st.up {
+            let health = st.snapshot.as_ref().and_then(|s| s.health);
+            memory.push((m.name.clone(), health.and_then(|h| h.pressure())));
+        }
     }
     let mut signed_in = Vec::new();
     if !cfg.pull_requests.gitlab.is_empty() {
@@ -305,6 +335,9 @@ pub async fn run(path: &Path, state_dir: std::path::PathBuf) -> anyhow::Result<(
             connectors.push((id, found));
         }
         for (ok, text) in pipelines_lines(&cfg, &defs, &linear, &gh, &signed_in, &up, &connectors) {
+            line(ok, &text);
+        }
+        for (ok, text) in memory_lines(cfg.pipelines.memory_limit, &memory) {
             line(ok, &text);
         }
         if let Ok(secrets) = &secrets {
@@ -507,6 +540,21 @@ mod tests {
             missing[0],
             (false, "Review my merge requests: git.commslayer.com was not checked; add it under pull_requests.gitlab".into())
         );
+    }
+
+    #[test]
+    fn the_memory_lines_say_what_the_hold_will_do() {
+        let readings = [
+            ("hp".to_string(), Some(40)),
+            ("mini".to_string(), Some(95)),
+            ("devbox".to_string(), None),
+        ];
+        let oks: Vec<bool> = memory_lines(90, &readings).iter().map(|l| l.0).collect();
+        assert_eq!(oks, vec![true, false, false]);
+        assert!(memory_lines(90, &readings)[2]
+            .1
+            .contains("no memory reading"));
+        assert!(memory_lines(0, &readings).is_empty());
     }
 
     #[test]

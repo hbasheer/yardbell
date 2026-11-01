@@ -87,6 +87,7 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
                 "runs": {
                     "running": count(&[RunState::Queued, RunState::Running]),
                     "waiting": count(&[RunState::Waiting]),
+                    "held": mine.iter().filter(|r| r.held.as_ref().is_some_and(|h| h.told)).count(),
                     "done": count(&[RunState::Done]),
                 },
                 "problem": problem,

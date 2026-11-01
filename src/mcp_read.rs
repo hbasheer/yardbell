@@ -636,6 +636,7 @@ fn runs(app: &AppState, args: &Value) -> Value {
                     "state": r.state,
                     "step": r.step,
                     "waiting_reason": r.waiting.as_ref().map(|w| w.reason.clone()),
+                    "held_reason": r.held.as_ref().map(|h| h.reason.clone()),
                     "started": r.started,
                 })
             })

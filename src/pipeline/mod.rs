@@ -38,6 +38,7 @@ pub struct Pipelines {
     // Runs with a step being carried out; the tick leaves them alone until it ends.
     busy: Mutex<HashSet<String>>,
     cfg: Mutex<crate::config::Pipelines>,
+    memory: Mutex<engine::MemoryWatch>,
     ticking: tokio::sync::Mutex<()>,
     linear: Mutex<Arc<linear::Linear>>,
     // Sessions of runs that went with a deleted pipeline, stopped on the next round.
@@ -69,6 +70,7 @@ impl Pipelines {
             watch: triggers::Watch::load(dir.join("watch.json")),
             busy: Mutex::new(HashSet::new()),
             cfg: Mutex::new(crate::config::Pipelines::default()),
+            memory: Mutex::new(Default::default()),
             ticking: tokio::sync::Mutex::new(()),
             linear: Mutex::new(Arc::new(linear::Linear::new())),
             orphans: Mutex::new(Vec::new()),
@@ -384,9 +386,36 @@ impl Pipelines {
             self.finish_deleting(&run.id);
         }
         let up = |m: &str| view.machines.iter().any(|x| x.name == m && x.up);
-        for id in engine::admit(&self.store.all(), cfg, &up) {
+        let all = self.store.all();
+        let readings = view
+            .machines
+            .iter()
+            .filter_map(|m| Some((m.name.clone(), m.health?.pressure()?)));
+        let admission = {
+            let mut memory = self.memory.lock().expect("pipelines memory");
+            memory.read(readings, &all, cfg.memory_limit, now);
+            engine::admit(&all, cfg, &up, &memory, &now)
+        };
+        for id in admission.start {
             if !self.busy(&id) {
                 self.apply(world.as_ref(), &id, Seen::Admitted, now);
+            }
+        }
+        for run in all.iter().filter(|r| r.state == RunState::Queued) {
+            let on_a_live_machine = run.slot.as_deref().is_some_and(up);
+            if !on_a_live_machine || self.busy(&run.id) {
+                continue;
+            }
+            let wanted = admission.held.get(&run.id);
+            let same = match (&run.held, wanted) {
+                (None, None) => true,
+                (Some(h), Some((kind, machine, reason))) => {
+                    h.kind == *kind && h.machine == *machine && h.reason == *reason
+                }
+                _ => false,
+            };
+            if !same {
+                self.apply(world.as_ref(), &run.id, Seen::Held(wanted.cloned()), now);
             }
         }
         let mut handles = Vec::new();

@@ -84,7 +84,7 @@ async fn pipelines_list_with_counts_and_templates() {
     assert_eq!(body["pipelines"][0]["definition"]["id"], id);
     assert_eq!(
         body["pipelines"][0]["runs"],
-        json!({ "running": 0, "waiting": 1, "done": 0 })
+        json!({ "running": 0, "waiting": 1, "held": 0, "done": 0 })
     );
     assert_eq!(body["settings"]["per_machine"], 2);
     assert_eq!(body["machines"], json!(["mini", "hp", "pro"]));

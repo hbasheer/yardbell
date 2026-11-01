@@ -1,5 +1,7 @@
 use super::definition::{MachineChoice, Outcome, Step, StepKind, END, WAIT};
-use super::record::{Effect, Entry, Question, Run, RunState, Seen, WaitKind, Waiting};
+use super::record::{
+    Effect, Entry, Held, HoldKind, Question, Run, RunState, Seen, WaitKind, Waiting,
+};
 use crate::config::Pipelines as Cfg;
 use chrono::{DateTime, Duration, Local};
 use std::collections::HashMap;
@@ -7,6 +9,9 @@ use std::collections::HashMap;
 const OFFLINE_MINUTES: i64 = 30;
 const RETRY_MINUTES: [i64; 4] = [1, 2, 4, 8];
 const SCREEN_LINES: usize = 10;
+const SETTLE_SECONDS: i64 = 120;
+const SPACING_SECONDS: i64 = 60;
+const HELD_TOO_LONG_MINUTES: i64 = 30;
 
 fn tail(text: &str, lines: usize) -> String {
     let all: Vec<&str> = text.trim_end().lines().collect();
@@ -53,6 +58,7 @@ fn wait(
     run.state = RunState::Waiting;
     run.step = step.to_string();
     run.slot = None;
+    run.held = None;
     run.waiting = Some(Waiting {
         kind,
         step: step.to_string(),
@@ -95,6 +101,7 @@ fn enter(mut run: Run, id: &str, now: &DateTime<Local>, past_limit: bool) -> (Ru
     run.retried = false;
     run.waiting = None;
     run.slot = None;
+    run.held = None;
     run.history.push(Entry {
         step: id.to_string(),
         outcome: None,
@@ -179,11 +186,16 @@ fn again(mut run: Run, screen: &str, now: &DateTime<Local>) -> (Run, Vec<Effect>
     }
     run.retried = true;
     run.step_since = now.to_rfc3339();
-    let effect = match current(&run).map(|s| s.kind) {
-        Some(StepKind::Plan { .. }) => Effect::Plan { step: id },
-        _ => Effect::Agent { step: id },
-    };
-    (run, vec![effect])
+    if matches!(current(&run).map(|s| s.kind), Some(StepKind::Plan { .. })) {
+        return (run, vec![Effect::Plan { step: id }]);
+    }
+    // A step whose agent died may have died of the memory the hold watches, so its second try
+    // queues like any other start.
+    if run.slot.is_none() {
+        run.slot = run.steps.get(&id).map(|s| s.machine.clone());
+    }
+    run.state = RunState::Queued;
+    (run, vec![])
 }
 
 fn tick(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
@@ -204,7 +216,7 @@ fn tick(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
                 "",
             );
         }
-        return (run, vec![]);
+        return held_too_long(run, now);
     }
     if run.state != RunState::Running {
         return (run, vec![]);
@@ -229,6 +241,25 @@ fn tick(mut run: Run, cfg: &Cfg, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
         }
         None => (run, vec![]),
     }
+}
+
+// The run stays queued so it starts by itself, but the person hears of it once.
+fn held_too_long(mut run: Run, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
+    let label = run.subject.label();
+    let Some(held) = run.held.as_mut().filter(|h| !h.told) else {
+        return (run, vec![]);
+    };
+    let minutes = elapsed(&held.since, now).unwrap_or_default();
+    if minutes < HELD_TOO_LONG_MINUTES {
+        return (run, vec![]);
+    }
+    held.told = true;
+    let text = format!(
+        "{label} has been held for {}: {}",
+        duration(minutes),
+        held.reason
+    );
+    (run, vec![Effect::Notify { text }])
 }
 
 fn answer(mut run: Run, text: String, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
@@ -289,6 +320,7 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
         Seen::Drop => {
             run.state = RunState::Dropped;
             run.slot = None;
+            run.held = None;
             (run, vec![Effect::StopSessions])
         }
         Seen::AcceptTool if waiting => {
@@ -326,14 +358,34 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
         }
         Seen::Admitted if run.state == RunState::Queued => {
             run.offline_since = None;
+            run.held = None;
             run.state = RunState::Running;
             run.step_since = now.to_rfc3339();
             let machine = run.slot.clone().unwrap_or_default();
+            let retried = run.retried;
             let st = run.state_of(&id);
-            st.runs += 1;
+            if !retried {
+                st.runs += 1;
+            }
             st.started = now.to_rfc3339();
             st.machine = machine;
             (run, vec![Effect::Agent { step: id }])
+        }
+        Seen::Held(hold) if run.state == RunState::Queued => {
+            // Only a machine that answers is judged, and held is what keeps a run off a machine
+            // that came back, so an old offline note must not stop it later.
+            run.offline_since = None;
+            let was = run.held.take();
+            run.held = hold.map(|(kind, machine, reason)| Held {
+                kind,
+                machine,
+                reason,
+                since: was
+                    .as_ref()
+                    .map_or_else(|| now.to_rfc3339(), |h| h.since.clone()),
+                told: was.as_ref().is_some_and(|h| h.told),
+            });
+            (run, vec![])
         }
         Seen::Closed(_) => {
             let reason = format!("{} was closed in Linear", run.subject.label());
@@ -451,9 +503,107 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
     }
 }
 
+// What the start gate knows of each machine's memory. The last time over the limit is kept
+// between rounds, for the two minutes a machine must then stay under.
+#[derive(Debug, Default)]
+pub struct MemoryWatch {
+    readings: HashMap<String, u64>,
+    over_at: HashMap<String, DateTime<Local>>,
+}
+
+impl MemoryWatch {
+    pub fn read(
+        &mut self,
+        readings: impl IntoIterator<Item = (String, u64)>,
+        runs: &[Run],
+        limit: u32,
+        now: DateTime<Local>,
+    ) {
+        self.readings = readings.into_iter().collect();
+        if limit == 0 {
+            return;
+        }
+        for (machine, used) in &self.readings {
+            if *used >= u64::from(limit) {
+                self.over_at.insert(machine.clone(), now);
+            }
+        }
+        // A restart forgets when a machine was last over, so a run held for memory starts the
+        // two minutes again rather than slipping through.
+        for run in runs.iter().filter(|r| r.state == RunState::Queued) {
+            if let Some(h) = &run.held {
+                if h.kind != HoldKind::Spacing {
+                    self.over_at.entry(h.machine.clone()).or_insert(now);
+                }
+            }
+        }
+    }
+
+    // A machine with no reading is not held for memory: it answers, and waiting for a figure
+    // that may never come would stop its work for good. The two minutes after a reading over the
+    // limit still run out first.
+    pub fn hold(
+        &self,
+        machine: &str,
+        limit: u32,
+        now: &DateTime<Local>,
+    ) -> Option<(HoldKind, String)> {
+        if limit == 0 {
+            return None;
+        }
+        if let Some(used) = self
+            .readings
+            .get(machine)
+            .filter(|u| **u >= u64::from(limit))
+        {
+            let reason = format!(
+                "{machine} is short of memory: {used}% is in use and the limit is {limit}%. This step starts once {machine} has stayed under the limit for two minutes."
+            );
+            return Some((HoldKind::Memory, reason));
+        }
+        let settling = self
+            .over_at
+            .get(machine)
+            .is_some_and(|at| (*now - *at).num_seconds() < SETTLE_SECONDS);
+        settling.then(|| {
+            let reason = format!(
+                "{machine} is back under its {limit}% memory limit. This step starts once it has stayed there for two minutes."
+            );
+            (HoldKind::Settling, reason)
+        })
+    }
+}
+
+fn last_starts(runs: &[Run]) -> HashMap<&str, DateTime<Local>> {
+    let mut last: HashMap<&str, DateTime<Local>> = HashMap::new();
+    for st in runs.iter().flat_map(|r| r.steps.values()) {
+        let Ok(at) = DateTime::parse_from_rfc3339(&st.started) else {
+            continue;
+        };
+        let at = at.with_timezone(&Local);
+        if !st.machine.is_empty() && last.get(st.machine.as_str()).is_none_or(|l| *l < at) {
+            last.insert(st.machine.as_str(), at);
+        }
+    }
+    last
+}
+
+#[derive(Debug, Default, PartialEq)]
+pub struct Admission {
+    pub start: Vec<String>,
+    pub held: HashMap<String, (HoldKind, String, String)>,
+}
+
 // Which queued runs may start their agent step now, oldest first, as slots on their machines
-// allow.
-pub fn admit(runs: &[Run], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<String> {
+// allow, and why the rest on a machine that answers are held. A run only short of a slot is not
+// held: it is plainly queued.
+pub fn admit(
+    runs: &[Run],
+    cfg: &Cfg,
+    up: &dyn Fn(&str) -> bool,
+    memory: &MemoryWatch,
+    now: &DateTime<Local>,
+) -> Admission {
     let since = |r: &Run| DateTime::parse_from_rfc3339(&r.step_since).ok();
     let mut busy: HashMap<&str, u32> = HashMap::new();
     for r in runs.iter().filter(|r| r.state == RunState::Running) {
@@ -466,16 +616,38 @@ pub fn admit(runs: &[Run], cfg: &Cfg, up: &dyn Fn(&str) -> bool) -> Vec<String> 
         .filter(|r| r.state == RunState::Queued)
         .collect();
     queued.sort_by_key(|r| since(r));
-    let mut out = Vec::new();
+    let mut last = last_starts(runs);
+    let mut out = Admission::default();
     for r in queued {
         let Some(m) = r.slot.as_deref() else {
             continue;
         };
-        let used = busy.entry(m).or_default();
-        if up(m) && *used < cfg.per_machine {
-            *used += 1;
-            out.push(r.id.clone());
+        if !up(m) {
+            continue;
         }
+        if let Some((kind, reason)) = memory.hold(m, cfg.memory_limit, now) {
+            out.held.insert(r.id.clone(), (kind, m.to_string(), reason));
+            continue;
+        }
+        let used = busy.entry(m).or_default();
+        if *used >= cfg.per_machine {
+            continue;
+        }
+        let spaced = cfg.memory_limit > 0
+            && last
+                .get(m)
+                .is_some_and(|at| (*now - *at).num_seconds() < SPACING_SECONDS);
+        if spaced {
+            let reason = format!(
+                "{m} started a step less than a minute ago. Yardbell starts at most one step a minute on each machine."
+            );
+            out.held
+                .insert(r.id.clone(), (HoldKind::Spacing, m.to_string(), reason));
+            continue;
+        }
+        *used += 1;
+        last.insert(m, *now);
+        out.start.push(r.id.clone());
     }
     out
 }
@@ -988,7 +1160,14 @@ pub(crate) mod tests {
             &cfg(),
             at(5),
         );
+        assert_eq!((did, run.state), (vec![], RunState::Queued));
+        assert!(run.retried);
+        let (run, did) = step(run, Seen::Admitted, &cfg(), at(5));
         assert_eq!((did, run.state), (agent("implement"), RunState::Running));
+        assert_eq!(
+            run.steps["implement"].runs, 1,
+            "a second try is not a new run"
+        );
         let screen: String = (1..=20).map(|n| format!("line {n}\n")).collect();
         let (run, _) = step(
             run,
@@ -1081,8 +1260,229 @@ pub(crate) mod tests {
             busy,
             queued("r4", 4, "devbox"),
         ];
-        assert_eq!(admit(&runs, &cfg(), &|_| true), vec!["r1", "r4"]);
-        assert_eq!(admit(&runs, &cfg(), &|m| m == "devbox"), vec!["r4"]);
+        let none = MemoryWatch::default();
+        let starts = |up: &dyn Fn(&str) -> bool| admit(&runs, &cfg(), up, &none, &at(9)).start;
+        assert_eq!(starts(&|_| true), vec!["r1", "r4"]);
+        assert_eq!(starts(&|m| m == "devbox"), vec!["r4"]);
+    }
+
+    fn limited() -> Cfg {
+        Cfg {
+            memory_limit: 90,
+            ..cfg()
+        }
+    }
+
+    fn queued_on(id: &str, minute: u32, machine: &str) -> Run {
+        Run {
+            id: id.into(),
+            state: RunState::Queued,
+            step_since: at(minute).to_rfc3339(),
+            slot: Some(machine.into()),
+            ..Run::default()
+        }
+    }
+
+    fn watching(readings: &[(&str, u64)], when: DateTime<Local>) -> MemoryWatch {
+        let mut watch = MemoryWatch::default();
+        let read = readings.iter().map(|(m, u)| (m.to_string(), *u));
+        watch.read(read, &[], limited().memory_limit, when);
+        watch
+    }
+
+    fn secs(minute: u32, second: u32) -> DateTime<Local> {
+        at(minute) + Duration::seconds(i64::from(second))
+    }
+
+    #[test]
+    fn a_machine_over_the_memory_limit_holds_its_steps_and_only_its_own() {
+        let runs = vec![queued_on("r1", 1, "hp"), queued_on("r2", 2, "devbox")];
+        let watch = watching(&[("hp", 90), ("devbox", 89)], at(5));
+        let out = admit(&runs, &limited(), &|_| true, &watch, &at(5));
+        assert_eq!(out.start, vec!["r2"]);
+        let (kind, machine, reason) = &out.held["r1"];
+        assert_eq!((*kind, machine.as_str()), (HoldKind::Memory, "hp"));
+        assert!(reason.contains("hp is short of memory: 90%"), "{reason}");
+        assert!(reason.contains("the limit is 90%"), "{reason}");
+    }
+
+    #[test]
+    fn a_machine_under_the_limit_is_released_only_after_two_minutes() {
+        let runs = vec![queued_on("r1", 1, "hp")];
+        let mut watch = watching(&[("hp", 95)], at(5));
+        let start = |watch: &MemoryWatch, now| admit(&runs, &limited(), &|_| true, watch, &now);
+        let under = || [("hp".to_string(), 40)];
+
+        watch.read(under(), &runs, 90, secs(5, 10));
+        let out = start(&watch, secs(5, 10));
+        assert!(out.start.is_empty());
+        assert_eq!(out.held["r1"].0, HoldKind::Settling);
+        assert!(start(&watch, secs(6, 59)).start.is_empty());
+        assert_eq!(start(&watch, at(7)).start, vec!["r1"]);
+
+        // Going over again starts the two minutes afresh.
+        watch.read([("hp".to_string(), 91)], &runs, 90, secs(6, 30));
+        watch.read(under(), &runs, 90, secs(6, 40));
+        assert!(start(&watch, at(8)).start.is_empty());
+        assert_eq!(start(&watch, secs(8, 30)).start, vec!["r1"]);
+    }
+
+    #[test]
+    fn a_machine_with_no_reading_is_not_held_but_its_two_minutes_still_run() {
+        let runs = vec![queued_on("r1", 1, "hp")];
+        let start = |watch: &MemoryWatch, now| admit(&runs, &limited(), &|_| true, watch, &now);
+        assert_eq!(
+            start(&MemoryWatch::default(), at(5)).start,
+            vec!["r1"],
+            "never read"
+        );
+        let mut watch = watching(&[("hp", 95)], at(5));
+        watch.read([], &runs, 90, secs(5, 10));
+        assert_eq!(start(&watch, secs(5, 10)).held["r1"].0, HoldKind::Settling);
+        assert_eq!(start(&watch, at(7)).start, vec!["r1"]);
+    }
+
+    #[test]
+    fn a_restart_does_not_let_a_held_step_slip_through() {
+        let mut run = queued_on("r1", 1, "hp");
+        run.held = Some(Held {
+            kind: HoldKind::Memory,
+            machine: "hp".into(),
+            reason: "short".into(),
+            since: at(1).to_rfc3339(),
+            told: false,
+        });
+        let runs = vec![run];
+        let mut fresh = MemoryWatch::default();
+        fresh.read([("hp".to_string(), 40)], &runs, 90, at(5));
+        let out = admit(&runs, &limited(), &|_| true, &fresh, &at(5));
+        assert_eq!(out.held["r1"].0, HoldKind::Settling);
+        let later = admit(&runs, &limited(), &|_| true, &fresh, &at(7));
+        assert_eq!(later.start, vec!["r1"]);
+    }
+
+    #[test]
+    fn at_most_one_step_a_minute_starts_on_each_machine() {
+        let mut roomy = limited();
+        roomy.per_machine = 6;
+        let mut started = queued_on("r0", 0, "hp");
+        started.state = RunState::Running;
+        started.state_of("a").machine = "hp".into();
+        started.state_of("a").started = at(5).to_rfc3339();
+        let runs = vec![
+            started,
+            queued_on("r1", 1, "hp"),
+            queued_on("r2", 2, "devbox"),
+            queued_on("r3", 3, "devbox"),
+        ];
+        let none = MemoryWatch::default();
+        let out = admit(&runs, &roomy, &|_| true, &none, &secs(5, 59));
+        assert_eq!(out.start, vec!["r2"], "one a round, on each machine");
+        assert_eq!(out.held["r1"].0, HoldKind::Spacing);
+        assert_eq!(out.held["r3"].0, HoldKind::Spacing);
+        let out = admit(&runs, &roomy, &|_| true, &none, &at(6));
+        assert_eq!(out.start, vec!["r1", "r2"]);
+    }
+
+    #[test]
+    fn a_run_short_of_a_slot_is_plainly_queued() {
+        let mut full = queued_on("r0", 0, "hp");
+        full.state = RunState::Running;
+        let mut slots = limited();
+        slots.per_machine = 1;
+        let runs = vec![full, queued_on("r1", 1, "hp")];
+        let out = admit(&runs, &slots, &|_| true, &MemoryWatch::default(), &at(5));
+        assert_eq!(out, Admission::default());
+    }
+
+    #[test]
+    fn a_machine_that_is_down_is_not_judged() {
+        let runs = vec![queued_on("r1", 1, "hp")];
+        let watch = watching(&[("hp", 95)], at(5));
+        let out = admit(&runs, &limited(), &|_| false, &watch, &at(5));
+        assert_eq!(out, Admission::default());
+    }
+
+    #[test]
+    fn the_off_setting_holds_nothing_and_spaces_nothing() {
+        let mut off = cfg();
+        off.memory_limit = 0;
+        off.per_machine = 6;
+        let mut started = queued_on("r0", 0, "hp");
+        started.state = RunState::Running;
+        started.state_of("a").machine = "hp".into();
+        started.state_of("a").started = at(5).to_rfc3339();
+        let runs = vec![started, queued_on("r1", 1, "hp"), queued_on("r2", 2, "hp")];
+        let mut watch = MemoryWatch::default();
+        watch.read([("hp".to_string(), 99)], &runs, 0, at(5));
+        let out = admit(&runs, &off, &|_| true, &watch, &at(5));
+        assert_eq!(out.start, vec!["r1", "r2"]);
+        assert!(out.held.is_empty());
+    }
+
+    fn held_seen(kind: HoldKind) -> Seen {
+        Seen::Held(Some((kind, "hp".into(), "hp is short of memory".into())))
+    }
+
+    #[test]
+    fn a_held_run_keeps_its_since_and_tells_the_person_once() {
+        let run = queued_on("r1", 1, "hp");
+        let (run, _) = step(run, held_seen(HoldKind::Memory), &cfg(), at(1));
+        let (run, _) = step(run, held_seen(HoldKind::Settling), &cfg(), at(20));
+        assert_eq!(run.held.as_ref().unwrap().since, at(1).to_rfc3339());
+        let (run, did) = step(run, Seen::Tick, &cfg(), at(30));
+        assert_eq!(did, vec![]);
+        let (run, did) = step(run, Seen::Tick, &cfg(), at(31));
+        match &did[..] {
+            [Effect::Notify { text }] => {
+                assert!(text.contains("held for 30 min"), "{text}");
+                assert!(text.contains("hp is short of memory"), "{text}");
+            }
+            other => panic!("{other:?}"),
+        }
+        assert_eq!(run.state, RunState::Queued, "it still starts by itself");
+        assert!(run.held.as_ref().unwrap().told);
+        let (run, did) = step(run, Seen::Tick, &cfg(), at(40));
+        assert_eq!(did, vec![]);
+        let (run, _) = step(run, held_seen(HoldKind::Memory), &cfg(), at(41));
+        assert!(run.held.as_ref().unwrap().told, "not told a second time");
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(42));
+        assert_eq!((run.state, run.held), (RunState::Running, None));
+    }
+
+    #[test]
+    fn being_judged_clears_an_old_offline_note() {
+        let mut run = queued_on("r1", 1, "hp");
+        run.offline_since = Some(at(1).to_rfc3339());
+        let (run, _) = step(run, held_seen(HoldKind::Memory), &cfg(), at(5));
+        assert_eq!(run.offline_since, None);
+        let (run, _) = step(run, Seen::Tick, &cfg(), at(40));
+        assert_eq!(run.state, RunState::Queued);
+    }
+
+    #[test]
+    fn a_saved_run_with_no_hold_still_loads() {
+        let run: Run = serde_json::from_str(r#"{"id":"r1","state":"queued"}"#).unwrap();
+        assert_eq!(run.held, None);
+    }
+
+    #[test]
+    fn a_second_try_queues_on_its_machine_so_the_gate_sees_it() {
+        let mut run = at_step("Implement my tickets", "implement");
+        run.slot = None;
+        let (run, _) = step(
+            run,
+            Seen::Started {
+                step: "implement".into(),
+                result: Err("no room".into()),
+            },
+            &cfg(),
+            at(5),
+        );
+        assert_eq!(
+            (run.state, run.slot.as_deref()),
+            (RunState::Queued, Some("hp"))
+        );
     }
 
     #[test]

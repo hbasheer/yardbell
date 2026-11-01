@@ -575,6 +575,21 @@ A step runs at most `max_runs` times in one run (2 unless you change it, up to 1
 step may run for its `minutes`, or the `minutes` setting, before it waits for you. At most
 `per_machine` agent steps run at once on each machine; the rest queue.
 
+New agent steps can also wait while a machine is short of memory. This is off unless you set a
+`memory_limit`. With a limit set, from that percent of memory in use, steps on that machine are held, and
+they are released only once it has stayed under the limit for two minutes. At most one step then starts
+a minute on each machine. This counts every start from the queue, including a step's second try and
+**Retry step**. A step already running is never stopped. The reading is the fuller of the machine's memory
+and the account's own limit, the same figure as the high memory notification. A machine that answers but
+gives no memory reading is not held, because a figure that may never come would stop its work for good,
+and `yardbell doctor` flags it.
+
+No single limit suits every machine. On a Mac the figure can read well above what macOS itself reports,
+so look at each machine's figure when it is idle before you choose.
+
+The run's page says it is held and why. A run held for 30 minutes also shows under **Waiting for me**
+and sends one phone notification. It stays queued and still starts by itself when the machine recovers.
+
 Each run gets one Dispatch conversation, where every step shows as a card marked **Ran as part of
 the pipeline run started at 09:40**. Starting a run is the one approval: your Dispatch rules still
 refuse what they refuse, and a refused step waits for you with the rule's reason.
@@ -638,6 +653,7 @@ The **Settings** button on the Pipelines page writes the `pipelines` section of 
 pipelines:
   per_machine: 2      # agent steps at once on each machine, 1 to 6
   minutes: 120        # an agent step running longer waits for you, 10 to 1440
+  memory_limit: 0     # off; or the percent of memory in use that holds new agent steps, 50 to 99
   qa_notes:           # added to every agent step working in that folder
     acme/web: |
       Run specs with: docker compose exec web bin/rspec <files>

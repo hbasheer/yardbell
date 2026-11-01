@@ -1,12 +1,12 @@
 use super::definition::{Outcome, SessionChoice, StepKind};
 use super::engine::{self, tests::run_of};
 use super::prompts::{marker, TicketText};
-use super::record::{Effect, PrRef, PullRef, Run, RunState, Seen, TicketRef, WaitKind};
+use super::record::{Effect, HoldKind, PrRef, PullRef, Run, RunState, Seen, TicketRef, WaitKind};
 use super::run::{act, needless_sessions, World};
 use super::watch;
 use crate::config::Pipelines;
 use crate::dispatch::ReviewOf;
-use crate::snapshot::Activity;
+use crate::snapshot::{Activity, Health};
 use crate::state::{MachineView, SessionView, StateView};
 use futures::future::BoxFuture;
 use serde_json::{json, Value};
@@ -41,6 +41,7 @@ pub(crate) struct Fake {
     pub tool_now: Mutex<Option<Result<(String, String), crate::mcp_client::Failure>>>,
     pub tool_reply: Mutex<Option<Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>>>,
     pub tool_args: Mutex<Vec<Value>>,
+    pub memory: Mutex<HashMap<String, u64>>,
 }
 
 impl Fake {
@@ -72,7 +73,18 @@ impl World for Fake {
                     reason: None,
                     last_seen: None,
                     local: false,
-                    health: None,
+                    health: self.memory.lock().unwrap().get(*m).map(|used| Health {
+                        mem_total_kb: 100,
+                        mem_used_kb: *used,
+                        agent_kb: 0,
+                        user_kb: 0,
+                        limit_kb: 0,
+                        limit_used_kb: 0,
+                        load1: 0.0,
+                        cpus: 1,
+                        disk_total_kb: 0,
+                        disk_used_kb: 0,
+                    }),
                     accounts: Vec::new(),
                     mesh_on: None,
                 })
@@ -918,6 +930,14 @@ async fn a_busy_shared_session_is_typed_into_once_it_is_idle() {
         &Pipelines::default(),
         chrono::Local::now(),
     );
+    assert_eq!(effects, vec![]);
+    assert_eq!(run.state, RunState::Queued);
+    let (run, effects) = engine::step(
+        run,
+        Seen::Admitted,
+        &Pipelines::default(),
+        chrono::Local::now(),
+    );
     assert_eq!(effects, vec![effect.clone()]);
     act(&fake, &Pipelines::default(), &run, &effect).await;
     assert_eq!(count(&fake.calls(), "send_to_session"), 1);
@@ -1408,12 +1428,26 @@ mod pipelines {
         src: Option<&Sources<'_>>,
         now: chrono::DateTime<chrono::Local>,
     ) {
+        tick_with(p, fake, &crate::config::Pipelines::default(), src, now).await;
+    }
+
+    async fn tick_with(
+        p: &Arc<Pipelines>,
+        fake: &Arc<Fake>,
+        settings: &crate::config::Pipelines,
+        src: Option<&Sources<'_>>,
+        now: chrono::DateTime<chrono::Local>,
+    ) {
         let world: Arc<dyn World> = fake.clone();
-        for handle in p
-            .tick(&world, &crate::config::Pipelines::default(), src, now)
-            .await
-        {
+        for handle in p.tick(&world, settings, src, now).await {
             handle.await.unwrap();
+        }
+    }
+
+    fn memory_limit_90() -> crate::config::Pipelines {
+        crate::config::Pipelines {
+            memory_limit: 90,
+            ..Default::default()
         }
     }
 
@@ -1430,6 +1464,111 @@ mod pipelines {
             }),
             pr: None,
         }
+    }
+
+    fn queued_on_hp(p: &Arc<Pipelines>) -> String {
+        let def = p
+            .library()
+            .copy_template("Implement my tickets", &cfg())
+            .unwrap();
+        let mut run = p
+            .start(&def.id, vec![ticket("COM-1")], "you")
+            .unwrap()
+            .remove(0);
+        run.place.machine = "hp".into();
+        run.step = "implement".into();
+        run.state = RunState::Queued;
+        run.slot = Some("hp".into());
+        run.pending = None;
+        let id = run.id.clone();
+        p.put(run);
+        id
+    }
+
+    #[tokio::test]
+    async fn a_config_with_no_memory_limit_never_holds_a_run_even_at_high_memory() {
+        for section in ["{}", "per_machine: 2"] {
+            let settings: crate::config::Pipelines = serde_yaml::from_str(section).unwrap();
+            let (p, _dir) = pipelines();
+            let id = queued_on_hp(&p);
+            let fake = Arc::new(Fake::default());
+            fake.memory.lock().unwrap().insert("hp".into(), 99);
+            tick_with(&p, &fake, &settings, None, chrono::Local::now()).await;
+            let run = p.run(&id).unwrap();
+            assert_eq!(
+                (run.state, run.held),
+                (RunState::Running, None),
+                "{section}"
+            );
+            assert_eq!(count(&fake.calls(), "start_session"), 1, "{section}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_short_machine_holds_a_step_until_it_has_stayed_under_the_limit() {
+        let (p, _dir) = pipelines();
+        let id = queued_on_hp(&p);
+        let limit = memory_limit_90();
+        let fake = Arc::new(Fake::default());
+        let t0 = chrono::Local::now();
+        let minutes = |m: i64| t0 + chrono::Duration::minutes(m);
+        let held = |p: &Arc<Pipelines>| p.run(&id).unwrap().held;
+
+        fake.memory.lock().unwrap().insert("hp".into(), 93);
+        tick_with(&p, &fake, &limit, None, t0).await;
+        let h = held(&p).expect("held");
+        assert_eq!(h.kind, HoldKind::Memory);
+        assert!(h.reason.contains("93%"), "{}", h.reason);
+        assert_eq!(p.run(&id).unwrap().state, RunState::Queued);
+
+        fake.memory.lock().unwrap().insert("hp".into(), 40);
+        tick_with(&p, &fake, &limit, None, minutes(1)).await;
+        assert_eq!(held(&p).unwrap().kind, HoldKind::Settling);
+        assert_eq!(p.run(&id).unwrap().state, RunState::Queued);
+
+        tick_with(&p, &fake, &limit, None, minutes(2)).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!((run.state, run.held), (RunState::Running, None));
+        assert_eq!(count(&fake.calls(), "start_session"), 1);
+    }
+
+    #[tokio::test]
+    async fn a_step_already_running_is_left_alone_when_memory_runs_short() {
+        let (p, _dir) = pipelines();
+        let id = queued_on_hp(&p);
+        let limit = memory_limit_90();
+        let fake = Arc::new(Fake::default());
+        tick_with(&p, &fake, &limit, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.state, RunState::Running);
+        let name = run.steps["implement"].session.clone();
+        fake.session("hp", &name, "b", Activity::Active);
+        fake.memory.lock().unwrap().insert("hp".into(), 99);
+        tick_with(&p, &fake, &limit, None, chrono::Local::now()).await;
+        let run = p.run(&id).unwrap();
+        assert_eq!((run.state, run.held), (RunState::Running, None));
+        assert_eq!(count(&fake.calls(), "stop_session"), 0);
+    }
+
+    #[tokio::test]
+    async fn a_run_held_too_long_tells_the_person_once_and_is_kept() {
+        let (p, _dir) = pipelines();
+        let id = queued_on_hp(&p);
+        let limit = memory_limit_90();
+        let fake = Arc::new(Fake::default());
+        fake.memory.lock().unwrap().insert("hp".into(), 95);
+        let t0 = chrono::Local::now();
+        tick_with(&p, &fake, &limit, None, t0).await;
+        assert!(fake.notes.lock().unwrap().is_empty());
+        for m in [31, 32] {
+            tick_with(&p, &fake, &limit, None, t0 + chrono::Duration::minutes(m)).await;
+        }
+        let notes = fake.notes.lock().unwrap().clone();
+        assert_eq!(notes.len(), 1, "{notes:?}");
+        assert!(notes[0].contains("hp is short of memory"), "{notes:?}");
+        let run = p.run(&id).unwrap();
+        assert_eq!(run.state, RunState::Queued);
+        assert!(run.held.unwrap().told);
     }
 
     #[tokio::test]
