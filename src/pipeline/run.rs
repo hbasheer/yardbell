@@ -78,6 +78,14 @@ pub trait World: Send + Sync {
         tool: &'a str,
         arguments: Value,
     ) -> BoxFuture<'a, Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>>;
+    fn run_command<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        command: &'a str,
+        seconds: u64,
+    ) -> BoxFuture<'a, Result<crate::worktrees::command::CommandRun, String>>;
+    fn stop_command<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ()>;
     fn written_result<'a>(
         &'a self,
         machine: &'a str,
@@ -186,6 +194,25 @@ fn work_path(run: &Run) -> Option<String> {
         })
         .filter_map(|s| run.steps.get(&s.id).map(|st| st.path.clone()))
         .find(|p| !p.is_empty())
+}
+
+// Where the work is: the machine and folder of the first agent step that made a worktree.
+pub(super) fn work_place(run: &Run) -> Option<(String, String)> {
+    run.def()
+        .steps
+        .iter()
+        .filter(|s| {
+            matches!(
+                s.kind,
+                StepKind::Agent {
+                    workspace: Workspace::NewWorktree,
+                    ..
+                }
+            )
+        })
+        .filter_map(|s| run.steps.get(&s.id))
+        .find(|st| !st.path.is_empty())
+        .map(|st| (st.machine.clone(), st.path.clone()))
 }
 
 async fn ticket_text(world: &dyn World, run: &Run) -> Result<TicketText, Seen> {
@@ -761,6 +788,91 @@ fn blind_to(world: &dyn World, step: &Step) -> Option<Seen> {
     })
 }
 
+fn command_report(
+    command: &str,
+    minutes: u64,
+    done: &crate::worktrees::command::CommandRun,
+) -> String {
+    let label: String = command
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .chars()
+        .take(80)
+        .collect();
+    let said = match (done.timed_out, done.exit) {
+        (true, _) => format!("Stopped after {} min, its time limit: {label}", minutes),
+        (false, Some(0)) => format!("Passed: {label}"),
+        (false, Some(code)) => format!("Failed with exit code {code}: {label}"),
+        (false, None) => format!("Ended without an exit code: {label}"),
+    };
+    match done.output.trim() {
+        "" => said,
+        output => format!("{said}\n\n{output}"),
+    }
+}
+
+async fn command_step(
+    world: &dyn World,
+    run: &Run,
+    step: &Step,
+    command: &str,
+    approved: &str,
+) -> Seen {
+    let Some((machine, path)) = work_place(run) else {
+        return Seen::Refused(format!(
+            "no step made a worktree, so {} has no folder to run in",
+            step.name
+        ));
+    };
+    let input = json!({
+        "machine": machine, "path": path, "folder": run.place.folder, "command": command,
+    });
+    if let Some(reason) = world.refused("run_command", &input) {
+        return Seen::Refused(reason);
+    }
+    if command != approved {
+        return Seen::ToolChanged {
+            hash: String::new(),
+            reason: format!(
+                "{} runs a command nobody has approved in this form. Read it, then accept it",
+                step.name
+            ),
+            shown: command.to_string(),
+        };
+    }
+    let minutes = step.minutes.unwrap_or(super::definition::COMMAND_MINUTES);
+    let done = world
+        .run_command(&machine, &path, command, minutes * 60)
+        .await;
+    let (recorded, seen) = match done {
+        Ok(done) => {
+            let report = command_report(command, minutes, &done);
+            if done.exit == Some(0) && !done.timed_out {
+                (Ok(json!(report)), Seen::CommandDone(Ok(report)))
+            } else {
+                (Err(report.clone()), Seen::CommandDone(Err(report)))
+            }
+        }
+        Err(e) => (
+            Err(e.clone()),
+            Seen::Started {
+                step: step.id.clone(),
+                result: Err(e),
+            },
+        ),
+    };
+    world.record(
+        &run.conversation,
+        "run_command",
+        input,
+        None,
+        &recorded,
+        &run.started,
+    );
+    seen
+}
+
 pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Vec<Seen> {
     let step_of = |id: &str| run.def().step(id).cloned();
     match effect {
@@ -886,6 +998,15 @@ pub async fn act(world: &dyn World, cfg: &Cfg, run: &Run, effect: &Effect) -> Ve
                 vec![tool_step(world, run, call).await]
             }
             _ => vec![],
+        },
+        Effect::Command { step } => match step_of(step) {
+            Some(s) => match &s.kind {
+                StepKind::Command { command, approved } => {
+                    vec![command_step(world, run, &s, command, approved).await]
+                }
+                _ => vec![],
+            },
+            None => vec![],
         },
         Effect::Report { step } => {
             let before = world.dispatch_tokens(&run.conversation);
@@ -1489,6 +1610,39 @@ impl World for Live {
             self.forge
                 .open_draft(m, path, &draft, &gitlab, github.as_ref())
                 .await
+        })
+    }
+
+    fn run_command<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        command: &'a str,
+        seconds: u64,
+    ) -> BoxFuture<'a, Result<crate::worktrees::command::CommandRun, String>> {
+        Box::pin(async move {
+            let m = self
+                .cfg
+                .machine(machine)
+                .ok_or_else(|| format!("{machine} is not a machine"))?;
+            let mut done = self
+                .app
+                .worktrees
+                .run_command(m, path, command, seconds)
+                .await?;
+            let saved = crate::mcp_read::saved_values(&self.app);
+            if let Value::String(clean) = crate::mcp_read::sweep(json!(done.output), &saved) {
+                done.output = clean;
+            }
+            Ok(done)
+        })
+    }
+
+    fn stop_command<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            if let Some(m) = self.cfg.machine(machine) {
+                self.app.worktrees.stop_command(m, path).await;
+            }
         })
     }
 

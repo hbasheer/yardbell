@@ -138,6 +138,45 @@ pub enum StepKind {
         #[serde(default)]
         message: String,
     },
+    Command {
+        command: String,
+        // The exact text a person accepted. Only this text runs, so a command an agent proposed
+        // or changed waits for a person the first time a run reaches it.
+        #[serde(default, skip_serializing_if = "String::is_empty")]
+        approved: String,
+    },
+}
+
+pub const COMMAND_MINUTES: u64 = 10;
+const COMMAND_MAX: usize = 4000;
+
+// The command reaches the shell exactly as it was approved, so nothing from a ticket can get in.
+fn command_problem(command: &str) -> Option<String> {
+    if command.trim().is_empty() {
+        return Some("the command is empty".into());
+    }
+    if command.chars().count() > COMMAND_MAX {
+        return Some(format!(
+            "the command must be at most {COMMAND_MAX} characters"
+        ));
+    }
+    if command
+        .chars()
+        .any(|c| c.is_control() && c != '\n' && c != '\t')
+    {
+        return Some(
+            "the command has control characters that would not show when you read it".into(),
+        );
+    }
+    let placeholder =
+        Regex::new(r"(?:^|[^$])(\{(?:ticket|title|url|description|branch|pr|report)(?::[^}]*)?\})")
+            .expect("static regex");
+    placeholder.captures(command).map(|c| {
+        format!(
+            "a command does not fill in {}, because a ticket's text must never reach a shell",
+            &c[1]
+        )
+    })
 }
 
 fn changes() -> crate::connectors::CallKind {
@@ -516,8 +555,12 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
         if !(1..=10).contains(&s.max_runs) {
             out.push(format!("{name}: max_runs must be from 1 to 10"));
         }
-        if s.minutes.is_some_and(|m| !(10..=1440).contains(&m)) {
-            out.push(format!("{name}: minutes must be from 10 to 1440"));
+        let shortest = match s.kind {
+            StepKind::Command { .. } => 1,
+            _ => 10,
+        };
+        if s.minutes.is_some_and(|m| !(shortest..=1440).contains(&m)) {
+            out.push(format!("{name}: minutes must be from {shortest} to 1440"));
         }
         let earlier = before.get(&s.id).cloned().unwrap_or_default();
         let comes_before = |word: &str, other: &str, out: &mut Vec<String>| {
@@ -605,6 +648,27 @@ pub fn check(def: &Definition, cfg: &Config) -> Result<(), Vec<String>> {
                 if !earlier.iter().any(worktree) {
                     out.push(format!(
                         "{name}: needs a step that works in a new worktree before it on every path"
+                    ));
+                }
+            }
+            StepKind::Command { command, .. } => {
+                if let Some(problem) = command_problem(command) {
+                    out.push(format!("{name}: {problem}"));
+                }
+                let worktree = |id: &String| {
+                    def.step(id).is_some_and(|x| {
+                        matches!(
+                            x.kind,
+                            StepKind::Agent {
+                                workspace: Workspace::NewWorktree,
+                                ..
+                            }
+                        )
+                    })
+                };
+                if !earlier.iter().any(worktree) {
+                    out.push(format!(
+                        "{name}: a command runs in the run's worktree, so it needs a step that works in a new worktree before it on every path"
                     ));
                 }
             }
@@ -999,6 +1063,118 @@ pub(crate) mod tests {
         assert!(problems(&gl).contains(&"gitlab_reviewer needs a host".to_string()));
         gl.enabled = false;
         assert!(problems(&gl).is_empty());
+    }
+
+    fn command_step(id: &str, command: &str) -> Step {
+        Step {
+            kind: StepKind::Command {
+                command: command.into(),
+                approved: command.into(),
+            },
+            ..agent(id, "Test", MachineChoice::Name("hp".into()))
+        }
+    }
+
+    fn after_worktree(command: Step) -> Definition {
+        let mut steps = vec![
+            plan_step("plan"),
+            agent("work", "Work", MachineChoice::SameAs("plan".into())),
+            command,
+        ];
+        steps[1].kind = StepKind::Agent {
+            instructions: "do it".into(),
+            agent: String::new(),
+            machine: MachineChoice::Pick(vec![]),
+            workspace: Workspace::NewWorktree,
+            session: SessionChoice::New,
+            read_only: false,
+            mcp_servers: vec![],
+        };
+        steps[0].next.pass = "work".into();
+        steps[1].next.pass = steps[2].id.clone();
+        def(steps)
+    }
+
+    #[test]
+    fn a_saved_command_step_reads_back_and_needs_no_approval_field() {
+        let step: Step = serde_json::from_value(serde_json::json!({
+            "id": "test", "name": "Test", "kind": "command", "command": "make test",
+        }))
+        .unwrap();
+        assert!(
+            matches!(&step.kind, StepKind::Command { command, approved } if command == "make test" && approved.is_empty())
+        );
+        let again: Step = serde_json::from_value(serde_json::to_value(&step).unwrap()).unwrap();
+        assert_eq!(again, step);
+    }
+
+    #[test]
+    fn a_good_command_step_passes_the_checks() {
+        for fine in [
+            "make test",
+            "cargo test\ncargo clippy",
+            "docker inspect --format '{{.State}}' x",
+            "echo ${branch} {a,b}",
+        ] {
+            assert_eq!(
+                problems(&after_worktree(command_step("test", fine))),
+                Vec::<String>::new(),
+                "{fine}"
+            );
+        }
+    }
+
+    #[test]
+    fn check_names_a_bad_command() {
+        let cases: [(String, &str); 5] = [
+            ("  ".into(), "Test: the command is empty"),
+            (
+                "x".repeat(COMMAND_MAX + 1),
+                "Test: the command must be at most 4000 characters",
+            ),
+            (
+                "make\u{1b}[2K test".into(),
+                "Test: the command has control characters that would not show when you read it",
+            ),
+            (
+                "git push origin {branch}".into(),
+                "Test: a command does not fill in {branch}, because a ticket's text must never reach a shell",
+            ),
+            (
+                "echo {report:Review}".into(),
+                "Test: a command does not fill in {report:Review}, because a ticket's text must never reach a shell",
+            ),
+        ];
+        for (command, message) in cases {
+            assert_eq!(
+                problems(&after_worktree(command_step("test", &command))),
+                vec![message.to_string()]
+            );
+        }
+    }
+
+    #[test]
+    fn a_command_needs_a_worktree_before_it_on_every_path() {
+        let alone = def(vec![command_step("test", "make test")]);
+        assert_eq!(
+            problems(&alone),
+            vec!["Test: a command runs in the run's worktree, so it needs a step that works in a new worktree before it on every path"]
+        );
+    }
+
+    #[test]
+    fn a_command_may_be_stopped_sooner_than_an_agent() {
+        let mut quick = command_step("test", "make test");
+        quick.minutes = Some(1);
+        assert_eq!(
+            problems(&after_worktree(quick.clone())),
+            Vec::<String>::new()
+        );
+        quick.minutes = Some(0);
+        assert_eq!(
+            problems(&after_worktree(quick)),
+            vec!["Test: minutes must be from 1 to 1440"]
+        );
     }
 
     #[test]

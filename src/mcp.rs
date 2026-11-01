@@ -821,6 +821,13 @@ pub(crate) fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
     let snap = app.state.snapshot(&machine).unwrap_or_default();
     let text = |key: &str| input[key].as_str().unwrap_or_default().trim().to_string();
     let folders = match called {
+        // A worktree can sit outside the folder it came from, and the run knows both.
+        "run_command" => Some(
+            [text("folder"), text("path")]
+                .into_iter()
+                .filter(|f| !f.is_empty())
+                .collect(),
+        ),
         "start_session" | "review_session" | "scan_folder" | "remove_worktree"
         | "integrate_branches" | "push_branch" => {
             let path = match text("path") {

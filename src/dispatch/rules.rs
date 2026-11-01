@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 pub const ANY: &str = "any";
 pub const REMEMBER: &str = "remember";
-pub(crate) const ACTIONS: [&str; 20] = [
+pub(crate) const ACTIONS: [&str; 21] = [
     "start_session",
     "stop_session",
     "send_to_session",
@@ -23,6 +23,7 @@ pub(crate) const ACTIONS: [&str; 20] = [
     "answer_run",
     "call_connector",
     "call_tool",
+    "run_command",
     "save_connector",
     REMEMBER,
 ];
@@ -497,7 +498,7 @@ mod tests {
         let cases = [
             (
                 vec![rule("kill", "any", "", Approval::Deny)],
-                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, save_pipeline, set_pipeline_enabled, run_pipeline, answer_run, call_connector, call_tool, save_connector, remember, or any",
+                "dispatch rule 1: action \"kill\" must be one of start_session, stop_session, send_to_session, review_session, scan_folder, remove_worktree, integrate_branches, push_branch, move_session, change_settings, save_task, run_trigger, save_pipeline, set_pipeline_enabled, run_pipeline, answer_run, call_connector, call_tool, run_command, save_connector, remember, or any",
             ),
             (
                 vec![rule("any", "nope", "", Approval::Deny)],

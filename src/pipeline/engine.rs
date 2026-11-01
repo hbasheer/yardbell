@@ -1,6 +1,6 @@
 use super::definition::{MachineChoice, Outcome, Step, StepKind, END, WAIT};
 use super::record::{
-    Effect, Entry, Held, HoldKind, Question, Run, RunState, Seen, WaitKind, Waiting,
+    CommandRan, Effect, Entry, Held, HoldKind, Question, Run, RunState, Seen, WaitKind, Waiting,
 };
 use super::tokens;
 use crate::config::Pipelines as Cfg;
@@ -29,6 +29,55 @@ fn duration(minutes: i64) -> String {
         format!("{minutes} min")
     } else {
         format!("{} h", minutes / 60)
+    }
+}
+
+// Who asks to continue a waiting run: a person on the run's page, or an agent's tool call, whatever
+// a rule or an approved card says about it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Who {
+    Person,
+    Agent,
+}
+
+// Why this outcome may not be followed from the Command step a run waits at. A pass has to rest on
+// the exact approved text having run in this attempt, so nobody can pass a command that did not
+// run, and only a person can pass one that failed.
+pub fn continue_refused(run: &Run, outcome: Outcome, who: Who) -> Option<String> {
+    let w = run.waiting.as_ref()?;
+    let step = run.definition.as_ref()?.step(&w.step)?;
+    let StepKind::Command { command, approved } = &step.kind else {
+        return None;
+    };
+    let name = &step.name;
+    match outcome {
+        Outcome::Fail => None,
+        Outcome::NeedsYou => Some(format!(
+            "{name} runs a command, which passes or fails and never needs you"
+        )),
+        Outcome::Pass => {
+            let ran = run
+                .steps
+                .get(&w.step)
+                .and_then(|st| st.ran.as_ref())
+                .filter(|r| r.command == *command && approved == command);
+            match ran {
+                None => {
+                    let way = if w.kind == WaitKind::ToolChanged {
+                        "Accept and run"
+                    } else {
+                        "Retry step"
+                    };
+                    Some(format!(
+                        "{name} cannot continue on pass because its command has not run in this attempt. {way} runs it"
+                    ))
+                }
+                Some(r) if r.passed || who == Who::Person => None,
+                Some(_) => Some(format!(
+                    "{name}'s command failed, and only a person on the run's page can continue on pass after that"
+                )),
+            }
+        }
     }
 }
 
@@ -137,6 +186,12 @@ fn enter_step(
     {
         return wait(run, kind, id, reason, "");
     }
+    // Comes ahead of the limit: a loop stopped here has not run the command since the last Fix.
+    if matches!(step.kind, StepKind::Command { .. }) {
+        let st = run.state_of(id);
+        st.ran = None;
+        st.overridden = false;
+    }
     let runs = run.steps.get(id).map_or(0, |s| s.runs);
     if runs >= step.max_runs && !past_limit {
         let times = if runs == 1 { "time" } else { "times" };
@@ -175,6 +230,7 @@ fn enter_step(
         StepKind::Report => Effect::Report { step: id.into() },
         StepKind::Call { .. } => Effect::Call { step: id.into() },
         StepKind::Tool { .. } => Effect::Tool { step: id.into() },
+        StepKind::Command { .. } => Effect::Command { step: id.into() },
     };
     let st = run.state_of(id);
     st.runs += 1;
@@ -227,7 +283,12 @@ fn follow(mut run: Run, outcome: Outcome, now: &DateTime<Local>) -> (Run, Vec<Ef
 // A step that ended without a usable result runs once more before the run waits.
 fn again(mut run: Run, screen: &str, now: &DateTime<Local>) -> (Run, Vec<Effect>) {
     let id = run.step.clone();
+    let kind = current(&run).map(|s| s.kind);
     if run.retried {
+        if matches!(kind, Some(StepKind::Command { .. })) {
+            let reason = format!("{} could not run", name_of(&run, &id));
+            return wait(run, WaitKind::Stopped, &id, reason, screen);
+        }
         let reason = format!("{} ended without a result", name_of(&run, &id));
         return wait(run, WaitKind::NoResult, &id, reason, screen);
     }
@@ -237,8 +298,11 @@ fn again(mut run: Run, screen: &str, now: &DateTime<Local>) -> (Run, Vec<Effect>
     }
     run.retried = true;
     run.step_since = now.to_rfc3339();
-    if matches!(current(&run).map(|s| s.kind), Some(StepKind::Plan { .. })) {
-        return (run, vec![Effect::Plan { step: id }]);
+    match kind {
+        Some(StepKind::Plan { .. }) => return (run, vec![Effect::Plan { step: id }]),
+        // Starts no agent, so it never queues for a slot or waits for memory.
+        Some(StepKind::Command { .. }) => return (run, vec![Effect::Command { step: id }]),
+        _ => {}
     }
     // A step whose agent died may have died of the memory the hold watches, so its second try
     // queues like any other start.
@@ -407,6 +471,7 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
     }
     let waiting = run.state == RunState::Waiting;
     let id = run.step.clone();
+    let ran_command = matches!(seen, Seen::CommandDone(_));
     match seen {
         Seen::Drop => {
             run.state = RunState::Dropped;
@@ -420,12 +485,17 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             };
             if let Some(def) = run.definition.as_mut() {
                 let saved = def.steps.iter_mut().find(|s| s.id == w.step);
-                if let Some(Step {
-                    kind: StepKind::Tool { schema_hash, .. },
-                    ..
-                }) = saved
-                {
-                    schema_hash.clone_from(&w.tool_hash);
+                match saved.map(|s| &mut s.kind) {
+                    Some(StepKind::Tool { schema_hash, .. }) => {
+                        schema_hash.clone_from(&w.tool_hash);
+                    }
+                    Some(StepKind::Command { command, approved }) => {
+                        approved.clone_from(command);
+                        // It waited instead of running, so that entry does not count.
+                        let st = run.state_of(&w.step);
+                        st.runs = st.runs.saturating_sub(1);
+                    }
+                    _ => {}
                 }
             }
             enter(run, &w.step, now, true)
@@ -452,8 +522,24 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             enter(run, &at, now, true)
         }
         Seen::Continue(outcome) if waiting => {
+            if continue_refused(&run, outcome, Who::Person).is_some() {
+                return (run, vec![]);
+            }
             if let Some(w) = run.waiting.take() {
                 run.step = w.step;
+            }
+            let at = run.step.clone();
+            let failed = run
+                .steps
+                .get(&at)
+                .and_then(|st| st.ran.as_ref())
+                .is_some_and(|r| !r.passed);
+            if outcome == Outcome::Pass && failed {
+                run.state_of(&at).overridden = true;
+                let name = name_of(&run, &at);
+                run.notes.push(format!(
+                    "{name}'s command failed, and a person continued on pass anyway"
+                ));
             }
             follow(run, outcome, now)
         }
@@ -529,6 +615,8 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             let (mut run, effects) = wait(run, WaitKind::ToolChanged, &id, reason, &shown);
             if let Some(w) = run.waiting.as_mut() {
                 w.tool_hash = hash;
+                // What the person accepts must show whole, not only its last lines.
+                w.screen = shown;
             }
             (run, effects)
         }
@@ -615,7 +703,15 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             run.notes.push(format!("Linear: {e}"));
             follow(run, Outcome::Fail, now)
         }
-        Seen::Called(result) | Seen::ToolDone(result) => {
+        Seen::Called(result) | Seen::ToolDone(result) | Seen::CommandDone(result) => {
+            if ran_command {
+                if let Some(StepKind::Command { command, .. }) = current(&run).map(|s| s.kind) {
+                    run.state_of(&id).ran = Some(CommandRan {
+                        command,
+                        passed: result.is_ok(),
+                    });
+                }
+            }
             let (outcome, report) = match result {
                 Ok(report) => (Outcome::Pass, report),
                 Err(e) => (Outcome::Fail, e),
@@ -1073,6 +1169,434 @@ pub(crate) mod tests {
                 step: "update".into()
             }]
         );
+    }
+
+    fn with_command(run: &mut Run) {
+        let def = run.definition.as_mut().unwrap();
+        def.steps.push(
+            serde_json::from_value(serde_json::json!({
+                "id": "test", "name": "Test", "kind": "command", "command": "make test",
+                "approved": "make test",
+                "next": { "pass": "report", "fail": "fix", "needs_you": "wait" },
+            }))
+            .unwrap(),
+        );
+        def.steps
+            .iter_mut()
+            .find(|s| s.id == "fix")
+            .unwrap()
+            .next
+            .pass = "test".into();
+    }
+
+    #[test]
+    fn entering_a_command_step_runs_it_and_counts_the_run() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let (run, did) = enter(run, "test", &at(5), false);
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(run.state, RunState::Running);
+        assert_eq!(run.steps["test"].runs, 1);
+        assert_eq!(run.slot, None, "a command starts no agent");
+    }
+
+    #[test]
+    fn a_command_loops_through_fix_until_it_passes() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let (run, _) = enter(run, "test", &at(5), false);
+        let seen = Seen::CommandDone(Err("Failed with exit code 1: make test".into()));
+        let (run, did) = step(run, seen, &cfg(), at(6));
+        assert_eq!((run.step.as_str(), run.state), ("fix", RunState::Queued));
+        assert_eq!(did, vec![]);
+        assert_eq!(run.steps["test"].outcome, Some(Outcome::Fail));
+        assert!(run.steps["test"].report.contains("exit code 1"));
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(7));
+        let (run, did) = step(run, ended("fix", Outcome::Pass), &cfg(), at(8));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(run.steps["test"].runs, 2);
+        let seen = Seen::CommandDone(Ok("Passed: make test".into()));
+        let (run, did) = step(run, seen, &cfg(), at(9));
+        assert_eq!(run.steps["test"].outcome, Some(Outcome::Pass));
+        assert_eq!(
+            did,
+            vec![Effect::Report {
+                step: "report".into()
+            }]
+        );
+    }
+
+    #[test]
+    fn a_failing_command_stops_at_its_run_limit() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let (mut run, _) = enter(run, "test", &at(5), false);
+        run.state_of("test").runs = 2;
+        run.state_of("fix").runs = 1;
+        let (run, _) = step(run, Seen::CommandDone(Err("failed".into())), &cfg(), at(6));
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(7));
+        let (run, _) = step(run, ended("fix", Outcome::Pass), &cfg(), at(8));
+        assert_eq!(
+            waiting(&run),
+            (WaitKind::RunLimit, "test".into(), "Test ran 2 times".into())
+        );
+    }
+
+    #[test]
+    fn a_command_that_could_not_run_tries_once_more_then_waits() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let (run, _) = enter(run, "test", &at(5), false);
+        let lost = || Seen::Started {
+            step: "test".into(),
+            result: Err("hp did not answer in time".into()),
+        };
+        let (run, did) = step(run, lost(), &cfg(), at(6));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(run.steps["test"].runs, 1, "a lost try is not a run");
+        let (run, _) = step(run, lost(), &cfg(), at(7));
+        assert_eq!(
+            waiting(&run),
+            (
+                WaitKind::Stopped,
+                "test".into(),
+                "Test could not run".into()
+            )
+        );
+        assert_eq!(run.steps["test"].outcome, None, "it did not fail");
+        assert!(run.waiting.unwrap().screen.contains("did not answer"));
+    }
+
+    #[test]
+    fn accepting_a_command_approves_what_the_run_holds_and_shows_it_whole() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        let long = (1..=30)
+            .map(|n| format!("step{n}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        if let StepKind::Command { command, approved } = &mut run
+            .definition
+            .as_mut()
+            .unwrap()
+            .steps
+            .last_mut()
+            .unwrap()
+            .kind
+        {
+            command.clone_from(&long);
+            approved.clear();
+        }
+        let (run, _) = enter(run, "test", &at(5), false);
+        let seen = Seen::ToolChanged {
+            hash: String::new(),
+            reason: "not approved".into(),
+            shown: long.clone(),
+        };
+        let (run, _) = step(run, seen, &cfg(), at(6));
+        assert_eq!(waiting(&run).0, WaitKind::ToolChanged);
+        assert_eq!(run.waiting.as_ref().unwrap().screen, long);
+        let (run, did) = step(run, Seen::AcceptTool, &cfg(), at(7));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(
+            run.steps["test"].runs, 1,
+            "waiting to be accepted is not a run"
+        );
+        assert!(
+            matches!(&run.def().step("test").unwrap().kind, StepKind::Command { command, approved } if *approved == *command && *command == long)
+        );
+    }
+
+    fn test_entered() -> Run {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        enter(run, "test", &at(5), false).0
+    }
+
+    fn failed_test() -> Run {
+        let mut run = test_entered();
+        let def = run.definition.as_mut().unwrap();
+        def.steps.last_mut().unwrap().next.fail = "wait".into();
+        let seen = Seen::CommandDone(Err("Failed with exit code 1: make test".into()));
+        step(run, seen, &cfg(), at(6)).0
+    }
+
+    fn lost() -> Seen {
+        Seen::Started {
+            step: "test".into(),
+            result: Err("hp did not answer in time".into()),
+        }
+    }
+
+    // Nobody passes it, the engine leaves it waiting, and the other ways on still work.
+    fn cannot_pass(run: Run, way: &str) {
+        assert_eq!(run.state, RunState::Waiting);
+        for who in [Who::Person, Who::Agent] {
+            let said = continue_refused(&run, Outcome::Pass, who).expect("refused");
+            assert!(said.contains("has not run in this attempt"), "{said}");
+            assert!(said.contains(way), "{said}");
+            assert_eq!(continue_refused(&run, Outcome::Fail, who), None);
+        }
+        let (still, did) = step(run.clone(), Seen::Continue(Outcome::Pass), &cfg(), at(9));
+        assert_eq!(did, vec![]);
+        assert_eq!(still, run, "a refused pass changes nothing");
+        let (on_fail, _) = step(run.clone(), Seen::Continue(Outcome::Fail), &cfg(), at(9));
+        assert_eq!(on_fail.steps["test"].outcome, Some(Outcome::Fail));
+        let (dropped, _) = step(run, Seen::Drop, &cfg(), at(9));
+        assert_eq!(dropped.state, RunState::Dropped);
+    }
+
+    #[test]
+    fn a_command_waiting_to_be_accepted_cannot_pass() {
+        let seen = Seen::ToolChanged {
+            hash: String::new(),
+            reason: "not approved".into(),
+            shown: "make test".into(),
+        };
+        let (run, _) = step(test_entered(), seen, &cfg(), at(6));
+        cannot_pass(run, "Accept and run");
+    }
+
+    #[test]
+    fn a_command_a_rule_refused_cannot_pass() {
+        let seen = Seen::Refused("Your rule".into());
+        let (run, _) = step(test_entered(), seen, &cfg(), at(6));
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn a_command_that_could_not_run_cannot_pass() {
+        let (run, _) = step(test_entered(), lost(), &cfg(), at(6));
+        let (run, _) = step(run, lost(), &cfg(), at(7));
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn a_command_stopped_by_its_run_limit_has_not_run_again() {
+        let mut run = test_entered();
+        run.state_of("test").runs = 2;
+        let seen = Seen::CommandDone(Err("failed".into()));
+        let (run, _) = step(run, seen, &cfg(), at(6));
+        assert!(run.steps["test"].ran.is_some());
+        let (run, _) = step(run, Seen::Admitted, &cfg(), at(7));
+        let (run, _) = step(run, ended("fix", Outcome::Pass), &cfg(), at(8));
+        assert_eq!(waiting(&run).0, WaitKind::RunLimit);
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn retrying_a_failed_command_starts_a_new_attempt() {
+        let (run, did) = step(failed_test(), Seen::Retry, &cfg(), at(7));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!(
+            run.steps["test"].ran, None,
+            "the old result no longer counts"
+        );
+        let (run, _) = step(run, lost(), &cfg(), at(8));
+        let (run, _) = step(run, lost(), &cfg(), at(9));
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn accepting_a_command_does_not_count_as_running_it() {
+        let seen = Seen::ToolChanged {
+            hash: String::new(),
+            reason: "not approved".into(),
+            shown: "make test".into(),
+        };
+        let (run, _) = step(test_entered(), seen, &cfg(), at(6));
+        let (run, _) = step(run, Seen::AcceptTool, &cfg(), at(7));
+        assert_eq!(run.state, RunState::Running);
+        assert_eq!(run.steps["test"].ran, None);
+        let (run, _) = step(run, lost(), &cfg(), at(8));
+        let (run, _) = step(run, lost(), &cfg(), at(9));
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn a_result_for_other_text_does_not_count() {
+        let mut run = failed_test();
+        run.state_of("test").ran = Some(CommandRan {
+            command: "true".into(),
+            passed: true,
+        });
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn only_a_person_can_pass_a_command_that_failed_and_the_run_records_it() {
+        let run = failed_test();
+        assert_eq!(continue_refused(&run, Outcome::Pass, Who::Person), None);
+        let said = continue_refused(&run, Outcome::Pass, Who::Agent).expect("refused");
+        assert!(said.contains("only a person"), "{said}");
+        assert_eq!(continue_refused(&run, Outcome::Fail, Who::Agent), None);
+        let (run, did) = step(run, Seen::Continue(Outcome::Pass), &cfg(), at(7));
+        assert_eq!(
+            did,
+            vec![Effect::Report {
+                step: "report".into()
+            }]
+        );
+        let st = &run.steps["test"];
+        assert_eq!(st.outcome, Some(Outcome::Pass));
+        assert!(st.overridden);
+        assert_eq!(
+            run.notes,
+            ["Test's command failed, and a person continued on pass anyway"]
+        );
+    }
+
+    #[test]
+    fn an_override_is_cleared_by_a_new_attempt_but_stays_in_the_notes() {
+        let (run, _) = step(failed_test(), Seen::Continue(Outcome::Pass), &cfg(), at(7));
+        let (run, _) = enter(run, "test", &at(8), false);
+        assert!(!run.steps["test"].overridden);
+        assert_eq!(run.notes.len(), 1);
+    }
+
+    #[test]
+    fn continuing_on_fail_after_a_failure_is_not_an_override() {
+        let (run, _) = step(failed_test(), Seen::Continue(Outcome::Fail), &cfg(), at(7));
+        assert!(!run.steps["test"].overridden);
+        assert!(run.notes.is_empty());
+    }
+
+    #[test]
+    fn anyone_can_continue_on_pass_once_the_command_passed() {
+        let mut run = test_entered();
+        let def = run.definition.as_mut().unwrap();
+        def.steps.last_mut().unwrap().next.pass = "wait".into();
+        let seen = Seen::CommandDone(Ok("Passed: make test".into()));
+        let (run, _) = step(run, seen, &cfg(), at(6));
+        assert_eq!(run.state, RunState::Waiting);
+        assert_eq!(continue_refused(&run, Outcome::Pass, Who::Agent), None);
+        assert_eq!(continue_refused(&run, Outcome::Pass, Who::Person), None);
+        let (run, _) = step(run, Seen::Continue(Outcome::Pass), &cfg(), at(7));
+        assert!(!run.steps["test"].overridden);
+        assert!(run.notes.is_empty());
+    }
+
+    #[test]
+    fn the_needs_you_line_is_no_way_around_the_command() {
+        let mut run = failed_test();
+        let def = run.definition.as_mut().unwrap();
+        def.steps.last_mut().unwrap().next.needs_you = "report".into();
+        for who in [Who::Person, Who::Agent] {
+            assert!(continue_refused(&run, Outcome::NeedsYou, who).is_some());
+        }
+        let (still, did) = step(
+            run.clone(),
+            Seen::Continue(Outcome::NeedsYou),
+            &cfg(),
+            at(7),
+        );
+        assert_eq!((still, did), (run, vec![]));
+    }
+
+    #[test]
+    fn other_steps_continue_as_they_did() {
+        let run = at_step("Implement my tickets", "implement");
+        let (run, _) = step(run, ended("implement", Outcome::Fail), &cfg(), at(5));
+        assert_eq!(continue_refused(&run, Outcome::Pass, Who::Agent), None);
+    }
+
+    #[test]
+    fn a_command_goes_through_past_a_token_limit_and_still_has_to_run() {
+        let mut run = run_of("Implement my tickets");
+        with_command(&mut run);
+        run.tokens.limit = Some(1000);
+        run.tokens.raised = true;
+        run.tokens.sources.insert(
+            "hp:a.jsonl".into(),
+            tokens::Tokens {
+                input: 1500,
+                ..tokens::Tokens::default()
+            },
+        );
+        let (run, did) = enter(run, "test", &at(5), false);
+        assert_eq!(run.state, RunState::Running, "{:?}", run.waiting);
+        assert_eq!(
+            did[0],
+            Effect::Command {
+                step: "test".into()
+            }
+        );
+        let (run, did) = step(run, lost(), &cfg(), at(6));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }],
+            "its second try is not held by the limit"
+        );
+        let (run, _) = step(run, lost(), &cfg(), at(7));
+        assert_eq!(waiting(&run).0, WaitKind::Stopped);
+        cannot_pass(run, "Retry step");
+    }
+
+    #[test]
+    fn a_commands_second_try_runs_at_once_instead_of_queueing_for_an_agent() {
+        let (run, did) = step(test_entered(), lost(), &cfg(), at(6));
+        assert_eq!(
+            did,
+            vec![Effect::Command {
+                step: "test".into()
+            }]
+        );
+        assert_eq!((run.state, run.slot.as_deref()), (RunState::Running, None));
+    }
+
+    #[test]
+    fn a_running_command_is_not_counted_in_a_machines_slots_or_spacing() {
+        let cfg = Cfg {
+            memory_limit: 90,
+            per_machine: 1,
+            ..Cfg::default()
+        };
+        let mut command = test_entered();
+        command.id = "r-command".into();
+        assert_eq!(command.steps["test"].machine, "");
+        let queued = Run {
+            id: "r-agent".into(),
+            state: RunState::Queued,
+            step_since: at(5).to_rfc3339(),
+            slot: Some("hp".into()),
+            ..Run::default()
+        };
+        let out = admit(
+            &[command, queued],
+            &cfg,
+            &|_| true,
+            &MemoryWatch::default(),
+            &at(5),
+        );
+        assert_eq!(out.start, vec!["r-agent"]);
+        assert!(out.held.is_empty(), "{:?}", out.held);
     }
 
     #[test]

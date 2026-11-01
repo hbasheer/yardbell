@@ -594,6 +594,7 @@ reviewer afresh.
 | Push and draft PR | Pushes the run's branch (with the secret check, never forced) and opens a draft pull or merge request. |
 | Linear | Moves the ticket to a state, or drafts a comment that you post yourself. |
 | Use a connected tool | Does one action in a [connection](#connectors): reads from or changes an outside tool. Its reply goes on the pass line and an error on the fail line. |
+| Run a command | Runs a saved shell command in the run's worktree, with no agent. Exit 0 goes on the pass line and anything else on the fail line. See [Run a command](#run-a-command). |
 | Report to me | Dispatch writes what the run did and found, and your phone gets the first line. |
 | Wait for me | Stops with your message until you continue it. |
 
@@ -626,6 +627,64 @@ as a default in **Settings**. See [Token limits](#token-limits).
 Each run gets one Dispatch conversation, where every step shows as a card marked **Ran as part of
 the pipeline run started at 09:40**. Starting a run is the one approval: your Dispatch rules still
 refuse what they refuse, and a refused step waits for you with the rule's reason.
+
+### Run a command
+
+An agent's pass is its own word. A **Run a command** step lets code decide instead: it runs a command such
+as `make test` and follows its exit code. It starts no agent and spends no tokens, so it suits a loop like
+this:
+
+```text
+Implement  pass  Test
+Test       pass  Push and draft PR
+Test       fail  Fix
+Fix        pass  Test
+```
+
+- It runs through your login shell, as an agent does, in the worktree of the first step that made one, on
+  that machine. Save refuses a command with no such step before it on every path.
+- The shell's exit code is the last command's, so on several lines an earlier failure does not count. Join
+  them with `&&`, as in `make test && make lint`.
+- Exit 0 goes down the pass line. Any other exit, or running past its **Stop after minutes** (10 unless you
+  change it, 1 to 1440), goes down the fail line. At the limit the machine stops the command and everything
+  it started.
+- The last 20,000 bytes of its output, with saved secrets and known token shapes hidden, are the step's
+  report. A Fix step reads them with `{report}`, quoted as data.
+- If Yardbell cannot tell how it ended, such as when ssh dropped, that is not a fail. It tries once more,
+  then waits for you with **Retry step**, and neither try counts against `max_runs`.
+- `max_runs` counts as for any step, so a Test and Fix loop stops and waits when either reaches its limit.
+- If Yardbell restarts during a command, the step runs again from the start and tells the copy left behind
+  to stop. Choose commands that are safe to run twice. Dropping the run stops the command too.
+- A command takes no placeholders. `{branch}` or `{report}` would be refused on save, because text from a
+  ticket must never reach a shell. It can read `YARDBELL_WORKTREE` and `YARDBELL_MAIN_CHECKOUT`.
+
+**A command step never passes without running.** **Continue on pass** on this step depends on what happened
+in this attempt, which starts each time a run enters the step:
+
+- If the exact approved command has not run, as when it waits to be accepted, a rule refused it, ssh dropped
+  or the run limit stopped the loop, nobody can continue on pass, including through `answer_run` under an
+  `allow` rule. The button is hidden. **Accept and run** or **Retry step** is the way forward.
+- If it ran and failed, you can still press **Continue on pass** on the run's page. The run keeps a note
+  that you overrode it, the step's row says so, and the final report lists it. `answer_run` is refused here
+  too, even with an `allow` rule or a card you approve, so this takes the run's page.
+- If it ran and passed, anyone can continue on pass.
+
+**Continue on fail** and **Drop** always work. Continue on fail follows the fail line as if the step failed,
+so it runs nothing, and a later step that reads `{report}` finds no output if the command never ran.
+
+**Who approves a command.** Only text a person has accepted runs:
+
+- A command you type in the builder counts as approved when you save it.
+- A pipeline Dispatch or an MCP client proposes always waits for you, and its card shows each command.
+  Approving the card saves the pipeline but does not approve the commands. The first time a run reaches one,
+  it waits and shows the whole command, and **Accept and run** goes on and remembers it. You can also press
+  **Approve this command** in the builder.
+- If an agent changes a command, the approval is gone and the run waits again. What an agent sends in the
+  `approved` field is ignored.
+
+**Dispatch rules.** A rule on the action `run_command` matches the machine, and the folder either as its name
+such as `acme/web` or as the worktree's path. A `deny` rule makes the run wait with the rule's reason. As with
+the other steps of a run, starting the run is the one approval, so `prompt` does not stop it.
 
 ### When a run waits for you
 

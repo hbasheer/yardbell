@@ -103,6 +103,7 @@ pub fn uses_tokens(kind: &StepKind) -> bool {
         | StepKind::Update { .. }
         | StepKind::Call { .. }
         | StepKind::Tool { .. }
+        | StepKind::Command { .. }
         | StepKind::Wait { .. } => false,
     }
 }
@@ -374,6 +375,10 @@ mod tests {
                 arguments: Value::Null,
                 call_kind: crate::connectors::CallKind::Change,
                 schema_hash: String::new(),
+            },
+            StepKind::Command {
+                command: String::new(),
+                approved: String::new(),
             },
             StepKind::Wait {
                 message: String::new(),

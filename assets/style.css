@@ -2534,3 +2534,9 @@ label.conn-setting + label.conn-setting { border-top: 1px solid var(--line); }
   .secret-row .conn-actions { grid-column: 2; grid-row: 1 / span 3; }
   label.conn-setting { align-items: flex-start; }
 }
+
+.pl-step-form textarea.mono { font: 12.5px/1.5 var(--mono); }
+.pl-approve-command { display: grid; gap: 8px; justify-items: start; margin-top: 8px; }
+.pl-approve-command .help { margin: 0; }
+.step-card-body pre.session-screen { margin: 4px 0 8px; max-height: 240px; overflow: auto; padding: 10px 12px; border-radius: 6px; background: var(--side); color: var(--ink-2); font: 12px/1.6 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
+.pl-overridden { display: block; color: var(--warn-text); }

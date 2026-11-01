@@ -45,6 +45,14 @@ and the project uses [Semantic Versioning](https://semver.org).
   the run, and a limited run asks before starting one. A session that runs `/clear` makes the figure "at
   least" and the run asks the same way. No limit means no change.
 
+- **Run a command.** This pipeline step runs a saved shell command in the run's worktree, with no agent
+  and no tokens. Exit 0 follows the pass line and anything else follows the fail line, so code rather
+  than an agent's word decides. The end of its output is the step's report, so a Fix step can read it
+  with `{report}`. A command an agent proposed runs only after you accept its exact text, and the
+  Dispatch rule action `run_command` can refuse it by machine or folder. The step can never pass unless its
+  command ran in that attempt. After a real failure only a person on the run's page can continue on pass,
+  and the run records the override.
+
 ## [0.10.0] - 2026-11-01
 
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing

@@ -19,6 +19,7 @@ export const KINDS = {
   update: "Update the ticket",
   call: "Use a connected tool",
   tool: "Use a connected tool",
+  command: "Run a command",
   report: "Report to me",
   wait: "Wait for me",
 };
@@ -35,6 +36,7 @@ const ICONS = {
   update: "M3 3.5h10v9H3z M5.5 8l1.75 1.75L10.5 6.5",
   call: "M2.5 8h8 M8 5l3 3-3 3 M13.5 3v10",
   tool: "M9.5 3.5a3 3 0 0 0-3.8 3.8L2.5 10.5l3 3 3.2-3.2a3 3 0 0 0 3.8-3.8l-2 2-2-2z",
+  command: "M3 4.5 6.5 8 3 11.5 M8 12h5",
   report: "M2.5 4h11v8h-11z M2.5 4 8 8.5 13.5 4",
   wait: "M6 4v8 M10 4v8",
 };
@@ -390,6 +392,7 @@ export function describe(s) {
       return { who: `Yardbell · ${connectorName(s.connector)}`, does: s.call ? `Calls ${s.call}` : "Pick a call", tags: [call?.kind === "lookup" ? "Reads" : "Changes"] };
     }
     case "tool": return { who: `Yardbell · ${s.server || "MCP"}`, does: s.tool ? `Calls ${s.tool}` : "Pick a tool", tags: [s.call_kind === "lookup" ? "Reads" : "Changes"] };
+    case "command": return { who: "Yardbell · no agent", does: s.command || "No command yet", tags: [s.command && s.approved !== s.command ? "Not approved yet" : "Exit code decides"] };
     case "report": return { who: "Yardbell · Dispatch", does: "Writes what the run found and tells you", tags: ["phone notification"] };
     case "wait": return { who: "You", does: s.message || "Waits until you continue it", tags: ["needs you"] };
     default: return { who: "", does: "", tags: [] };

