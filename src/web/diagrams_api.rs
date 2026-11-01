@@ -224,11 +224,16 @@ async fn remove_route(
 #[derive(Deserialize)]
 pub(crate) struct Draw {
     pub machine: String,
+    #[serde(default)]
     pub folder: String,
     #[serde(default)]
     pub agent: String,
     #[serde(default)]
     pub focus: String,
+    #[serde(default)]
+    pub description: String,
+    #[serde(default)]
+    pub new_folder: String,
 }
 
 async fn draw_route(
@@ -242,7 +247,21 @@ async fn draw_route(
 pub(crate) fn check_draw(app: &AppState, req: &Draw) -> Result<(), ApiError> {
     let cfg = app.config()?;
     let m = find_machine(&cfg, &req.machine)?;
-    folder_path(app, &m.name, &req.folder)?;
+    if req.new_folder.is_empty() {
+        if req.folder.is_empty() {
+            return Err(bad("choose a folder, or a name for a new one"));
+        }
+        folder_path(app, &m.name, &req.folder)?;
+    } else {
+        if !diagrams::safe_name(&req.new_folder) || req.new_folder.starts_with('.') {
+            return Err(bad("that folder name is not a plain name"));
+        }
+        if req.description.trim().is_empty() {
+            return Err(bad(
+                "Describe what to draw, since a new folder has no code to read",
+            ));
+        }
+    }
     if !req.agent.is_empty() && cfg.agent(&req.agent).is_none() {
         return Err(bad(&format!("no agent named {}", req.agent)));
     }
@@ -250,9 +269,9 @@ pub(crate) fn check_draw(app: &AppState, req: &Draw) -> Result<(), ApiError> {
 }
 
 pub(crate) async fn draw(app: &AppState, req: Draw) -> Result<Value, ApiError> {
+    check_draw(app, &req)?;
     let cfg = app.config()?;
     let m = find_machine(&cfg, &req.machine)?;
-    let path = folder_path(app, &m.name, &req.folder)?;
     let status = app
         .sessions
         .script(&m, &login_shell(&diagrams::status_script()), STATUS_WAIT)
@@ -268,6 +287,21 @@ pub(crate) async fn draw(app: &AppState, req: Draw) -> Result<Value, ApiError> {
         }
         _ => return Err(bad(&format!("Install Archify on {} first", m.name))),
     }
+    let path = if req.new_folder.is_empty() {
+        folder_path(app, &m.name, &req.folder)?
+    } else {
+        let made = app
+            .sessions
+            .script(
+                &m,
+                &diagrams::new_folder_script(&m.root, &req.new_folder),
+                STATUS_WAIT,
+            )
+            .await
+            .map_err(ApiError::gateway)?;
+        diagrams::parse_new_folder(&made)
+            .ok_or_else(|| ApiError::gateway(format!("could not make {}", req.new_folder)))?
+    };
     if let Err(problem) = app
         .sessions
         .script(&m, &diagrams::exclude_script(&path), STATUS_WAIT)
@@ -275,11 +309,16 @@ pub(crate) async fn draw(app: &AppState, req: Draw) -> Result<Value, ApiError> {
     {
         tracing::warn!(machine = %m.name, %problem, "could not keep .archify out of git");
     }
+    let prompt = if req.description.trim().is_empty() {
+        diagrams::draw_prompt(&req.focus)
+    } else {
+        diagrams::describe_prompt(&req.description)
+    };
     let session: NewSession = serde_json::from_value(json!({
         "machine": m.name,
-        "folder": req.folder,
+        "path": path,
         "agent": req.agent,
-        "prompt": diagrams::draw_prompt(&req.focus),
+        "prompt": prompt,
         "name_tag": "diagram",
     }))
     .map_err(|e| bad(&e.to_string()))?;

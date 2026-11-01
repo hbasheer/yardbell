@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.403] - 2026-11-01
+
+- **Draw from a description.** **Draw architecture** can draw something not built yet, from what you type, saved in a
+  folder you have or a new one. **Build from this** then works from it as with any diagram. Dispatch can propose this too.
+- **Proposals** only shows in the menu while something waits there, which also makes room on a phone. The page stays
+  linked from **Settings, Let agents use Yardbell**.
+
 ## [0.10.402] - 2026-11-01
 
 - **Build from a diagram.** **Build from this** on a diagram, or **Run now** on a by-hand pipeline, starts a run that

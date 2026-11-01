@@ -2727,6 +2727,27 @@ class Suite:
             b.goto(self.url(path))
             b.wait("document.querySelector('.side-link[href=\"/proposals\"]')", f"Proposals in the menu on {path}")
 
+    def test_proposals_only_shows_in_the_menu_when_something_waits(self):
+        b = self.b
+        link = """document.querySelector('.side-link[href="/proposals"]')"""
+        shown = f"{link}.getClientRects().length > 0"
+        b.goto(self.url("/settings"))
+        b.wait(f"{link} && document.getElementById('nav-proposals-count')", "the menu")
+        waiting = len([p for p in self.api("GET", "/api/proposals")["proposals"] if p["status"] == "pending"])
+        for path in ("/", "/settings", "/workspace", "/diagrams", "/dispatch", "/pipeline"):
+            b.goto(self.url(path))
+            if waiting:
+                b.wait(shown, f"Proposals in the menu on {path} while {waiting} wait")
+            else:
+                b.pump(0.6)
+                if b.js(shown):
+                    raise Failure(f"Proposals shows on {path} with nothing waiting")
+        b.goto(self.url("/proposals"))
+        b.wait(shown, "Proposals in the menu on its own page")
+        b.goto(self.url("/settings#mcp"))
+        b.wait("""document.querySelector('#mcp a[href="/proposals"]')""", "a way to the page from Settings")
+        self.check_errors("Proposals in the menu")
+
     def test_proposals_page_approves_and_rejects(self):
         b = self.b
         b.goto(self.url("/proposals"))
@@ -3888,6 +3909,48 @@ class Suite:
         finally:
             self.api("DELETE", f"/api/pipelines/{made['id']}")
 
+    def test_draw_from_a_description(self):
+        b = self.b
+        b.goto(self.url("/diagrams"))
+        b.wait("document.getElementById('draw-new')", "the page")
+        b.js("""(() => {
+          const real = window.fetch;
+          window.__drawn = [];
+          window.fetch = (u, o) => {
+            if (String(u).endsWith('/api/diagrams/draw')) {
+              window.__drawn.push(JSON.parse(o.body));
+              return Promise.resolve(new Response(JSON.stringify({ error: 'stopped by the test' }), { status: 400, headers: { 'content-type': 'application/json' } }));
+            }
+            if (String(u).endsWith('/api/diagrams')) {
+              return real(u, o).then((r) => r.json()).then((d) => { d.machines.forEach((m) => { m.state = 'installed'; }); return new Response(JSON.stringify(d), { headers: { 'content-type': 'application/json' } }); });
+            }
+            return real(u, o);
+          };
+          document.dispatchEvent(new Event('visibilitychange'));
+        })()""")
+        b.wait("!document.getElementById('draw-new').disabled", "Draw to be ready")
+        b.click("#draw-new")
+        b.wait("document.getElementById('draw-dialog')?.open", "the draw dialog")
+        b.click("#draw-dialog [data-kind=description]")
+        b.wait("document.getElementById('draw-description')", "the description box")
+        if not b.js("document.querySelector('#draw-dialog button[type=submit]').disabled"):
+            raise Failure("Draw should wait for a description")
+        self.set_field("#draw-description", "A shop with a cart")
+        b.js("""(() => { const s = document.getElementById('draw-where'); s.value = '__new'; s.dispatchEvent(new Event('change', { bubbles: true })); })()""")
+        b.wait("document.getElementById('draw-new-folder')", "the new folder box")
+        if not b.js("document.querySelector('#draw-dialog button[type=submit]').disabled"):
+            raise Failure("Draw should wait for a folder name")
+        self.set_field("#draw-new-folder", "my-idea")
+        b.wait("!document.querySelector('#draw-dialog button[type=submit]').disabled", "Draw to be ready")
+        b.click("#draw-dialog button[type=submit]")
+        b.wait("window.__drawn.length === 1", "the request")
+        sent = b.js("window.__drawn[0]")
+        if sent.get("description") != "A shop with a cart" or sent.get("new_folder") != "my-idea" or sent.get("folder"):
+            raise Failure(f"the request was {sent}")
+        b.wait("document.querySelector('#draw-dialog [role=alert]')?.textContent.includes('stopped by the test')", "the error kept in the dialog")
+        b.js("document.getElementById('draw-dialog').close()")
+        self.check_errors("drawing from a description")
+
     def test_settings_shows_archify_on_each_machine(self):
         b = self.b
         b.goto(self.url("/settings#diagrams"))
@@ -4347,7 +4410,7 @@ class Suite:
                 b.pump(0.4)
                 seen = b.js(probe)
                 problems = []
-                if seen["tabs"] != want:
+                if [t for t in seen["tabs"] if t != "Proposals"] != [t for t in want if t != "Proposals"]:
                     problems.append("tabs")
                 if abs(seen["bottom"] - seen["height"]) > 1 or seen["wide"] != seen["page"]:
                     problems.append("not along the bottom")

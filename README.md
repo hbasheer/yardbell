@@ -51,7 +51,7 @@ plain HTML UI, plus apps for macOS, Linux and Android.
   find the servers on it so signing in takes only the passcode.
 - **An MCP server for agents.** Agents can list machines and sessions, start, read and answer them,
   and read every part of Yardbell. Secrets are never shown.
-- **One menu on every page.** Dashboard, Workspace, Pipelines, Dispatch, Proposals and Settings in
+- **One menu on every page.** Dashboard, Workspace, Pipelines, Diagrams, Dispatch and Settings, plus Proposals while something waits, in
   the same place everywhere, as a tab bar along the bottom on a phone.
 - **Light or dark, and small to run.** A theme button in every sidebar; about 9 MB of memory, a
   service in one command and a `doctor` that checks everything.

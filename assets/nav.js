@@ -62,6 +62,7 @@
     if (!waiting) return;
     waiting.textContent = state.proposals ? String(state.proposals) : "";
     waiting.hidden = !state.proposals;
+    waiting.closest(".side-link")?.classList.toggle("has-waiting", Boolean(state.proposals));
     problemsBadge(state);
   }
 

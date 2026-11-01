@@ -259,6 +259,10 @@ the agent keeps the diagram and says so.
 A diagram opens inside Yardbell, in a frame that cannot reach your login, Yardbell's API or the network. It holds what the
 agent read from the repository, and saved secrets are not removed from it, so check it before sharing it.
 
+It can also draw from a description, as a plan for something not built yet: choose **A description**, say what to draw,
+and save it in a folder you have or a new one, which Yardbell makes as a new git repository under the machine's root. It
+never reuses a folder that already exists.
+
 **Build from this** on a diagram starts a pipeline run that works from it. Choose one of your by-hand pipelines, or let it
 add **Implement from a diagram**, which writes a task list and waits for you to approve it before changing any code, then
 implements, reviews, fixes, pushes a draft pull request and reports. **Run now** on a by-hand pipeline has the same choice.
@@ -406,6 +410,8 @@ builder, where **Approve and save** saves it; a new pipeline starts switched off
 **Ask Dispatch to change it** starts a message to Dispatch about that pipeline.
 
 ### Proposals
+
+The menu only shows **Proposals** while something waits there. **Settings, Let agents use Yardbell** links to the page at any time.
 
 Other MCP clients, such as Claude Code with Yardbell added, can ask for the same changes. They wait
 on the **Proposals** page, linked from the sidebar with a count while any wait, and your phone says
