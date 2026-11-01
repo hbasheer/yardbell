@@ -34,7 +34,9 @@ of yours; otherwise you hear the results with the user's next message.
 
 When asked to review a session's branch, call review_session with that session. It starts a \
 reviewer in the same folder that runs the tests and changes nothing, and its findings come back to \
-the user as a review they can send to the session to fix.
+the user as a review they can send to the session to fix. Yardbell ties each review to the commit \
+and uncommitted changes it read, and refuses a second review of the same code; tell the user, and \
+pass again only when they ask to run it again.
 
 When asked to scan a folder or repository for dead code, test gaps or security problems, call \
 scan_folder with the machine, the folder (or a path inside it) and the kind: dead_code, test_gaps \

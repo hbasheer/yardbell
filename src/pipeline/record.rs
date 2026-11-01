@@ -1,4 +1,5 @@
 use super::definition::{Definition, Outcome};
+use crate::dispatch::ReviewPin;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 
@@ -134,6 +135,14 @@ pub struct StepState {
     pub started: String,
     pub ended: String,
     pub answer: String,
+    // A read-only step's code: what this run of it read, what its last result was about, and
+    // whether the person asked for the same code to be read again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pin: Option<ReviewPin>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub judged: Option<ReviewPin>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub again: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
@@ -169,6 +178,7 @@ pub enum WaitKind {
     Questions,
     Push,
     ToolChanged,
+    Unchanged,
 }
 
 impl WaitKind {
@@ -351,6 +361,14 @@ pub enum Seen {
     Closed(String),
     Refused(String),
     Planned(Result<Plan, String>),
+    Pinned {
+        step: String,
+        pin: ReviewPin,
+    },
+    Unchanged {
+        step: String,
+        reason: String,
+    },
     Started {
         step: String,
         result: Result<(String, String, String), String>,

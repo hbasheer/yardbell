@@ -26,6 +26,7 @@ MACHINE = "hp"
 SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
 REVIEW_CHAT = "browserreview001"
+REVIEW_AGAIN_CHAT = "browserreagain01"
 SCAN_CHAT = "browserscan00001"
 SHOT_FILE = "shotbrowsertest1.png"
 PULL_CHAT = "browsertestpull0"
@@ -206,7 +207,8 @@ def review_card(repo, anchor):
         "machine": MACHINE,
         "name": "hp-demo-app-2",
         "path": repo,
-        "of": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login", "evidence": "browsershots"},
+        "of": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login", "evidence": "browsershots",
+               "pin": {"head": anchor["merge_base"], "top": repo}},
         "at": "2026-01-01T10:05:00+00:00",
         "verdict": "changes",
         "base": "main",
@@ -723,7 +725,14 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
         with open(os.path.join(self.state, "insights.json"), "w") as f:
             json.dump({f"{MACHINE}:{OLD_RUN}": {"machine": MACHINE, "name": OLD_RUN, "agent": "shell", "folder": "demo-app",
                                                 "branch": "main", "marks": marks}}, f)
-        for chat in (short, long, review, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
+        review_again = conversation(REVIEW_AGAIN_CHAT, "Review the login fix again", [
+            {"role": "user", "text": "Review the login fix"},
+            {"role": "action", "id": "reagain1", "tool": "start_session", "by": "you", "status": "pending", "at": "2026-01-01T10:06:00+00:00",
+             "input": {"machine": MACHINE, "path": repo, "prompt": "Review it.", "read_only": True},
+             "review": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login"},
+             "already": {"text": "Commit ab12cd3 already has a finished review, which said ready, by hp-demo-app-2.", "conversation": REVIEW_CHAT}},
+        ])
+        for chat in (short, long, review, review_again, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
                      settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat(),
                      review_card_chat(), run_steps_chat(),
                      proposed_pipeline(PROPOSAL_CHAT, (("propstp1", "Built in the builder"),
@@ -1137,6 +1146,14 @@ class Suite:
             self.api("POST", "/api/settings/dispatch", before)
             os.remove(os.path.join(self.y.env["HOME"], ".codex", "models_cache.json"))
 
+    def test_a_review_of_reviewed_code_offers_review_again(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={REVIEW_AGAIN_CHAT}"))
+        card = "#dispatch-log .step-card.pending"
+        b.wait(f"document.querySelector('{card} .review-commit')?.textContent.includes('already has a finished review')", "the note that this code has a review")
+        if b.js(f"document.querySelector('{card} .step-card-actions .btn.primary').textContent.trim()") != "Review again":
+            raise Failure("the button does not say Review again")
+
     def test_dispatch_review_card_diff_and_evidence(self):
         b = self.b
         b.goto(self.url(f"/dispatch?c={REVIEW_CHAT}"))
@@ -1153,6 +1170,9 @@ class Suite:
             raise Failure("the high and medium findings are not the ones ticked")
         if "/" in b.js(f"document.querySelector('{card} .step-card-where').textContent"):
             raise Failure("the card names the whole path instead of the folder")
+        b.wait(f"document.querySelector('{card} .review-commit')?.textContent.includes('The branch has moved on since this review')", "the card saying the branch moved on")
+        if not b.js(f"document.querySelector('{card} .review-commit').textContent.startsWith('Read ')"):
+            raise Failure("the card does not name the commit it read")
         b.click(f"{card} .finding-group.low .finding-group-head")
         b.wait(f"document.querySelector('{card}').textContent.includes('Mention passkeys')", "the low finding once opened")
         if b.js(f"document.querySelector('{card} .finding-group.low input').checked"):

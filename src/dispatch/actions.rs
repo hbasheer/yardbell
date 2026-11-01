@@ -1,4 +1,4 @@
-use super::review::ReviewOf;
+use super::review::{Pin, ReviewOf};
 use rand::Rng;
 use serde_json::{json, Value};
 
@@ -390,8 +390,13 @@ fn review_finished(review: &Value) -> String {
     } else {
         format!(" Findings: {}", findings.join(" "))
     };
+    let read = serde_json::from_value::<Pin>(review["of"]["pin"].clone())
+        .ok()
+        .filter(|p| !p.head.is_empty())
+        .map(|p| format!(" It read {}.", p.words()))
+        .unwrap_or_default();
     format!(
-        "{} by {} on {} finished: {verdict}. {}{listed}",
+        "{} by {} on {} finished: {verdict}.{read} {}{listed}",
         capital(&work(&review["of"], "the")),
         text(review, "name"),
         text(review, "machine"),
@@ -539,6 +544,16 @@ mod tests {
         assert_eq!(
             untold(&mut events),
             ["You proposed starting a session on hp in demo-app on branch eng-1. I approved it, but it failed: tmux: no server."]
+        );
+    }
+
+    #[test]
+    fn a_finished_review_tells_the_commit_it_read() {
+        let review = json!({ "role": "review", "machine": "hp", "name": "hp-app-2", "verdict": "ready", "summary": "Fine.",
+            "of": { "machine": "hp", "name": "hp-app", "branch": "eng-1", "pin": { "head": "abcdef1234", "changes": "h" } } });
+        assert_eq!(
+            review_finished(&review),
+            "The review of branch eng-1 by hp-app-2 on hp finished: ready. It read commit abcdef1 with uncommitted changes. Fine. No findings."
         );
     }
 

@@ -83,6 +83,7 @@ async fn send(
             let approve = Decision {
                 decision: "approve".into(),
                 input: None,
+                again: false,
             };
             decide(&app, id, &step_id, &approve).await?
         }

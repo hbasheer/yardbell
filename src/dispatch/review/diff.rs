@@ -90,7 +90,7 @@ pub fn valid_path(file: &str) -> bool {
             .any(|part| part.is_empty() || part == "." || part == "..")
 }
 
-fn prelude(path: &str) -> String {
+pub(super) fn prelude(path: &str) -> String {
     format!(
         "cd {0} 2>/dev/null || {{ echo 'ERR the folder {1} is gone'; exit 0; }}; \
          top=$(git rev-parse --show-toplevel 2>/dev/null) || {{ echo 'ERR {1} is not in a git repository'; exit 0; }}; \
@@ -133,13 +133,13 @@ pub(super) fn gather_prelude(path: &str, want: &str) -> String {
     format!("{}{}", prelude(path), anchor_script(want))
 }
 
-fn err_of(out: &str) -> Option<String> {
+pub(super) fn err_of(out: &str) -> Option<String> {
     out.lines()
         .find_map(|l| l.strip_prefix("ERR "))
         .map(str::to_string)
 }
 
-fn field<'a>(out: &'a str, key: &str) -> &'a str {
+pub(super) fn field<'a>(out: &'a str, key: &str) -> &'a str {
     out.lines()
         .find_map(|l| l.strip_prefix(key)?.strip_prefix('\t'))
         .unwrap_or_default()

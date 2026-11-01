@@ -561,6 +561,21 @@ and **Send** them to the session that did the work, which gets them as one reque
 **Dismiss** the review. Asking Dispatch to review a session proposes the same reviewer. A list at
 the top of the conversation shows every session it started and what each is doing now.
 
+Each review is tied to the code it read. When it starts, Yardbell reads the branch's commit and a hash
+of its uncommitted changes and new files with `git` on the session's machine, which changes nothing
+there, and the card says **Read `ab12cd3`**, with **with uncommitted changes** when there were some. When
+you look at the card it reads them again and says whether nothing has changed since, whether the branch
+has moved on (and to which commit), or whether it is at the same commit with different uncommitted
+changes, because the verdict may not hold then. It also says if the code changed while the review ran.
+A reviewer that runs the tests and leaves new files that are not ignored counts as such a change.
+
+The same commit with the same uncommitted changes in the same folder is not reviewed twice. Pressing
+**Review branch** on code that has a finished review, or one still running, prepares the card as usual
+but says so, and its button becomes **Review again**, which is how you ask for a second read. Dispatch
+is told the same thing when it proposes such a review, and passes `again` only when you ask it to. A
+review that ended without a report, a review during which the code changed, and a review whose code
+could not be read do not count. Files git ignores are not part of what is compared.
+
 A review card also has **Changes**, the branch's diff against the base the reviewer compared with.
 The reviewer names that base in its report; when it does not, Yardbell uses the same rule the
 reviewer is given (the branch it was made from, usually `main`, or `origin/main` on `main` itself)

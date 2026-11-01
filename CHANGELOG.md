@@ -30,6 +30,13 @@ and the project uses [Semantic Versioning](https://semver.org).
   filter finds. The first check after a change only notes what matches, so old tickets never flood in.
   Saved pipelines and connections are unchanged, and a connection can add its own filters under **Choices**.
 
+- **Reviews are tied to the code they read.** A review notes the branch's commit and a hash of its
+  uncommitted changes when it starts. Its card shows the commit and says plainly when the branch has
+  moved on or the uncommitted changes differ. Code that already has a finished review, or one still
+  running, is not reviewed again unless you press **Review again** or ask Dispatch to. In a pipeline, a
+  read-only step reached again on the code its last result was about no longer starts: the run waits and
+  says the fix changed nothing, and **Run it again** or **Continue** decides.
+
 ## [0.10.0] - 2026-11-01
 
 - **Sign in to tools.** **Settings, Connections** now connects a tool through its MCP server by signing

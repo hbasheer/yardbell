@@ -1186,6 +1186,8 @@ button.finding-group-head:hover { background: var(--hover); color: var(--ink); }
 .shot img { display: block; width: 120px; height: 76px; object-fit: cover; object-position: top left; }
 .finding-shot-error { color: var(--muted); font-size: 12px; }
 .visually-hidden { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.review-commit.warn, .review-commit.warn strong { color: var(--warn-text); }
+.review-commit code { overflow-wrap: anywhere; }
 .review-diff { display: grid; min-width: 0; margin: 6px 0 0 -10px; }
 .review-diff-toggle { display: flex; align-items: center; gap: 6px; justify-self: start; max-width: 100%; height: 30px; padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--ink-2); font: 500 12.5px var(--sans); cursor: pointer; }
 .review-diff-toggle:hover { background: var(--hover); color: var(--ink); }
@@ -2405,6 +2407,8 @@ button.back-link { justify-self: start; border: 0; background: none; font-family
 .pl-st { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; padding: 8px 0; border-top: 1px solid var(--line); font-size: 13px; align-items: start; }
 .pl-st-name { color: var(--ink); font-weight: 500; }
 .pl-st small, .pl-st time { color: var(--muted); font-size: 12px; }
+.pl-st-commit { display: block; }
+.pl-st-commit code { font: 11.5px var(--mono); }
 .pl-report { margin: 3px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
 details.pl-report summary { cursor: pointer; }
 .pl-final { display: grid; gap: 6px; }

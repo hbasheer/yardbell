@@ -283,7 +283,9 @@ fn answer(mut run: Run, text: String, now: &DateTime<Local>) -> (Run, Vec<Effect
             (run, vec![Effect::Answer { step: w.step, text }])
         }
         _ => {
-            run.state_of(&w.step).answer = text;
+            let st = run.state_of(&w.step);
+            st.answer = text;
+            st.again = true;
             enter(run, &w.step, now, true)
         }
     }
@@ -307,6 +309,12 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             let st = run.state_of(&step);
             st.made = path;
             st.repo = repo;
+            return (run, vec![]);
+        }
+        Seen::Pinned { step, pin } => {
+            let st = run.state_of(&step);
+            st.pin = Some(pin);
+            st.again = false;
             return (run, vec![]);
         }
         other => other,
@@ -341,6 +349,7 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
         }
         Seen::Retry if waiting => {
             let at = run.waiting.take().map_or(id, |w| w.step);
+            run.state_of(&at).again = true;
             enter(run, &at, now, true)
         }
         Seen::Continue(outcome) if waiting => {
@@ -386,6 +395,12 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
                 told: was.as_ref().is_some_and(|h| h.told),
             });
             (run, vec![])
+        }
+        // Nothing started, so this try does not count towards the step's limit.
+        Seen::Unchanged { step, reason } => {
+            let st = run.state_of(&step);
+            st.runs = st.runs.saturating_sub(1);
+            wait(run, WaitKind::Unchanged, &step, reason, "")
         }
         Seen::Closed(_) => {
             let reason = format!("{} was closed in Linear", run.subject.label());
@@ -467,6 +482,8 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
             let st = run.state_of(&step);
             st.report = report;
             st.details = details;
+            st.judged = st.pin.clone();
+            st.again = false;
             run.step = step;
             follow(run, outcome, now)
         }

@@ -47,6 +47,7 @@ pub(crate) struct Fake {
     pub tool_reply: Mutex<Option<Result<crate::mcp_client::ToolReply, crate::mcp_client::Failure>>>,
     pub tool_args: Mutex<Vec<Value>>,
     pub memory: Mutex<HashMap<String, u64>>,
+    pub pins: Mutex<VecDeque<crate::dispatch::ReviewPin>>,
 }
 
 impl Fake {
@@ -209,6 +210,20 @@ impl World for Fake {
                 }
                 _ => Ok(json!({ "ok": true })),
             }
+        })
+    }
+
+    fn read_pin<'a>(
+        &'a self,
+        _machine: &'a str,
+        _path: &'a str,
+    ) -> BoxFuture<'a, crate::dispatch::ReviewPin> {
+        Box::pin(async move {
+            self.pins
+                .lock()
+                .unwrap()
+                .pop_front()
+                .unwrap_or_else(|| crate::dispatch::ReviewPin::failed("no git here"))
         })
     }
 
@@ -2699,4 +2714,127 @@ fn saving_says_when_a_connection_lacks_the_update() {
             .any(|p| p.contains("Up") && p.contains("move") && p.contains("Tool")),
         "{problems:?}"
     );
+}
+
+fn pin(head: &str, changes: &str) -> crate::dispatch::ReviewPin {
+    crate::dispatch::ReviewPin {
+        head: head.repeat(40),
+        top: "/r/repo".into(),
+        changes: changes.into(),
+        error: String::new(),
+    }
+}
+
+async fn run_with_pins(fake: &Fake, pins: Vec<crate::dispatch::ReviewPin>) -> Run {
+    fake.pins.lock().unwrap().extend(pins);
+    let mut run = run_of("Implement my tickets");
+    run.place.machine = "hp".into();
+    run.place.folder = "acme/app".into();
+    run.place.branch = "com-1-fix".into();
+    run.step = "implement".into();
+    run.definition.as_mut().unwrap().start = "implement".into();
+    drive(fake, run, &[("review", "fail")]).await
+}
+
+#[tokio::test]
+async fn a_review_after_a_fix_that_changed_nothing_waits_for_the_person() {
+    let fake = Fake::default();
+    let run = run_with_pins(&fake, vec![pin("a", ""), pin("a", "")]).await;
+    assert_eq!(run.state, RunState::Waiting);
+    let w = run.waiting.clone().unwrap();
+    assert_eq!((w.kind, w.step.as_str()), (WaitKind::Unchanged, "review"));
+    assert!(
+        w.reason
+            .contains("Fix made no new commit and changed no files"),
+        "{}",
+        w.reason
+    );
+    assert!(
+        w.reason.contains("It failed on commit aaaaaaa."),
+        "{}",
+        w.reason
+    );
+    assert_eq!(run.steps["review"].runs, 1, "the second read never started");
+    assert_eq!(run.steps["review"].outcome, Some(Outcome::Fail));
+    assert_eq!(
+        count(&fake.calls(), "stop_session"),
+        0,
+        "no reviewer stopped"
+    );
+    let reviewers = |fake: &Fake| {
+        fake.calls()
+            .iter()
+            .filter(|c| c.starts_with("start_session") && c.contains("\"read_only\":true"))
+            .count()
+    };
+    assert_eq!(reviewers(&fake), 1, "{:?}", fake.calls());
+
+    let cfg = Pipelines::default();
+    let (run, _) = engine::step(run, Seen::Retry, &cfg, chrono::Local::now());
+    assert!(run.steps["review"].again);
+    let (run, effects) = engine::step(run, Seen::Admitted, &cfg, chrono::Local::now());
+    fake.pins.lock().unwrap().push_back(pin("a", ""));
+    let seen = act(&fake, &cfg, &run, &effects[0]).await;
+    assert!(
+        seen.iter().any(|s| matches!(s, Seen::Started { .. })),
+        "the person asked, so it runs: {seen:?}"
+    );
+    assert_eq!(reviewers(&fake), 2, "{:?}", fake.calls());
+}
+
+#[tokio::test]
+async fn a_review_after_a_new_commit_or_new_uncommitted_changes_runs() {
+    let fake = Fake::default();
+    let run = run_with_pins(&fake, vec![pin("a", ""), pin("b", ""), pin("b", "edited")]).await;
+    let w = run.waiting.clone().unwrap();
+    assert_eq!(w.kind, WaitKind::RunLimit, "{}", w.reason);
+    assert_eq!(run.steps["review"].runs, 3);
+    assert_eq!(run.steps["review"].pin, Some(pin("b", "edited")));
+    assert_eq!(run.steps["review"].judged, Some(pin("b", "edited")));
+}
+
+#[tokio::test]
+async fn a_review_whose_code_cannot_be_read_runs_as_it_did() {
+    let fake = Fake::default();
+    let run = run_with_pins(&fake, vec![]).await;
+    assert_eq!(run.waiting.unwrap().kind, WaitKind::RunLimit);
+    assert_eq!(run.steps["review"].runs, 3);
+    assert_eq!(
+        run.steps["review"].pin.as_ref().unwrap().error,
+        "no git here"
+    );
+}
+
+#[tokio::test]
+async fn a_first_read_only_step_is_pinned_once_its_worktree_exists() {
+    let fake = Fake::default();
+    fake.pins.lock().unwrap().push_back(pin("c", ""));
+    let mut run = run_of("Review my merge requests");
+    mr(&mut run);
+    run.place.machine = "hp".into();
+    run.place.folder = "acme/app".into();
+    run.step = "understand".into();
+    run.state = RunState::Running;
+    run.state_of("understand").machine = "hp".into();
+    let seen = act(
+        &fake,
+        &Pipelines::default(),
+        &run,
+        &Effect::Agent {
+            step: "understand".into(),
+        },
+    )
+    .await;
+    assert!(
+        matches!(&seen[0], Seen::Pinned { step, pin: p } if step == "understand" && *p == pin("c", "")),
+        "{seen:?}"
+    );
+    assert!(seen.iter().any(|s| matches!(s, Seen::Started { .. })));
+}
+
+#[test]
+fn a_saved_step_without_a_pin_still_loads() {
+    let st: crate::pipeline::record::StepState =
+        serde_json::from_str(r#"{"runs":1,"session":"s","outcome":"fail"}"#).unwrap();
+    assert_eq!((st.pin, st.judged, st.again), (None, None, false));
 }
