@@ -3731,6 +3731,9 @@ class Suite:
             self.api("POST", "/api/settings/mcp/servers", {"servers": before})
             b.goto(self.url("/"))
 
+    # This machine's real folders can show up too, so a test only ever touches its own row.
+    OWN_DIAGRAM = "[...document.querySelectorAll('.dg-list .row')].find((r) => r.textContent.includes('demo-app'))"
+
     def seed_diagram(self, body):
         folder = os.path.join(self.y.root, "demo-app", ".archify", "architecture-billing-20260101-000000")
         os.makedirs(folder, exist_ok=True)
@@ -3759,10 +3762,10 @@ class Suite:
             d = found[0]
             b.goto(self.url("/diagrams"))
             b.js("window.__seen = null; addEventListener('message', (e) => { if (e.data?.diagram) window.__seen = e.data.diagram; })")
-            b.wait("document.querySelector('.dg-open')", "the diagram in the list")
-            if b.js("document.querySelector('.dg-open').textContent").strip() != "architecture billing":
+            b.wait(self.OWN_DIAGRAM, "the diagram in the list")
+            if b.js(f"{self.OWN_DIAGRAM}.querySelector('.dg-open').textContent").strip() != "architecture billing":
                 raise Failure("the diagram's name reads wrong")
-            b.click(".dg-open")
+            b.js(f"{self.OWN_DIAGRAM}.querySelector('.dg-open').click()")
             b.wait("document.querySelector('iframe.dg-frame')", "the diagram's frame")
             if "allow-same-origin" in b.js("document.querySelector('iframe.dg-frame').getAttribute('sandbox')"):
                 raise Failure("the frame shares Yardbell's origin")
@@ -3788,7 +3791,8 @@ class Suite:
         folder = self.seed_diagram("<!doctype html><title>x</title>drawn")
         try:
             b.goto(self.url("/diagrams"))
-            b.wait("document.querySelector('.dg-open')", "the diagram in the list")
+            b.wait(self.OWN_DIAGRAM, "the diagram in the list")
+            others = b.js("document.querySelectorAll('.dg-list .row').length") - 1
             state = self.api("GET", "/api/diagrams")["machines"][0]["state"]
             if state == "needs_node" and "Needs Node 18" not in b.js("document.querySelector('.dg-setup').innerText"):
                 raise Failure("the page does not say Node is needed")
@@ -3812,15 +3816,77 @@ class Suite:
                 raise Failure("the folder is not offered")
             b.js("[...document.querySelectorAll('#draw-dialog button')].find((x) => x.textContent === 'Cancel').click()")
             b.wait("!document.getElementById('draw-dialog')?.open", "the dialog to close")
-            b.js("[...document.querySelectorAll('.dg-list .btn')].find((x) => x.textContent === 'Delete').click()")
-            b.wait("document.querySelector('dialog.confirm[open]')", "the delete confirmation")
+            b.js(f"[...{self.OWN_DIAGRAM}.querySelectorAll('.btn')].find((x) => x.textContent === 'Delete').click()")
+            b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('demo-app')", "the delete confirmation")
             b.click("dialog.confirm[open] [data-answer=yes]")
-            b.wait("!document.querySelector('.dg-open')", "the diagram gone")
+            b.wait(f"!{self.OWN_DIAGRAM}", "the diagram gone")
             if os.path.exists(folder):
                 raise Failure("the diagram's folder is still there")
+            left = b.js("document.querySelectorAll('.dg-list .row').length")
+            if left != others:
+                raise Failure(f"{others} other diagrams were listed and now {left} are")
             self.check_errors("the diagrams page")
         finally:
             shutil.rmtree(os.path.dirname(folder), ignore_errors=True)
+
+    def test_a_diagram_can_start_a_pipeline_run(self):
+        b = self.b
+        folder = self.seed_diagram("<!doctype html><title>x</title>drawn")
+        with open(os.path.join(folder, "candidate.json"), "w") as f:
+            f.write('{"nodes":["billing <img src=x onerror=window.__bad=1>"]}')
+        made = None
+        try:
+            b.goto(self.url("/diagrams"))
+            b.wait(self.OWN_DIAGRAM, "the diagram in the list")
+            # The run would go on to a real session, so only the request it sends is checked.
+            b.js("""(() => {
+              const real = window.fetch;
+              window.__sent = [];
+              window.fetch = (u, o) => {
+                if (o?.method === 'POST' && String(u).endsWith('/runs')) {
+                  window.__sent.push([String(u), o.body]);
+                  return Promise.resolve(new Response(JSON.stringify({ runs: [] }), { headers: { 'content-type': 'application/json' } }));
+                }
+                return real(u, o);
+              };
+              window.addEventListener('beforeunload', (e) => e.preventDefault());
+            })()""")
+            b.js(f"[...{self.OWN_DIAGRAM}.querySelectorAll('.btn')].find((x) => x.textContent === 'Build from this').click()")
+            b.wait("document.getElementById('build-dialog')?.open", "the build dialog")
+            said = b.js("document.getElementById('build-dialog').innerText")
+            for want in ("Implement from a diagram", "approve it before changing any code", "tokens"):
+                if want not in said:
+                    raise Failure(f"the dialog does not say {want!r}: {said}")
+            b.js("[...document.querySelectorAll('#build-dialog button')].find((x) => x.textContent === 'Cancel').click()")
+            b.wait("!document.getElementById('build-dialog')?.open", "the dialog to close")
+
+            made = self.api("POST", "/api/pipelines", {"template": "Implement from a diagram"})["id"]
+            b.goto(self.url(f"/pipeline?p={made}&tab=build"))
+            b.wait("document.getElementById('pl-run-now')", "Run now")
+            b.click("#pl-run-now")
+            b.wait("document.querySelector('#pl-diagram option[value*=architecture-billing]')", "the diagram offered to Run now")
+            if b.js("window.__bad"):
+                raise Failure("text from the diagram was not escaped")
+            self.check_errors("a diagram starting a run")
+        finally:
+            if made:
+                self.api("DELETE", f"/api/pipelines/{made}")
+            shutil.rmtree(os.path.dirname(folder), ignore_errors=True)
+
+    def test_implement_from_a_diagram_template_waits_for_approval(self):
+        made = self.api("POST", "/api/pipelines", {"template": "Implement from a diagram"})
+        try:
+            steps = {s["id"]: s for s in made["steps"]}
+            if made["trigger"]["kind"] != "manual" or made["enabled"]:
+                raise Failure(f"the template starts as {made['trigger']}, on: {made['enabled']}")
+            if list(steps) != ["plan", "implement", "review", "fix", "push", "report"]:
+                raise Failure(f"the steps are {list(steps)}")
+            words = steps["implement"]["instructions"]
+            for want in ("before you change any file", "say needs you", "{diagram}"):
+                if want not in words:
+                    raise Failure(f"Implement does not say {want!r}: {words}")
+        finally:
+            self.api("DELETE", f"/api/pipelines/{made['id']}")
 
     def test_settings_shows_archify_on_each_machine(self):
         b = self.b

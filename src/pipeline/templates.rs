@@ -7,6 +7,15 @@ const IMPLEMENT: &str = "Implement the ticket {ticket} \"{title}\" ({url}).\n\nY
 the branch {branch} in a new worktree. Make the change the ticket asks for, add or update tests for \
 it, run the tests that cover it, and commit on this branch with a message that names {ticket}. Do \
 not push: Yardbell reviews and tests the branch first.";
+const FROM_DIAGRAM: &str = "Build what this architecture diagram describes, on the branch {branch} in \
+a new worktree.\n\nFirst, before you change any file, write a numbered list of the tasks it takes, say \
+what the diagram leaves unclear, and say needs you to ask the person to approve the list. A diagram \
+shows the parts and how they connect, not their behaviour, so do not guess at what it leaves out.\n\n\
+Once the person has approved, do the tasks, add tests, run them, and commit on this branch. Do not \
+push: Yardbell reviews the branch first.\n\n{diagram}";
+const REVIEW_DIAGRAM: &str = "Review the branch {branch} against the tasks the person approved and this \
+diagram: correctness, tests, and whether it builds what was drawn. Say pass when it is ready to ship, \
+fail with each problem otherwise.\n\n{diagram}";
 const REVIEW: &str = "Review the branch {branch} for {ticket}: correctness, tests, and whether it \
 fixes the root cause. Say pass when it is ready to ship, fail with each problem otherwise.";
 const FIX: &str = "Fix what this report found, run the tests and commit.\n\n{report}";
@@ -207,6 +216,84 @@ fn implement() -> Definition {
     }
 }
 
+fn from_diagram() -> Definition {
+    let same = |id: &str| Workspace::SameAs { step: id.into() };
+    Definition {
+        id: "implement-from-a-diagram".into(),
+        name: "Implement from a diagram".into(),
+        enabled: false,
+        version: 0,
+        trigger: Trigger::Manual,
+        start: "plan".into(),
+        steps: vec![
+            built_in(
+                "plan",
+                "Plan",
+                StepKind::Plan { machines: vec![] },
+                ("implement", WAIT),
+                (40.0, 120.0),
+            ),
+            agent(
+                "implement",
+                "Implement",
+                Agent {
+                    instructions: FROM_DIAGRAM,
+                    machine: MachineChoice::Pick(vec![]),
+                    workspace: Workspace::NewWorktree,
+                    session: SessionChoice::New,
+                    read_only: false,
+                },
+                ("review", WAIT),
+                2,
+                (320.0, 120.0),
+            ),
+            agent(
+                "review",
+                "Review",
+                Agent {
+                    instructions: REVIEW_DIAGRAM,
+                    machine: MachineChoice::SameAs("implement".into()),
+                    workspace: same("implement"),
+                    session: SessionChoice::New,
+                    read_only: true,
+                },
+                ("push", "fix"),
+                3,
+                (600.0, 120.0),
+            ),
+            agent(
+                "fix",
+                "Fix",
+                Agent {
+                    instructions: FIX,
+                    machine: MachineChoice::SameAs("implement".into()),
+                    workspace: same("implement"),
+                    session: SessionChoice::Continue("implement".into()),
+                    read_only: false,
+                },
+                ("review", WAIT),
+                2,
+                (600.0, 300.0),
+            ),
+            built_in(
+                "push",
+                "Push and draft PR",
+                StepKind::Push,
+                ("report", WAIT),
+                (880.0, 120.0),
+            ),
+            built_in(
+                "report",
+                "Report to me",
+                StepKind::Report,
+                (END, END),
+                (1160.0, 120.0),
+            ),
+        ],
+        token_limit: None,
+    }
+}
+
 fn review() -> Definition {
     let reader = |instructions, workspace, machine| Agent {
         instructions,
@@ -288,7 +375,7 @@ fn review() -> Definition {
 }
 
 pub fn all() -> Vec<Definition> {
-    vec![implement(), review()]
+    vec![implement(), review(), from_diagram()]
 }
 
 #[cfg(test)]
@@ -301,7 +388,11 @@ mod tests {
         let names: Vec<String> = all().iter().map(|d| d.name.clone()).collect();
         assert_eq!(
             names,
-            vec!["Implement my tickets", "Review my merge requests"]
+            vec![
+                "Implement my tickets",
+                "Review my merge requests",
+                "Implement from a diagram"
+            ]
         );
         for mut def in all() {
             assert_eq!(check(&def, &cfg()), Ok(()), "{}", def.name);

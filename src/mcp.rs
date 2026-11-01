@@ -275,6 +275,17 @@ fn tools() -> Vec<Value> {
             &["machine", "name"],
         ),
         tool(
+            "draw_diagram",
+            "Start a session that draws an architecture diagram of a folder with Archify, using that agent's tokens. It writes only to .archify in the folder. list_diagrams shows which machines can draw one and what exists.",
+            json!({
+                "machine": machine,
+                "folder": { "type": "string", "description": "Folder label from list_folders" },
+                "agent": { "type": "string", "description": "Agent to draw it; empty uses the default" },
+                "focus": { "type": "string", "description": "Anything to look at closely" },
+            }),
+            &["machine", "folder"],
+        ),
+        tool(
             "scan_folder",
             "Start a read-only scan of a folder: a new session there looks through all of its code (not a branch's changes) for one kind of problem, changes no files, and ends with a report of findings. kind is dead_code (unused functions, modules, routes, assets and config), test_gaps (important code without tests; it runs the project's tests) or security (secrets in the repository, injection, unsafe deserialization, missing auth checks, dependency advisories). Give folder (a label from list_folders) or path (a checkout, or a folder inside one, to scan only that part).",
             json!({
@@ -828,7 +839,7 @@ pub(crate) fn step_of(app: &AppState, called: &str, input: &Value) -> Step {
                 .filter(|f| !f.is_empty())
                 .collect(),
         ),
-        "start_session" | "review_session" | "scan_folder" | "remove_worktree"
+        "start_session" | "review_session" | "scan_folder" | "draw_diagram" | "remove_worktree"
         | "integrate_branches" | "push_branch" => {
             let path = match text("path") {
                 path if path.is_empty() => snap.folder_paths.get(&text("folder")).cloned(),
@@ -1042,6 +1053,7 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
         "change_settings" => check_settings(app, cfg, &arg(input.clone())?),
         "save_task" => check_task(&arg(input.clone())?),
         "run_trigger" => check_trigger(cfg, input["name"].as_str().unwrap_or_default()),
+        "draw_diagram" => crate::web::diagrams_api::check_draw(app, &arg(input.clone())?),
         tool if crate::mcp_pipeline::owns(tool) => {
             crate::mcp_pipeline::check(app, cfg, tool, input)
         }
@@ -1270,6 +1282,9 @@ pub async fn perform(app: &AppState, tool: &str, input: Value) -> Result<Value, 
     }
     if tool == "run_trigger" {
         return run_trigger(app, input["name"].as_str().unwrap_or_default()).await;
+    }
+    if tool == "draw_diagram" {
+        return crate::web::diagrams_api::draw(app, arg(input)?).await;
     }
     run_tool(app, tool, input).await
 }

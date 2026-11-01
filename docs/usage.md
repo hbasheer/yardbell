@@ -259,6 +259,16 @@ the agent keeps the diagram and says so.
 A diagram opens inside Yardbell, in a frame that cannot reach your login, Yardbell's API or the network. It holds what the
 agent read from the repository, and saved secrets are not removed from it, so check it before sharing it.
 
+**Build from this** on a diagram starts a pipeline run that works from it. Choose one of your by-hand pipelines, or let it
+add **Implement from a diagram**, which writes a task list and waits for you to approve it before changing any code, then
+implements, reviews, fixes, pushes a draft pull request and reports. **Run now** on a by-hand pipeline has the same choice.
+A run keeps its own copy of the diagram's source with saved secrets removed, so drawing again does not change it, and a
+step can quote it with `{diagram}`. A diagram shows the parts and how they connect, not their behaviour, so the first step
+asks what it leaves unclear.
+
+Dispatch can read diagrams with `list_diagrams` and `read_diagram`, start a run on one, and propose a drawing with
+`draw_diagram`, which your rules decide like any other session.
+
 #### Linear, GitHub and GitLab
 
 Linear has a row under **Settings, Connections** for its API key, saved as the secret `linear`.

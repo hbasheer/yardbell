@@ -80,7 +80,10 @@ async fn pipelines_list_with_counts_and_templates() {
     r.app.pipelines.put(run);
     let (status, body) = call(&r, &c, "GET", "/api/pipelines", None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert_eq!(body["templates"], json!([IMPLEMENT, REVIEW]));
+    assert_eq!(
+        body["templates"],
+        json!([IMPLEMENT, REVIEW, "Implement from a diagram"])
+    );
     assert_eq!(body["pipelines"][0]["definition"]["id"], id);
     assert_eq!(
         body["pipelines"][0]["runs"],

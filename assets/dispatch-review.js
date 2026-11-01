@@ -5,7 +5,7 @@ import { canvas, fitAll, settle as fitCanvases, triggerWords } from "/pipeline-c
 // Dispatch's steps that change something (start, stop or type into a session) and the results of
 // reviews, drawn as cards the person approves, edits, rejects or acts on.
 
-export const CHANGING = new Set(["save_connector", "call_connector", "start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
+export const CHANGING = new Set(["save_connector", "call_connector", "start_session", "send_to_session", "stop_session", "review_session", "scan_folder", "draw_diagram", "remove_worktree", "integrate_branches", "push_branch", "move_session", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 const ICONS = {
   start_session: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
@@ -21,6 +21,7 @@ const ICONS = {
   run_trigger: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9 2 4 9h4l-1 5 5-7H8z"/></svg>`,
   save_pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="12.5" cy="4" r="1.5"/><circle cx="12.5" cy="12" r="1.5"/><path d="M5 8h2.5c1.5 0 1.5-4 3.5-4M7.5 8c1.5 0 1.5 4 3.5 4"/></svg>`,
   set_pipeline_enabled: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="5" width="11" height="6" rx="3"/><circle cx="10.5" cy="8" r="1.5"/></svg>`,
+  draw_diagram: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="2" width="5" height="3.5" rx="1"/><rect x="1.5" y="10.5" width="5" height="3.5" rx="1"/><rect x="9.5" y="10.5" width="5" height="3.5" rx="1"/><path d="M8 5.5V8M4 10.5V8h8v2.5"/></svg>`,
   run_pipeline: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.5 3.5v9l7-4.5z"/></svg>`,
   save_connector: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8h8 M8 5l3 3-3 3 M13.5 3v10"/></svg>`,
   call_connector: html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 8h8 M8 5l3 3-3 3 M13.5 3v10"/></svg>`,
@@ -571,7 +572,7 @@ function worktreeOutcome(tool, text) {
   }
 }
 
-const RULE_STEPS = { save_connector: "save connections", call_connector: "call connected tools", start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
+const RULE_STEPS = { draw_diagram: "draw diagrams", save_connector: "save connections", call_connector: "call connected tools", start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
 const UNPLACED = new Set(["save_connector", "call_connector", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 export function ruleText(r) {
@@ -638,6 +639,7 @@ function stepTitle(e) {
   if (e.tool === "save_pipeline") return `${e.input?.before ? "Change the pipeline" : "New pipeline:"} ${e.input?.definition?.name || ""}`.trim();
   if (e.tool === "set_pipeline_enabled") return `${e.input?.on ? "Turn on" : "Turn off"} ${e.input?.name || ""}`.trim();
   if (e.tool === "run_pipeline") return `Run ${e.input?.name || ""}`.trim();
+  if (e.tool === "draw_diagram") return `Draw a diagram of ${e.input?.folder || "a folder"}`;
   if (e.tool === "answer_run") {
     const a = e.input?.action;
     const how = a === "continue_pass" ? " as passed" : a === "continue_fail" ? " as failed" : "";

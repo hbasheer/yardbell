@@ -1,6 +1,7 @@
 use super::{asset, find_machine, start_session, ApiError, AppState, NewSession};
 use crate::config::Machine;
 use crate::diagrams::{self, Diagram};
+use crate::pipeline::record::Subject;
 use crate::shell::{login_shell, Duration};
 use axum::extract::{Query, State as AxState};
 use axum::http::{header, StatusCode};
@@ -45,7 +46,7 @@ fn folder_path(app: &AppState, machine: &str, folder: &str) -> Result<String, Ap
         .ok_or_else(|| bad(&format!("{machine} has no folder {folder}")))
 }
 
-async fn machine_entry(app: Arc<AppState>, m: Machine) -> (Value, Vec<Diagram>) {
+async fn machine_entry(app: &AppState, m: Machine) -> (Value, Vec<Diagram>) {
     let folders: Vec<(String, String)> = app
         .state
         .snapshot(&m.name)
@@ -81,13 +82,9 @@ async fn machine_entry(app: Arc<AppState>, m: Machine) -> (Value, Vec<Diagram>) 
     (entry, found)
 }
 
-async fn list_route(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+pub(crate) async fn overview(app: &AppState) -> Result<(Vec<Value>, Vec<Value>), ApiError> {
     let cfg = app.config()?;
-    let asked = cfg
-        .machines
-        .iter()
-        .cloned()
-        .map(|m| machine_entry(app.clone(), m));
+    let asked = cfg.machines.iter().cloned().map(|m| machine_entry(app, m));
     let answers = futures::future::join_all(asked).await;
     let mut machines = Vec::new();
     let mut found = Vec::new();
@@ -99,6 +96,45 @@ async fn list_route(AxState(app): AxState<Arc<AppState>>) -> Result<Response, Ap
             found.push(row);
         }
     }
+    Ok((machines, found))
+}
+
+#[derive(Deserialize)]
+pub(crate) struct DiagramRef {
+    pub machine: String,
+    pub folder: String,
+    pub dir: String,
+}
+
+pub(crate) async fn source(app: &AppState, d: &DiagramRef) -> Result<String, ApiError> {
+    if !diagrams::safe_name(&d.dir) {
+        return Err(bad("that is not a diagram"));
+    }
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &d.machine)?;
+    let path = folder_path(app, &m.name, &d.folder)?;
+    let text = app
+        .sessions
+        .script(&m, &diagrams::source_script(&path, &d.dir), READ_WAIT)
+        .await
+        .map_err(ApiError::gateway)?;
+    Ok(crate::mcp_read::scrubbed(
+        &text,
+        &crate::mcp_read::saved_values(app),
+    ))
+}
+
+pub(crate) async fn subject(app: &AppState, d: &DiagramRef) -> Result<Subject, ApiError> {
+    let text = source(app, d).await?;
+    Ok(Subject {
+        ticket: Some(diagrams::work_item(&d.machine, &d.folder, &d.dir, &text)),
+        pr: None,
+    })
+}
+
+async fn list_route(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let (machines, found) = overview(&app).await?;
     let agents: Vec<Value> = cfg
         .agents()
         .iter()
@@ -186,22 +222,37 @@ async fn remove_route(
 }
 
 #[derive(Deserialize)]
-struct Draw {
-    machine: String,
-    folder: String,
+pub(crate) struct Draw {
+    pub machine: String,
+    pub folder: String,
     #[serde(default)]
-    agent: String,
+    pub agent: String,
     #[serde(default)]
-    focus: String,
+    pub focus: String,
 }
 
 async fn draw_route(
     AxState(app): AxState<Arc<AppState>>,
     Json(req): Json<Draw>,
 ) -> Result<Response, ApiError> {
+    Ok(Json(draw(&app, req).await?).into_response())
+}
+
+// The mistakes worth catching before a person is asked to approve the step.
+pub(crate) fn check_draw(app: &AppState, req: &Draw) -> Result<(), ApiError> {
     let cfg = app.config()?;
     let m = find_machine(&cfg, &req.machine)?;
-    let path = folder_path(&app, &m.name, &req.folder)?;
+    folder_path(app, &m.name, &req.folder)?;
+    if !req.agent.is_empty() && cfg.agent(&req.agent).is_none() {
+        return Err(bad(&format!("no agent named {}", req.agent)));
+    }
+    Ok(())
+}
+
+pub(crate) async fn draw(app: &AppState, req: Draw) -> Result<Value, ApiError> {
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &req.machine)?;
+    let path = folder_path(app, &m.name, &req.folder)?;
     let status = app
         .sessions
         .script(&m, &login_shell(&diagrams::status_script()), STATUS_WAIT)
@@ -232,9 +283,9 @@ async fn draw_route(
         "name_tag": "diagram",
     }))
     .map_err(|e| bad(&e.to_string()))?;
-    let started = start_session(&app, session).await?;
+    let started = start_session(app, session).await?;
     app.recheck(&m.name);
-    Ok(Json(started).into_response())
+    Ok(started)
 }
 
 #[derive(Deserialize)]
