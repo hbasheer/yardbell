@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.404] - 2026-11-02
+
 - **Attach files to Dispatch.** Drop, paste or pick screenshots, PDFs and text files into a Dispatch message, and
   Dispatch reads them with the text. A message can be only files. Codex conversations take images and text files.
 
