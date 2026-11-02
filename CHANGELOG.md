@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.405] - 2026-11-03
+
 - **Opening a file in Dispatch no longer takes over the desktop app.** A sent image, PDF or text file now opens in a
   viewer over the conversation, which Close, Escape or a click outside it closes.
 
