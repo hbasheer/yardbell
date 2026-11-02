@@ -6,6 +6,7 @@ import * as groups from "/dispatch-group.js";
 import { openHistory, proposedPrompt } from "/dispatch-tasks.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
+import { toBase64 } from "/attachments.js";
 
 const $ = (id) => document.getElementById(id);
 const Nav = window.YardbellNav;
@@ -371,6 +372,7 @@ function block(b) {
       if (b.event.by === "yardbell") return html`<div class="msg user by-yardbell"><span class="msg-by">Sent by Yardbell once the results were in</span>${b.event.text}</div>`;
       if (b.event.improve) return html`<div class="msg user marked"><span class="msg-by">Suggest a better prompt for ${b.event.improve.name} on ${b.event.improve.machine}</span><details class="msg-more"><summary>What Dispatch was asked</summary>${b.event.text}</details></div>`;
       if (b.event.task) return html`<div class="msg user marked"><span class="msg-by">Task ${b.event.task.name} · version ${b.event.task.version}</span>${b.event.text}</div>`;
+      if (b.event.attachments?.length) return html`<div class="msg user has-files">${b.event.text ? html`<p class="msg-text">${b.event.text}</p>` : nothing}${sentFiles(b.event.attachments)}</div>`;
       return html`<p class="msg user">${b.event.text}</p>`;
     case "assistant":
       return html`<div class="msg md">${markdown(b.event.text)}${promptActions(b)}</div>`;
@@ -462,6 +464,15 @@ async function loadRunsOn() {
   runsOn = await api("GET", "/dispatch/runs-on").catch(() => runsOn);
   if (!current) backend = runsOn?.runs_on || backend;
   draw();
+}
+
+function sentFiles(list) {
+  return html`<div class="msg-files">${list.map((a) => {
+    const href = a.url || `/dispatch/conversations/${encodeURIComponent(current)}/attachments/${encodeURIComponent(a.file)}`;
+    return html`<a class="msg-file ${a.kind}" href=${href} target="_blank" rel="noopener" title=${a.name}>${a.kind === "image"
+      ? html`<img src=${href} alt="" loading="lazy">`
+      : html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3"/></svg>`}<span class="msg-file-name">${a.name}</span></a>`;
+  })}</div>`;
 }
 
 function show(event) {
@@ -604,21 +615,26 @@ async function watch(id) {
   }
 }
 
-async function ask(text, marks = {}) {
+async function ask(text, marks = {}, files = []) {
   setBusy(true);
   loadRunsOn();
-  show({ role: "user", text, ...marks });
+  const sent = { role: "user", text, ...marks };
+  if (files.length) sent.attachments = files.map(({ file, kind }) => ({ name: file.name, kind, size: file.size, url: URL.createObjectURL(file) }));
+  show(sent);
+  let answering = false;
   try {
+    const attachments = await Promise.all(files.map(async ({ file }) => ({ name: file.name, data: await toBase64(file) })));
     const res = await fetch("/dispatch/ask", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ conversation: current, text, ...marks }),
+      body: JSON.stringify({ conversation: current, text, ...marks, ...(files.length ? { attachments } : {}) }),
     });
     if (res.status === 401) { location.href = "/login"; return; }
     if (!res.ok) {
       const out = await res.json().catch(() => ({}));
       throw new Error(out.error || `Request failed (${res.status})`);
     }
+    answering = true;
     const reader = res.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
@@ -642,6 +658,10 @@ async function ask(text, marks = {}) {
       }
     }
   } catch (err) {
+    if (!answering) {
+      events = events.filter((e) => e !== sent);
+      compose.restore(text, files);
+    }
     show({ role: "error", text: err.message });
   } finally {
     setBusy(false);
@@ -931,15 +951,17 @@ function scroller() {
 }
 
 const compose = composer(form, {
-  send(text) {
+  send(text, files) {
     if (busy) {
       toast("Dispatch is still working on the last message. Stop it or wait, then send.");
       return false;
     }
-    ask(text);
+    ask(text, {}, files);
     return true;
   },
-  sent: () => events.filter((e) => e.role === "user").map((e) => e.text),
+  runsOn: () => backend,
+  toast,
+  sent: () => events.filter((e) => e.role === "user" && e.text).map((e) => e.text),
   tasks: () => savedTasks.filter((t) => !t.hidden),
   state: () => api("GET", "/state"),
   scroller,

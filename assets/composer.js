@@ -1,4 +1,5 @@
 import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
+import { admit, sizeText } from "/attachments.js";
 
 const SEND_KEY = "yardbell.dispatch.send";
 const DRAFTS_KEY = "yardbell.dispatch.drafts";
@@ -80,6 +81,9 @@ export function composer(form, hooks) {
   const menuBox = document.getElementById("compose-menu");
   const sendButton = document.getElementById("dispatch-send");
   const hint = document.getElementById("send-key");
+  const filesBox = document.getElementById("compose-files");
+  const picker = document.getElementById("attach-input");
+  const dropZone = document.getElementById("dispatch-chat");
   const touch = window.matchMedia("(hover: none) and (pointer: coarse)");
   let mode = read(SEND_KEY, null) || (touch.matches ? "mod" : "enter");
   let key = "new";
@@ -91,6 +95,8 @@ export function composer(form, hooks) {
   let namesError = "";
   let loading = false;
   let frame = 0;
+  let attached = [];
+  let adding = Promise.resolve();
 
   function atBottom() {
     const s = hooks.scroller();
@@ -101,7 +107,7 @@ export function composer(form, hooks) {
     const pinned = atBottom();
     input.style.height = "auto";
     input.style.height = `${input.scrollHeight}px`;
-    sendButton.disabled = !input.value.trim();
+    sendButton.disabled = !input.value.trim() && !attached.length;
     if (pinned) hooks.scrollDown();
   }
 
@@ -134,11 +140,54 @@ export function composer(form, hooks) {
     return Array.isArray(list) ? list.filter((t) => typeof t === "string" && t.trim()) : [];
   }
 
+  function drawFiles() {
+    filesBox.hidden = !attached.length;
+    render(attached.map((a, i) => html`<span class="compose-file" title=${a.file.name}>${a.url
+      ? html`<img src=${a.url} alt="">`
+      : html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3"/></svg>`}<span class="compose-file-name">${a.file.name}</span><span class="compose-file-size">${sizeText(a.file.size)}</span><button class="compose-file-remove" type="button" aria-label=${`Remove ${a.file.name}`} @click=${() => removeFile(i)}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button></span>`), filesBox);
+    fit();
+  }
+
+  function removeFile(index) {
+    const [gone] = attached.splice(index, 1);
+    if (gone?.url) URL.revokeObjectURL(gone.url);
+    drawFiles();
+    input.focus();
+  }
+
+  function clearFiles() {
+    for (const a of attached) if (a.url) URL.revokeObjectURL(a.url);
+    attached = [];
+    drawFiles();
+  }
+
+  async function addFiles(list) {
+    for (const file of list) {
+      if (attached.some((a) => a.file.name === file.name && a.file.size === file.size && a.file.lastModified === file.lastModified)) continue;
+      const { kind, error } = await admit(file, attached, hooks.runsOn());
+      if (error) {
+        hooks.toast(error);
+        continue;
+      }
+      attached.push({ file, kind, url: kind === "image" ? URL.createObjectURL(file) : null });
+    }
+    drawFiles();
+  }
+
+  // Files checked one batch at a time, so two quick drops cannot both pass the count or the total.
+  function attach(list) {
+    const files = [...list];
+    if (files.length) adding = adding.then(() => addFiles(files));
+    return adding;
+  }
+
   function submit() {
     const text = input.value.trim();
-    if (!text || !hooks.send(text)) return;
-    write(HISTORY_KEY, [text, ...kept().filter((t) => t !== text)].slice(0, HISTORY_SIZE));
+    const files = attached.map(({ file, kind }) => ({ file, kind }));
+    if ((!text && !files.length) || !hooks.send(text, files)) return;
+    if (text) write(HISTORY_KEY, [text, ...kept().filter((t) => t !== text)].slice(0, HISTORY_SIZE));
     input.value = "";
+    clearFiles();
     recall = null;
     hide();
     saveDraft();
@@ -403,6 +452,34 @@ export function composer(form, hooks) {
     onCaret();
   });
   input.addEventListener("click", onCaret);
+  input.addEventListener("paste", (e) => {
+    const files = e.clipboardData?.files;
+    if (!files?.length) return;
+    if (!e.clipboardData.types.includes("text/plain")) e.preventDefault();
+    attach(files);
+  });
+  const carriesFiles = (e) => e.dataTransfer?.types.includes("Files");
+  for (const type of ["dragenter", "dragover"]) {
+    dropZone.addEventListener(type, (e) => {
+      if (!carriesFiles(e)) return;
+      e.preventDefault();
+      box.classList.add("dropping");
+    });
+  }
+  dropZone.addEventListener("dragleave", (e) => {
+    if (!dropZone.contains(e.relatedTarget)) box.classList.remove("dropping");
+  });
+  dropZone.addEventListener("drop", (e) => {
+    if (!carriesFiles(e)) return;
+    e.preventDefault();
+    box.classList.remove("dropping");
+    attach(e.dataTransfer.files);
+  });
+  document.getElementById("attach-file").addEventListener("click", () => picker.click());
+  picker.addEventListener("change", () => {
+    attach(picker.files).then(() => input.focus());
+    picker.value = "";
+  });
   input.addEventListener("keyup", (e) => {
     if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End"].includes(e.key)) onCaret();
   });
@@ -434,6 +511,7 @@ export function composer(form, hooks) {
 
   return {
     show(id) {
+      if ((id || "new") !== key) clearFiles();
       key = id || "new";
       recall = null;
       dismissed = -1;
@@ -448,6 +526,12 @@ export function composer(form, hooks) {
       saveDrafts(all);
       key = id;
       saveDraft();
+    },
+    restore(text, files) {
+      input.value = text;
+      saveDraft();
+      fit();
+      attach(files.map((f) => f.file));
     },
     keep(ids) {
       const all = drafts();

@@ -1,7 +1,9 @@
+use super::super::attachments::{text_block, File, Kind};
 use super::super::mcp_config::extra_servers;
 use super::super::usage;
 use super::{assistant, short, tool_text, Backend, Launch, TurnSpec, TOOLS};
 use crate::config::RunsOn;
+use base64::Engine;
 use serde_json::{json, Value};
 use std::collections::HashMap;
 
@@ -29,10 +31,14 @@ impl Backend for Claude {
             .mcp_config
             .map(|p| p.display().to_string())
             .unwrap_or_default();
+        let stdin = (!turn.files.is_empty()).then(|| stream_message(turn));
+        argv.push("-p".into());
+        match stdin {
+            Some(_) => argv.extend(["--input-format".into(), "stream-json".into()]),
+            None => argv.push(turn.prompt.to_string()),
+        }
         argv.extend(
             [
-                "-p",
-                turn.prompt,
                 "--output-format",
                 "stream-json",
                 "--verbose",
@@ -56,7 +62,7 @@ impl Backend for Claude {
         Ok(Launch {
             argv,
             env: Vec::new(),
-            stdin: None,
+            stdin,
         })
     }
 
@@ -120,6 +126,28 @@ impl Backend for Claude {
             }
             _ => Vec::new(),
         }
+    }
+}
+
+fn stream_message(turn: &TurnSpec) -> String {
+    let mut content = vec![json!({ "type": "text", "text": turn.prompt })];
+    content.extend(turn.files.iter().map(block));
+    let line = json!({ "type": "user", "message": { "role": "user", "content": content } });
+    format!("{line}\n")
+}
+
+fn block(f: &File) -> Value {
+    let source = || {
+        json!({
+            "type": "base64",
+            "media_type": f.kind.mime(),
+            "data": base64::engine::general_purpose::STANDARD.encode(&f.bytes),
+        })
+    };
+    match f.kind {
+        Kind::Text => json!({ "type": "text", "text": text_block(&f.name, &f.bytes) }),
+        Kind::Pdf => json!({ "type": "document", "source": source() }),
+        _ => json!({ "type": "image", "source": source() }),
     }
 }
 

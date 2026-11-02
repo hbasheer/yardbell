@@ -110,7 +110,11 @@ def say(line):
 mcp(0, "initialize", {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "fake-codex", "version": "0"}})
 say({"type": "thread.started", "thread_id": thread})
 say({"type": "turn.started"})
-if resumed:
+if "-i" in args or "<file name=" in prompt:
+    images, texts = args.count("-i"), prompt.count("<file name=")
+    say({"type": "item.completed", "item": {"id": "item_0", "type": "agent_message",
+         "text": f"I saw {images} image and {texts} text file."}})
+elif resumed:
     heard = "rejected" in prompt
     say({"type": "item.completed", "item": {"id": "item_0", "type": "agent_message",
          "text": "Understood, nothing started." if heard else "I did not hear what happened."}})
@@ -1174,6 +1178,86 @@ class Suite:
         finally:
             self.api("POST", "/api/settings/dispatch", before)
             os.remove(os.path.join(self.y.env["HOME"], ".codex", "models_cache.json"))
+
+    def test_dispatch_attaches_files_on_codex(self):
+        b = self.b
+        before = self.api("GET", "/api/settings")["dispatch"]
+        self.api("POST", "/api/settings/dispatch", {**before, "rules": [], "approval": "prompt", "runs_on": "codex"})
+        files = """
+          const png = Uint8Array.from(atob('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/iZk9HQAAAABJRU5ErkJggg=='), (c) => c.charCodeAt(0));
+          const make = (name, bytes) => new File([bytes], name, { lastModified: 1 });
+          const files = { png: make('shot.png', png), log: make('notes.log', 'hello'), fake: make('fake.png', new Uint8Array([80, 75, 3, 4, 20, 0, 0, 0])), pdf: make('a.pdf', '%PDF-1.4') };
+          const carry = (...list) => { const dt = new DataTransfer(); for (const f of list) dt.items.add(f); return dt; };
+          const drop = (...list) => { const dt = carry(...list); const target = document.getElementById('dispatch-chat');
+            target.dispatchEvent(new DragEvent('dragenter', { bubbles: true, cancelable: true, dataTransfer: dt }));
+            target.dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt })); };
+        """
+        chips = "document.querySelectorAll('#compose-files .compose-file').length"
+        toast = "document.getElementById('toast').textContent"
+        try:
+            b.goto(self.url("/dispatch"))
+            b.wait("document.getElementById('runs-on').textContent.startsWith('Codex')", "a new conversation on Codex")
+            b.js(f"(() => {{ {files} const paste = new Event('paste', {{ bubbles: true, cancelable: true }}); Object.defineProperty(paste, 'clipboardData', {{ value: carry(files.png) }}); document.querySelector('#dispatch-form textarea').dispatchEvent(paste); }})()")
+            b.wait(f"{chips} === 1 && document.querySelector('#compose-files .compose-file img')", "the pasted image as a chip with a thumbnail")
+            b.js(f"(() => {{ {files} drop(files.log); }})()")
+            b.wait(f"{chips} === 2", "the dropped text file")
+            b.js(f"(() => {{ {files} drop(files.log); }})()")
+            b.pump(0.3)
+            if b.js(chips) != 2:
+                raise Failure("the same file dropped twice made two chips")
+            b.js(f"(() => {{ {files} drop(files.fake); }})()")
+            b.wait(f"{toast} === 'fake.png is not an image, a PDF or a text file'", "the refusal of a renamed zip")
+            b.js(f"(() => {{ {files} drop(files.pdf); }})()")
+            b.wait(f"{toast} === 'Codex cannot read PDFs, so a.pdf cannot be sent in this conversation'", "the refusal of a PDF on Codex")
+            if b.js(chips) != 2:
+                raise Failure("a refused file became a chip")
+            b.click("#dispatch-form textarea")
+            b.type("what is in these?")
+            b.click("#dispatch-send")
+            b.wait("[...document.querySelectorAll('#dispatch-log .msg')].some((m) => m.textContent.includes('I saw 1 image and 1 text file.'))", "Codex's reply", timeout=20)
+            b.wait(f"{chips} === 0", "the chips cleared once sent")
+            id = b.js("new URLSearchParams(location.search).get('c')")
+            b.goto(self.url(f"/dispatch?c={id}"))
+            b.wait("document.querySelectorAll('#dispatch-log .msg.user .msg-file').length === 2", "the files on the saved message")
+            b.wait("(() => { const i = document.querySelector('#dispatch-log .msg.user .msg-file img'); return i && i.complete && i.naturalWidth === 1; })()", "the saved image's thumbnail")
+            text = b.js(f"fetch('/dispatch/conversations/{id}/attachments/1-notes.log').then((r) => r.text())")
+            if text != "hello":
+                raise Failure(f"the saved text file reads {text!r}")
+        finally:
+            self.api("POST", "/api/settings/dispatch", before)
+
+    def test_dispatch_keeps_files_when_a_send_is_refused(self):
+        b = self.b
+        b.goto(self.url("/dispatch"))
+        b.wait("document.getElementById('dispatch-form')", "the composer")
+        drop = """(() => { const dt = new DataTransfer(); dt.items.add(new File(['hello'], 'notes.log'));
+          document.getElementById('dispatch-chat').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt })); })()"""
+        kept = ("document.querySelectorAll('#compose-files .compose-file').length === 1"
+                " && document.querySelector('#dispatch-form textarea').value === 'read this'"
+                " && !document.querySelector('#dispatch-log .msg.user')")
+        b.js("""(() => { const real = window.fetch; window.fetch = (url, options) => String(url) === '/dispatch/ask'
+          ? Promise.resolve(new Response(JSON.stringify({ error: 'could not save notes.log: disk full' }), { status: 409 }))
+          : real(url, options); })()""")
+        b.js(drop)
+        b.wait("document.querySelectorAll('#compose-files .compose-file').length === 1", "the dropped file")
+        b.click("#dispatch-form textarea")
+        b.type("read this")
+        b.click("#dispatch-send")
+        b.wait("document.querySelector('#dispatch-log .msg.error')?.textContent.includes('disk full')", "the server's refusal")
+        b.wait(kept, "the file and the text back in the composer after a 409")
+
+        b.js("localStorage.removeItem('yardbell.dispatch.drafts')")
+        b.goto(self.url("/dispatch"))
+        b.wait("document.getElementById('dispatch-form')", "the composer again")
+        b.js("FileReader.prototype.readAsDataURL = function () { setTimeout(() => this.onerror?.(new ProgressEvent('error'))); }")
+        b.js(drop)
+        b.wait("document.querySelectorAll('#compose-files .compose-file').length === 1", "the dropped file")
+        b.click("#dispatch-form textarea")
+        b.type("read this")
+        b.click("#dispatch-send")
+        b.wait("document.querySelector('#dispatch-log .msg.error')?.textContent.includes('could not read notes.log')", "the read failure")
+        b.wait(kept, "the file and the text back in the composer after a failed read")
+        b.js("localStorage.removeItem('yardbell.dispatch.drafts')")
 
     def test_a_review_of_reviewed_code_offers_review_again(self):
         b = self.b

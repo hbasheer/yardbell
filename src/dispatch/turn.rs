@@ -1,3 +1,4 @@
+use super::attachments::{self, Attachment, File};
 use super::backend::{self, codex, Launch, TurnSpec};
 use super::prompt::{memory_section, system_prompt};
 use super::store::{new_id, now, title_of, Conversation, Shared, Stored};
@@ -14,6 +15,7 @@ use tokio::sync::{mpsc, Notify};
 const TURN_LIMIT: Duration = Duration::from_secs(900);
 const INSTRUCTIONS_CHANGED: &str = "Yardbell's instructions for you have changed since this \
 conversation started, for example your memory or the user's rules. These replace the earlier ones:";
+const ONLY_FILES: &str = "See the attached files.";
 
 // A conversation that a trigger starts, rather than the person: its title, the trigger's mark,
 // and a note for Claude that nobody typed the message.
@@ -21,6 +23,20 @@ pub struct Opening<'a> {
     pub title: &'a str,
     pub trigger: Value,
     pub note: &'a str,
+}
+
+pub struct Message<'a> {
+    pub text: &'a str,
+    pub files: Vec<Attachment>,
+}
+
+impl<'a> From<&'a str> for Message<'a> {
+    fn from(text: &'a str) -> Self {
+        Message {
+            text,
+            files: Vec::new(),
+        }
+    }
 }
 
 // Who sends a turn's message: the person, with what the page knows about where the message came
@@ -117,6 +133,15 @@ impl Dispatch {
         )
     }
 
+    pub fn check_attachments(
+        &self,
+        conversation: Option<&str>,
+        files: &[Attachment],
+        settings: &DispatchSettings,
+    ) -> Result<(), String> {
+        attachments::check(files, self.runs_on(conversation, settings)?)
+    }
+
     // A conversation keeps the agent it started on; a new one starts on the one in Settings.
     fn runs_on(&self, id: Option<&str>, settings: &DispatchSettings) -> Result<RunsOn, String> {
         match id {
@@ -137,10 +162,15 @@ impl Dispatch {
         id: Option<&str>,
         runs_on: RunsOn,
         sender: Author,
-        text: &str,
+        sent: Message,
         cancel: Arc<Notify>,
         live: mpsc::Sender<Value>,
-    ) -> Result<(String, Option<String>, String), String> {
+    ) -> Result<(String, Option<String>, String, Vec<File>), String> {
+        let Message { text, files } = sent;
+        let titled = match files.first() {
+            Some(f) if text.is_empty() => f.name.as_str(),
+            _ => text,
+        };
         let mut chats = self.shared.lock();
         let id = match id {
             Some(id) => {
@@ -157,7 +187,7 @@ impl Dispatch {
                     id.clone(),
                     Conversation::new(Stored {
                         id: id.clone(),
-                        title: title_of(sender.opening().map_or(text, |o| o.title)),
+                        title: title_of(sender.opening().map_or(titled, |o| o.title)),
                         created: stamp.clone(),
                         updated: stamp,
                         trigger: sender.opening().map(|o| o.trigger.clone()),
@@ -176,7 +206,16 @@ impl Dispatch {
         c.reached = false;
         actions::withdraw(&mut c.stored.events, &stamp);
         let news = actions::untold(&mut c.stored.events);
+        let files = attachments::prepare(
+            &self.shared.dir,
+            &id,
+            attachments::recorded(&c.stored.events),
+            files,
+        );
         let mut message = json!({ "role": "user", "text": text });
+        if !files.is_empty() {
+            message["attachments"] = files.iter().map(File::event).collect();
+        }
         if matches!(sender, Author::Yardbell(_)) {
             message["by"] = json!("yardbell");
         }
@@ -187,7 +226,7 @@ impl Dispatch {
         }
         c.stored.events.push(message);
         c.stored.updated = stamp;
-        let prompt = actions::with_news(&news, text);
+        let prompt = actions::with_news(&news, if text.is_empty() { ONLY_FILES } else { text });
         Ok((
             id,
             c.stored.session.clone(),
@@ -195,6 +234,7 @@ impl Dispatch {
                 Some(note) => format!("{note}\n\n{prompt}"),
                 None => prompt,
             },
+            files,
         ))
     }
 
@@ -209,7 +249,7 @@ impl Dispatch {
         self.turn(
             conversation,
             Author::Person(None),
-            text,
+            text.into(),
             port,
             settings,
             extra,
@@ -222,7 +262,7 @@ impl Dispatch {
     pub async fn ask_marked(
         &self,
         conversation: Option<&str>,
-        text: &str,
+        message: Message<'_>,
         marks: &Value,
         port: u16,
         settings: &DispatchSettings,
@@ -231,7 +271,7 @@ impl Dispatch {
         self.turn(
             conversation,
             Author::Person(Some(marks)),
-            text,
+            message,
             port,
             settings,
             extra,
@@ -253,7 +293,7 @@ impl Dispatch {
         self.turn(
             Some(id),
             Author::Yardbell(note),
-            text,
+            text.into(),
             port,
             settings,
             extra,
@@ -269,35 +309,51 @@ impl Dispatch {
         settings: &DispatchSettings,
         extra: Option<&str>,
     ) -> Result<(String, mpsc::Receiver<Value>), String> {
-        self.turn(None, Author::Trigger(&opening), text, port, settings, extra)
-            .await
+        self.turn(
+            None,
+            Author::Trigger(&opening),
+            text.into(),
+            port,
+            settings,
+            extra,
+        )
+        .await
     }
 
     async fn turn(
         &self,
         conversation: Option<&str>,
         sender: Author<'_>,
-        text: &str,
+        message: Message<'_>,
         port: u16,
         settings: &DispatchSettings,
         extra: Option<&str>,
     ) -> Result<(String, mpsc::Receiver<Value>), String> {
+        let Message { text, files } = message;
         let text = text.trim();
-        if text.is_empty() {
+        if text.is_empty() && files.is_empty() {
             return Err("type a task first".into());
         }
         let runs_on = self.runs_on(conversation, settings)?;
+        attachments::check(&files, runs_on)?;
         let binary = self.agent(runs_on).await?;
         let cancel = Arc::new(Notify::new());
         let (tx, rx) = mpsc::channel(64);
-        let (id, resume, prompt) = self.begin(
+        let (id, resume, prompt, files) = self.begin(
             conversation,
             runs_on,
             sender,
-            text,
+            Message { text, files },
             cancel.clone(),
             tx.clone(),
         )?;
+        if let Err(e) = attachments::write(&files) {
+            if let Some(c) = self.shared.lock().get_mut(&id) {
+                c.stored.events.pop();
+            }
+            self.shared.finish(&id);
+            return Err(e);
+        }
         let config = match runs_on {
             RunsOn::Claude => match self.write_mcp_config(port, extra, &id) {
                 Ok(config) => Some(config),
@@ -329,6 +385,7 @@ impl Dispatch {
                 token: &self.token,
                 mcp_config: config.as_deref(),
                 extra,
+                files: &files,
             },
         );
         let launch = match launch {
@@ -1249,5 +1306,397 @@ echo '{{"type":"turn.completed","usage":{{}}}}'"#,
             !saved.contains("backend"),
             "Claude Code conversations are saved as before: {saved}"
         );
+    }
+
+    const PNG: &[u8] = b"\x89PNG\r\n\x1a\nimage";
+    const PDF: &[u8] = b"%PDF-1.7 doc";
+
+    fn attach(name: &str, bytes: &[u8]) -> crate::dispatch::Attachment {
+        crate::dispatch::Attachment {
+            name: name.into(),
+            bytes: bytes.to_vec(),
+        }
+    }
+
+    fn recording_claude(dir: &Path) -> (Dispatch, std::path::PathBuf) {
+        let rec = dir.join("rec");
+        std::fs::create_dir_all(&rec).unwrap();
+        let script = format!(
+            r#"printf '%s\n' "$@" > {rec}/args
+cat > {rec}/stdin
+echo '{{"type":"system","subtype":"init","session_id":"s1"}}'
+echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
+            rec = rec.display()
+        );
+        (fake_claude(dir, &script), rec)
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    fn user_events(dispatch: &Dispatch, id: &str) -> Vec<Value> {
+        dispatch.get(id).unwrap()["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["role"] == "user")
+            .cloned()
+            .collect()
+    }
+
+    #[tokio::test]
+    async fn a_claude_turn_with_files_sends_them_on_stdin() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, rec) = recording_claude(dir.path());
+        let files = vec![
+            attach("shot.png", PNG),
+            attach("a.pdf", PDF),
+            attach("notes.log", b"hello"),
+        ];
+        let (id, rx) = dispatch
+            .ask_marked(
+                None,
+                Message {
+                    text: "what broke?",
+                    files,
+                },
+                &json!({}),
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let args = std::fs::read_to_string(rec.join("args")).unwrap();
+        assert!(
+            args.starts_with("-p\n--input-format\nstream-json\n"),
+            "{args}"
+        );
+        assert!(!args.contains("what broke?"), "{args}");
+        let line: Value =
+            serde_json::from_str(&std::fs::read_to_string(rec.join("stdin")).unwrap()).unwrap();
+        assert_eq!(line["type"], "user");
+        let content = &line["message"]["content"];
+        assert_eq!(content[0], json!({ "type": "text", "text": "what broke?" }));
+        assert_eq!(
+            content[1],
+            json!({ "type": "image", "source": { "type": "base64", "media_type": "image/png", "data": b64(PNG) } })
+        );
+        assert_eq!(
+            content[2],
+            json!({ "type": "document", "source": { "type": "base64", "media_type": "application/pdf", "data": b64(PDF) } })
+        );
+        assert_eq!(
+            content[3],
+            json!({ "type": "text", "text": "<file name=\"notes.log\">\nhello\n</file>" })
+        );
+        assert_eq!(
+            user_events(&dispatch, &id)[0]["attachments"],
+            json!([
+                { "file": "0-shot.png", "name": "shot.png", "kind": "image", "size": PNG.len() },
+                { "file": "1-a.pdf", "name": "a.pdf", "kind": "pdf", "size": PDF.len() },
+                { "file": "2-notes.log", "name": "notes.log", "kind": "text", "size": 5 },
+            ])
+        );
+        assert_eq!(
+            dispatch.attachment(&id, "0-shot.png"),
+            Some((crate::dispatch::AttachmentKind::Png, PNG.to_vec()))
+        );
+    }
+
+    #[tokio::test]
+    async fn a_turn_without_files_launches_as_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, rec) = recording_claude(dir.path());
+        let (id, rx) = dispatch
+            .ask_marked(
+                None,
+                Message {
+                    text: "what is up?",
+                    files: Vec::new(),
+                },
+                &json!({}),
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let args = std::fs::read_to_string(rec.join("args")).unwrap();
+        assert!(args.starts_with("-p\nwhat is up?\n"), "{args}");
+        assert!(!args.contains("--input-format"), "{args}");
+        assert_eq!(std::fs::read_to_string(rec.join("stdin")).unwrap(), "");
+        assert!(user_events(&dispatch, &id)[0].get("attachments").is_none());
+    }
+
+    #[tokio::test]
+    async fn files_alone_are_titled_after_the_first_and_prompted() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, rec) = recording_claude(dir.path());
+        let (id, rx) = dispatch
+            .ask_marked(
+                None,
+                Message {
+                    text: "  ",
+                    files: vec![attach("shot.png", PNG)],
+                },
+                &json!({}),
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        assert_eq!(user_events(&dispatch, &id)[0]["text"], "");
+        assert_eq!(dispatch.list()[0]["title"], "shot.png");
+        let line: Value =
+            serde_json::from_str(&std::fs::read_to_string(rec.join("stdin")).unwrap()).unwrap();
+        assert_eq!(
+            line["message"]["content"][0]["text"],
+            "See the attached files."
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resumed_conversation_sends_later_files_with_resume() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, rec) = recording_claude(dir.path());
+        let settings = DispatchSettings::default();
+        let (id, rx) = dispatch
+            .ask_marked(None, "hi".into(), &json!({}), 4000, &settings, None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        for _ in 0..2 {
+            let (_, rx) = dispatch
+                .ask_marked(
+                    Some(&id),
+                    Message {
+                        text: "and this",
+                        files: vec![attach("shot.png", PNG)],
+                    },
+                    &json!({}),
+                    4000,
+                    &settings,
+                    None,
+                )
+                .await
+                .unwrap();
+            drain(rx).await;
+            let args = std::fs::read_to_string(rec.join("args")).unwrap();
+            assert!(args.contains("--input-format\nstream-json\n"), "{args}");
+            assert!(args.ends_with("--resume\ns1\n"), "{args}");
+        }
+        let files: Vec<_> = user_events(&dispatch, &id)
+            .iter()
+            .filter_map(|e| e["attachments"].get(0).map(|a| a["file"].clone()))
+            .collect();
+        assert_eq!(files, [json!("0-shot.png"), json!("1-shot.png")]);
+    }
+
+    #[tokio::test]
+    async fn deleting_a_conversation_removes_its_files() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, _) = recording_claude(dir.path());
+        let (id, rx) = dispatch
+            .ask_marked(
+                None,
+                Message {
+                    text: "look",
+                    files: vec![attach("shot.png", PNG)],
+                },
+                &json!({}),
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let folder = crate::dispatch::attachments::folder(&dir.path().join("dispatch"), &id);
+        assert!(folder.join("0-shot.png").exists());
+        dispatch.delete(&id).unwrap();
+        assert!(!folder.exists());
+    }
+
+    #[tokio::test]
+    async fn an_unlisted_attachment_is_not_served() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, _) = recording_claude(dir.path());
+        let (id, rx) = dispatch
+            .ask_marked(
+                None,
+                Message {
+                    text: "look",
+                    files: vec![attach("shot.png", PNG)],
+                },
+                &json!({}),
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let folder = crate::dispatch::attachments::folder(&dir.path().join("dispatch"), &id);
+        std::fs::write(folder.join("9-x.png"), PNG).unwrap();
+        assert_eq!(dispatch.attachment(&id, "9-x.png"), None);
+        assert_eq!(dispatch.attachment(&id, "../conversations"), None);
+        assert_eq!(dispatch.attachment("nosuchconvo", "0-shot.png"), None);
+    }
+
+    #[tokio::test]
+    async fn a_bad_file_starts_no_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, _) = recording_claude(dir.path());
+        let refused = dispatch
+            .ask_marked(
+                None,
+                Message {
+                    text: "look",
+                    files: vec![attach("trace.zip", b"PK\x03\x04\x14\0\0\0")],
+                },
+                &json!({}),
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused, "trace.zip is not an image, a PDF or a text file");
+        assert_eq!(dispatch.list(), json!([]));
+    }
+
+    fn recording_codex(dir: &Path) -> (Arc<Dispatch>, std::path::PathBuf) {
+        let rec = dir.join("rec");
+        std::fs::create_dir_all(&rec).unwrap();
+        let script = format!(
+            r#"{VERSION}
+printf '%s\n' "$@" > {rec}/args
+cat > {rec}/stdin
+{REACH}
+echo '{{"type":"thread.started","thread_id":"thread-1"}}'
+echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}'"#,
+            rec = rec.display()
+        );
+        (fake_codex(dir, &script), rec)
+    }
+
+    #[tokio::test]
+    async fn a_codex_turn_gets_images_by_path_and_text_in_its_prompt() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, rec) = recording_codex(dir.path());
+        let port = mcp_stub(dispatch.clone()).await;
+        let (id, rx) = dispatch
+            .ask_marked(
+                None,
+                Message {
+                    text: "look",
+                    files: vec![attach("shot.png", PNG), attach("notes.log", b"hi")],
+                },
+                &json!({}),
+                port,
+                &codex_settings(""),
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let args = std::fs::read_to_string(rec.join("args")).unwrap();
+        let image = crate::dispatch::attachments::folder(&dir.path().join("dispatch"), &id)
+            .join("0-shot.png");
+        assert!(
+            args.ends_with(&format!("\n-i\n{}\n-\n", image.display())),
+            "{args}"
+        );
+        assert_eq!(args.matches("\n-i\n").count(), 1, "only images go by path");
+        assert_eq!(
+            std::fs::read_to_string(rec.join("stdin")).unwrap(),
+            "look\n\n<file name=\"notes.log\">\nhi\n</file>"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_resumed_codex_thread_keeps_the_thread_last() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, rec) = recording_codex(dir.path());
+        let port = mcp_stub(dispatch.clone()).await;
+        let settings = codex_settings("");
+        let (id, rx) = dispatch
+            .ask_marked(None, "hi".into(), &json!({}), port, &settings, None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        let (_, rx) = dispatch
+            .ask_marked(
+                Some(&id),
+                Message {
+                    text: "and this",
+                    files: vec![attach("shot.png", PNG)],
+                },
+                &json!({}),
+                port,
+                &settings,
+                None,
+            )
+            .await
+            .unwrap();
+        drain(rx).await;
+        let args = std::fs::read_to_string(rec.join("args")).unwrap();
+        let image = crate::dispatch::attachments::folder(&dir.path().join("dispatch"), &id)
+            .join("0-shot.png");
+        assert!(
+            args.ends_with(&format!("\n-i\n{}\nthread-1\n-\n", image.display())),
+            "{args}"
+        );
+    }
+
+    #[tokio::test]
+    async fn codex_conversations_refuse_pdfs_before_a_turn() {
+        let dir = tempfile::tempdir().unwrap();
+        let (dispatch, rec) = recording_codex(dir.path());
+        let port = mcp_stub(dispatch.clone()).await;
+        let settings = codex_settings("");
+        let (id, rx) = dispatch
+            .ask_marked(None, "hi".into(), &json!({}), port, &settings, None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        std::fs::remove_file(rec.join("args")).unwrap();
+        let refusal = "Codex cannot read PDFs, so a.pdf cannot be sent in this conversation";
+        assert_eq!(
+            dispatch.check_attachments(Some(&id), &[attach("a.pdf", PDF)], &settings),
+            Err(refusal.into())
+        );
+        assert_eq!(
+            dispatch.check_attachments(
+                Some(&id),
+                &[attach("a.pdf", PDF)],
+                &DispatchSettings::default()
+            ),
+            Err(refusal.into()),
+            "the conversation's own agent decides, not the one in Settings"
+        );
+        let refused = dispatch
+            .ask_marked(
+                Some(&id),
+                Message {
+                    text: "read it",
+                    files: vec![attach("a.pdf", PDF)],
+                },
+                &json!({}),
+                port,
+                &settings,
+                None,
+            )
+            .await
+            .unwrap_err();
+        assert_eq!(refused, refusal);
+        assert!(!rec.join("args").exists(), "Codex never started");
     }
 }

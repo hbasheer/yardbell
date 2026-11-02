@@ -1,6 +1,6 @@
 use crate::auth::{Auth, Clock, Verdict};
 use crate::config::{Config, Machine};
-use crate::dispatch::Dispatch;
+use crate::dispatch::{Attachment, AttachmentKind, Dispatch, Message as DispatchMessage};
 use crate::folders::Folders;
 use crate::mesh::HostMesh;
 use crate::onboarding::Onboarding;
@@ -13,7 +13,7 @@ use crate::state::{PortStatus, State};
 use crate::term;
 use crate::viewers::{Plan, Viewers};
 use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
-use axum::extract::{ConnectInfo, Path as UrlPath, Request, State as AxState};
+use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as UrlPath, Request, State as AxState};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -433,8 +433,13 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(|| async { asset("pipeline-canvas.js") }),
         )
         .route("/composer.js", get(|| async { asset("composer.js") }))
+        .route("/attachments.js", get(|| async { asset("attachments.js") }))
         .route("/dispatch/conversations", get(dispatch_list))
         .route("/dispatch/conversations/{id}", get(dispatch_get))
+        .route(
+            "/dispatch/conversations/{id}/attachments/{file}",
+            get(dispatch_attachment),
+        )
         .route("/dispatch/conversations/{id}/stop", post(dispatch_stop))
         .route("/dispatch/conversations/{id}/delete", post(dispatch_delete))
         .route("/dispatch/clear", post(dispatch_clear))
@@ -494,7 +499,10 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(|| async { asset("dispatch-group.js") }),
         )
         .route("/sessions/{machine}/{name}/keys", post(session_keys))
-        .route("/dispatch/ask", post(dispatch_ask))
+        .route(
+            "/dispatch/ask",
+            post(dispatch_ask).layer(DefaultBodyLimit::max(ASK_LIMIT)),
+        )
         .route(
             "/mcp",
             post(crate::mcp::handle).get(|| async { StatusCode::METHOD_NOT_ALLOWED }),
@@ -1055,6 +1063,34 @@ struct DispatchAsk {
     task: Option<TaskMark>,
     #[serde(default)]
     improve: Option<ImproveMark>,
+    #[serde(default)]
+    attachments: Vec<Upload>,
+}
+
+// 40 MB of files, after base64.
+const ASK_LIMIT: usize = 56 * 1024 * 1024;
+
+#[derive(Deserialize)]
+struct Upload {
+    name: String,
+    data: String,
+}
+
+impl Upload {
+    fn decode(self) -> Result<Attachment, ApiError> {
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(&self.data)
+            .map_err(|_| {
+                ApiError(
+                    StatusCode::BAD_REQUEST,
+                    format!("{} did not arrive whole, try attaching it again", self.name),
+                )
+            })?;
+        Ok(Attachment {
+            name: self.name,
+            bytes,
+        })
+    }
 }
 
 // The saved task, and the version of it, that a message ran.
@@ -1096,11 +1132,22 @@ async fn dispatch_ask(
     if let Some(improve) = &req.improve {
         marks["improve"] = json!(improve);
     }
+    let files = req
+        .attachments
+        .into_iter()
+        .map(Upload::decode)
+        .collect::<Result<Vec<_>, _>>()?;
+    app.dispatch
+        .check_attachments(conversation, &files, &cfg.dispatch)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
     let (id, rx) = app
         .dispatch
         .ask_marked(
             conversation,
-            &req.text,
+            DispatchMessage {
+                text: &req.text,
+                files,
+            },
             &marks,
             cfg.port,
             &cfg.dispatch,
@@ -1123,6 +1170,41 @@ async fn dispatch_ask(
         axum::body::Body::from_stream(lines),
     )
         .into_response())
+}
+
+async fn dispatch_attachment(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((id, file)): UrlPath<(String, String)>,
+) -> Result<Response, ApiError> {
+    let id = conversation_id(&id)?;
+    let (kind, bytes) = app
+        .dispatch
+        .attachment(id, &file)
+        .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such attachment".into()))?;
+    let mut response = (
+        [
+            (header::CONTENT_TYPE, kind.mime().to_string()),
+            (
+                header::CONTENT_DISPOSITION,
+                format!("inline; filename=\"{file}\""),
+            ),
+            (
+                header::CACHE_CONTROL,
+                "private, max-age=31536000, immutable".into(),
+            ),
+            (header::X_CONTENT_TYPE_OPTIONS, "nosniff".into()),
+        ],
+        bytes,
+    )
+        .into_response();
+    // A browser's PDF viewer does not open under this policy.
+    if kind != AttachmentKind::Pdf {
+        response.headers_mut().insert(
+            header::CONTENT_SECURITY_POLICY,
+            header::HeaderValue::from_static("default-src 'none'"),
+        );
+    }
+    Ok(response)
 }
 
 async fn dispatch_stop(
