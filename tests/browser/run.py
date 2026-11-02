@@ -1223,6 +1223,17 @@ class Suite:
             text = b.js(f"fetch('/dispatch/conversations/{id}/attachments/1-notes.log').then((r) => r.text())")
             if text != "hello":
                 raise Failure(f"the saved text file reads {text!r}")
+            page = b.js("location.href")
+            viewer = "document.getElementById('shot-view')"
+            b.click("#dispatch-log .msg.user .msg-file.image")
+            b.wait(f"{viewer}?.open && (() => {{ const i = {viewer}.querySelector('img'); return i && i.complete && i.naturalWidth === 1; }})()", "the image in the viewer")
+            b.click("#shot-view .shot-view-head button")
+            b.wait(f"!{viewer}.open", "the viewer closed by its Close button")
+            b.click("#dispatch-log .msg.user .msg-file.text")
+            b.wait(f"{viewer}.open && {viewer}.querySelector('pre')?.textContent === 'hello'", "the text file in the viewer")
+            b.js(f"{viewer}.close()")
+            if b.js("location.href") != page or b.js("document.querySelector('#dispatch-log .msg.user .msg-file[target]')"):
+                raise Failure("opening a file left the conversation or would open a new window")
         finally:
             self.api("POST", "/api/settings/dispatch", before)
 
