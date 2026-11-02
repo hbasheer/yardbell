@@ -1768,7 +1768,7 @@ async fn dispatch_routes_need_login_and_check_conversation_ids() {
     assert_eq!(body, r#"{"kept":0}"#);
 }
 
-async fn dispatch_conversation(r: &Rig) -> String {
+fn stub_claude(r: &Rig) {
     let script = r._dir.path().join("claude");
     std::fs::write(
         &script,
@@ -1780,6 +1780,125 @@ async fn dispatch_conversation(r: &Rig) -> String {
         "command -v claude",
         Output::ok_with(&format!("{}\n", script.display())),
     );
+}
+
+fn ask_with(cookie: &str, body: Value) -> Request<Body> {
+    Request::post("/dispatch/ask")
+        .header(header::COOKIE, cookie)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap()
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+const PNG: &[u8] = b"\x89PNG\r\n\x1a\nimage";
+
+#[tokio::test]
+async fn dispatch_ask_refuses_bad_attachments_with_400() {
+    let r = rig();
+    stub_claude(&r);
+    let c = cookie(&r.app).await;
+    let many: Vec<Value> = (0..11)
+        .map(|n| json!({ "name": format!("{n}.txt"), "data": b64(b"hi") }))
+        .collect();
+    for (attachments, error) in [
+        (
+            json!([{ "name": "a.zip", "data": b64(b"PK\x03\x04\x14\0\0\0") }]),
+            "a.zip is not an image, a PDF or a text file",
+        ),
+        (
+            json!([{ "name": "x.png", "data": "not base64!" }]),
+            "x.png did not arrive whole, try attaching it again",
+        ),
+        (json!(many), "attach at most 10 files to one message"),
+    ] {
+        let (status, _, body) = send(
+            &r.app,
+            ask_with(&c, json!({ "text": "hi", "attachments": attachments })),
+        )
+        .await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+        assert!(body.contains(error), "{body}");
+    }
+    assert_eq!(r.app.dispatch.list(), json!([]));
+}
+
+#[tokio::test]
+async fn dispatch_ask_takes_a_body_over_two_megabytes() {
+    let r = rig();
+    stub_claude(&r);
+    let c = cookie(&r.app).await;
+    let mut big = PNG.to_vec();
+    big.resize(4 * 1024 * 1024, 0);
+    let (status, _, body) = send(
+        &r.app,
+        ask_with(
+            &c,
+            json!({ "text": "look", "attachments": [{ "name": "big.png", "data": b64(&big) }] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn a_sent_attachment_is_served_with_its_type() {
+    let r = rig();
+    stub_claude(&r);
+    let c = cookie(&r.app).await;
+    let (status, _, body) = send(
+        &r.app,
+        ask_with(
+            &c,
+            json!({ "text": "look", "attachments": [
+                { "name": "shot.png", "data": b64(PNG) },
+                { "name": "notes.log", "data": b64(b"hello") },
+            ] }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let first: Value = serde_json::from_str(body.lines().next().unwrap()).unwrap();
+    let id = first["id"].as_str().unwrap();
+    let get = |file: &str, cookie: Option<&str>| {
+        let mut req = Request::get(format!("/dispatch/conversations/{id}/attachments/{file}"))
+            .header(header::ACCEPT, "application/json");
+        if let Some(cookie) = cookie {
+            req = req.header(header::COOKIE, cookie);
+        }
+        send(&r.app, req.body(Body::empty()).unwrap())
+    };
+    let (status, headers, body) = get("0-shot.png", Some(&c)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "image/png");
+    assert_eq!(headers[header::X_CONTENT_TYPE_OPTIONS], "nosniff");
+    assert_eq!(
+        headers[header::CONTENT_SECURITY_POLICY],
+        "default-src 'none'"
+    );
+    assert_eq!(body.as_bytes(), String::from_utf8_lossy(PNG).as_bytes());
+    let (status, headers, body) = get("1-notes.log", Some(&c)).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "text/plain; charset=utf-8");
+    assert_eq!(
+        headers[header::CONTENT_SECURITY_POLICY],
+        "default-src 'none'"
+    );
+    assert_eq!(body, "hello");
+    let (status, _, _) = get("0-shot.png", None).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "behind the login");
+    for other in ["9-x.png", "..%2F..%2Fconversations", "x"] {
+        let (status, _, _) = get(other, Some(&c)).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{other}");
+    }
+}
+
+async fn dispatch_conversation(r: &Rig) -> String {
+    stub_claude(r);
     let (id, mut rx) = r
         .app
         .dispatch

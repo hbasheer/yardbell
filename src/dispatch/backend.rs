@@ -58,6 +58,7 @@ pub(super) struct TurnSpec<'a> {
     pub(super) token: &'a str,
     pub(super) mcp_config: Option<&'a Path>,
     pub(super) extra: Option<&'a str>,
+    pub(super) files: &'a [super::attachments::File],
 }
 
 pub(super) struct Launch {

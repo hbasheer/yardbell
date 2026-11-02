@@ -384,6 +384,15 @@ preferring the most free memory, the lowest load and the fewest running agents, 
 starting the default agent there with your task. Follow-up messages continue the same
 conversation, for example "what is that session doing now?" or "tell it yes".
 
+To show Dispatch a screenshot, a log or a PDF, drop the files on the conversation, paste them into
+the message box, or pick them with the paperclip. Each one sits above the box until you send, with
+**×** to take it back, and a message can be only files. Dispatch reads images, PDFs and text files
+(anything that is UTF-8 text: logs, code, JSON, CSV). A message takes up to 10 files, images up to
+5 MB each, PDFs up to 32 MB, text files up to 256 KB, and 40 MB in all. Codex cannot read PDFs, so
+a conversation on Codex refuses them. Files stay with their conversation, open from the message
+they came with, and go when the conversation is deleted. They are not passed on to the sessions
+Dispatch starts.
+
 Dispatch also reads Yardbell itself, so you can ask about it in the same words: "which triggers
 run on weekdays?", "what did the review pipeline find on !87?", "why did that run stop?", "how
 much Claude usage is left?" or "which pull requests have failing CI?". It reads Settings, its

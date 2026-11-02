@@ -1,3 +1,4 @@
+use super::super::attachments::{codex_pdf, text_block, Kind};
 use super::super::mcp_config::CONVERSATION_HEADER;
 use super::{assistant, short, tool_text, Backend, Launch, TurnSpec, TOOLS};
 use crate::config::RunsOn;
@@ -117,6 +118,17 @@ impl Backend for Codex {
         if !model.is_empty() {
             argv.extend(["-m".into(), model.to_string()]);
         }
+        let mut prompt = turn.prompt.to_string();
+        for f in turn.files {
+            match f.kind {
+                Kind::Pdf => return Err(codex_pdf(&f.shown)),
+                Kind::Text => {
+                    prompt.push_str("\n\n");
+                    prompt.push_str(&text_block(&f.name, &f.bytes));
+                }
+                _ => argv.extend(["-i".into(), f.path.display().to_string()]),
+            }
+        }
         if let Some(thread) = turn.resume {
             argv.push(thread.to_string());
         }
@@ -124,7 +136,7 @@ impl Backend for Codex {
         Ok(Launch {
             argv,
             env,
-            stdin: Some(turn.prompt.to_string()),
+            stdin: Some(prompt),
         })
     }
 

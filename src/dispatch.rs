@@ -1,4 +1,5 @@
 mod actions;
+pub(crate) mod attachments;
 mod backend;
 pub(crate) mod diff;
 mod follow;
@@ -16,6 +17,7 @@ mod turn;
 mod usage;
 
 pub use actions::{changes_something, result as step_result, valid_id as valid_action_id, By};
+pub use attachments::{Attachment, Kind as AttachmentKind};
 pub use diff::{Op as DiffOp, Part as DiffPart};
 pub use follow::Change;
 pub use group::{
@@ -41,7 +43,7 @@ pub(crate) use store::new_id as new_conversation_id;
 pub use store::valid_id;
 pub use store::write_private;
 pub use tasks::{History as TaskHistory, SavedTask, Version as TaskVersion, MAX_VERSIONS};
-pub use turn::Opening;
+pub use turn::{Message, Opening};
 
 use crate::config::RunsOn;
 use crate::shell::Runner;
@@ -553,6 +555,23 @@ impl Dispatch {
         self.shared.dir.join("evidence").join(id)
     }
 
+    pub fn attachment(&self, id: &str, file: &str) -> Option<(AttachmentKind, Vec<u8>)> {
+        let listed = self
+            .shared
+            .lock()
+            .get(id)?
+            .stored
+            .events
+            .iter()
+            .filter(|e| e["role"] == "user")
+            .filter_map(|e| e["attachments"].as_array())
+            .flatten()
+            .any(|a| a["file"] == file);
+        listed
+            .then(|| attachments::read(&self.shared.dir, id, file))
+            .flatten()
+    }
+
     pub fn evidence(&self, id: &str, card: usize, file: &str) -> Option<Vec<u8>> {
         let review = self.event(id, card).filter(|e| e["role"] == "review")?;
         let listed = review["evidence"]
@@ -626,6 +645,7 @@ impl Dispatch {
         }
         let _ = std::fs::remove_file(self.mcp_config_file(id));
         let _ = std::fs::remove_dir_all(self.evidence_dir(id));
+        let _ = std::fs::remove_dir_all(attachments::folder(&self.shared.dir, id));
         match std::fs::remove_file(self.shared.file(id)) {
             Err(e) if e.kind() != std::io::ErrorKind::NotFound => {
                 Err(format!("could not delete the conversation: {e}"))
@@ -1345,7 +1365,7 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
         let (id, rx) = dispatch
             .ask_marked(
                 None,
-                "Fix the bugs",
+                "Fix the bugs".into(),
                 &marks,
                 4000,
                 &DispatchSettings::default(),
