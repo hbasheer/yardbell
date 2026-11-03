@@ -110,6 +110,24 @@ function parentOf(node, target, parent = null) {
   return left !== undefined ? left : parentOf(node.b, target, node);
 }
 
+function even(parts, dir) {
+  return parts.length === 1 ? parts[0] : { split: dir, ratio: 1 / parts.length, a: parts[0], b: even(parts.slice(1), dir) };
+}
+
+// A balanced grid from the panes in reading order: enough columns for the count, any extra
+// panes in the top rows, and every pane an equal share of its row.
+function gridOf(list) {
+  const cols = Math.ceil(Math.sqrt(list.length));
+  const rows = [];
+  for (let at = 0; at < list.length; ) {
+    const left = list.length - at;
+    const take = Math.ceil(left / Math.ceil(left / cols));
+    rows.push(even(list.slice(at, at + take), "row"));
+    at += take;
+  }
+  return even(rows, "col");
+}
+
 // The workspace you are in is the folder of the focused session, or the one last picked.
 function project() {
   const s = saved.tabs.length ? sessionFor(focusedLeaf()?.key) : null;
@@ -126,6 +144,8 @@ function space() {
   return saved;
 }
 
+// Taking a pane out lays the tab out again as an even grid: hand-made split shapes and dragged
+// ratios last only until the pane count changes.
 function removeLeaf(t, leaf) {
   const parent = parentOf(t.root, leaf);
   if (!parent) return false;
@@ -134,6 +154,7 @@ function removeLeaf(t, leaf) {
   if (!grand) t.root = other;
   else if (grand.a === parent) grand.a = other;
   else grand.b = other;
+  t.root = gridOf(leaves(t.root));
   return true;
 }
 
@@ -513,6 +534,7 @@ function fillPane(el, leaf, n, alone) {
 function renderPanes() {
   const sp = space();
   const keep = new Set();
+  $("panes").classList.toggle("many", !phone.matches && leaves(tab().root).length > 1);
   sp.tabs.forEach((t, ti) => {
     const layout = rects(t.root, { x: 0, y: 0, w: 1, h: 1 });
     layout.panes.forEach(({ leaf, box }, i) => {
@@ -652,17 +674,78 @@ function ownTab(id) {
   render();
 }
 
-function mergeTab(from, to, dir) {
+// Merging keeps the pane objects, so their terminals stay connected, and lays the target tab
+// out as an even grid with the arriving panes after its own. A blank target is replaced.
+function mergeTab(from, to) {
   const sp = space();
   const source = sp.tabs[from];
   const target = sp.tabs[to];
   if (!source || !target || source === target) return;
-  target.root = { split: dir, ratio: 0.5, a: target.root, b: source.root };
+  const mine = leaves(target.root);
+  const added = leaves(source.root);
+  target.root = gridOf(mine.length === 1 && !mine[0].key ? added : [...mine, ...added]);
   sp.tabs.splice(from, 1);
   sp.tab = sp.tabs.indexOf(target);
-  sp.focus = leaves(source.root)[0].pane;
+  sp.focus = added[0].pane;
   save();
   render();
+}
+
+function swapPanes(aId, bId) {
+  const t = tab();
+  const all = leaves(t.root);
+  const a = all.find((l) => l.pane === aId);
+  const b = all.find((l) => l.pane === bId);
+  if (!a || !b || a === b) return;
+  const pa = parentOf(t.root, a);
+  const pb = parentOf(t.root, b);
+  if (pa === pb) {
+    const x = pa.a;
+    pa.a = pa.b;
+    pa.b = x;
+  } else {
+    if (pa.a === a) pa.a = b; else pa.b = b;
+    if (pb.a === b) pb.a = a; else pb.b = a;
+  }
+  save();
+  render();
+}
+
+function movePane(e, id) {
+  e.preventDefault();
+  try { e.target.setPointerCapture(e.pointerId); } catch {}
+  const start = { x: e.clientX, y: e.clientY };
+  let target = null;
+  let active = false;
+  const mark = (el) => {
+    if (el === target) return;
+    target?.classList.remove("ws-move-into");
+    target = el;
+    target?.classList.add("ws-move-into");
+  };
+  const move = (ev) => {
+    if (!active) {
+      if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 6) return;
+      active = true;
+      $("panes").classList.add("moving");
+      paneEls.get(id)?.classList.add("ws-move-src");
+    }
+    const over = document.elementsFromPoint(ev.clientX, ev.clientY).find((el) => el.classList?.contains("ws-pane") && !el.hidden);
+    mark(over && over.dataset.pane !== id ? over : null);
+  };
+  const end = (ev) => {
+    window.removeEventListener("pointermove", move);
+    window.removeEventListener("pointerup", end);
+    window.removeEventListener("pointercancel", end);
+    $("panes").classList.remove("moving");
+    paneEls.get(id)?.classList.remove("ws-move-src");
+    const to = ev.type === "pointerup" ? target : null;
+    mark(null);
+    if (to) swapPanes(id, to.dataset.pane);
+  };
+  window.addEventListener("pointermove", move);
+  window.addEventListener("pointerup", end);
+  window.addEventListener("pointercancel", end);
 }
 
 function toast(message) {
@@ -931,8 +1014,7 @@ $("tabs").addEventListener("contextmenu", (e) => {
   e.preventDefault();
   const i = Number(t.dataset.tab);
   const others = phone.matches ? [] : space().tabs.flatMap((other, j) => j === i ? [] : [
-    { label: `Split into ${other.name}, right`, run: () => mergeTab(i, j, "row") },
-    { label: `Split into ${other.name}, below`, run: () => mergeTab(i, j, "col") },
+    { label: `Move into ${other.name}`, run: () => mergeTab(i, j) },
   ]);
   showMenu({ right: e.clientX + 200, bottom: e.clientY }, [
     ...others,
@@ -981,6 +1063,14 @@ $("tab-list").addEventListener("click", (e) => {
 $("new-tab").addEventListener("click", newTab);
 $("side-new").addEventListener("click", newTab);
 
+$("panes").addEventListener("pointerdown", (e) => {
+  if (phone.matches || e.button !== 0) return;
+  const head = e.target.closest(".ws-pane-head");
+  if (!head || e.target.closest("button, a, select, input")) return;
+  if (leaves(tab().root).length < 2) return;
+  movePane(e, head.closest(".ws-pane").dataset.pane);
+});
+
 $("panes").addEventListener("click", (e) => {
   const pane = e.target.closest(".ws-pane");
   if (!pane) return;
@@ -995,7 +1085,7 @@ $("panes").addEventListener("click", (e) => {
     focusPane(id);
   } else if (e.target.closest("[data-start]") && leaf) startHere(leaf, e.target.closest("[data-start]").dataset.start);
   else if (act === "close") closePane(id);
-  else if (act === "more" && leaf?.key) paneMenu(e.target.closest("[data-act]"), leaf.key);
+  else if (act === "more" && leaf?.key) paneMenu(e.target.closest("[data-act]"), leaf);
   else if (act === "own-tab") ownTab(id);
   else if (act === "split-row" || act === "split-col") {
     space().focus = id;
@@ -1007,16 +1097,24 @@ $("panes").addEventListener("click", (e) => {
   }
 });
 
-function paneMenu(button, key) {
+function paneMenu(button, leaf) {
   if ($("ws-menu")?.trigger === button && !$("ws-menu").hidden) {
     closeMenu();
     return;
   }
-  const [machine, ...rest] = key.split("/");
+  const [machine, ...rest] = leaf.key.split("/");
   const name = rest.join("/");
+  const all = leaves(tab().root);
+  const swaps = phone.matches ? [] : all.flatMap((other, n) => {
+    if (other === leaf) return [];
+    const s = other.key && sessionFor(other.key);
+    const what = s ? title(s) : other.key ? other.key.split("/").pop() : "empty pane";
+    return [{ label: `Swap with ${n + 1} · ${what}`, run: () => swapPanes(leaf.pane, other.pane) }];
+  });
   showMenu(button.getBoundingClientRect(), [
     { label: "Insights", run: () => window.YardbellInsights.open({ machine, name, onSuggest: (data) => askDispatch(data) }) },
     { label: "Suggest a better prompt", run: () => askDispatch({ machine, name }) },
+    ...swaps,
   ], button);
 }
 

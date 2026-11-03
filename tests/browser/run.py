@@ -941,6 +941,158 @@ class Suite:
         finally:
             b.viewport(1280, 800)
 
+    # Four shell sessions, each in its own tab, with the saved layout wiped so earlier tests
+    # cannot shape it. Returns their keys.
+    def grid_tab(self):
+        b = self.b
+        folder = os.path.join(self.y.root, "demo-app")
+        keys = [f"{MACHINE}/hp-grid-{i}" for i in range(1, 5)]
+        for key in keys:
+            self.y.tmux("new", "-d", "-s", key.split("/", 1)[1], "-c", folder, self.y.shell)
+        b.goto(self.url("/workspace"))
+        self.api("POST", "/refresh")
+        b.wait(
+            f"typeof leaves === 'function' && {json.dumps(keys)}.every((k) => (state?.sessions || []).some((s) => s.machine + '/' + s.tmux === k))",
+            "the workspace to see the grid sessions", timeout=15,
+        )
+        b.js("(() => { saved.tabs = []; saved.hidden = []; saved.tab = 0; render(); })()")
+        b.wait(
+            f"{json.dumps(keys)}.every((k) => saved.tabs.some((t) => leaves(t.root).some((l) => l.key === k)))",
+            "a tab per grid session",
+        )
+        return keys
+
+    # Later tests count the sessions in demo-app and revisit the Workspace, so the grid sessions
+    # cannot outlive their test, in tmux or in the saved layout.
+    def drop_grid_tab(self, keys):
+        if self.b.js("location.pathname === '/workspace' && typeof detach === 'function'"):
+            self.b.js(f"""(() => {{
+              for (const k of {json.dumps(keys)}) {{
+                saved.hidden.push(k);
+                detach(saved, k);
+              }}
+              save();
+              render();
+            }})()""")
+        self.b.goto(self.url("/"))
+        for key in keys:
+            self.y.tmux("kill-session", "-t", f"={key.split('/', 1)[1]}")
+        self.api("POST", "/refresh")
+        self.b.wait(
+            f"fetch('/state', {{headers: {{Accept: 'application/json'}}}}).then((r) => r.json()).then((s) => !s.sessions.some((x) => {json.dumps(keys)}.includes(x.machine + '/' + x.tmux)))",
+            "the grid sessions to be gone",
+        )
+
+    def merge_grid_tabs(self, keys, total=None):
+        self.b.js(f"""(() => {{
+          const at = (k) => saved.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === k));
+          for (const k of {json.dumps(keys[1:])}) mergeTab(at(k), at({json.dumps(keys[0])}));
+        }})()""")
+        self.b.wait(f"leaves(tab().root).length === {total or len(keys)}", "the merged tab to show every pane")
+
+    def pane_boxes(self):
+        return self.b.js("""(() => {
+          const area = document.getElementById('panes').getBoundingClientRect();
+          return [...document.querySelectorAll('.ws-pane:not([hidden])')].map((el) => {
+            const r = el.getBoundingClientRect();
+            return {key: el.querySelector('iframe')?.dataset.key || null,
+                    x: (r.left - area.left) / area.width, y: (r.top - area.top) / area.height,
+                    w: r.width / area.width, h: r.height / area.height};
+          });
+        })()""")
+
+    def pane_point(self, key, selector=".ws-pane-title"):
+        p = self.b.wait(
+            f"""(() => {{
+              const f = document.querySelector('iframe[data-key="{key}"]');
+              const el = f && f.closest('.ws-pane').querySelector({json.dumps(selector)});
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return r.width ? {{x: r.left + r.width / 2, y: r.top + r.height / 2}} : null;
+            }})()""",
+            f"the pane for {key}",
+        )
+        return (p["x"], p["y"])
+
+    def test_workspace_panes_balance_into_a_grid(self):
+        b = self.b
+        keys = self.grid_tab()
+        try:
+            self.balance_into_a_grid(keys)
+        finally:
+            self.drop_grid_tab(keys)
+
+    def balance_into_a_grid(self, keys):
+        b = self.b
+        # The first merge goes through the tab's right-click menu; the rest call it directly.
+        b.js(f"""(() => {{
+          const at = (k) => saved.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === k));
+          const t = document.querySelector(`#tabs [data-tab="${{at({json.dumps(keys[1])})}}"]`);
+          const r = t.getBoundingClientRect();
+          t.dispatchEvent(new MouseEvent("contextmenu", {{bubbles: true, cancelable: true, clientX: r.left + 8, clientY: r.bottom - 4}}));
+        }})()""")
+        b.wait("document.getElementById('ws-menu') && !document.getElementById('ws-menu').hidden", "the tab menu")
+        moved = b.js(f"""(() => {{
+          const at = (k) => saved.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === k));
+          const name = saved.tabs[at({json.dumps(keys[0])})].name;
+          const hit = [...document.querySelectorAll('#ws-menu [role=menuitem]')].find((m) => m.textContent.trim() === 'Move into ' + name);
+          if (hit) hit.click();
+          return Boolean(hit);
+        }})()""")
+        if not moved:
+            raise Failure("the tab menu has no Move into item")
+        b.wait("leaves(tab().root).length === 2", "two panes after the merge")
+        self.merge_grid_tabs([keys[0], *keys[2:]], total=4)
+        boxes = {p["key"]: p for p in self.pane_boxes()}
+        if len(boxes) != 4:
+            raise Failure(f"four visible panes expected: {sorted(boxes)}")
+        want = dict(zip(keys, ((0, 0), (1, 0), (0, 1), (1, 1))))
+        for key, p in boxes.items():
+            if abs(p["w"] - 0.5) > 0.02 or abs(p["h"] - 0.5) > 0.02:
+                raise Failure(f"a 2x2 grid should give {key} half the area: {p}")
+            if (round(p["x"] * 2), round(p["y"] * 2)) != want[key]:
+                raise Failure(f"{key} should sit at {want[key]} of the 2x2 grid: {p}")
+        pane = b.js(f"leaves(tab().root).find((l) => l.key === {json.dumps(keys[3])}).pane")
+        b.click(f'.ws-pane[data-pane="{pane}"] [data-act="close"]')
+        b.wait("leaves(tab().root).length === 3", "three panes after closing one")
+        boxes = {p["key"]: p for p in self.pane_boxes()}
+        for key, (x, w) in ((keys[0], (0, 0.5)), (keys[1], (0.5, 0.5))):
+            p = boxes[key]
+            if abs(p["x"] - x) > 0.02 or abs(p["w"] - w) > 0.02 or round(p["y"] * 2) != 0:
+                raise Failure(f"{key} should keep half of the top row: {p}")
+        p = boxes[keys[2]]
+        if abs(p["w"] - 1) > 0.02 or abs(p["h"] - 0.5) > 0.02 or round(p["y"] * 2) != 1:
+            raise Failure(f"{keys[2]} should take the whole bottom row: {p}")
+
+    def test_workspace_panes_move_by_drag_and_swap_menu(self):
+        b = self.b
+        keys = self.grid_tab()
+        try:
+            self.move_by_drag_and_swap_menu(keys)
+        finally:
+            self.drop_grid_tab(keys)
+
+    def move_by_drag_and_swap_menu(self, keys):
+        b = self.b
+        self.merge_grid_tabs(keys)
+        b.drag(self.pane_point(keys[0]), self.pane_point(keys[3]))
+        order = b.js("leaves(tab().root).map((l) => l.key)")
+        if order != [keys[3], keys[1], keys[2], keys[0]]:
+            raise Failure(f"dragging pane 1 onto pane 4 should swap their places: {order}")
+        pane = b.js(f"leaves(tab().root).find((l) => l.key === {json.dumps(keys[0])}).pane")
+        b.click(f'.ws-pane[data-pane="{pane}"] [data-act="more"]')
+        b.wait("document.getElementById('ws-menu') && !document.getElementById('ws-menu').hidden", "the pane menu")
+        swapped = b.js("""(() => {
+          const hit = [...document.querySelectorAll('#ws-menu [role=menuitem]')].find((m) => m.textContent.includes('Swap with 1'));
+          if (hit) hit.click();
+          return Boolean(hit);
+        })()""")
+        if not swapped:
+            raise Failure("the pane menu has no Swap with item")
+        order = b.js("leaves(tab().root).map((l) => l.key)")
+        if order != keys:
+            raise Failure(f"Swap with 1 should put the panes back in reading order: {order}")
+
     def menu(self, path):
         self.b.goto(self.url(path))
         self.b.wait("document.querySelector('[data-theme-toggle] .theme-word')", f"the menu on {path}")
