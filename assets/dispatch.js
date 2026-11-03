@@ -6,7 +6,7 @@ import * as groups from "/dispatch-group.js";
 import { openHistory, proposedPrompt } from "/dispatch-tasks.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
-import { toBase64 } from "/attachments.js";
+import { sizeText, toBase64 } from "/attachments.js";
 
 const $ = (id) => document.getElementById(id);
 const Nav = window.YardbellNav;
@@ -469,10 +469,40 @@ async function loadRunsOn() {
 function sentFiles(list) {
   return html`<div class="msg-files">${list.map((a) => {
     const href = a.url || `/dispatch/conversations/${encodeURIComponent(current)}/attachments/${encodeURIComponent(a.file)}`;
-    return html`<a class="msg-file ${a.kind}" href=${href} target="_blank" rel="noopener" title=${a.name}>${a.kind === "image"
+    const open = (ev) => {
+      ev.preventDefault();
+      openFile(a, href);
+    };
+    return html`<a class="msg-file ${a.kind}" href=${href} title=${a.name} @click=${open}>${a.kind === "image"
       ? html`<img src=${href} alt="" loading="lazy">`
       : html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3"/></svg>`}<span class="msg-file-name">${a.name}</span></a>`;
   })}</div>`;
+}
+
+// The desktop app loads a new-tab link in place of the whole page, with no way back, so a file
+// opens over the conversation instead.
+function openFile(file, href) {
+  const dialog = steps.viewer();
+  const zoom = (ev) => ev.currentTarget.closest(".shot-view-body").classList.toggle("actual");
+  const body = {
+    image: () => html`<img src=${href} alt=${file.name} title="Click to switch between fitting the window and the actual size" @click=${zoom}>`,
+    pdf: () => html`<iframe class="file-view-frame" src=${href} title=${file.name}></iframe>`,
+    text: () => html`<pre class="file-view-text">Loading…</pre>`,
+  }[file.kind];
+  render(html`<div class="shot-view-head">
+      <strong>${file.name}</strong>
+      <span class="muted">${file.size ? sizeText(file.size) : ""}</span>
+      <button class="btn" type="button" @click=${() => dialog.close()}>Close</button>
+    </div>
+    <div class="shot-view-body">${body ? body() : nothing}</div>`, dialog);
+  dialog.querySelector(".shot-view-body").classList.remove("actual");
+  dialog.showModal();
+  if (file.kind !== "text") return;
+  const pre = dialog.querySelector(".file-view-text");
+  fetch(href)
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`could not open ${file.name}`))))
+    .then((text) => { pre.textContent = text; })
+    .catch((e) => { pre.textContent = e.message; });
 }
 
 function show(event) {

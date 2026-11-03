@@ -10,6 +10,11 @@ and the project uses [Semantic Versioning](https://semver.org).
   another to swap their places, or pick **Swap with** from the pane's **⋯** menu. A tab's right-click menu now says
   **Move into** instead of two Split into entries. Hand-made splits keep their shape until the pane count changes.
 
+## [0.10.405] - 2026-11-03
+
+- **Opening a file in Dispatch no longer takes over the desktop app.** A sent image, PDF or text file now opens in a
+  viewer over the conversation, which Close, Escape or a click outside it closes.
+
 ## [0.10.404] - 2026-11-02
 
 - **Attach files to Dispatch.** Drop, paste or pick screenshots, PDFs and text files into a Dispatch message, and
