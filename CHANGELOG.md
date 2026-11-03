@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.406] - 2026-11-03
+
 - **Workspace panes balance into a grid.** A tab lays its panes out evenly: four make two by two, not a stack of
   full-width rows, and the grid is rebuilt whenever a pane is added or removed. Drag a pane by its title bar onto
   another to swap their places, or pick **Swap with** from the pane's **⋯** menu. A tab's right-click menu now says
