@@ -1,6 +1,7 @@
 mod capability;
 mod client;
 mod creds;
+mod forward;
 mod launch;
 mod local;
 mod main_window;
@@ -18,6 +19,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use tauri::async_runtime::JoinHandle;
+use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Emitter, EventTarget, Listener, Manager, RunEvent, State, WindowEvent};
 use tauri_plugin_autostart::AutoLaunchManager;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
@@ -49,6 +51,32 @@ pub struct Session {
     store: Arc<dyn Store>,
     message: Mutex<Option<String>>,
     view: Mutex<Option<StateView>>,
+    forward: Mutex<Option<forward::Forward>>,
+}
+
+async fn page_address(app: &AppHandle, server: &str) -> String {
+    let session = app.state::<Session>();
+    let Some(target) = forward::page_target(server) else {
+        session.forward.lock().unwrap().take();
+        return server.to_string();
+    };
+    {
+        let forward = session.forward.lock().unwrap();
+        if let Some(forward) = forward.as_ref().filter(|f| f.serves(&target)) {
+            return forward.url().to_string();
+        }
+    }
+    match forward::start(target).await {
+        Ok(forward) => {
+            let url = forward.url().to_string();
+            session.forward.lock().unwrap().replace(forward);
+            url
+        }
+        Err(e) => {
+            eprintln!("yardbell: can't give the server a local page address: {e}");
+            server.to_string()
+        }
+    }
 }
 
 #[tauri::command]
@@ -64,9 +92,10 @@ async fn connect(
         .await
         .map_err(|e| e.to_string())?;
     session.store.save(&server, &cookie)?;
-    begin_session(&app, Client::new(&server, Some(&cookie))).await;
+    let pages = page_address(&app, &server).await;
+    begin_session(&app, Client::new(&pages, Some(&cookie))).await;
     *session.message.lock().unwrap() = None;
-    main_window::open(&app, &server).map_err(|e| e.to_string())?;
+    main_window::open(&app, &pages).map_err(|e| e.to_string())?;
     if let Some(window) = app.get_webview_window(windows::CONNECT) {
         window.destroy().map_err(|e| e.to_string())?;
     }
@@ -109,6 +138,11 @@ fn connect_message(session: State<'_, Session>) -> Option<String> {
 
 #[tauri::command]
 async fn connect_server(session: State<'_, Session>) -> Result<Option<String>, String> {
+    // The store holds the address the user typed; the client may hold a
+    // forwarded local one that would not survive a restart.
+    if let Some(server) = session.store.server() {
+        return Ok(Some(server));
+    }
     let client = session.client.read().await;
     Ok(client.as_ref().map(|client| client.server().to_string()))
 }
@@ -179,7 +213,8 @@ async fn open_dashboard(app: &AppHandle) {
         return;
     };
     let server = client.server().to_string();
-    tell_launch(app, CONNECTING, &server);
+    let shown = session.store.server().unwrap_or_else(|| server.clone());
+    tell_launch(app, CONNECTING, &shown);
     let result = client.handoff().await;
     if !session.generation.is_current(generation) {
         return;
@@ -193,7 +228,7 @@ async fn open_dashboard(app: &AppHandle) {
             Ok(false) => {}
             Err(e) => eprintln!("yardbell: can't open the dashboard: {e}"),
         },
-        Startup::Retry { server } => tell_launch(app, UNREACHABLE, &server),
+        Startup::Retry { .. } => tell_launch(app, UNREACHABLE, &shown),
         Startup::Connect { message } => {
             sign_out_session(app, generation, message.as_deref()).await;
         }
@@ -496,6 +531,7 @@ async fn end_session(app: &AppHandle, generation: Option<u64>, message: Option<&
         if let Some(poller) = session.poller.lock().unwrap().take() {
             poller.abort();
         }
+        session.forward.lock().unwrap().take();
     }
     session.store.clear();
     tray::reset_tray(app, &app.state::<Settings>().switches());
@@ -524,14 +560,24 @@ async fn start(app: AppHandle) {
         }
         return;
     };
-    begin_session(&app, Client::new(&server, Some(&cookie))).await;
-    if let Err(e) = main_window::open(&app, &server) {
+    let pages = page_address(&app, &server).await;
+    begin_session(&app, Client::new(&pages, Some(&cookie))).await;
+    if let Err(e) = main_window::open(&app, &pages) {
         eprintln!("yardbell: can't open the main window: {e}");
+    }
+}
+
+fn permission(label: &str, kind: PermissionKind) -> PermissionResponse {
+    if kind == PermissionKind::Microphone && label == DASHBOARD {
+        PermissionResponse::Allow
+    } else {
+        PermissionResponse::Default
     }
 }
 
 fn main() {
     tauri::Builder::default()
+        .on_permission_request(|webview, kind| permission(webview.label(), kind))
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             if let Err(e) = main_window::reveal(app) {
                 eprintln!("yardbell: can't show the window: {e}");
@@ -620,6 +666,7 @@ fn main() {
                 store: Arc::new(Keychain::new(config_dir)),
                 message: Mutex::new(None),
                 view: Mutex::new(None),
+                forward: Mutex::new(None),
             });
             app.manage(OpenTabs(Mutex::new(Tabs::new())));
             app.manage(capability::Granted::default());
@@ -643,7 +690,8 @@ fn main() {
 
 #[cfg(test)]
 mod tests {
-    use super::keep_running;
+    use super::{keep_running, panel, permission, windows, DASHBOARD};
+    use tauri::webview::{PermissionKind, PermissionResponse};
 
     #[test]
     fn closing_the_last_window_keeps_a_signed_in_app_in_the_tray() {
@@ -656,5 +704,25 @@ mod tests {
         assert!(!keep_running(Some(0), true));
         assert!(!keep_running(Some(0), false));
         assert!(!keep_running(Some(1), true));
+    }
+
+    #[test]
+    fn only_the_dashboard_gets_the_microphone() {
+        assert_eq!(
+            permission(DASHBOARD, PermissionKind::Microphone),
+            PermissionResponse::Allow
+        );
+        assert_eq!(
+            permission(DASHBOARD, PermissionKind::Camera),
+            PermissionResponse::Default
+        );
+        assert_eq!(
+            permission(windows::CONNECT, PermissionKind::Microphone),
+            PermissionResponse::Default
+        );
+        assert_eq!(
+            permission(panel::PANEL, PermissionKind::Microphone),
+            PermissionResponse::Default
+        );
     }
 }

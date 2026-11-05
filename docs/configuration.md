@@ -459,8 +459,10 @@ voice:
 it. `api` sends the recording to an OpenAI-compatible transcription endpoint; `api_key` must be a
 `${secret:name}` reference into [secrets](#secrets), never the key itself, and `api_url` must use
 https, or http only to `127.0.0.1` for a server such as speaches or LocalAI on the same machine.
-Browsers only open the microphone on a secure page, so dictation works on `https://` or on the
-machine the browser calls `localhost`.
+Browsers only open the microphone on a secure page, so in a browser dictation works on `https://`
+or on the machine the browser calls `localhost`. The desktop and Android apps take care of this
+themselves: they load a remote server's pages through a local relay, so the microphone works there
+wherever the server is.
 
 Speaking is separate: the speaker toggle on the Dispatch page (also under Settings, Voice) reads
 replies and session changes aloud with the device's own voices, is off by default, and is saved
