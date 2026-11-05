@@ -7,6 +7,7 @@ import { openHistory, proposedPrompt } from "/dispatch-tasks.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
 import { toBase64 } from "/attachments.js";
+import { dictation, speaker, spoken } from "/voice.js";
 
 const $ = (id) => document.getElementById(id);
 const Nav = window.YardbellNav;
@@ -446,6 +447,7 @@ function backendNote() {
 function renderRunsOn() {
   const chip = $("runs-on");
   chip.hidden = !runsOn;
+  $("mic").hidden = !runsOn?.voice_input;
   if (!runsOn) return;
   const { label, model } = agentOf(backend);
   chip.textContent = `${label} · ${model}`;
@@ -475,10 +477,49 @@ function sentFiles(list) {
   })}</div>`;
 }
 
+const voice = speaker();
+const SPOKEN_STATES = { ended: "has ended", "needs you": "is waiting for you", working: "is working", idle: "has gone idle" };
+const spokenStates = new Map();
+
+function voiceOut(e) {
+  if (!voice.on()) return;
+  if (e.role === "assistant") voice.speak(spoken(e.text));
+  else if (e.role === "error") voice.speak(`Dispatch hit an error. ${e.text}`);
+  else if (e.role === "session" && e.state === "blocked") voice.speak(`Session ${e.name} on ${e.machine} is waiting for an answer.`);
+}
+
+function paintSpeakToggle() {
+  const button = $("speak-toggle");
+  button.hidden = !voice.able;
+  const on = voice.on();
+  button.setAttribute("aria-pressed", String(on));
+  button.classList.toggle("on", on);
+  button.setAttribute("aria-label", on ? "Stop reading aloud" : "Read replies aloud");
+  button.title = on
+    ? "Replies and session changes are read aloud. Press to mute at once."
+    : "Read replies and session changes aloud. Off until you turn it on.";
+}
+
+$("speak-toggle").addEventListener("click", () => {
+  voice.set(!voice.on());
+  paintSpeakToggle();
+  if (voice.on()) voice.speak("Dispatch reads replies aloud.");
+});
+
+// The same switch sits in Settings, which may be open in another tab.
+window.addEventListener("storage", () => {
+  voice.sync();
+  paintSpeakToggle();
+});
+paintSpeakToggle();
+
+// Streamed events count as shown, so the catch-up after a turn never reads them out again.
 function show(event) {
   events.push(event);
+  shownEvents = Math.max(shownEvents, events.length);
   draw();
   scrollDown();
+  voiceOut(event);
 }
 
 async function pick(e, index, key, label) {
@@ -557,6 +598,7 @@ async function open(id) {
   loadRunsOn();
   answers = new Map();
   screens.clear();
+  spokenStates.clear();
   steps.reset();
   groups.reset();
   setBusy(false);
@@ -606,6 +648,7 @@ async function watch(id) {
     }
     if (convo.updated !== shownUpdated) {
       const grew = convo.events.length > shownEvents;
+      if (grew) convo.events.slice(shownEvents).forEach(voiceOut);
       events = convo.events.slice();
       shownEvents = convo.events.length;
       shownUpdated = convo.updated;
@@ -680,6 +723,7 @@ async function catchUp(showNew = true) {
   if (!convo || current !== id || busy) return;
   const grew = convo.events.length > shownEvents;
   if (convo.updated !== shownUpdated || grew) {
+    if (grew) convo.events.slice(shownEvents).forEach(voiceOut);
     events = convo.events.slice();
     draw();
     if (showNew && grew) scrollDown();
@@ -690,9 +734,26 @@ async function catchUp(showNew = true) {
   renderTracked();
 }
 
-function trackedItem(t, state) {
+function sessionWord(t, state) {
   const s = state?.sessions.find((x) => x.machine === t.machine && x.tmux === t.name && !x.stale);
-  const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : "idle";
+  return { s, word: !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : "idle" };
+}
+
+// A tracked session's first word is only remembered, so opening a conversation says nothing.
+function speakTransitions(state) {
+  for (const t of tracked) {
+    const { word } = sessionWord(t, state);
+    const key = `${t.machine}/${t.name}`;
+    const before = spokenStates.get(key);
+    spokenStates.set(key, word);
+    if (before && before !== word && voice.on()) {
+      voice.speak(`Session ${t.name} on ${t.machine} ${SPOKEN_STATES[word] || word}.`);
+    }
+  }
+}
+
+function trackedItem(t, state) {
+  const { s, word } = sessionWord(t, state);
   const tone = !s ? "" : s.activity === "blocked" ? "warn" : s.activity === "active" ? "ok" : "";
   return html`<span class="dispatch-session"><span class="dot ${tone}"></span>${s
     ? html`<a href=${termUrl(t.machine, t.name)} target="_blank" rel="noopener">${t.name}</a>`
@@ -709,6 +770,7 @@ async function renderTracked() {
   box.hidden = !tracked.length;
   if (!tracked.length) { render(nothing, box); return; }
   const state = await loadState();
+  speakTransitions(state);
   if (events.some((e) => e.role === "group")) draw();
   render(html`<span class="dispatch-sessions-label">Sessions</span>${repeat(tracked, (t) => `${t.machine}/${t.name}`, (t) => trackedItem(t, state))}`, box);
 }
@@ -967,6 +1029,8 @@ const compose = composer(form, {
   scroller,
   scrollDown,
 });
+
+dictation({ button: $("mic"), input: form.text, toast });
 
 $("dispatch-stop").addEventListener("click", () => {
   if (!current) return;

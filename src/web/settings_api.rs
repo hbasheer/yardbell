@@ -34,6 +34,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/secrets/delete", post(secret_delete))
         .route("/api/settings/secrets/move", post(secrets_move))
         .route("/api/settings/dispatch", post(dispatch))
+        .route("/api/settings/voice", post(voice))
+        .route("/api/settings/voice/check", post(voice_check))
         .route("/api/settings/pair", post(pair))
         .route("/api/settings/passcode", post(passcode))
         .route("/api/settings/logout-all", post(logout_all))
@@ -105,6 +107,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "mcp_auth": mcp_auth,
         "secrets": secrets,
         "dispatch": cfg.dispatch,
+        "voice": cfg.voice,
         "codex_models": app.dispatch.codex_models(),
         "dispatch_runs_on": crate::config::RunsOn::ALL.map(|r| r.name()),
         "agents": cfg
@@ -417,6 +420,37 @@ async fn dispatch(
     };
     app.settings.set_dispatch(settings).map_err(bad)?;
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+fn trimmed_voice(req: crate::config::VoiceSettings) -> crate::config::VoiceSettings {
+    crate::config::VoiceSettings {
+        input: req.input,
+        whisper_command: req.whisper_command.trim().to_string(),
+        whisper_model: req.whisper_model.trim().to_string(),
+        api_url: req.api_url.trim().to_string(),
+        api_model: req.api_model.trim().to_string(),
+        api_key: req.api_key.trim().to_string(),
+        language: req.language.trim().to_string(),
+    }
+}
+
+async fn voice(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<crate::config::VoiceSettings>,
+) -> Result<Response, ApiError> {
+    app.settings.set_voice(trimmed_voice(req)).map_err(bad)?;
+    Ok(Json(json!({ "ok": true })).into_response())
+}
+
+// The settings as typed are checked, saved or not, so Test works before Save.
+async fn voice_check(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<crate::config::VoiceSettings>,
+) -> Result<Response, ApiError> {
+    let runner = app.dispatch.runner();
+    let (ok, message) =
+        crate::voice::check(runner.as_ref(), &trimmed_voice(req), &app.secrets()?).await;
+    Ok(Json(json!({ "ok": ok, "message": message })).into_response())
 }
 
 #[derive(Deserialize)]
