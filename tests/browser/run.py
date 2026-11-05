@@ -1657,6 +1657,15 @@ class Suite:
         # desktop app records through the Web Audio fallback. Taking MediaRecorder away
         # entirely walks the same path.
         b = self.b
+        b.goto(self.url("/dispatch"))
+        b.js("window.__clock = new AudioContext(); window.__clock.resume().catch(() => {}); 0")
+        b.pump(0.5)
+        able = b.js("window.__clock.state === 'running'")
+        b.js("window.__clock.close().catch(() => {}); delete window.__clock; 0")
+        if not able:
+            # Without an audio server, as on a CI runner, Web Audio has no clock
+            # and nothing can capture; the speak test skips the same way.
+            return
         self.api(
             "POST",
             "/api/settings/voice",
