@@ -1652,6 +1652,32 @@ class Suite:
         finally:
             self.api("POST", "/api/settings/voice", {"input": "off"})
 
+    def test_dictation_falls_back_without_mediarecorder(self):
+        # WebKitGTK's MediaRecorder accepts a mime type and then refuses to start, so the
+        # desktop app records through the Web Audio fallback. Taking MediaRecorder away
+        # entirely walks the same path.
+        b = self.b
+        self.api(
+            "POST",
+            "/api/settings/voice",
+            {"input": "local", "whisper_model": self.y.config},
+        )
+        try:
+            b.goto(self.url("/dispatch"))
+            b.wait("!document.getElementById('mic').hidden", "the microphone button in the composer")
+            b.js("window.MediaRecorder = undefined")
+            b.click("#mic")
+            b.wait("document.getElementById('mic').classList.contains('recording')", "the fallback recorder to start")
+            b.pump(1.0)
+            b.click("#mic")
+            b.wait(
+                f"document.querySelector('#dispatch-form textarea').value.includes({json.dumps(FAKE_DICTATION)})",
+                "the fallback dictation to land in the message box",
+            )
+            self.set_field("#dispatch-form textarea", "")
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+
     def test_dispatch_speak_toggle_mutes_at_once(self):
         b = self.b
         b.goto(self.url("/dispatch"))

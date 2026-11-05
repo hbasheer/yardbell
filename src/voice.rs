@@ -109,7 +109,9 @@ async fn local(
     let scratch = Scratch::new()?;
     let recording = scratch.file(&format!("recording.{}", extension(mime)));
     std::fs::write(&recording, audio).map_err(|e| format!("cannot keep the recording: {e}"))?;
-    let wav = scratch.file("recording.wav");
+    // Not "recording.wav": a wav upload already sits at that name, and ffmpeg
+    // cannot read and write the same file.
+    let wav = scratch.file("whisper.wav");
     let path = |p: &Path| p.display().to_string();
     let converted = runner
         .run(
