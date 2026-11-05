@@ -25,8 +25,82 @@ function micProblem(err) {
 }
 
 // A tap toggles recording; holding the button records only while it is held, like push-to-talk.
+// Captures mono PCM through Web Audio and packs it into a 16 kHz WAV blob.
+// WebKitGTK's MediaRecorder reports a supported type and then fails on start,
+// so engines where MediaRecorder never records fall back to this.
+function wavCapture(stream) {
+  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+  const source = ctx.createMediaStreamSource(stream);
+  const grab = ctx.createScriptProcessor(4096, 1, 1);
+  const mute = ctx.createGain();
+  mute.gain.value = 0;
+  const parts = [];
+  grab.onaudioprocess = (e) => parts.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  if (ctx.state !== "running") ctx.resume().catch(() => {});
+  source.connect(grab);
+  grab.connect(mute);
+  mute.connect(ctx.destination);
+  return {
+    finish() {
+      grab.onaudioprocess = null;
+      source.disconnect();
+      grab.disconnect();
+      mute.disconnect();
+      const rate = ctx.sampleRate;
+      ctx.close();
+      for (const track of stream.getTracks()) track.stop();
+      return wavBlob(parts, rate);
+    },
+  };
+}
+
+const WAV_RATE = 16000;
+
+function wavBlob(parts, rate) {
+  let pcm = new Float32Array(parts.reduce((n, p) => n + p.length, 0));
+  let at = 0;
+  for (const p of parts) {
+    pcm.set(p, at);
+    at += p.length;
+  }
+  if (rate > WAV_RATE) {
+    const step = rate / WAV_RATE;
+    const out = new Float32Array(Math.floor(pcm.length / step));
+    for (let i = 0; i < out.length; i++) {
+      const from = Math.floor(i * step);
+      const to = Math.min(pcm.length, Math.floor((i + 1) * step));
+      let sum = 0;
+      for (let j = from; j < to; j++) sum += pcm[j];
+      out[i] = to > from ? sum / (to - from) : 0;
+    }
+    pcm = out;
+    rate = WAV_RATE;
+  }
+  const data = new DataView(new ArrayBuffer(44 + pcm.length * 2));
+  const label = (o, s) => {
+    for (let i = 0; i < s.length; i++) data.setUint8(o + i, s.charCodeAt(i));
+  };
+  label(0, "RIFF");
+  data.setUint32(4, 36 + pcm.length * 2, true);
+  label(8, "WAVEfmt ");
+  data.setUint32(16, 16, true);
+  data.setUint16(20, 1, true);
+  data.setUint16(22, 1, true);
+  data.setUint32(24, rate, true);
+  data.setUint32(28, rate * 2, true);
+  data.setUint16(32, 2, true);
+  data.setUint16(34, 16, true);
+  label(36, "data");
+  data.setUint32(40, pcm.length * 2, true);
+  for (let i = 0; i < pcm.length; i++) {
+    data.setInt16(44 + i * 2, Math.max(-1, Math.min(1, pcm[i])) * 0x7fff, true);
+  }
+  return new Blob([data], { type: "audio/wav" });
+}
+
 export function dictation({ button, input, toast }) {
   let recorder = null;
+  let wav = null;
   let chunks = [];
   let busy = false;
   let downAt = 0;
@@ -34,7 +108,7 @@ export function dictation({ button, input, toast }) {
   let timer = 0;
 
   function paint() {
-    const recording = Boolean(recorder);
+    const recording = Boolean(recorder || wav);
     button.classList.toggle("recording", recording);
     button.classList.toggle("busy", busy);
     button.disabled = busy;
@@ -48,7 +122,7 @@ export function dictation({ button, input, toast }) {
   }
 
   async function start() {
-    if (recorder || busy) return;
+    if (recorder || wav || busy) return;
     if (!navigator.mediaDevices?.getUserMedia) {
       toast("The browser only allows the microphone on a secure page. Open Yardbell over https, or on the machine it runs on.");
       return;
@@ -63,16 +137,28 @@ export function dictation({ button, input, toast }) {
     const mime = MIMES.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
     try {
       recorder = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 48000 } : undefined);
-    } catch (err) {
-      for (const track of stream.getTracks()) track.stop();
-      toast(`This browser cannot record audio: ${err.message}`);
-      return;
+    } catch {
+      wav = wavCapture(stream);
     }
-    chunks = [];
-    recorder.ondataavailable = (e) => {
-      if (e.data?.size) chunks.push(e.data);
-    };
-    recorder.start();
+    if (recorder) {
+      chunks = [];
+      recorder.ondataavailable = (e) => {
+        if (e.data?.size) chunks.push(e.data);
+      };
+      try {
+        recorder.start();
+        const r = recorder;
+        setTimeout(() => {
+          if (recorder === r && r.state !== "recording") {
+            recorder = null;
+            wav = wavCapture(r.stream);
+          }
+        }, 250);
+      } catch {
+        recorder = null;
+        wav = wavCapture(stream);
+      }
+    }
     timer = setTimeout(() => {
       toast(`Recording stops after ${MAX_SECONDS / 60} minutes.`);
       stop(true);
@@ -81,6 +167,14 @@ export function dictation({ button, input, toast }) {
   }
 
   function stop(send) {
+    if (wav) {
+      const blob = wav.finish();
+      wav = null;
+      clearTimeout(timer);
+      paint();
+      if (send && blob.size > 44) transcribe(blob);
+      return;
+    }
     const r = recorder;
     if (!r) return;
     recorder = null;
@@ -125,16 +219,17 @@ export function dictation({ button, input, toast }) {
     }
   }
 
+  const live = () => Boolean(recorder || wav);
   button.addEventListener("pointerdown", (e) => {
     if (e.button) return;
     e.preventDefault();
     downAt = Date.now();
-    if (recorder) stopOnUp = true;
+    if (live()) stopOnUp = true;
     else start();
   });
   const up = () => {
     const held = Date.now() - downAt >= HOLD_MS;
-    if (recorder && (stopOnUp || held)) stop(true);
+    if (live() && (stopOnUp || held)) stop(true);
     stopOnUp = false;
   };
   button.addEventListener("pointerup", up);
@@ -142,11 +237,11 @@ export function dictation({ button, input, toast }) {
   // A keyboard press reaches the button as a click with no pointer events before it.
   button.addEventListener("click", (e) => {
     if (e.detail !== 0) return;
-    if (recorder) stop(true);
+    if (live()) stop(true);
     else start();
   });
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && recorder) {
+    if (e.key === "Escape" && live()) {
       e.preventDefault();
       stop(false);
     }

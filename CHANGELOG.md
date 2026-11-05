@@ -5,6 +5,15 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.409] - 2026-11-05
+
+- **Dictation records on every engine.** The desktop app's web engine on Linux accepts a recording format and then
+  refuses to record (clicking the microphone silently did nothing). Dictation now notices and records through Web
+  Audio instead, sending plain WAV, so the microphone works in the Linux desktop app too.
+- **The macOS app can actually use the microphone.** The app is signed with the hardened runtime, which refuses audio
+  capture unless the signature carries the `audio-input` entitlement. The bundle now signs with it, so the system's
+  one-time microphone prompt appears and dictation works.
+
 ## [0.10.408] - 2026-11-05
 
 - **Dictation works in the apps.** The desktop and Android apps now open the microphone for Dispatch: they answer the
