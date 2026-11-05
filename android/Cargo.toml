@@ -1,6 +1,6 @@
 [package]
 name = "yardbell-android"
-version = "0.10.407"
+version = "0.10.408"
 edition = "2021"
 publish = false
 

@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.408] - 2026-11-05
+
+- **Dictation works in the apps.** The desktop and Android apps now open the microphone for Dispatch: they answer the
+  page's permission request and load a remote server's pages through a local relay, which the engine treats as a
+  secure page. Before, dictation in an app only worked against a server on the same machine; in a browser the
+  `https://` or localhost rule still applies.
+
 ## [0.10.407] - 2026-11-05
 
 - **Talk to Dispatch.** A microphone button in Dispatch's message box turns speech into text: tap to record, tap again
