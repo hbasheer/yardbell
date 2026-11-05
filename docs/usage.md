@@ -396,6 +396,17 @@ a conversation on Codex refuses them. Files stay with their conversation, open f
 they came with, and go when the conversation is deleted. They are not passed on to the sessions
 Dispatch starts.
 
+You can also talk instead of typing. Once **Settings, Voice** turns voice input on, a microphone
+button sits in the message box: tap to record and tap again to stop, or hold it and speak while it
+is held. What you said is typed into the box for you to check and send. The recording is
+transcribed on the machine Yardbell runs on with [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
+or by the speech-to-text API the same section names, see
+[`voice`](configuration.md#voice-optional). Browsers only open the microphone on a secure page, so
+dictate over `https://` or on the machine itself. And Dispatch can talk back: the speaker button at
+the top reads replies, errors and session changes ("hp-eng-1234 is waiting for you") aloud with
+this device's own voice. It is off by default, speaks one thing at a time, and pressing it again
+mutes it at once. The same switch is under Settings, Voice, and is saved per device.
+
 Dispatch also reads Yardbell itself, so you can ask about it in the same words: "which triggers
 run on weekdays?", "what did the review pipeline find on !87?", "why did that run stop?", "how
 much Claude usage is left?" or "which pull requests have failing CI?". It reads Settings, its

@@ -41,5 +41,6 @@ pub mod testing;
 pub mod triggers;
 pub mod tunnels;
 pub mod viewers;
+pub mod voice;
 pub mod web;
 pub mod worktrees;

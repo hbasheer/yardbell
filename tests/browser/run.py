@@ -23,6 +23,7 @@ PASSCODE = "yardbell-browser-tests"
 PASSCODE_HASH = "$argon2id$v=19$m=19456,t=2,p=1$W9HtFU6zAJJHfaLZxyoLZw$CowUQvJ7lk5RORBJ4iV9u9uJi2N9R2CA1dxq3fupAOg"
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 MACHINE = "hp"
+FAKE_DICTATION = "Fix the flaky checkout test, please."
 SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
 REVIEW_CHAT = "browserreview001"
@@ -603,6 +604,14 @@ class Yardbell:
         with open(os.path.join(fake_bin, "gh"), "w") as f:
             f.write(f"#!/bin/sh\nif [ \"$1 $2\" = \"pr view\" ]; then\ncat <<'EOF'\n{json.dumps(FAKE_PR)}\nEOF\nexit 0\nfi\nexit 1\n")
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
+        # Voice input shells out to ffmpeg and whisper-cli; the fakes skip the conversion and
+        # answer with a fixed transcription, so no real model or ffmpeg is needed.
+        with open(os.path.join(fake_bin, "ffmpeg"), "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(fake_bin, "ffmpeg"), 0o755)
+        with open(os.path.join(fake_bin, "whisper-cli"), "w") as f:
+            f.write(f'#!/bin/sh\necho {json.dumps(FAKE_DICTATION)}\n')
+        os.chmod(os.path.join(fake_bin, "whisper-cli"), 0o755)
         self.fake_claude = os.path.join(fake_bin, "claude")
         with open(self.fake_claude, "w") as f:
             f.write(FAKE_CLAUDE)
@@ -1611,6 +1620,59 @@ class Suite:
                 raise Failure(f"the composer ends at {box['bottom']}px, not on the tab bar at {box['bar']}px")
         finally:
             b.viewport(1280, 800)
+
+    def test_settings_voice_input_and_dispatch_dictation(self):
+        b = self.b
+        b.goto(self.url("/settings#voice"))
+        b.wait("document.querySelector('#voice-form select[name=input]')?.value === 'off'", "voice input off by default")
+        b.wait("document.getElementById('mic') === null", "no microphone on the Settings page")
+        self.set_field("#voice-form select[name=input]", "local")
+        b.wait("!document.querySelector('#voice-form [data-input=local]').hidden", "the local Whisper fields")
+        self.set_field("#voice-form input[name=whisper_model]", self.y.config)
+        b.click("#voice-check")
+        b.wait("document.getElementById('voice-status').classList.contains('ok')", "the Test to find ffmpeg, whisper-cli and the model")
+        b.click("#voice-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the voice settings to save")
+        with open(self.y.config) as f:
+            config = f.read()
+        if "input: local" not in config:
+            raise Failure(f"yardbell.yml does not hold the voice input:\n{config}")
+        try:
+            b.goto(self.url("/dispatch"))
+            b.wait("!document.getElementById('mic').hidden", "the microphone button in the composer")
+            b.click("#mic")
+            b.wait("document.getElementById('mic').classList.contains('recording')", "recording to start on the fake microphone")
+            b.pump(0.5)
+            b.click("#mic")
+            b.wait(
+                f"document.querySelector('#dispatch-form textarea').value.includes({json.dumps(FAKE_DICTATION)})",
+                "the dictation to land in the message box",
+            )
+            self.set_field("#dispatch-form textarea", "")
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+
+    def test_dispatch_speak_toggle_mutes_at_once(self):
+        b = self.b
+        b.goto(self.url("/dispatch"))
+        b.wait("document.getElementById('dispatch-send')", "the Dispatch page")
+        able = b.js("'speechSynthesis' in window")
+        if not able:
+            if not b.js("document.getElementById('speak-toggle').hidden"):
+                raise Failure("the speak toggle shows although the browser cannot speak")
+            return
+        b.wait("!document.getElementById('speak-toggle').hidden", "the speak toggle")
+        if b.js("document.getElementById('speak-toggle').getAttribute('aria-pressed')") != "false":
+            raise Failure("speaking is not off by default")
+        b.click("#speak-toggle")
+        b.wait("document.getElementById('speak-toggle').getAttribute('aria-pressed') === 'true'", "speaking turned on")
+        if b.js("localStorage.getItem('yardbell.dispatch.speak')") != "1":
+            raise Failure("the choice is not kept on this device")
+        b.goto(self.url("/settings#voice"))
+        b.wait("document.getElementById('speak-enable').checked", "the same switch on in Settings")
+        b.click("#speak-enable")
+        b.goto(self.url("/dispatch"))
+        b.wait("document.getElementById('speak-toggle').getAttribute('aria-pressed') === 'false'", "Settings turned it off")
 
     def pull_session(self):
         r = self.y.tmux("has-session", "-t", f"={PULL_SESSION}")

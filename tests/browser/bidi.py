@@ -148,6 +148,9 @@ class Browser:
             "ui.prefersReducedMotion": 1,
             # Pages may ask before leaving with unsaved work; a test moving on must not stall on it.
             "dom.disable_beforeunload": True,
+            # A fake microphone, granted without a prompt, so dictation can be tested headless.
+            "media.navigator.streams.fake": True,
+            "media.navigator.permission.disabled": True,
         }
         with open(os.path.join(self.profile, "user.js"), "w") as f:
             for k, v in prefs.items():

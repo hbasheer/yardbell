@@ -1045,6 +1045,12 @@ body.resizing { cursor: col-resize; user-select: none; }
 .compose-send:hover:not(:disabled) { transform: translateY(-1px); }
 .compose-send:disabled { opacity: 0.4; cursor: default; }
 .compose-send[hidden] { display: none; }
+.compose-tool.mic { touch-action: none; }
+.compose-tool.mic.recording { background: var(--bad); color: #fff; animation: pulse 1.4s ease-in-out infinite; }
+.compose-tool.mic.busy { color: var(--accent-text); animation: pulse 1.4s ease-in-out infinite; cursor: progress; }
+.speak-toggle .speak-waves, .speak-toggle.on .speak-cross { display: none; }
+.speak-toggle.on .speak-waves { display: initial; }
+.speak-toggle.on { color: var(--accent-text); }
 .compose-box { position: relative; container: compose / inline-size; }
 .compose-tools { display: flex; flex: none; align-items: center; gap: 2px; margin-right: auto; }
 .compose-tool.icon-only { padding: 5px 7px; }

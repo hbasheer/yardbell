@@ -5,6 +5,16 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.407] - 2026-11-05
+
+- **Talk to Dispatch.** A microphone button in Dispatch's message box turns speech into text: tap to record, tap again
+  or hold and release to stop, and what you said is typed into the box. Transcription runs on your machine with
+  whisper.cpp, or through an OpenAI-compatible API whose key stays a `${secret:name}`. Set up under **Settings, Voice**,
+  with a **Test** button that checks ffmpeg, the Whisper command and the model.
+- **Dispatch can talk back.** A speaker toggle on the Dispatch page reads replies, errors and session changes aloud
+  with the device's own voice, one thing at a time. Off by default, saved per device, and pressing it again mutes it
+  at once.
+
 ## [0.10.406] - 2026-11-03
 
 - **Workspace panes balance into a grid.** A tab lays its panes out evenly: four make two by two, not a stack of

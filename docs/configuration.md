@@ -437,6 +437,35 @@ run says which rule on its card. Yardbell refuses to load rules with an unknown 
 a folder starting with `~`, a rule that names nothing (set `approval` instead) or two rules for the
 same steps, and says which rule is wrong.
 
+### `voice` (optional)
+
+Voice input for Dispatch: a microphone button in its message box records what you say and types it
+out. The **Voice** section of the Settings page edits it, and its **Test** button checks the pieces
+without saving.
+
+```yaml
+voice:
+  input: local                    # off (the default), local or api
+  whisper_command: whisper-cli    # the whisper.cpp binary; empty means whisper-cli on PATH
+  whisper_model: ~/models/ggml-base.en.bin   # required with input: local
+  api_url: https://api.openai.com/v1/audio/transcriptions  # with input: api; empty means OpenAI
+  api_model: whisper-1            # empty means whisper-1
+  api_key: ${secret:openai}       # with input: api; must be a ${secret:name} reference
+  language: en                    # optional hint; empty lets the engine find it
+```
+
+`local` transcribes on the machine Yardbell runs on, with
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) and `ffmpeg`, so the recording never leaves
+it. `api` sends the recording to an OpenAI-compatible transcription endpoint; `api_key` must be a
+`${secret:name}` reference into [secrets](#secrets), never the key itself, and `api_url` must use
+https, or http only to `127.0.0.1` for a server such as speaches or LocalAI on the same machine.
+Browsers only open the microphone on a secure page, so dictation works on `https://` or on the
+machine the browser calls `localhost`.
+
+Speaking is separate: the speaker toggle on the Dispatch page (also under Settings, Voice) reads
+replies and session changes aloud with the device's own voices, is off by default, and is saved
+per device in the browser, so nothing about it is in `yardbell.yml`.
+
 ### `worktree_setup` (optional)
 
 Commands that run in a new worktree right after Yardbell creates it, before the agent starts. The

@@ -474,6 +474,45 @@ impl DispatchSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VoiceInput {
+    #[default]
+    Off,
+    Local,
+    Api,
+}
+
+impl VoiceInput {
+    fn is_off(&self) -> bool {
+        *self == VoiceInput::Off
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceSettings {
+    #[serde(default, skip_serializing_if = "VoiceInput::is_off")]
+    pub input: VoiceInput,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub whisper_command: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub whisper_model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub language: String,
+}
+
+impl VoiceSettings {
+    fn is_default(&self) -> bool {
+        *self == VoiceSettings::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServer {
     pub name: String,
@@ -613,6 +652,8 @@ pub struct Config {
     pub mcp_servers: Vec<McpServer>,
     #[serde(default, skip_serializing_if = "DispatchSettings::is_default")]
     pub dispatch: DispatchSettings,
+    #[serde(default, skip_serializing_if = "VoiceSettings::is_default")]
+    pub voice: VoiceSettings,
     #[serde(default, skip_serializing_if = "PullRequests::is_default")]
     pub pull_requests: PullRequests,
     #[serde(default, skip_serializing_if = "Pipelines::is_default")]
@@ -760,6 +801,7 @@ impl Config {
         self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
         crate::connectors::validate(&self.connectors).map_err(ConfigError::Invalid)?;
         self.validate_dispatch().map_err(ConfigError::Invalid)?;
+        self.validate_voice().map_err(ConfigError::Invalid)?;
         if !(1..=6).contains(&self.pipelines.per_machine) {
             return invalid("pipelines.per_machine must be from 1 to 6".into());
         }
@@ -809,6 +851,46 @@ impl Config {
             ));
         }
         crate::dispatch::validate_rules(&d.rules, |m| self.machine(m).is_some())
+    }
+
+    // The key stays in secrets.yml: a raw key in voice.api_key would land in yardbell.yml and
+    // every one of its backups.
+    fn validate_voice(&self) -> Result<(), String> {
+        let v = &self.voice;
+        match v.input {
+            VoiceInput::Off => Ok(()),
+            VoiceInput::Local => {
+                if v.whisper_model.trim().is_empty() {
+                    return Err(
+                        "voice.whisper_model is needed for local voice input: the path to a ggml model file, like ~/models/ggml-base.en.bin".into(),
+                    );
+                }
+                Ok(())
+            }
+            VoiceInput::Api => {
+                let key = v.api_key.trim();
+                let names =
+                    crate::secrets::references(key).map_err(|e| format!("voice.api_key: {e}"))?;
+                if names.len() != 1 || key != crate::secrets::reference(names[0]) {
+                    return Err(
+                        "voice.api_key must be a ${secret:name} reference. Save the key under Connections, Secrets, and refer to it here by name".into(),
+                    );
+                }
+                // Plain http would show the key to the network, so it is kept to this machine,
+                // where an OpenAI-compatible server such as speaches or LocalAI may run.
+                let local = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"];
+                if !v.api_url.is_empty()
+                    && !v.api_url.starts_with("https://")
+                    && !local.iter().any(|at| v.api_url.starts_with(at))
+                {
+                    return Err(format!(
+                        "voice.api_url {:?} must start with https:// (or http://127.0.0.1 for a server on this machine), or be empty for OpenAI",
+                        v.api_url
+                    ));
+                }
+                Ok(())
+            }
+        }
     }
 
     fn validate_mcp_servers(&self) -> Result<(), String> {
@@ -1636,6 +1718,44 @@ mod tests {
         }
         let long = format!("dispatch:\n  instructions: {}\n{BASE}", "a".repeat(4001));
         assert!(load_str(&long).is_err());
+    }
+
+    #[test]
+    fn voice_settings_are_checked_and_round_trip() {
+        assert_eq!(load_str(BASE).unwrap().voice, VoiceSettings::default());
+        let local = load_str(&format!(
+            "voice:\n  input: local\n  whisper_model: ~/models/ggml-base.en.bin\n{BASE}"
+        ))
+        .unwrap();
+        assert_eq!(local.voice.input, VoiceInput::Local);
+        let saved = serde_yaml::to_string(&local).unwrap();
+        assert!(saved.contains("whisper_model"), "{saved}");
+        assert!(load_str(&format!("voice:\n  input: local\n{BASE}"))
+            .unwrap_err()
+            .to_string()
+            .contains("whisper_model"));
+        let api = load_str(&format!(
+            "voice:\n  input: api\n  api_key: ${{secret:openai}}\n{BASE}"
+        ))
+        .unwrap();
+        assert_eq!(api.voice.input, VoiceInput::Api);
+        // A raw key never lands in yardbell.yml, which is backed up on every settings change.
+        for key in ["sk-raw-key", "Bearer ${secret:openai}", ""] {
+            let err = load_str(&format!("voice:\n  input: api\n  api_key: '{key}'\n{BASE}"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("${secret:"), "{key}: {err}");
+        }
+        assert!(load_str(&format!(
+            "voice:\n  input: api\n  api_key: ${{secret:x}}\n  api_url: http://stt.lan/v1\n{BASE}"
+        ))
+        .unwrap_err()
+        .to_string()
+        .contains("https://"));
+        assert!(load_str(&format!(
+            "voice:\n  input: api\n  api_key: ${{secret:x}}\n  api_url: http://127.0.0.1:9000/v1/audio/transcriptions\n{BASE}"
+        ))
+        .is_ok());
     }
 
     #[test]
