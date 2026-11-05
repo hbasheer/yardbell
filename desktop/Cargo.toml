@@ -1,6 +1,6 @@
 [package]
 name = "yardbell-desktop"
-version = "0.10.409"
+version = "0.10.410"
 edition = "2021"
 publish = false
 

@@ -448,8 +448,13 @@ async fn voice_check(
     Json(req): Json<crate::config::VoiceSettings>,
 ) -> Result<Response, ApiError> {
     let runner = app.dispatch.runner();
-    let (ok, message) =
-        crate::voice::check(runner.as_ref(), &trimmed_voice(req), &app.secrets()?).await;
+    let (ok, message) = crate::voice::check(
+        runner.as_ref(),
+        &trimmed_voice(req),
+        &crate::voice::ModelStore::default(),
+        &app.secrets()?,
+    )
+    .await;
     Ok(Json(json!({ "ok": ok, "message": message })).into_response())
 }
 

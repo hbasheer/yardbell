@@ -893,9 +893,16 @@ async fn dispatch_transcribe(
         .unwrap_or("audio/webm")
         .to_string();
     let runner = app.dispatch.runner();
-    let text = crate::voice::transcribe(runner.as_ref(), &cfg.voice, &app.secrets()?, &body, &mime)
-        .await
-        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    let text = crate::voice::transcribe(
+        runner.as_ref(),
+        &cfg.voice,
+        &crate::voice::ModelStore::default(),
+        &app.secrets()?,
+        &body,
+        &mime,
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(json!({ "text": text })).into_response())
 }
 

@@ -309,9 +309,9 @@
       <div data-input="local" hidden>
         <div class="grid2">
           <label>Whisper command <input type="text" name="whisper_command" placeholder="whisper-cli" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-          <label>Model file <input type="text" name="whisper_model" placeholder="~/models/ggml-base.en.bin" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <label>Model <input type="text" name="whisper_model" placeholder="small" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
         </div>
-        <p class="help dispatch-help">Needs <code>ffmpeg</code> and <a href="https://github.com/ggml-org/whisper.cpp" target="_blank" rel="noopener">whisper.cpp</a> on this machine. Its <code>models/download-ggml-model.sh</code> fetches a model; <code>base</code> is quick, <code>small</code> or <code>medium</code> hears more through typos and accents.</p>
+        <p class="help dispatch-help">Needs <code>ffmpeg</code> and <a href="https://github.com/ggml-org/whisper.cpp" target="_blank" rel="noopener">whisper.cpp</a> on this machine. The model is a name like <code>base</code> (quick), <code>small</code> or <code>medium</code> (hears more through accents), downloaded automatically on the first dictation, or the path to a ggml file of your own.</p>
       </div>
       <div data-input="api" hidden>
         <div class="grid2">
