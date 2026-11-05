@@ -36,6 +36,7 @@ function wavCapture(stream) {
   mute.gain.value = 0;
   const parts = [];
   grab.onaudioprocess = (e) => parts.push(new Float32Array(e.inputBuffer.getChannelData(0)));
+  if (ctx.state !== "running") ctx.resume().catch(() => {});
   source.connect(grab);
   grab.connect(mute);
   mute.connect(ctx.destination);
