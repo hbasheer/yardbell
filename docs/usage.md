@@ -401,8 +401,9 @@ button sits in the message box: tap to record and tap again to stop, or hold it 
 is held. What you said is typed into the box for you to check and send. The recording is
 transcribed on the machine Yardbell runs on with [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
 or by the speech-to-text API the same section names, see
-[`voice`](configuration.md#voice-optional). Browsers only open the microphone on a secure page, so
-dictate over `https://` or on the machine itself. And Dispatch can talk back: the speaker button at
+[`voice`](configuration.md#voice-optional). In the Yardbell apps the microphone just works; a
+browser only opens it on a secure page, so there dictate over `https://` or on the machine
+itself. And Dispatch can talk back: the speaker button at
 the top reads replies, errors and session changes ("hp-eng-1234 is waiting for you") aloud with
 this device's own voice. It is off by default, speaks one thing at a time, and pressing it again
 mutes it at once. The same switch is under Settings, Voice, and is saved per device.
