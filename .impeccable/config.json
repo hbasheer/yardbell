@@ -134,6 +134,24 @@
         ],
         "createdAt": "2026-10-20T22:04:00.836Z",
         "reason": "The settings view's back arrow sits beside the Settings heading in a flex row, not above it; checked in the rendered panel"
+      },
+      {
+        "rule": "pulsing-dot",
+        "value": "*",
+        "files": [
+          "assets/dispatch.html"
+        ],
+        "createdAt": "2026-11-05T00:02:09.715Z",
+        "reason": "model decided: the mic button pulses only while a live recording or transcription is running, a domain-appropriate recording indicator, and the pulse keyframe is the project's own"
+      },
+      {
+        "rule": "cramped-padding",
+        "value": "*",
+        "files": [
+          "assets/dispatch.html"
+        ],
+        "createdAt": "2026-11-05T00:02:09.727Z",
+        "reason": "model decided: flagged compose-tool buttons are icon-only with no text, and their 5x7px inset on a colored background is the file's pre-existing hover pattern for every compose tool"
       }
     ]
   }
