@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.410] - 2026-11-05
+
 - **The dictation model installs itself.** `voice.whisper_model` now takes a Whisper model name such as `small` (the
   default when empty) or `base.en`: the server downloads it once into `~/.local/share/yardbell/models` and keeps it
   there, across upgrades and worktree cleanups. A path to a ggml file of your own still works and is never downloaded.
