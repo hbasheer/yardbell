@@ -1276,6 +1276,8 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .shot-view-body:not(.actual) { overflow: hidden; }
 .shot-view-body img { display: block; max-width: calc(100vw - 34px); max-height: calc(100vh - 92px); width: auto; height: auto; cursor: zoom-in; }
 .shot-view-body.actual img { max-width: none; max-height: none; cursor: zoom-out; }
+.file-view-frame { display: block; width: min(900px, calc(100vw - 34px)); height: calc(100vh - 92px); border: 0; background: #fff; }
+.file-view-text { margin: 0; padding: 12px 16px; max-width: min(900px, calc(100vw - 34px)); max-height: calc(100vh - 92px); overflow: auto; font: 12px/1.5 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; }
 @media (prefers-reduced-motion: reduce) { .review-diff-toggle .chevron, .diff-file-head .chevron, .finding-group-head .chevron, .pull-check-head .chevron { transition: none; } }
 .session-card.answered { border-left-color: var(--line-strong); }
 .session-card-answer { align-self: center; color: var(--muted); font-size: 12px; }
@@ -1744,6 +1746,11 @@ body.resizing iframe { pointer-events: none; }
 .ws-panes { position: relative; flex: 1; min-height: 0; background: var(--side); }
 .ws-panes.dragging { cursor: col-resize; user-select: none; }
 .ws-panes.dragging iframe { pointer-events: none; }
+.ws-panes.many .ws-pane-head { cursor: grab; }
+.ws-panes.moving, .ws-panes.moving .ws-pane-head { cursor: grabbing; user-select: none; }
+.ws-panes.moving iframe { pointer-events: none; }
+.ws-pane.ws-move-src { opacity: 0.65; }
+.ws-pane.ws-move-into::after { border-color: var(--accent); box-shadow: inset 0 0 0 2px color-mix(in srgb, var(--accent) 35%, transparent); }
 .ws-pane { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--term-bg); background-clip: padding-box; color: var(--term-ink); border: 3px solid var(--side); border-radius: 12px; }
 .ws-pane::after { content: ""; position: absolute; inset: 0; border: 1px solid var(--term-line); border-radius: 9px; pointer-events: none; }
 .ws-pane.focused::after { border-color: color-mix(in srgb, var(--accent) 75%, transparent); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--accent) 25%, transparent); }

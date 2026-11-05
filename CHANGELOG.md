@@ -5,7 +5,7 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
-## [0.10.405] - 2026-11-05
+## [0.10.407] - 2026-11-05
 
 - **Talk to Dispatch.** A microphone button in Dispatch's message box turns speech into text: tap to record, tap again
   or hold and release to stop, and what you said is typed into the box. Transcription runs on your machine with
@@ -14,6 +14,18 @@ and the project uses [Semantic Versioning](https://semver.org).
 - **Dispatch can talk back.** A speaker toggle on the Dispatch page reads replies, errors and session changes aloud
   with the device's own voice, one thing at a time. Off by default, saved per device, and pressing it again mutes it
   at once.
+
+## [0.10.406] - 2026-11-03
+
+- **Workspace panes balance into a grid.** A tab lays its panes out evenly: four make two by two, not a stack of
+  full-width rows, and the grid is rebuilt whenever a pane is added or removed. Drag a pane by its title bar onto
+  another to swap their places, or pick **Swap with** from the pane's **⋯** menu. A tab's right-click menu now says
+  **Move into** instead of two Split into entries. Hand-made splits keep their shape until the pane count changes.
+
+## [0.10.405] - 2026-11-03
+
+- **Opening a file in Dispatch no longer takes over the desktop app.** A sent image, PDF or text file now opens in a
+  viewer over the conversation, which Close, Escape or a click outside it closes.
 
 ## [0.10.404] - 2026-11-02
 

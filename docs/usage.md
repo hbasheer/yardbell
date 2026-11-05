@@ -132,16 +132,19 @@ one, named like the first with `-2` after it.
 The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
 machine, then folder (a workspace), then the sessions in it, each with its state. A session with a pull request shows its number, colored by its state, and
 the full state on hover. Click a workspace
-to switch to it and a session to open it in the focused pane. Hover a session for its **⋯** menu,
-which opens it to the right of or below the focused pane, or in a new tab. Each workspace has tabs: **+** opens the New
+to switch to it and a session to open it in the focused pane. Each workspace has tabs: **+** opens the New
 session dialog in that folder and the new session in a tab of its own, and closing a tab with
 sessions in it asks whether to stop them or keep them running. Double-click a tab to rename it, or
-right-click it for Rename tab and Close tab. When the tabs do not fit, scroll the row with the mouse
+right-click it to rename or close it, or to move its panes into another tab. When the tabs do not fit, scroll the row with the mouse
 wheel, a trackpad or a swipe, or click the arrow button at its end for a list of every tab. The tab
 you switch to always scrolls into view, and a tab's tooltip shows its full name.
-An empty pane offers to start an
-agent there or to open one of the workspace's sessions. Panes split right or down and resize by
-dragging the border between them; **Keyboard shortcuts** in the sidebar lists the keys. On a phone
+A tab lays its panes out as an even grid: two side by side, three as a pair over a full-width
+pane, four as two by two. Moving panes in or closing one lays the grid out again. To rearrange,
+drag a pane by its title bar onto another pane and they swap places, or pick **Swap with** from
+the pane's **⋯** menu. An empty pane offers to start an
+agent there or to open one of the workspace's sessions. Panes also split right or down and resize by
+dragging the border between them; the split's shape lasts until a pane is added or removed, when
+the grid takes over again. **Keyboard shortcuts** in the sidebar lists the keys. On a phone
 the sidebar comes first and a session opens full screen.
 
 **Dispatch** sits in the Workspace too, as a panel between the sidebar and the terminals. Sessions

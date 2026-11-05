@@ -994,7 +994,7 @@ function shotUrl(index, file) {
   return `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/evidence/${encodeURIComponent(file)}`;
 }
 
-function viewer() {
+export function viewer() {
   let dialog = document.getElementById("shot-view");
   if (!dialog) {
     dialog = document.createElement("dialog");
