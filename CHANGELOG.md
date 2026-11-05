@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.405] - 2026-11-05
+
 - **Talk to Dispatch.** A microphone button in Dispatch's message box turns speech into text: tap to record, tap again
   or hold and release to stop, and what you said is typed into the box. Transcription runs on your machine with
   whisper.cpp, or through an OpenAI-compatible API whose key stays a `${secret:name}`. Set up under **Settings, Voice**,
