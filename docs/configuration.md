@@ -447,7 +447,7 @@ without saving.
 voice:
   input: local                    # off (the default), local or api
   whisper_command: whisper-cli    # the whisper.cpp binary; empty means whisper-cli on PATH
-  whisper_model: ~/models/ggml-base.en.bin   # required with input: local
+  whisper_model: small            # a model name, or a path to a ggml file; empty means small
   api_url: https://api.openai.com/v1/audio/transcriptions  # with input: api; empty means OpenAI
   api_model: whisper-1            # empty means whisper-1
   api_key: ${secret:openai}       # with input: api; must be a ${secret:name} reference
@@ -456,7 +456,10 @@ voice:
 
 `local` transcribes on the machine Yardbell runs on, with
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and `ffmpeg`, so the recording never leaves
-it. `api` sends the recording to an OpenAI-compatible transcription endpoint; `api_key` must be a
+it. `whisper_model` is a Whisper model name such as `tiny`, `base.en`, `small` or `large-v3-turbo`:
+the server downloads it once into `~/.local/share/yardbell/models` on the first dictation and keeps
+it there, across upgrades. A path to a `ggml-*.bin` file you manage yourself also works, and such a
+file is never downloaded. Empty means `small`, which hears most languages well. `api` sends the recording to an OpenAI-compatible transcription endpoint; `api_key` must be a
 `${secret:name}` reference into [secrets](#secrets), never the key itself, and `api_url` must use
 https, or http only to `127.0.0.1` for a server such as speaches or LocalAI on the same machine.
 Browsers only open the microphone on a secure page, so in a browser dictation works on `https://`

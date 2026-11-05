@@ -7,13 +7,139 @@ use std::time::Duration;
 
 pub const AUDIO_MAX: usize = 25 * 1024 * 1024;
 pub const DEFAULT_WHISPER_COMMAND: &str = "whisper-cli";
+pub const DEFAULT_MODEL: &str = "small";
+const MODELS_DIR: &str = "~/.local/share/yardbell/models";
+const MODEL_URL_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 pub const DEFAULT_API_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 pub const DEFAULT_API_MODEL: &str = "whisper-1";
 const CONVERT_TIMEOUT: Duration = Duration::from_secs(60);
+const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
+const GGML_MAGIC: &[u8] = b"lmgg";
 const WHISPER_TIMEOUT: Duration = Duration::from_secs(300);
 const API_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub const OFF_MESSAGE: &str = "Voice input is off. Turn it on under Settings, Voice.";
+
+pub struct ModelStore {
+    pub dir: PathBuf,
+    pub url_base: String,
+}
+
+impl Default for ModelStore {
+    fn default() -> ModelStore {
+        ModelStore {
+            dir: expand_tilde(MODELS_DIR),
+            url_base: MODEL_URL_BASE.to_string(),
+        }
+    }
+}
+
+enum Model {
+    File(PathBuf),
+    Name(String),
+}
+
+fn model(setting: &str) -> Result<Model, String> {
+    let given = setting.trim();
+    if given.contains('/') || given.starts_with('~') {
+        return Ok(Model::File(expand_tilde(given)));
+    }
+    let name = given.strip_prefix("ggml-").unwrap_or(given);
+    let name = name.strip_suffix(".bin").unwrap_or(name);
+    if name.is_empty() {
+        return Ok(Model::Name(DEFAULT_MODEL.to_string()));
+    }
+    if !name
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+    {
+        return Err(format!(
+            "voice.whisper_model {given:?} is neither a Whisper model name like {DEFAULT_MODEL} nor a path to a ggml file"
+        ));
+    }
+    Ok(Model::Name(name.to_string()))
+}
+
+impl ModelStore {
+    pub fn resolve(&self, setting: &str) -> Result<PathBuf, String> {
+        Ok(match model(setting)? {
+            Model::File(path) => path,
+            Model::Name(name) => self.dir.join(format!("ggml-{name}.bin")),
+        })
+    }
+
+    async fn ensure(&self, setting: &str) -> Result<PathBuf, String> {
+        let name = match model(setting)? {
+            Model::File(path) => return Ok(path),
+            Model::Name(name) => name,
+        };
+        let path = self.dir.join(format!("ggml-{name}.bin"));
+        if path.is_file() {
+            return Ok(path);
+        }
+        let part = self.dir.join(format!(
+            ".ggml-{name}.bin.part-{}-{:08x}",
+            std::process::id(),
+            rand::thread_rng().gen::<u32>()
+        ));
+        let fetched = self.fetch(&name, &part).await;
+        match fetched {
+            Ok(()) => std::fs::rename(&part, &path).map_err(|e| {
+                let _ = std::fs::remove_file(&part);
+                format!("the downloaded model cannot be moved into place: {e}")
+            })?,
+            Err(e) => {
+                let _ = std::fs::remove_file(&part);
+                return Err(e);
+            }
+        }
+        Ok(path)
+    }
+
+    async fn fetch(&self, name: &str, into: &Path) -> Result<(), String> {
+        let url = format!("{}/ggml-{name}.bin", self.url_base);
+        std::fs::create_dir_all(&self.dir)
+            .map_err(|e| format!("cannot make the models folder {}: {e}", self.dir.display()))?;
+        let client = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(30))
+            .timeout(DOWNLOAD_TIMEOUT)
+            .build()
+            .map_err(|e| e.to_string())?;
+        let mut res = client
+            .get(&url)
+            .send()
+            .await
+            .map_err(|e| format!("the {name} model could not be downloaded from {url}: {e}"))?;
+        if !res.status().is_success() {
+            return Err(format!(
+                "the {name} model could not be downloaded from {url}: the server said {}",
+                res.status()
+            ));
+        }
+        let mut file = std::fs::File::create(into)
+            .map_err(|e| format!("cannot write the model to {}: {e}", into.display()))?;
+        let mut head: Vec<u8> = Vec::with_capacity(GGML_MAGIC.len());
+        use std::io::Write;
+        while let Some(chunk) = res
+            .chunk()
+            .await
+            .map_err(|e| format!("the {name} model download from {url} broke off: {e}"))?
+        {
+            if head.len() < GGML_MAGIC.len() {
+                head.extend_from_slice(&chunk[..chunk.len().min(GGML_MAGIC.len() - head.len())]);
+                if head.len() == GGML_MAGIC.len() && head != GGML_MAGIC {
+                    return Err(format!("what {url} sends is not a ggml model file"));
+                }
+            }
+            file.write_all(&chunk)
+                .map_err(|e| format!("cannot write the model to {}: {e}", into.display()))?;
+        }
+        if head.len() < GGML_MAGIC.len() {
+            return Err(format!("what {url} sends is not a ggml model file"));
+        }
+        Ok(())
+    }
+}
 
 fn extension(mime: &str) -> &'static str {
     match mime.split(';').next().unwrap_or("").trim() {
@@ -86,6 +212,7 @@ impl Drop for Scratch {
 pub async fn transcribe(
     runner: &dyn Runner,
     voice: &VoiceSettings,
+    store: &ModelStore,
     secrets: &Secrets,
     audio: &[u8],
     mime: &str,
@@ -95,7 +222,7 @@ pub async fn transcribe(
     }
     match voice.input {
         VoiceInput::Off => Err(OFF_MESSAGE.into()),
-        VoiceInput::Local => local(runner, voice, audio, mime).await,
+        VoiceInput::Local => local(runner, voice, store, audio, mime).await,
         VoiceInput::Api => api(voice, secrets, audio, mime).await,
     }
 }
@@ -103,6 +230,7 @@ pub async fn transcribe(
 async fn local(
     runner: &dyn Runner,
     voice: &VoiceSettings,
+    store: &ModelStore,
     audio: &[u8],
     mime: &str,
 ) -> Result<String, String> {
@@ -140,12 +268,11 @@ async fn local(
         "" => DEFAULT_WHISPER_COMMAND,
         given => given,
     };
+    let model = store.ensure(&voice.whisper_model).await?;
     let mut argv = vec![
         command.to_string(),
         "-m".into(),
-        expand_tilde(voice.whisper_model.trim())
-            .display()
-            .to_string(),
+        model.display().to_string(),
         "-f".into(),
         path(&wav),
         "-nt".into(),
@@ -229,6 +356,7 @@ async fn api(
 pub async fn check(
     runner: &dyn Runner,
     voice: &VoiceSettings,
+    store: &ModelStore,
     secrets: &Secrets,
 ) -> (bool, String) {
     match voice.input {
@@ -251,14 +379,31 @@ pub async fn check(
             if found.status == Some(127) {
                 problems.push(format!("{command} was not found on this machine"));
             }
-            let model = expand_tilde(voice.whisper_model.trim());
-            if !model.is_file() {
-                problems.push(format!("there is no model file at {}", model.display()));
+            let mut downloads = None;
+            match model(&voice.whisper_model) {
+                Err(problem) => problems.push(problem),
+                Ok(Model::File(path)) if !path.is_file() => {
+                    problems.push(format!("there is no model file at {}", path.display()))
+                }
+                Ok(Model::Name(name)) => {
+                    if !store.dir.join(format!("ggml-{name}.bin")).is_file() {
+                        downloads = Some(name);
+                    }
+                }
+                Ok(Model::File(_)) => {}
             }
-            if problems.is_empty() {
-                (true, "ffmpeg, the Whisper command and the model are all in place.".into())
-            } else {
+            if !problems.is_empty() {
                 (false, problems.join(". "))
+            } else if let Some(name) = downloads {
+                (
+                    true,
+                    format!(
+                        "ffmpeg and the Whisper command are in place. The {name} model is downloaded to {} on the first dictation.",
+                        store.dir.display()
+                    ),
+                )
+            } else {
+                (true, "ffmpeg, the Whisper command and the model are all in place.".into())
             }
         }
         VoiceInput::Api => match secrets.resolve(voice.api_key.trim()) {
@@ -297,6 +442,7 @@ mod tests {
         let err = transcribe(
             &fake,
             &VoiceSettings::default(),
+            &ModelStore::default(),
             &secrets(),
             b"x",
             "audio/webm",
@@ -314,9 +460,16 @@ mod tests {
             "whisper-cli",
             Output::ok_with("  Fix the login test.\n[BLANK_AUDIO]\n  Then run it.  \n"),
         );
-        let text = transcribe(&fake, &local_settings(), &secrets(), b"x", "audio/webm")
-            .await
-            .unwrap();
+        let text = transcribe(
+            &fake,
+            &local_settings(),
+            &ModelStore::default(),
+            &secrets(),
+            b"x",
+            "audio/webm",
+        )
+        .await
+        .unwrap();
         assert_eq!(text, "Fix the login test. Then run it.");
         let calls = fake.calls();
         assert_eq!(calls.len(), 2);
@@ -341,9 +494,16 @@ mod tests {
             language: "fi".into(),
             ..local_settings()
         };
-        let text = transcribe(&fake, &voice, &secrets(), b"x", "audio/ogg")
-            .await
-            .unwrap();
+        let text = transcribe(
+            &fake,
+            &voice,
+            &ModelStore::default(),
+            &secrets(),
+            b"x",
+            "audio/ogg",
+        )
+        .await
+        .unwrap();
         assert_eq!(text, "hei");
         let calls = fake.calls();
         assert!(calls[1].windows(2).any(|w| w == ["-l", "fi"]));
@@ -353,9 +513,16 @@ mod tests {
     async fn a_failing_tool_reports_its_last_line() {
         let fake = FakeRunner::default();
         fake.stub("ffmpeg", Output::failed(1, "something\nInvalid data found"));
-        let err = transcribe(&fake, &local_settings(), &secrets(), b"x", "audio/webm")
-            .await
-            .unwrap_err();
+        let err = transcribe(
+            &fake,
+            &local_settings(),
+            &ModelStore::default(),
+            &secrets(),
+            b"x",
+            "audio/webm",
+        )
+        .await
+        .unwrap_err();
         assert_eq!(
             err,
             "ffmpeg could not read the recording: Invalid data found"
@@ -366,9 +533,16 @@ mod tests {
             "whisper-cli",
             Output::failed(127, "whisper-cli: No such file or directory"),
         );
-        let err = transcribe(&fake, &local_settings(), &secrets(), b"x", "audio/webm")
-            .await
-            .unwrap_err();
+        let err = transcribe(
+            &fake,
+            &local_settings(),
+            &ModelStore::default(),
+            &secrets(),
+            b"x",
+            "audio/webm",
+        )
+        .await
+        .unwrap_err();
         assert!(err.contains("whisper-cli could not transcribe"), "{err}");
     }
 
@@ -412,6 +586,7 @@ mod tests {
         let text = transcribe(
             &FakeRunner::default(),
             &voice,
+            &ModelStore::default(),
             &secrets(),
             b"RIFFdata",
             "audio/webm;codecs=opus",
@@ -434,6 +609,7 @@ mod tests {
         let err = transcribe(
             &FakeRunner::default(),
             &voice,
+            &ModelStore::default(),
             &secrets(),
             b"x",
             "audio/webm",
@@ -448,7 +624,8 @@ mod tests {
         let fake = FakeRunner::default();
         fake.stub("ffmpeg -version", Output::ok_with("ffmpeg version 6"));
         fake.stub("whisper-cli --help", Output::failed(127, "not found"));
-        let (ok, message) = check(&fake, &local_settings(), &secrets()).await;
+        let (ok, message) =
+            check(&fake, &local_settings(), &ModelStore::default(), &secrets()).await;
         assert!(!ok);
         assert!(message.contains("whisper-cli was not found"), "{message}");
         assert!(message.contains("no model file"), "{message}");
@@ -462,14 +639,215 @@ mod tests {
             api_key: "${secret:stt}".into(),
             ..VoiceSettings::default()
         };
-        let (ok, _) = check(&FakeRunner::default(), &voice, &secrets()).await;
+        let (ok, _) = check(
+            &FakeRunner::default(),
+            &voice,
+            &ModelStore::default(),
+            &secrets(),
+        )
+        .await;
         assert!(ok);
         let missing = VoiceSettings {
             api_key: "${secret:gone}".into(),
             ..voice
         };
-        let (ok, message) = check(&FakeRunner::default(), &missing, &secrets()).await;
+        let (ok, message) = check(
+            &FakeRunner::default(),
+            &missing,
+            &ModelStore::default(),
+            &secrets(),
+        )
+        .await;
         assert!(!ok);
         assert!(message.contains("gone"), "{message}");
+    }
+
+    fn store(dir: &Path, url_base: &str) -> ModelStore {
+        ModelStore {
+            dir: dir.to_path_buf(),
+            url_base: url_base.to_string(),
+        }
+    }
+
+    // Serves url_base; the closure answers GET /ggml-<name>.bin and counts the hits.
+    async fn model_server(
+        body: impl Fn() -> axum::response::Response + Clone + Send + Sync + 'static,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicU32>) {
+        let hits = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+        let seen = hits.clone();
+        let app = axum::Router::new().route(
+            "/{file}",
+            axum::routing::get(move || {
+                let seen = seen.clone();
+                let body = body.clone();
+                async move {
+                    seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                    body()
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (format!("http://127.0.0.1:{port}"), hits)
+    }
+
+    fn weights() -> Vec<u8> {
+        let mut bytes = b"lmgg".to_vec();
+        bytes.extend_from_slice(&[7; 64]);
+        bytes
+    }
+
+    #[test]
+    fn the_model_setting_is_a_name_or_a_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let at = store(dir.path(), "http://unused");
+        let resolved = |setting: &str| at.resolve(setting).unwrap();
+        assert_eq!(resolved(""), dir.path().join("ggml-small.bin"));
+        assert_eq!(resolved("small"), dir.path().join("ggml-small.bin"));
+        assert_eq!(
+            resolved("ggml-small.bin"),
+            dir.path().join("ggml-small.bin")
+        );
+        assert_eq!(resolved("base.en"), dir.path().join("ggml-base.en.bin"));
+        assert_eq!(
+            resolved("large-v3-turbo"),
+            dir.path().join("ggml-large-v3-turbo.bin")
+        );
+        assert_eq!(
+            resolved("/models/own.bin"),
+            PathBuf::from("/models/own.bin")
+        );
+        let home = std::env::var("HOME").unwrap();
+        assert_eq!(
+            resolved("~/models/own.bin"),
+            Path::new(&home).join("models/own.bin")
+        );
+        let err = at.resolve("so wrong").unwrap_err();
+        assert!(err.contains("so wrong"), "{err}");
+    }
+
+    #[tokio::test]
+    async fn a_named_model_is_downloaded_once_and_reused() {
+        let (url, hits) = model_server(|| {
+            use axum::response::IntoResponse;
+            weights().into_response()
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let at = store(dir.path(), &url);
+        let voice = VoiceSettings {
+            whisper_model: "small".into(),
+            ..local_settings()
+        };
+        for _ in 0..2 {
+            let fake = FakeRunner::default();
+            fake.stub("ffmpeg", Output::ok_with(""));
+            fake.stub("whisper-cli", Output::ok_with("hello"));
+            let text = transcribe(&fake, &voice, &at, &secrets(), b"x", "audio/webm")
+                .await
+                .unwrap();
+            assert_eq!(text, "hello");
+            let model = dir.path().join("ggml-small.bin").display().to_string();
+            assert!(
+                fake.calls()[1]
+                    .windows(2)
+                    .any(|w| w == ["-m".to_string(), model.clone()]),
+                "{:?}",
+                fake.calls()[1]
+            );
+        }
+        assert_eq!(hits.load(std::sync::atomic::Ordering::SeqCst), 1);
+        assert_eq!(
+            std::fs::read(dir.path().join("ggml-small.bin")).unwrap(),
+            weights()
+        );
+    }
+
+    #[tokio::test]
+    async fn a_failed_download_says_so_and_leaves_nothing_behind() {
+        let (url, _) = model_server(|| {
+            use axum::response::IntoResponse;
+            (axum::http::StatusCode::NOT_FOUND, "no such model").into_response()
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeRunner::default();
+        fake.stub("ffmpeg", Output::ok_with(""));
+        let voice = VoiceSettings {
+            whisper_model: "small".into(),
+            ..local_settings()
+        };
+        let err = transcribe(
+            &fake,
+            &voice,
+            &store(dir.path(), &url),
+            &secrets(),
+            b"x",
+            "audio/webm",
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("small"), "{err}");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn a_download_that_is_not_a_model_is_refused() {
+        let (url, _) = model_server(|| {
+            use axum::response::IntoResponse;
+            "<html>a login page</html>".into_response()
+        })
+        .await;
+        let dir = tempfile::tempdir().unwrap();
+        let fake = FakeRunner::default();
+        fake.stub("ffmpeg", Output::ok_with(""));
+        let voice = VoiceSettings {
+            whisper_model: "small".into(),
+            ..local_settings()
+        };
+        let err = transcribe(
+            &fake,
+            &voice,
+            &store(dir.path(), &url),
+            &secrets(),
+            b"x",
+            "audio/webm",
+        )
+        .await
+        .unwrap_err();
+        assert!(err.contains("not a ggml model"), "{err}");
+        assert_eq!(std::fs::read_dir(dir.path()).unwrap().count(), 0);
+    }
+
+    #[tokio::test]
+    async fn check_says_a_named_model_downloads_on_first_use() {
+        let fake = FakeRunner::default();
+        fake.stub("ffmpeg -version", Output::ok_with("ffmpeg version 6"));
+        fake.stub("whisper-cli --help", Output::ok_with("usage"));
+        let dir = tempfile::tempdir().unwrap();
+        let voice = VoiceSettings {
+            whisper_model: String::new(),
+            ..local_settings()
+        };
+        let (ok, message) = check(
+            &fake,
+            &voice,
+            &store(dir.path(), "http://unused"),
+            &secrets(),
+        )
+        .await;
+        assert!(ok, "{message}");
+        assert!(message.contains("first dictation"), "{message}");
+        std::fs::write(dir.path().join("ggml-small.bin"), weights()).unwrap();
+        let (ok, message) = check(
+            &fake,
+            &voice,
+            &store(dir.path(), "http://unused"),
+            &secrets(),
+        )
+        .await;
+        assert!(ok, "{message}");
+        assert!(message.contains("all in place"), "{message}");
     }
 }

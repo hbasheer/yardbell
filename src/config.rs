@@ -859,14 +859,9 @@ impl Config {
         let v = &self.voice;
         match v.input {
             VoiceInput::Off => Ok(()),
-            VoiceInput::Local => {
-                if v.whisper_model.trim().is_empty() {
-                    return Err(
-                        "voice.whisper_model is needed for local voice input: the path to a ggml model file, like ~/models/ggml-base.en.bin".into(),
-                    );
-                }
-                Ok(())
-            }
+            VoiceInput::Local => crate::voice::ModelStore::default()
+                .resolve(&v.whisper_model)
+                .map(|_| ()),
             VoiceInput::Api => {
                 let key = v.api_key.trim();
                 let names =
@@ -1730,10 +1725,18 @@ mod tests {
         assert_eq!(local.voice.input, VoiceInput::Local);
         let saved = serde_yaml::to_string(&local).unwrap();
         assert!(saved.contains("whisper_model"), "{saved}");
-        assert!(load_str(&format!("voice:\n  input: local\n{BASE}"))
-            .unwrap_err()
-            .to_string()
-            .contains("whisper_model"));
+        let bare = load_str(&format!("voice:\n  input: local\n{BASE}")).unwrap();
+        assert_eq!(
+            bare.voice.input,
+            VoiceInput::Local,
+            "the model has a default"
+        );
+        assert!(load_str(&format!(
+            "voice:\n  input: local\n  whisper_model: so wrong\n{BASE}"
+        ))
+        .unwrap_err()
+        .to_string()
+        .contains("so wrong"));
         let api = load_str(&format!(
             "voice:\n  input: api\n  api_key: ${{secret:openai}}\n{BASE}"
         ))
