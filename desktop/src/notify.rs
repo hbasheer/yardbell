@@ -31,7 +31,7 @@ pub fn note_for(event: &Event, view: &StateView) -> Note {
 }
 
 fn target_for(event: &Event) -> Target {
-    let Event::AgentIdle { machine, tmux, .. } = event else {
+    let (Event::AgentIdle { machine, tmux, .. } | Event::Pull { machine, tmux, .. }) = event else {
         return Target::Main;
     };
     match tmux.as_deref().filter(|tmux| !tmux.is_empty()) {
@@ -49,6 +49,7 @@ pub fn allowed(event: &Event, s: &Switches) -> bool {
         Event::SessionEnded { .. } => s.session_ended,
         Event::MachineDown { .. } | Event::MachineUp { .. } => s.machine,
         Event::MemoryHigh { .. } => s.memory,
+        Event::Pull { .. } => s.pull_requests,
     }
 }
 
@@ -155,6 +156,8 @@ mod tests {
     use super::*;
     use notify_rust::CloseReason;
     use yardbell::config::HostTerminal;
+    use yardbell::events::PullChange;
+    use yardbell::pulls::{Ci, Mergeable, PullView};
     use yardbell::state::AgentView;
 
     fn view() -> StateView {
@@ -220,6 +223,45 @@ mod tests {
             machine: "devbox".into(),
             percent: 96,
         }
+    }
+
+    fn pull() -> Event {
+        Event::Pull {
+            machine: "devbox".into(),
+            session_id: "s1".into(),
+            tmux: Some("acme-api".into()),
+            folder: "acme/api".into(),
+            change: PullChange::Merged,
+            pull: PullView {
+                forge: "github".into(),
+                number: 12,
+                url: "https://github.com/acme/api/pull/12".into(),
+                title: "Fix login".into(),
+                state: "merged".into(),
+                draft: false,
+                review: String::new(),
+                ci: Ci::Passing,
+                failed: vec![],
+                head: "a".into(),
+                base: "main".into(),
+                mergeable: Mergeable::Clean,
+            },
+        }
+    }
+
+    #[test]
+    fn a_pull_request_note_opens_its_session() {
+        assert_eq!(
+            note_for(&pull(), &view()),
+            note(
+                "acme/api: #12 was merged",
+                "Fix login, on devbox",
+                Target::Terminal {
+                    machine: "devbox".into(),
+                    tmux: "acme-api".into(),
+                },
+            )
+        );
     }
 
     fn note(title: &str, body: &str, open: Target) -> Note {
@@ -291,44 +333,52 @@ mod tests {
             down(None),
             up(),
             memory(),
+            pull(),
         ];
         let on = Switches::default();
         let cases = [
-            (on, [true, true, true, true, true]),
+            (on, [true, true, true, true, true, true]),
             (
                 Switches {
                     agent_idle: false,
                     ..on
                 },
-                [false, true, true, true, true],
+                [false, true, true, true, true, true],
             ),
             (
                 Switches {
                     session_ended: false,
                     ..on
                 },
-                [true, false, true, true, true],
+                [true, false, true, true, true, true],
             ),
             (
                 Switches {
                     machine: false,
                     ..on
                 },
-                [true, true, false, false, true],
+                [true, true, false, false, true, true],
             ),
             (
                 Switches {
                     memory: false,
                     ..on
                 },
-                [true, true, true, true, false],
+                [true, true, true, true, false, true],
+            ),
+            (
+                Switches {
+                    pull_requests: false,
+                    ..on
+                },
+                [true, true, true, true, true, false],
             ),
             (
                 Switches {
                     autostart: true,
                     ..on
                 },
-                [true, true, true, true, true],
+                [true, true, true, true, true, true],
             ),
         ];
         for (switches, expected) in cases {

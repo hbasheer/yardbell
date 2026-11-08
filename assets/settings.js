@@ -78,9 +78,14 @@ function clock(stamp) {
   return new Date(stamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+const PHONE_SWITCHES = [
+  "agent_waiting", "session_ended", "machines", "memory", "pipeline_waiting", "pipeline_finished", "proposals",
+  "pull_ci_failed", "pull_conflicts", "pull_ready", "pull_merged", "pull_closed",
+];
+
 function renderPhone(p) {
   const f = $("phone-form");
-  for (const name of ["agent_waiting", "session_ended", "machines", "memory", "pipeline_waiting", "pipeline_finished", "proposals"]) f.elements[name].checked = p[name];
+  for (const name of PHONE_SWITCHES) f.elements[name].checked = p[name];
   f.elements.wait_minutes.value = p.wait_minutes;
   const status = $("phone-status");
   status.textContent = p.app_connected
@@ -1690,16 +1695,8 @@ $("pr-form").addEventListener("submit", async (e) => {
 $("phone-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
-  const body = {
-    wait_minutes: Number(f.elements.wait_minutes.value.trim()),
-    agent_waiting: f.elements.agent_waiting.checked,
-    session_ended: f.elements.session_ended.checked,
-    machines: f.elements.machines.checked,
-    memory: f.elements.memory.checked,
-    pipeline_waiting: f.elements.pipeline_waiting.checked,
-    pipeline_finished: f.elements.pipeline_finished.checked,
-    proposals: f.elements.proposals.checked,
-  };
+  const body = { wait_minutes: Number(f.elements.wait_minutes.value.trim()) };
+  for (const name of PHONE_SWITCHES) body[name] = f.elements[name].checked;
   phoneBusy(true);
   try {
     await api("POST", "/api/settings/phone", body);

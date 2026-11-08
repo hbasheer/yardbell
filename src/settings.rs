@@ -92,6 +92,16 @@ pub struct PhoneEdit {
     pub pipeline_finished: bool,
     #[serde(default = "on")]
     pub proposals: bool,
+    #[serde(default = "on")]
+    pub pull_ci_failed: bool,
+    #[serde(default = "on")]
+    pub pull_conflicts: bool,
+    #[serde(default = "on")]
+    pub pull_ready: bool,
+    #[serde(default = "on")]
+    pub pull_merged: bool,
+    #[serde(default = "on")]
+    pub pull_closed: bool,
 }
 
 fn on() -> bool {
@@ -583,6 +593,11 @@ impl Settings {
         phone.pipeline_waiting = edit.pipeline_waiting;
         phone.pipeline_finished = edit.pipeline_finished;
         phone.proposals = edit.proposals;
+        phone.pull_ci_failed = edit.pull_ci_failed;
+        phone.pull_conflicts = edit.pull_conflicts;
+        phone.pull_ready = edit.pull_ready;
+        phone.pull_merged = edit.pull_merged;
+        phone.pull_closed = edit.pull_closed;
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
         self.save(&cfg, backup, None)

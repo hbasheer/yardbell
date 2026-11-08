@@ -550,6 +550,7 @@ mod tests {
             session_ended: true,
             machine: true,
             memory: false,
+            pull_requests: true,
             autostart: true,
         };
         let listed: Vec<(&str, &str, bool)> = switch_views(&switches)
@@ -563,6 +564,7 @@ mod tests {
                 ("notify-session-ended", "Session ended", true),
                 ("notify-machine", "Machine down or back", true),
                 ("notify-memory", "Memory almost full", false),
+                ("notify-pulls", "Pull requests", true),
                 ("autostart", "Start at login", true),
             ]
         );

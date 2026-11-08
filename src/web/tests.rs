@@ -1329,6 +1329,11 @@ async fn phone_settings_are_saved_and_validated() {
             "pipeline_waiting": true,
             "pipeline_finished": true,
             "proposals": true,
+            "pull_ci_failed": true,
+            "pull_conflicts": true,
+            "pull_ready": true,
+            "pull_merged": true,
+            "pull_closed": true,
         })
     );
     let (status, body) = save_phone(
@@ -1340,6 +1345,8 @@ async fn phone_settings_are_saved_and_validated() {
             "session_ended": false,
             "machines": false,
             "memory": false,
+            "pull_ready": false,
+            "pull_closed": false,
         }),
     )
     .await;
@@ -1357,6 +1364,11 @@ async fn phone_settings_are_saved_and_validated() {
             "pipeline_waiting": true,
             "pipeline_finished": true,
             "proposals": true,
+            "pull_ci_failed": true,
+            "pull_conflicts": true,
+            "pull_ready": false,
+            "pull_merged": true,
+            "pull_closed": false,
         })
     );
 

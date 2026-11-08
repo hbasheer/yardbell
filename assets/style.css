@@ -1616,6 +1616,8 @@ input:disabled, select:disabled { color: var(--muted); background: var(--side); 
 .phone-switches { display: grid; gap: 2px; justify-items: start; }
 .phone-switches > * { min-height: 32px; }
 .phone-switch { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+.phone-pulls { margin: 14px 0 0; padding: 0; border: 0; min-width: 0; }
+.phone-pulls legend { padding: 0; margin-bottom: 4px; color: var(--muted); font-size: 13px; }
 .phone-wait { color: var(--ink-2); }
 .phone-wait input { width: 64px; height: 32px; font-variant-numeric: tabular-nums; }
 #health-form .phone-switches { justify-items: stretch; }
