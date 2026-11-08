@@ -4,6 +4,9 @@ This compares Yardbell, as it is on `main` at 0.10.404, with
 [OrchestratorInc/agent-orchestrator](https://github.com/OrchestratorInc/agent-orchestrator)
 ("AO"), read at commit `449b6fe` on 2026-11-08. AO is Apache-2.0. Nothing below copies its code;
 where an idea is worth taking, the note says how it would be built from Yardbell's own parts.
+Releases 0.10.405 to 0.10.410, merged in after it was written, added a viewer for Dispatch files, the
+Workspace grid and voice in Dispatch; none of them changes a row below. The four features built from
+it (merge conflicts, pull request notifications, the board and error stops) are in 0.10.411.
 
 ## What AO is
 
