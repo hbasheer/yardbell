@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.411] - 2026-11-08
+
 - **Merge conflicts.** A pull or merge request that can no longer merge into its base branch shows **conflicts** on its
   badge, gets a Dispatch card whose **Send to session** asks the agent to rebase, appears in Insights, and makes **Wait
   for CI and reviews** follow fail, once per commit.
