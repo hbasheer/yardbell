@@ -234,6 +234,22 @@ pub struct PullRequests {
     pub github_token: String,
     #[serde(skip_serializing_if = "is_token")]
     pub gitlab_via: GitlabVia,
+    #[serde(skip_serializing_if = "is_review_off")]
+    pub review_sessions: ReviewSessions,
+}
+
+// Whether a session's pull request is reviewed when it opens or gets new commits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewSessions {
+    #[default]
+    Off,
+    Ask,
+    Auto,
+}
+
+fn is_review_off(review: &ReviewSessions) -> bool {
+    *review == ReviewSessions::Off
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -340,6 +356,7 @@ impl Default for PullRequests {
             github_via: GithubVia::Gh,
             github_token: String::new(),
             gitlab_via: GitlabVia::Token,
+            review_sessions: ReviewSessions::Off,
         }
     }
 }
@@ -1445,6 +1462,9 @@ mod tests {
         assert_eq!(cfg.pull_requests.poll_seconds, 120);
         let off = load_str(&format!("{BASE}pull_requests:\n  cards: false\n")).unwrap();
         assert!(off.pull_requests.enabled && !off.pull_requests.cards);
+        assert_eq!(cfg.pull_requests.review_sessions, ReviewSessions::Off);
+        let auto = load_str(&format!("{BASE}pull_requests:\n  review_sessions: auto\n")).unwrap();
+        assert_eq!(auto.pull_requests.review_sessions, ReviewSessions::Auto);
         match load_str(&format!("{BASE}pull_requests:\n  poll_seconds: 5\n")) {
             Err(ConfigError::Invalid(got)) => {
                 assert_eq!(got, "pull_requests.poll_seconds must be at least 30")
@@ -1556,6 +1576,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("cards: false"), "{text}");
         assert!(!text.contains("gitlab"), "{text}");
+        assert!(!text.contains("review_sessions"), "{text}");
     }
 
     #[test]

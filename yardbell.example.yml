@@ -40,6 +40,7 @@ default_agent: claude            # preselected in New session; built in: claude,
 # pull_requests:
 #   github_via: gh       # or token, with github_token: ${secret:NAME}
 #   gitlab_via: token    # or glab
+#   review_sessions: off # ask or auto: review your sessions' pull requests on every push
 # connectors:
 #   - id: tracker
 #     name: Tracker

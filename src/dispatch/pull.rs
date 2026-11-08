@@ -2,6 +2,7 @@ use super::follow::Tracked;
 use super::store::{new_id, now, title_of, Conversation, Stored};
 use super::{missing, Dispatch, Refusal};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or_default()
@@ -9,6 +10,71 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
 
 fn is_pull(e: &Value) -> bool {
     e["role"] == "pull"
+}
+
+pub struct Place<'a> {
+    pub machine: &'a str,
+    pub session: &'a str,
+    pub path: &'a str,
+    pub title: &'a str,
+    pub url: &'a str,
+}
+
+fn conversation_in(chats: &mut HashMap<String, Conversation>, at: &Place) -> String {
+    let newest = |found: Vec<&Conversation>| {
+        found
+            .into_iter()
+            .max_by(|a, b| a.stored.updated.cmp(&b.stored.updated))
+            .map(|c| c.stored.id.clone())
+    };
+    let follows = newest(
+        chats
+            .values()
+            .filter(|c| {
+                c.stored
+                    .sessions
+                    .iter()
+                    .any(|t| t.machine == at.machine && t.name == at.session)
+            })
+            .collect(),
+    );
+    let same_pull = || {
+        newest(
+            chats
+                .values()
+                .filter(|c| {
+                    !at.url.is_empty()
+                        && c.stored
+                            .events
+                            .iter()
+                            .any(|e| is_pull(e) && e["pull"]["url"] == at.url)
+                })
+                .collect(),
+        )
+    };
+    if let Some(id) = follows.or_else(same_pull) {
+        return id;
+    }
+    let id = new_id();
+    let stamp = now();
+    chats.insert(
+        id.clone(),
+        Conversation::new(Stored {
+            id: id.clone(),
+            title: title_of(at.title),
+            created: stamp.clone(),
+            updated: stamp,
+            sessions: vec![Tracked {
+                machine: at.machine.to_string(),
+                name: at.session.to_string(),
+                path: at.path.to_string(),
+                last: String::new(),
+                review: None,
+            }],
+            ..Stored::default()
+        }),
+    );
+    id
 }
 
 impl Dispatch {
@@ -32,61 +98,14 @@ impl Dispatch {
             if posted {
                 return None;
             }
-            let newest = |found: Vec<&Conversation>| {
-                found
-                    .into_iter()
-                    .max_by(|a, b| a.stored.updated.cmp(&b.stored.updated))
-                    .map(|c| c.stored.id.clone())
+            let at = Place {
+                machine,
+                session,
+                path,
+                title,
+                url: text(&card["pull"], "url"),
             };
-            let follows = newest(
-                chats
-                    .values()
-                    .filter(|c| {
-                        c.stored
-                            .sessions
-                            .iter()
-                            .any(|t| t.machine == machine && t.name == session)
-                    })
-                    .collect(),
-            );
-            let same_pull = || {
-                newest(
-                    chats
-                        .values()
-                        .filter(|c| {
-                            c.stored
-                                .events
-                                .iter()
-                                .any(|e| is_pull(e) && e["pull"]["url"] == card["pull"]["url"])
-                        })
-                        .collect(),
-                )
-            };
-            let id = match follows.or_else(same_pull) {
-                Some(id) => id,
-                None => {
-                    let id = new_id();
-                    let stamp = now();
-                    chats.insert(
-                        id.clone(),
-                        Conversation::new(Stored {
-                            id: id.clone(),
-                            title: title_of(title),
-                            created: stamp.clone(),
-                            updated: stamp,
-                            sessions: vec![Tracked {
-                                machine: machine.to_string(),
-                                name: session.to_string(),
-                                path: path.to_string(),
-                                last: String::new(),
-                                review: None,
-                            }],
-                            ..Stored::default()
-                        }),
-                    );
-                    id
-                }
-            };
+            let id = conversation_in(&mut chats, &at);
             let c = chats.get_mut(&id).expect("conversation exists");
             c.stored.events.push(card.clone());
             c.stored.updated = now();
@@ -95,6 +114,14 @@ impl Dispatch {
         self.shared.save(&id);
         self.shared.send_live(&id, &card);
         Some(id)
+    }
+
+    // Where something about a session's pull request goes: the conversation that follows the
+    // session, or else the one with cards for the same pull request, or else a new one.
+    pub fn conversation_for(&self, at: &Place) -> String {
+        let id = conversation_in(&mut self.shared.lock(), at);
+        self.shared.save(&id);
+        id
     }
 
     // Claims the card for one send, so a second click or a second device cannot type it twice. A

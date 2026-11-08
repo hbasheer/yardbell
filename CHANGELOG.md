@@ -5,6 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Reviews know the pull request.** A review of a session with an open pull or merge request compares against that
+  request's base branch, not "usually main", records which request and commit it covered, and its card links the
+  request and says when the folder held a different commit than the one pushed.
+- **Review pull request from the session.** **Review #12** on a dashboard row, and **Review pull request** in a
+  Workspace pane's menu, start the reviewer in the Dispatch conversation that follows the session.
+- **Reviews show on the session.** Beside the pull request badge on the dashboard, the Board and the Workspace, the
+  newest review shows as waiting, reviewing, ready, a count of findings, or reviewed an older commit.
+- **Review every push.** **Review my sessions' pull requests** under Settings, GitHub and GitLab (`review_sessions:
+  ask` or `auto`) reviews a session's pull request when it opens or gets new commits, once per head commit, after the
+  session is idle with that commit checked out. Dispatch rules for reviews still apply. Off by default.
+
 ## [0.10.411] - 2026-11-08
 
 - **Merge conflicts.** A pull or merge request that can no longer merge into its base branch shows **conflicts** on its

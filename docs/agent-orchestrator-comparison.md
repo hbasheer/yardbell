@@ -73,7 +73,7 @@ Effort: **S** is a day or less, **M** a few days, **L** a week or more.
 | Feature | AO | Yardbell | Notes |
 |---|---|---|---|
 | Reviewer agent that did not write the code | Separate reviewer harness, read-only by prompt, posts inline comments | **Has** | **Review branch** and pipeline review steps start a read-only session. |
-| Automatic review of every PR a worker opens | `autoReview` per project: once the worker has been idle a minute, review each new head commit, retry at most 3 times | **Partly** | Pipelines can review, and a review request on GitHub or GitLab can start one, but nothing starts a review because one of your own sessions opened or pushed to a PR. Value **medium to high**, effort **M**. A pipeline trigger **When a session's pull request opens or gets new commits** fits the existing trigger list and reuses the review templates; it starts once per head commit. |
+| Automatic review of every PR a worker opens | `autoReview` per project: once the worker has been idle a minute, review each new head commit, retry at most 3 times | **Has** (since this was written) | **Review my sessions' pull requests** in Settings, from [the PR Lens comparison](pr-lens-comparison.md). It reviews once per head commit, once the session is idle with that commit checked out. |
 
 ## Notifications
 

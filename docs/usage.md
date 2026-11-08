@@ -41,6 +41,13 @@ stop leaves the list at once.
   and GitLab**, where you switch each one on or off, add GitLab hosts and see which service each of
   your folders uses. See
   [`pull_requests`](configuration.md#pull_requests-optional).
+- **Reviews of pull requests:** a session with an open pull or merge request has **Review #12**
+  (or **Review !12**) among its buttons. It starts a read-only reviewer on that request in the
+  Dispatch conversation that follows the session, and opens it. Beside the badge, the newest review
+  of the branch shows as **review waiting** (for your approval), **reviewing**, **review: ready**,
+  **3 review findings** (red when one is high, amber when the worst is medium), or **reviewed an
+  older commit** once the pull request has moved past what was reviewed. Click it to open the
+  conversation. See [Reviewing your sessions' pull requests](#reviewing-your-sessions-pull-requests).
 
 **Board** (beside **Machines** in the top bar) lays the sessions of every machine side by side in
 five lanes, by what each needs next:
@@ -154,7 +161,9 @@ one, named like the first with `-2` after it.
 
 The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
 machine, then folder (a workspace), then the sessions in it, each with its state. A session with a pull request shows its number, colored by its state, and
-the full state on hover. Click a workspace
+the full state on hover, followed by its newest review as on the dashboard. A pane's **⋯** menu has
+**Review pull request #12** for a session with an open one, which opens the review in the Dispatch
+panel. Click a workspace
 to switch to it and a session to open it in the focused pane. Each workspace has tabs: **+** opens the New
 session dialog in that folder and the new session in a tab of its own, and closing a tab with
 sessions in it asks whether to stop them or keep them running. Double-click a tab to rename it, or
@@ -597,6 +606,33 @@ first time only sets what is known, so old comments never turn into cards.
 A pipeline run with a [Wait for CI and reviews](automation.md#wait-for-ci-and-reviews) step takes these
 for its own pull or merge request while it runs, so it gets no cards then.
 
+#### Reviewing your sessions' pull requests
+
+A review of a session that has an open pull or merge request is a review of that request. The
+reviewer is told its number, link and base branch, and compares the branch with `origin/<base>`
+from the commit they share, so a merge request into `develop` is not read against `main`. It is
+also told the request's latest pushed commit, and the review card links the request and says when
+the folder held a different commit, such as work not pushed yet, so the review is not of exactly
+what is pushed. Dispatch's own **Review branch**, **Review #12** on the dashboard and the Workspace
+menu all start the same reviewer.
+
+**Settings, GitHub and GitLab, Review my sessions' pull requests** reviews them as they change:
+
+- **Off** (the default): only when you ask.
+- **Ask me first:** when a session's pull request opens, or gets a new head commit, a review waits
+  for your approval in the conversation that follows the session, marked **Proposed by Yardbell**.
+- **Automatically:** the review starts at once.
+
+Either way it waits until every agent on that branch in that folder is idle and the folder has the
+pushed commit checked out, so the reviewer reads what was pushed rather than half-done work, and it
+happens once per head commit, also after a restart. Pull requests that were already open when you
+turned it on, and commits pushed while it was off, are not reviewed until the next push. A Dispatch
+rule for `review_session` still applies: one that refuses reviews on a machine or folder stops them
+there, and with **Automatically**, one that asks makes it wait for you. A pull request that a
+pipeline run is waiting on is left to the run. Each review uses your agent's tokens. Like any step
+waiting in a conversation, a waiting review is withdrawn when you send that conversation a new
+message, and that head is not proposed again.
+
 #### Triggers
 
 A trigger starts a Dispatch conversation from one of your saved tasks without you typing it. Add
@@ -638,8 +674,9 @@ Dispatch follows the sessions it starts. When one finishes, stops to wait for an
 the conversation gets a card with the last four lines of its screen (**Show all** opens the rest). A waiting agent's choices, such as
 Yes and No on a permission prompt, become buttons that answer it, and the card keeps the answer you
 picked. A finished or ended one has **Review branch**, which prepares a reviewer: a new session in
-the same folder that reviews the branch against the one it was made from, runs the tests and
-changes no files. Start it as it is, or edit its agent or instructions first. When the reviewer
+the same folder that reviews the branch against the one it was made from (or its pull request's
+base, see [Reviewing your sessions' pull requests](#reviewing-your-sessions-pull-requests)), runs the
+tests and changes no files. Start it as it is, or edit its agent or instructions first. When the reviewer
 finishes, its findings come back as a review card with a verdict (ready, or changes needed), a
 summary, and its findings under **High**, **Medium** and **Low**, each with its file and line.
 High and medium findings start ticked; low ones start folded and unticked. Tick the ones that matter

@@ -1731,6 +1731,8 @@ body.resizing iframe { pointer-events: none; }
 .ws-pr.warn { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn-text); }
 .ws-pr.ok { background: color-mix(in srgb, var(--ok) 13%, transparent); color: var(--ok-text); }
 .ws-pr.done { background: var(--accent-soft); color: var(--accent-text); }
+.ws-pr.pending { background: color-mix(in srgb, var(--warn) 10%, transparent); color: var(--ink-2); }
+.ws-review { font-family: inherit; }
 .ws-item-word.blocked { color: var(--warn-text); font-weight: 600; }
 .ws-item-word.working { color: var(--ok-text); }
 .ws-item-word.done { color: var(--accent-text); font-weight: 600; }
@@ -2588,6 +2590,7 @@ label.conn-setting + label.conn-setting { border-top: 1px solid var(--line); }
 .conn-setting > span:first-child { display: grid; gap: 2px; min-width: 0; }
 .conn-setting strong { font-size: 13px; font-weight: 550; color: var(--ink); }
 .conn-setting small { color: var(--muted); font-size: 12.5px; }
+.conn-setting > select { width: auto; flex: none; margin: 0; }
 .conn-seconds { display: inline-flex; align-items: center; gap: 8px; flex: none; color: var(--ink-2); font-size: 13px; }
 .conn-seconds input { width: 84px; }
 .conn-settings-foot { display: flex; align-items: center; justify-content: flex-end; gap: 12px; padding: 10px 14px; border-top: 1px solid var(--line); }

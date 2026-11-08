@@ -167,6 +167,7 @@ impl World for Fake {
                     worktree: true,
                     setup: None,
                     stopped: None,
+                    review: None,
                 })
                 .collect(),
             ended: vec![],

@@ -546,6 +546,7 @@ pull_requests:
   cards: true          # false: badges only, no cards in Dispatch
   use_github: true     # false: gh is never asked for badges and cards
   use_gitlab: true     # false: GitLab hosts are kept but never asked for badges and cards
+  review_sessions: off # ask or auto: review a session's pull request when it opens or gets new commits
   gitlab:              # optional
     - host: git.example.com               # the host as the remote URL names it
       token: '${secret:gitlab}'           # a personal access token with read_api
@@ -558,6 +559,13 @@ Every key is optional. The values above, without `gitlab`, are the defaults. A b
 most once every `poll_seconds`, separately from the machine check every `poll_seconds` at the top
 level, and the branches of one machine are asked one after another. What has already been posted
 is kept in `pulls.json` in the state folder, so a restart never posts a card twice.
+
+`review_sessions` starts a read-only reviewer on a session's pull or merge request when it opens or
+gets a new head commit, once the session's agents are idle and its folder has that commit checked
+out: `ask` proposes it in Dispatch for you to approve, `auto` starts it. Each head is reviewed once,
+remembered in `pulls.json`. Requests already open when it is turned on wait for their next push.
+Dispatch rules for `review_session` still apply. See
+[Reviewing your sessions' pull requests](usage.md#reviewing-your-sessions-pull-requests).
 
 A GitLab token needs only the `read_api` scope: Yardbell never writes to GitLab. Make one in GitLab
 from your avatar, **Edit profile**, **Access tokens**, and save it under **Secrets** in Settings.
