@@ -462,6 +462,31 @@ span.mg-fold { cursor: default; }
 .s-status { padding-top: 1px; }
 .s-actions { justify-self: end; }
 .s-empty { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; color: var(--muted); font-size: 13px; }
+
+.view-toggle { margin-left: auto; }
+.groups.boarded { container-type: inline-size; }
+.board { display: grid; grid-template-columns: minmax(0, 1fr); gap: 12px; align-items: start; }
+@container (min-width: 820px) { .board { grid-template-columns: repeat(5, minmax(0, 1fr)); } }
+.b-lane { min-width: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--side); overflow: hidden; }
+.b-lane h2 { display: flex; align-items: center; gap: 8px; margin: 0; padding: 10px 12px; border-bottom: 1px solid var(--line); font-size: 13px; font-weight: 600; color: var(--ink); }
+.b-lane h2::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: var(--line-strong); }
+.b-lane[data-lane=needs] h2::before { background: var(--warn); }
+.b-lane[data-lane=working] h2::before, .b-lane[data-lane=ready] h2::before { background: var(--ok); }
+.b-count { margin-left: auto; color: var(--muted); font-size: 12px; font-weight: 500; font-variant-numeric: tabular-nums; }
+.b-list { display: grid; gap: 8px; margin: 0; padding: 8px; list-style: none; }
+.b-card { min-width: 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--surface); }
+.b-branch { margin-top: 2px; }
+.b-marks { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 12px; }
+.b-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.b-where { min-width: 0; overflow-wrap: anywhere; }
+.b-empty { margin: 0; padding: 12px; color: var(--muted); font-size: 13px; }
+@media (pointer: fine) {
+  .b-card.openable { cursor: pointer; }
+  .b-card.openable:hover { background: var(--hover); }
+}
+.b-card.openable:focus-visible { outline: none; }
+.b-card.kb, .b-card.openable:focus-visible { background: var(--selected); box-shadow: inset 2px 0 0 var(--accent); }
+.b-card.stale .folder, .b-card.stale .branch { color: var(--muted); }
 .mgroup.down .s-empty { padding: 12px 14px; }
 @media (hover: hover) and (pointer: fine) {
   .s-row .stop { opacity: 0; }
@@ -1934,6 +1959,7 @@ html.embedded .dispatch-tabs { top: -10px; }
   .search-key { display: none; }
   .segmented { display: grid; grid-template-columns: repeat(3, 1fr); }
   .segmented button { justify-content: center; height: 34px; }
+  .segmented.view-toggle { grid-template-columns: repeat(2, 1fr); margin-left: 0; }
 
   .groups { gap: 14px; }
   .mg-head { grid-template-columns: minmax(0, 1fr) auto; gap: 10px; }

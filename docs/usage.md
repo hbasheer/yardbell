@@ -37,6 +37,23 @@ stop leaves the list at once.
   your folders uses. See
   [`pull_requests`](configuration.md#pull_requests-optional).
 
+**Board** (beside **Machines** in the top bar) lays the sessions of every machine side by side in
+five lanes, by what each needs next:
+
+| Lane | Holds |
+|---|---|
+| **Needs you** | An agent waiting for your answer, or an idle one whose pull request failed CI, has merge conflicts or has changes requested. |
+| **Working** | The agent is working, whatever its pull request says. |
+| **In review** | An idle agent with an open pull request that is a draft, has CI running or waits for a review. |
+| **Ready to merge** | Approved, CI green (or no CI) and no known merge conflict. |
+| **Idle** | An idle agent with no open pull request, including one whose pull request was merged or closed. |
+
+Each card shows the folder, ticket, branch, the pull request badge, the machine and the agent. Click
+it (or tap it on a phone) to open its terminal; `j`, `k` and `Enter` work as on the list. Search, the
+All, Working and Idle switch and a machine picked in the sidebar filter the board too. The choice
+is kept in the address (`?view=board`) and in this browser, so the dashboard opens the way you left
+it. Sessions outside tmux and ended ones stay on **Machines**.
+
 Sessions started outside tmux, and sessions that ended, fold into the footer of their machine's
 section, since Yardbell can see them but cannot attach to them. Open the list and press **Move to
 tmux** on one: Yardbell stops that agent (it asks first) and starts it again in tmux with its resume

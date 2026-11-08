@@ -399,6 +399,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/theme.js", get(|| async { asset("theme.js") }))
         .route("/side.js", get(|| async { asset("side.js") }))
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
+        .route("/board.js", get(|| async { asset("board.js") }))
         .route(
             "/vendor/lit-html/lit-html.js",
             get(|| async { asset("vendor/lit-html/lit-html.js") }),
