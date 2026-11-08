@@ -1,13 +1,51 @@
 mod client;
+mod forward;
 mod store;
 
 use client::{Client, ClientError};
 use store::{Server, Store};
+use tauri::webview::{PermissionKind, PermissionResponse};
 use tauri::{AppHandle, Manager};
+
+struct ActiveForward(std::sync::Mutex<Option<forward::Forward>>);
 
 fn store(app: &AppHandle) -> Result<Store, String> {
     let dir = app.path().app_data_dir().map_err(|e| e.to_string())?;
     Ok(Store::new(&dir))
+}
+
+// The page loads from a local port relaying to the server, so the WebView sees
+// a secure context and lets the Dispatch microphone work.
+async fn page_url(app: &AppHandle, server: &str, url: String) -> String {
+    let forwards = &app.state::<ActiveForward>().0;
+    let Some(target) = forward::page_target(server) else {
+        forwards.lock().unwrap().take();
+        return url;
+    };
+    let pages = {
+        let held = forwards.lock().unwrap();
+        held.as_ref()
+            .filter(|f| f.serves(&target))
+            .map(|f| f.url().to_string())
+    };
+    let pages = match pages {
+        Some(pages) => pages,
+        None => match forward::start(target).await {
+            Ok(started) => {
+                let pages = started.url().to_string();
+                forwards.lock().unwrap().replace(started);
+                pages
+            }
+            Err(e) => {
+                eprintln!("yardbell: can't give the server a local page address: {e}");
+                return url;
+            }
+        },
+    };
+    match url.strip_prefix(server) {
+        Some(path) => format!("{pages}{path}"),
+        None => url,
+    }
 }
 
 fn now() -> u64 {
@@ -24,11 +62,11 @@ async fn sign_in(app: &AppHandle, server: String, cookie: String) -> Result<Stri
     let store = store(app)?;
     store.remember(std::slice::from_ref(&server))?;
     store.put(Server {
-        server,
+        server: server.clone(),
         cookie: Some(cookie),
         last_used: now(),
     })?;
-    Ok(url)
+    Ok(page_url(app, &server, url).await)
 }
 
 #[derive(serde::Serialize)]
@@ -81,11 +119,11 @@ async fn open(app: AppHandle, server: String) -> Result<String, String> {
     match Client::new(&server, Some(&cookie)).handoff().await {
         Ok(url) => {
             store.put(Server {
-                server,
+                server: server.clone(),
                 cookie: Some(cookie),
                 last_used: now(),
             })?;
-            Ok(url)
+            Ok(page_url(&app, &server, url).await)
         }
         Err(ClientError::SignedOut) => {
             store.put(Server {
@@ -151,12 +189,22 @@ fn forget(app: AppHandle, server: String) -> Result<(), String> {
     store(&app)?.forget(&server)
 }
 
+fn permission(label: &str, kind: PermissionKind) -> PermissionResponse {
+    if kind == PermissionKind::Microphone && label == "main" {
+        PermissionResponse::Allow
+    } else {
+        PermissionResponse::Default
+    }
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     let builder = tauri::Builder::default();
     #[cfg(mobile)]
     let builder = builder.plugin(tauri_plugin_barcode_scanner::init());
     builder
+        .manage(ActiveForward(std::sync::Mutex::new(None)))
+        .on_permission_request(|webview, kind| permission(webview.label(), kind))
         .invoke_handler(tauri::generate_handler![
             servers, pair, connect, open, forget, discover
         ])

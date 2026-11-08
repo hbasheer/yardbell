@@ -2944,6 +2944,104 @@ async fn dispatch_settings_are_saved_and_checked() {
 }
 
 #[tokio::test]
+async fn voice_settings_are_saved_and_refuse_a_raw_key() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice",
+        r#"{"input":"api","api_key":"sk-raw-key"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("${secret:"), "{body}");
+    assert!(
+        !std::fs::read_to_string(&r.app.cfg_path)
+            .unwrap()
+            .contains("sk-raw-key"),
+        "a refused key must not land in yardbell.yml"
+    );
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice",
+        r#"{"input":"local","whisper_model":" ~/models/ggml-base.en.bin ","language":" en "}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = r.app.config().unwrap().voice;
+    assert_eq!(saved.input, crate::config::VoiceInput::Local);
+    assert_eq!(saved.whisper_model, "~/models/ggml-base.en.bin");
+    assert_eq!(saved.language, "en");
+    let (_, _, body) = send(
+        &r.app,
+        Request::get("/api/settings")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let shown: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(shown["voice"]["input"], "local");
+    let (_, _, body) = send(
+        &r.app,
+        Request::get("/dispatch/runs-on")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let runs: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(runs["voice_input"], true);
+}
+
+async fn post_audio(r: &Rig, c: &str) -> (StatusCode, String) {
+    let req = Request::post("/dispatch/transcribe")
+        .header(header::COOKIE, c)
+        .header(header::CONTENT_TYPE, "audio/webm;codecs=opus")
+        .body(Body::from(vec![1u8, 2, 3]))
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    (status, body)
+}
+
+#[tokio::test]
+async fn transcribe_turns_a_recording_into_text_or_says_voice_is_off() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, body) = post_audio(&r, &c).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("Settings"), "{body}");
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice",
+        r#"{"input":"local","whisper_model":"/models/ggml-base.en.bin"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    r.fake.stub("ffmpeg", Output::ok_with(""));
+    r.fake
+        .stub("whisper-cli", Output::ok_with(" Start the review. \n"));
+    let (status, body) = post_audio(&r, &c).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let out: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(out["text"], "Start the review.");
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice/check",
+        r#"{"input":"local","whisper_model":"/models/ggml-base.en.bin"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let check: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(check["ok"], false, "the model file does not exist: {body}");
+    assert!(check["message"].as_str().unwrap().contains("no model file"));
+}
+
+#[tokio::test]
 async fn dispatch_says_which_agent_and_model_it_runs_on() {
     let r = rig();
     let c = cookie(&r.app).await;
@@ -2969,6 +3067,7 @@ async fn dispatch_says_which_agent_and_model_it_runs_on() {
                 "claude": { "label": "Claude Code", "model": "" },
                 "codex": { "label": "Codex", "model": "" },
             },
+            "voice_input": false,
         }),
         "nothing set keeps Claude Code on its own default model"
     );
@@ -2996,6 +3095,7 @@ async fn dispatch_says_which_agent_and_model_it_runs_on() {
                 "claude": { "label": "Claude Code", "model": "haiku" },
                 "codex": { "label": "Codex CLI", "model": "gpt-6.1-sol" },
             },
+            "voice_input": false,
         }),
         "the label is the one sessions show for the agent"
     );

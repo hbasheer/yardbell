@@ -16,6 +16,50 @@ and the project uses [Semantic Versioning](https://semver.org).
 - **Stopped on an error.** An idle Claude Code or Codex session whose last turn ended on an API error, a usage limit or
   a dropped stream shows a red **Error** with the line, sits under Needs you, and is notified at once.
 
+## [0.10.410] - 2026-11-05
+
+- **The dictation model installs itself.** `voice.whisper_model` now takes a Whisper model name such as `small` (the
+  default when empty) or `base.en`: the server downloads it once into `~/.local/share/yardbell/models` and keeps it
+  there, across upgrades and worktree cleanups. A path to a ggml file of your own still works and is never downloaded.
+
+## [0.10.409] - 2026-11-05
+
+- **Dictation records on every engine.** The desktop app's web engine on Linux accepts a recording format and then
+  refuses to record (clicking the microphone silently did nothing). Dictation now notices and records through Web
+  Audio instead, sending plain WAV, so the microphone works in the Linux desktop app too.
+- **The macOS app can actually use the microphone.** The app is signed with the hardened runtime, which refuses audio
+  capture unless the signature carries the `audio-input` entitlement. The bundle now signs with it, so the system's
+  one-time microphone prompt appears and dictation works.
+
+## [0.10.408] - 2026-11-05
+
+- **Dictation works in the apps.** The desktop and Android apps now open the microphone for Dispatch: they answer the
+  page's permission request and load a remote server's pages through a local relay, which the engine treats as a
+  secure page. Before, dictation in an app only worked against a server on the same machine; in a browser the
+  `https://` or localhost rule still applies.
+
+## [0.10.407] - 2026-11-05
+
+- **Talk to Dispatch.** A microphone button in Dispatch's message box turns speech into text: tap to record, tap again
+  or hold and release to stop, and what you said is typed into the box. Transcription runs on your machine with
+  whisper.cpp, or through an OpenAI-compatible API whose key stays a `${secret:name}`. Set up under **Settings, Voice**,
+  with a **Test** button that checks ffmpeg, the Whisper command and the model.
+- **Dispatch can talk back.** A speaker toggle on the Dispatch page reads replies, errors and session changes aloud
+  with the device's own voice, one thing at a time. Off by default, saved per device, and pressing it again mutes it
+  at once.
+
+## [0.10.406] - 2026-11-03
+
+- **Workspace panes balance into a grid.** A tab lays its panes out evenly: four make two by two, not a stack of
+  full-width rows, and the grid is rebuilt whenever a pane is added or removed. Drag a pane by its title bar onto
+  another to swap their places, or pick **Swap with** from the pane's **⋯** menu. A tab's right-click menu now says
+  **Move into** instead of two Split into entries. Hand-made splits keep their shape until the pane count changes.
+
+## [0.10.405] - 2026-11-03
+
+- **Opening a file in Dispatch no longer takes over the desktop app.** A sent image, PDF or text file now opens in a
+  viewer over the conversation, which Close, Escape or a click outside it closes.
+
 ## [0.10.404] - 2026-11-02
 
 - **Attach files to Dispatch.** Drop, paste or pick screenshots, PDFs and text files into a Dispatch message, and

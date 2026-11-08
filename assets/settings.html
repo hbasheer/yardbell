@@ -72,6 +72,7 @@
       <a href="#health">Health checks</a>
       <p class="nav-label">Agents</p>
       <a href="#dispatch">Dispatch</a>
+      <a href="#voice">Voice</a>
       <a href="#triggers">Triggers</a>
       <a href="#diagrams">Diagrams</a>
       <a href="#worktree-setup">Worktree setup</a>
@@ -300,6 +301,45 @@
       <summary id="memory-history-summary">History</summary>
       <ol id="memory-history-list"></ol>
     </details>
+  </section>
+
+  <section id="voice">
+    <div class="section-head"><h2>Voice</h2></div>
+    <form class="panel" id="voice-form">
+      <label>Voice input
+        <select name="input">
+          <option value="off">Off</option>
+          <option value="local">Local Whisper (whisper.cpp on this machine)</option>
+          <option value="api">An OpenAI-compatible speech-to-text API</option>
+        </select>
+      </label>
+      <p class="help dispatch-help">A microphone button in Dispatch's message box records what you say and types it out, so you can dictate a task instead of typing it. With Local Whisper the recording never leaves this machine; with an API it is sent to that service.</p>
+      <div data-input="local" hidden>
+        <div class="grid2">
+          <label>Whisper command <input type="text" name="whisper_command" placeholder="whisper-cli" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <label>Model <input type="text" name="whisper_model" placeholder="small" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        </div>
+        <p class="help dispatch-help">Needs <code>ffmpeg</code> and <a href="https://github.com/ggml-org/whisper.cpp" target="_blank" rel="noopener">whisper.cpp</a> on this machine. The model is a name like <code>base</code> (quick), <code>small</code> or <code>medium</code> (hears more through accents), downloaded automatically on the first dictation, or the path to a ggml file of your own.</p>
+      </div>
+      <div data-input="api" hidden>
+        <div class="grid2">
+          <label>API address <input type="text" name="api_url" placeholder="https://api.openai.com/v1/audio/transcriptions" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <label>Model <input type="text" name="api_model" placeholder="whisper-1" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        </div>
+        <label>API key <input type="text" name="api_key" placeholder="${secret:openai}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <p class="help dispatch-help">Save the key once under Connections, Secrets, and name it here as <code>${secret:name}</code>. The key itself never goes into <code>yardbell.yml</code>.</p>
+      </div>
+      <label data-input="local api" hidden>Language <input type="text" name="language" placeholder="found from the recording" maxlength="8" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <div class="form-foot">
+        <p class="help" id="voice-status" role="status"></p>
+        <button class="btn" type="button" id="voice-check" hidden>Test</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+    <div class="panel">
+      <label class="choice"><input type="checkbox" class="switch" id="speak-enable">Read Dispatch's replies and session changes aloud</label>
+      <p class="help" id="speak-help">Spoken by this device's own voice, so nothing is sent anywhere, and saved on this device. The speaker button on the Dispatch page is the same switch and mutes it at once.</p>
+    </div>
   </section>
 
   <section id="triggers">

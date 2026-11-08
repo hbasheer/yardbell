@@ -155,16 +155,19 @@ one, named like the first with `-2` after it.
 The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
 machine, then folder (a workspace), then the sessions in it, each with its state. A session with a pull request shows its number, colored by its state, and
 the full state on hover. Click a workspace
-to switch to it and a session to open it in the focused pane. Hover a session for its **⋯** menu,
-which opens it to the right of or below the focused pane, or in a new tab. Each workspace has tabs: **+** opens the New
+to switch to it and a session to open it in the focused pane. Each workspace has tabs: **+** opens the New
 session dialog in that folder and the new session in a tab of its own, and closing a tab with
 sessions in it asks whether to stop them or keep them running. Double-click a tab to rename it, or
-right-click it for Rename tab and Close tab. When the tabs do not fit, scroll the row with the mouse
+right-click it to rename or close it, or to move its panes into another tab. When the tabs do not fit, scroll the row with the mouse
 wheel, a trackpad or a swipe, or click the arrow button at its end for a list of every tab. The tab
 you switch to always scrolls into view, and a tab's tooltip shows its full name.
-An empty pane offers to start an
-agent there or to open one of the workspace's sessions. Panes split right or down and resize by
-dragging the border between them; **Keyboard shortcuts** in the sidebar lists the keys. On a phone
+A tab lays its panes out as an even grid: two side by side, three as a pair over a full-width
+pane, four as two by two. Moving panes in or closing one lays the grid out again. To rearrange,
+drag a pane by its title bar onto another pane and they swap places, or pick **Swap with** from
+the pane's **⋯** menu. An empty pane offers to start an
+agent there or to open one of the workspace's sessions. Panes also split right or down and resize by
+dragging the border between them; the split's shape lasts until a pane is added or removed, when
+the grid takes over again. **Keyboard shortcuts** in the sidebar lists the keys. On a phone
 the sidebar comes first and a session opens full screen.
 
 **Dispatch** sits in the Workspace too, as a panel between the sidebar and the terminals. Sessions
@@ -415,6 +418,18 @@ the message box, or pick them with the paperclip. Each one sits above the box un
 a conversation on Codex refuses them. Files stay with their conversation, open from the message
 they came with, and go when the conversation is deleted. They are not passed on to the sessions
 Dispatch starts.
+
+You can also talk instead of typing. Once **Settings, Voice** turns voice input on, a microphone
+button sits in the message box: tap to record and tap again to stop, or hold it and speak while it
+is held. What you said is typed into the box for you to check and send. The recording is
+transcribed on the machine Yardbell runs on with [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
+or by the speech-to-text API the same section names, see
+[`voice`](configuration.md#voice-optional). In the Yardbell apps the microphone just works; a
+browser only opens it on a secure page, so there dictate over `https://` or on the machine
+itself. And Dispatch can talk back: the speaker button at
+the top reads replies, errors and session changes ("hp-eng-1234 is waiting for you") aloud with
+this device's own voice. It is off by default, speaks one thing at a time, and pressing it again
+mutes it at once. The same switch is under Settings, Voice, and is saved per device.
 
 Dispatch also reads Yardbell itself, so you can ask about it in the same words: "which triggers
 run on weekdays?", "what did the review pipeline find on !87?", "why did that run stop?", "how

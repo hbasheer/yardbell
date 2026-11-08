@@ -650,6 +650,14 @@ impl Settings {
         self.save(&cfg, backup, None)
     }
 
+    pub fn set_voice(&self, voice: crate::config::VoiceSettings) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.voice = voice;
+        cfg.validate().map_err(|e| e.to_string())?;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
     pub fn set_mcp_servers(&self, servers: Vec<crate::config::McpServer>) -> Result<(), String> {
         let mut cfg = self.load()?;
         cfg.mcp_servers = servers;

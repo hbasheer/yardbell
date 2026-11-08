@@ -87,6 +87,11 @@ pub struct Dispatch {
 }
 
 impl Dispatch {
+    // Voice transcription runs its local commands through the same runner, so tests fake it.
+    pub fn runner(&self) -> Arc<dyn Runner> {
+        self.runner.clone()
+    }
+
     pub fn new(runner: Arc<dyn Runner>, dir: PathBuf) -> Dispatch {
         let chats = Mutex::new(load(&dir));
         let usage = |runs_on| {

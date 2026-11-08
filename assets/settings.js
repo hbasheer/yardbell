@@ -855,6 +855,7 @@ async function load() {
   renderServers();
   renderSecrets();
   renderDispatch();
+  renderVoice();
   renderPullRequests();
   pullFoldersWanted();
   await loadConnections().catch((err) => toast(err.message));
@@ -1773,6 +1774,94 @@ $("dispatch-form").addEventListener("submit", async (e) => {
 
 $("dispatch-form").elements.runs_on.addEventListener("change", dispatchRunsOn);
 $("dispatch-form").elements.codex_model.addEventListener("input", codexModelNote);
+
+function voiceInputMode() {
+  const f = $("voice-form");
+  const mode = f.elements.input.value;
+  f.querySelectorAll("[data-input]").forEach((el) => { el.hidden = !el.dataset.input.split(" ").includes(mode); });
+  $("voice-check").hidden = mode === "off";
+}
+
+function voiceValues() {
+  const f = $("voice-form");
+  return {
+    input: f.elements.input.value,
+    whisper_command: f.elements.whisper_command.value.trim(),
+    whisper_model: f.elements.whisper_model.value.trim(),
+    api_url: f.elements.api_url.value.trim(),
+    api_model: f.elements.api_model.value.trim(),
+    api_key: f.elements.api_key.value.trim(),
+    language: f.elements.language.value.trim(),
+  };
+}
+
+function renderVoice() {
+  const f = $("voice-form");
+  const v = data.voice || {};
+  f.elements.input.value = v.input || "off";
+  f.elements.whisper_command.value = v.whisper_command || "";
+  f.elements.whisper_model.value = v.whisper_model || "";
+  f.elements.api_url.value = v.api_url || "";
+  f.elements.api_model.value = v.api_model || "";
+  f.elements.api_key.value = v.api_key || "";
+  f.elements.language.value = v.language || "";
+  voiceInputMode();
+}
+
+$("voice-form").elements.input.addEventListener("change", voiceInputMode);
+
+$("voice-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = e.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("POST", "/api/settings/voice", voiceValues());
+    saved(voiceValues().input === "off"
+      ? "Voice input is off, so Dispatch hides its microphone button."
+      : "Voice settings saved. The microphone button shows in Dispatch's message box.");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("voice-check").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  const status = $("voice-status");
+  button.disabled = true;
+  status.classList.remove("ok");
+  status.textContent = "Checking…";
+  try {
+    const out = await api("POST", "/api/settings/voice/check", voiceValues());
+    status.textContent = out.message;
+    status.classList.toggle("ok", out.ok);
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// Speaking is this device's choice, like the theme, so it is kept in the browser, not yardbell.yml.
+const SPEAK_KEY = "yardbell.dispatch.speak";
+const speakBox = $("speak-enable");
+if ("speechSynthesis" in window) {
+  try { speakBox.checked = localStorage.getItem(SPEAK_KEY) === "1"; } catch {}
+  speakBox.addEventListener("change", () => {
+    try {
+      if (speakBox.checked) localStorage.setItem(SPEAK_KEY, "1");
+      else localStorage.removeItem(SPEAK_KEY);
+    } catch {}
+  });
+  window.addEventListener("storage", () => {
+    try { speakBox.checked = localStorage.getItem(SPEAK_KEY) === "1"; } catch {}
+  });
+} else {
+  speakBox.disabled = true;
+  $("speak-help").textContent = "This browser has no speech voices, so there is nothing to read with here.";
+}
 
 $("rule-add").addEventListener("click", () => {
   rules.push({ action: "stop_session", machine: "any", folder: "", approval: "deny" });

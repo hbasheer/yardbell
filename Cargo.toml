@@ -1,6 +1,6 @@
 [package]
 name = "yardbell"
-version = "0.10.404"
+version = "0.10.410"
 edition = "2021"
 description = "One page for AI coding agent sessions across all your machines: health, sessions, ports, and a terminal from any device."
 license = "MIT"
@@ -23,7 +23,7 @@ portable-pty = "0.8"
 qrcode = { version = "0.14", default-features = false, features = ["svg"] }
 rand = "0.8"
 regex = "1"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls"] }
 rpassword = "7"
 rust-embed = "8"
 serde = { version = "1", features = ["derive"] }

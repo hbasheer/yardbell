@@ -434,6 +434,7 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(|| async { asset("pipeline-canvas.js") }),
         )
         .route("/composer.js", get(|| async { asset("composer.js") }))
+        .route("/voice.js", get(|| async { asset("voice.js") }))
         .route("/attachments.js", get(|| async { asset("attachments.js") }))
         .route("/dispatch/conversations", get(dispatch_list))
         .route("/dispatch/conversations/{id}", get(dispatch_get))
@@ -503,6 +504,10 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route(
             "/dispatch/ask",
             post(dispatch_ask).layer(DefaultBodyLimit::max(ASK_LIMIT)),
+        )
+        .route(
+            "/dispatch/transcribe",
+            post(dispatch_transcribe).layer(DefaultBodyLimit::max(crate::voice::AUDIO_MAX)),
         )
         .route(
             "/mcp",
@@ -864,13 +869,42 @@ async fn dispatch_runs_on(AxState(app): AxState<Arc<AppState>>) -> Response {
         })
         .collect();
     let runs_on = settings.runs_on;
+    let voice_input = cfg
+        .as_ref()
+        .is_some_and(|c| c.voice.input != crate::config::VoiceInput::Off);
     Json(json!({
         "runs_on": runs_on,
         "label": label(runs_on),
         "model": settings.model_for(runs_on),
         "agents": agents,
+        "voice_input": voice_input,
     }))
     .into_response()
+}
+
+async fn dispatch_transcribe(
+    AxState(app): AxState<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let mime = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("audio/webm")
+        .to_string();
+    let runner = app.dispatch.runner();
+    let text = crate::voice::transcribe(
+        runner.as_ref(),
+        &cfg.voice,
+        &crate::voice::ModelStore::default(),
+        &app.secrets()?,
+        &body,
+        &mime,
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "text": text })).into_response())
 }
 
 async fn dispatch_usage(AxState(app): AxState<Arc<AppState>>) -> Response {
