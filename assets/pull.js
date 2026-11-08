@@ -1,10 +1,11 @@
 (function () {
-  // One word for a session's pull request, the most urgent first: what failed, then what a
-  // reviewer asked for, then how far CI got.
+  // One word for a session's pull request, the most urgent first: what failed or cannot merge,
+  // then what a reviewer asked for, then how far CI got.
   function status(p) {
     if (p.state === "merged") return { word: "merged", tone: "done" };
     if (p.state === "closed") return { word: "closed", tone: "" };
     if (p.ci === "failing") return { word: "CI failing", tone: "bad" };
+    if (p.mergeable === "conflicting") return { word: "conflicts", tone: "bad" };
     if (p.review === "changes_requested") return { word: "changes requested", tone: "warn" };
     if (p.ci === "pending") return { word: "CI running", tone: "pending" };
     if (p.review === "approved") return { word: "approved", tone: "ok" };
@@ -27,6 +28,7 @@
     const parts = [];
     const ci = { failing: p.forge === "gitlab" ? "Pipeline failing" : "CI failing", pending: "CI running", passing: "CI passing" }[p.ci];
     if (ci) parts.push(p.ci === "failing" && p.failed?.length ? `${ci} on ${p.failed.join(", ")}` : ci);
+    if (p.mergeable === "conflicting") parts.push(p.base ? `Merge conflicts with ${p.base}` : "Merge conflicts");
     const review = { approved: "Approved", changes_requested: "Changes requested", review_required: "Review required" }[p.review];
     if (review) parts.push(review);
     return parts;

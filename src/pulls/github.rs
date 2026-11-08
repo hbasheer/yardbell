@@ -1,4 +1,4 @@
-use super::{Check, Ci, Fetched, Forge, Note, Pull, Unsettled, UnsettledCheck};
+use super::{Check, Ci, Fetched, Forge, Mergeable, Note, Pull, Unsettled, UnsettledCheck};
 use crate::config::Machine;
 use crate::shell::{quote, Duration, Output, Runner};
 use crate::ssh::Ssh;
@@ -8,7 +8,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::sync::{Arc, OnceLock};
 
-const FIELDS: &str = "number,url,title,state,isDraft,reviewDecision,headRefOid,author,statusCheckRollup,comments,reviews,createdAt";
+const FIELDS: &str = "number,url,title,state,isDraft,reviewDecision,headRefOid,author,statusCheckRollup,comments,reviews,createdAt,mergeable,baseRefName";
 const VIEW_TIMEOUT: Duration = Duration::from_secs(20);
 const LOG_TIMEOUT: Duration = Duration::from_secs(30);
 const NO_GH: i32 = 127;
@@ -227,6 +227,10 @@ struct RawPull {
     reviews: Option<Vec<RawReview>>,
     #[serde(default)]
     created_at: Option<String>,
+    #[serde(default)]
+    mergeable: Option<String>,
+    #[serde(default)]
+    base_ref_name: Option<String>,
 }
 
 #[derive(PartialEq)]
@@ -402,6 +406,12 @@ pub fn parse_view(json: &str) -> Result<Pull, String> {
         asking: standing.into_values().collect(),
         resolved: Vec::new(),
         unsettled: ended,
+        base: raw.base_ref_name.unwrap_or_default(),
+        mergeable: match raw.mergeable.as_deref() {
+            Some("CONFLICTING") => Mergeable::Conflicting,
+            Some("MERGEABLE") => Mergeable::Clean,
+            _ => Mergeable::Unknown,
+        },
     })
 }
 

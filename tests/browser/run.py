@@ -1799,6 +1799,72 @@ class Suite:
         if "#12" in text or "pull request" in text.lower():
             raise Failure(f"the merge request card still says pull request:\n{text}")
 
+    def test_board_lays_sessions_into_lanes(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait("window.YardbellBoard", "the board helpers")
+        lanes = b.js(
+            """(() => {
+              const B = window.YardbellBoard;
+              const pr = (more) => ({forge: 'github', number: 1, state: 'open', ci: 'passing', review: '', draft: false, mergeable: 'clean', ...more});
+              const s = (activity, pull) => ({activity, pull});
+              return [
+                s('blocked', pr({ci: 'failing'})),
+                s('active', pr({ci: 'failing'})),
+                s('idle', pr({ci: 'failing'})),
+                s('idle', pr({mergeable: 'conflicting', review: 'approved'})),
+                s('idle', pr({review: 'changes_requested'})),
+                s('idle', pr({review: 'approved'})),
+                s('idle', pr({review: 'approved', ci: 'none', mergeable: 'unknown'})),
+                s('idle', pr({review: 'approved', draft: true})),
+                s('idle', pr({ci: 'pending'})),
+                s('idle', pr({})),
+                s('idle', pr({state: 'merged'})),
+                s('idle', undefined),
+                {activity: 'idle', stopped: 'API Error: 529', pull: pr({review: 'approved'})},
+              ].map(B.lane);
+            })()"""
+        )
+        want = ["needs", "working", "needs", "needs", "needs", "ready", "ready", "review", "review", "review", "idle", "idle", "needs"]
+        if lanes != want:
+            raise Failure(f"the lanes are {lanes}, not {want}")
+        self.pull_session()
+        b.js("localStorage.removeItem('yardbell.dashboard.view')")
+        b.goto(self.url("/"))
+        b.wait(
+            f"(async () => (await (await fetch('/state')).json()).sessions.find((s) => s.tmux === {json.dumps(PULL_SESSION)})?.pull?.ci === 'failing')()",
+            "the failing pull request in /state",
+            timeout=45,
+        )
+        b.click("[data-view=board]")
+        card = f"document.querySelector('.b-lane[data-lane=needs] .b-card[data-name={json.dumps(PULL_SESSION)}]')"
+        b.wait(card, "the session with failing CI under Needs you")
+        text = b.js(f"{card}.innerText")
+        for expected in ("demo-app", "CI failing", "#12"):
+            if expected not in text:
+                raise Failure(f"the card does not show {expected!r}:\n{text}")
+        titles = b.js("[...document.querySelectorAll('.b-lane h2 .b-title')].map((t) => t.textContent)")
+        if titles != ["Needs you", "Working", "In review", "Ready to merge", "Idle"]:
+            raise Failure(f"the lanes are titled {titles}")
+        if "view=board" not in b.js("location.search"):
+            raise Failure("the address does not keep the board")
+        b.goto(self.url("/"))
+        b.wait(card, "the board again after a reload")
+        b.js("document.getElementById('search').value = 'no-such-session'; document.getElementById('search').dispatchEvent(new Event('input'))")
+        b.wait("document.querySelector('#groups .empty')?.innerText.includes('No sessions match')", "the empty board while nothing matches")
+        b.viewport(380, 800)
+        try:
+            b.goto(self.url("/?view=board"))
+            b.wait(card, "the board at phone width")
+            wide = b.js("document.documentElement.scrollWidth > document.documentElement.clientWidth")
+            if wide:
+                raise Failure("the board scrolls sideways at phone width")
+        finally:
+            b.viewport(1280, 800)
+        b.click("[data-view=machines]")
+        b.wait(f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]')", "the machine sections again")
+        b.js("localStorage.removeItem('yardbell.dashboard.view')")
+
     def test_settings_saves_dispatch_rules(self):
         b = self.b
         b.goto(self.url("/settings#dispatch"))

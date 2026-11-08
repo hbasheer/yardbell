@@ -183,7 +183,8 @@ machine lists which ones it finds.
 ### `phone_notifications` (optional)
 
 Which notifications the Yardbell app for Android shows: an agent waiting for you, a session ended,
-a machine down or back, or a machine's memory at 95%. The app gets them over its own connection
+a machine down or back, a machine's memory at 95%, pipelines, proposals, and what happens to your
+sessions' pull and merge requests. The app gets them over its own connection
 to the server, so there is nothing to set up. The **Phone notifications** section of the Settings
 page edits these switches.
 
@@ -197,6 +198,11 @@ phone_notifications:
   pipeline_waiting: true
   pipeline_finished: true
   proposals: true
+  pull_ci_failed: true
+  pull_conflicts: true
+  pull_ready: true
+  pull_merged: true
+  pull_closed: true
 ```
 
 Every key is optional. The values above are the defaults. Older configs may still have `server`,
@@ -212,6 +218,11 @@ Every key is optional. The values above are the defaults. Older configs may stil
 | `pipeline_waiting` | `true` | Notify when a pipeline run waits for you. |
 | `pipeline_finished` | `true` | Notify with the first line of a pipeline run's report. |
 | `proposals` | `true` | Notify when a proposal waits in the Proposals inbox. |
+| `pull_ci_failed` | `true` | Notify when CI fails on a session's pull or merge request, once per commit. |
+| `pull_conflicts` | `true` | Notify when a session's pull or merge request gets merge conflicts with its base branch. |
+| `pull_ready` | `true` | Notify when it is approved, green and free of conflicts. |
+| `pull_merged` | `true` | Notify when it is merged. |
+| `pull_closed` | `true` | Notify when it is closed without merging. |
 
 ### `health_checks` (optional)
 

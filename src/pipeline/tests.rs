@@ -166,6 +166,7 @@ impl World for Fake {
                     path: format!("/r/{name}"),
                     worktree: true,
                     setup: None,
+                    stopped: None,
                 })
                 .collect(),
             ended: vec![],
@@ -3725,6 +3726,8 @@ mod ci_wait {
             asking: vec![],
             resolved: vec![],
             unsettled: vec![],
+            base: "main".into(),
+            mergeable: crate::pulls::Mergeable::Unknown,
         })
     }
 

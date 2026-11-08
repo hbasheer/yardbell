@@ -5,6 +5,19 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.411] - 2026-11-08
+
+- **Merge conflicts.** A pull or merge request that can no longer merge into its base branch shows **conflicts** on its
+  badge, gets a Dispatch card whose **Send to session** asks the agent to rebase, appears in Insights, and makes **Wait
+  for CI and reviews** follow fail, once per commit.
+- **Pull request notifications.** The phone and the desktop app say when a session's pull request fails CI, gets
+  conflicts, is ready to merge, is merged or is closed without merging. Each has a switch under Phone notifications;
+  the desktop tray has one **Pull requests** switch.
+- **Board.** **Board**, beside **Machines** on the dashboard, puts every machine's sessions in lanes: Needs you,
+  Working, In review, Ready to merge and Idle.
+- **Stopped on an error.** An idle Claude Code or Codex session whose last turn ended on an API error, a usage limit or
+  a dropped stream shows a red **Error** with the line, sits under Needs you, and is notified at once.
+
 ## [0.10.410] - 2026-11-05
 
 - **The dictation model installs itself.** `voice.whisper_model` now takes a Whisper model name such as `small` (the

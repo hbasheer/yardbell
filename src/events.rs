@@ -1,3 +1,4 @@
+use crate::pulls::{Ci, Mergeable, PullView};
 use crate::snapshot::Activity;
 use crate::state::StateView;
 use std::collections::{HashMap, HashSet};
@@ -34,6 +35,23 @@ pub enum Event {
         machine: String,
         percent: u8,
     },
+    Pull {
+        machine: String,
+        session_id: String,
+        tmux: Option<String>,
+        folder: String,
+        change: PullChange,
+        pull: PullView,
+    },
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PullChange {
+    CiFailed,
+    Conflicts,
+    Ready,
+    Merged,
+    Closed,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -46,11 +64,23 @@ pub fn message(event: &Event, view: &StateView, waited_minutes: u64) -> Message 
     let (title, body) = match event {
         Event::AgentIdle {
             machine,
+            session_id,
             folder,
             agent,
             ..
         } => {
             let who = format!("{} on {machine}", agent_label(view, agent));
+            let error = view
+                .sessions
+                .iter()
+                .find(|s| s.id == *session_id)
+                .and_then(|s| s.stopped.as_deref());
+            if let Some(error) = error {
+                return Message {
+                    title: format!("{folder} stopped on an error"),
+                    body: format!("{who}: {error}"),
+                };
+            }
             let body = match waited_minutes {
                 0 => format!("{who} finished or needs you"),
                 1 => format!("{who} has been waiting for 1 minute"),
@@ -75,8 +105,42 @@ pub fn message(event: &Event, view: &StateView, waited_minutes: u64) -> Message 
         Event::MemoryHigh { machine, percent } => {
             (format!("{machine} memory at {percent}%"), String::new())
         }
+        Event::Pull {
+            machine,
+            folder,
+            change,
+            pull,
+            ..
+        } => pull_message(machine, folder, *change, pull),
     };
     Message { title, body }
+}
+
+fn pull_message(
+    machine: &str,
+    folder: &str,
+    change: PullChange,
+    pull: &PullView,
+) -> (String, String) {
+    let mark = if pull.forge == "gitlab" { '!' } else { '#' };
+    let number = format!("{mark}{}", pull.number);
+    let base = if pull.base.is_empty() {
+        "its base branch"
+    } else {
+        &pull.base
+    };
+    let what = match change {
+        PullChange::CiFailed => format!("CI failed on {number}"),
+        PullChange::Conflicts => format!("{number} has merge conflicts with {base}"),
+        PullChange::Ready => format!("{number} is ready to merge"),
+        PullChange::Merged => format!("{number} was merged"),
+        PullChange::Closed => format!("{number} was closed without merging"),
+    };
+    let mut body = format!("{}, on {machine}", pull.title);
+    if change == PullChange::CiFailed && !pull.failed.is_empty() {
+        body.push_str(&format!(". Failed: {}", pull.failed.join(", ")));
+    }
+    (format!("{folder}: {what}"), body)
 }
 
 pub fn agent_label<'a>(view: &'a StateView, agent: &'a str) -> &'a str {
@@ -103,10 +167,69 @@ struct MachineState {
     memory_armed: bool,
 }
 
+// What has been told of one pull request: each head is the commit a change was told for.
+struct PullState {
+    state: String,
+    ci_failed: String,
+    conflict: String,
+    ready: String,
+}
+
+fn ready(p: &PullView) -> bool {
+    p.state == "open"
+        && !p.draft
+        && p.review == "approved"
+        && matches!(p.ci, Ci::Passing | Ci::None)
+        && p.mergeable == Mergeable::Clean
+}
+
+impl PullState {
+    // A pull request seen for the first time only sets what is known.
+    fn first(p: &PullView) -> PullState {
+        let head_if = |yes: bool| if yes { p.head.clone() } else { String::new() };
+        PullState {
+            state: p.state.clone(),
+            ci_failed: head_if(p.ci == Ci::Failing),
+            conflict: head_if(p.mergeable == Mergeable::Conflicting),
+            ready: head_if(ready(p)),
+        }
+    }
+
+    fn next(&mut self, p: &PullView) -> Vec<PullChange> {
+        let mut changes = Vec::new();
+        let was_open = self.state == "open";
+        self.state.clone_from(&p.state);
+        match p.state.as_str() {
+            "merged" if was_open => return vec![PullChange::Merged],
+            "closed" if was_open => return vec![PullChange::Closed],
+            "open" => {}
+            _ => return changes,
+        }
+        if p.ci == Ci::Failing && self.ci_failed != p.head {
+            self.ci_failed.clone_from(&p.head);
+            changes.push(PullChange::CiFailed);
+        }
+        match p.mergeable {
+            Mergeable::Clean => self.conflict.clear(),
+            Mergeable::Conflicting if self.conflict != p.head => {
+                self.conflict.clone_from(&p.head);
+                changes.push(PullChange::Conflicts);
+            }
+            _ => {}
+        }
+        if ready(p) && self.ready != p.head {
+            self.ready.clone_from(&p.head);
+            changes.push(PullChange::Ready);
+        }
+        changes
+    }
+}
+
 #[derive(Default)]
 pub struct Tracker {
     sessions: HashMap<String, SessionState>,
     machines: HashMap<String, MachineState>,
+    pulls: HashMap<String, PullState>,
     primed: bool,
 }
 
@@ -123,6 +246,7 @@ impl Tracker {
         let mut events = Vec::new();
         self.observe_machines(view, now, &mut events);
         self.observe_sessions(view, now, &mut events);
+        self.observe_pulls(view, &mut events);
         if !std::mem::replace(&mut self.primed, true) {
             events.clear();
         }
@@ -178,6 +302,34 @@ impl Tracker {
                 });
             }
         }
+    }
+
+    fn observe_pulls(&mut self, view: &StateView, events: &mut Vec<Event>) {
+        let mut seen: HashSet<&str> = HashSet::new();
+        for s in view.sessions.iter().filter(|s| !s.stale) {
+            let Some(pull) = &s.pull else {
+                continue;
+            };
+            if !seen.insert(pull.url.as_str()) {
+                continue;
+            }
+            let changes = match self.pulls.get_mut(&pull.url) {
+                Some(state) => state.next(pull),
+                None => {
+                    self.pulls.insert(pull.url.clone(), PullState::first(pull));
+                    Vec::new()
+                }
+            };
+            events.extend(changes.into_iter().map(|change| Event::Pull {
+                machine: s.machine.clone(),
+                session_id: s.id.clone(),
+                tmux: s.tmux.clone(),
+                folder: s.folder.clone(),
+                change,
+                pull: pull.clone(),
+            }));
+        }
+        self.pulls.retain(|url, _| seen.contains(url.as_str()));
     }
 
     fn observe_sessions(&mut self, view: &StateView, now: Instant, events: &mut Vec<Event>) {
@@ -245,7 +397,8 @@ impl Tracker {
                         continue;
                     }
                     let since = *state.idle_since.get_or_insert(now);
-                    if now.duration_since(since) >= IDLE_AFTER {
+                    // An error is as sure a stop as a question, so it need not wait to be sure.
+                    if s.stopped.is_some() || now.duration_since(since) >= IDLE_AFTER {
                         state.notified = true;
                         events.push(Event::AgentIdle {
                             machine: s.machine.clone(),
@@ -266,6 +419,7 @@ mod tests {
     use super::*;
     use crate::config::HostTerminal;
     use crate::mesh::MeshView;
+    use crate::pulls::{Ci, Mergeable, PullView};
     use crate::snapshot::Health;
     use crate::state::{AgentView, EndedView, FolderView, MachineView, PortView, SessionView};
 
@@ -319,6 +473,7 @@ mod tests {
             path: String::new(),
             worktree: false,
             setup: None,
+            stopped: None,
         }
     }
 
@@ -842,6 +997,251 @@ mod tests {
             texts(&memory(96), 0),
             ("devbox memory at 96%".into(), String::new())
         );
+    }
+
+    #[test]
+    fn an_agent_stopped_on_an_error_is_told_at_once_with_the_error() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let active = one_machine(vec![session("s1", "hp", Activity::Active)]);
+        let stopped = || {
+            let mut v = one_machine(vec![SessionView {
+                stopped: Some("API Error: 529 overloaded".into()),
+                ..session("s1", "hp", Activity::Idle)
+            }]);
+            v.agents = labelled().agents;
+            v
+        };
+        assert_eq!(t.observe(&active, t0), vec![]);
+        assert_eq!(t.observe(&stopped(), secs(t0, 2)), vec![idle_event()]);
+        assert_eq!(t.observe(&stopped(), secs(t0, 40)), vec![]);
+        let Message { title, body } = message(&idle_event(), &stopped(), 0);
+        assert_eq!(title, "api stopped on an error");
+        assert_eq!(body, "Claude Code on hp: API Error: 529 overloaded");
+    }
+
+    fn texts(e: &Event, waited: u64) -> (String, String) {
+        let Message { title, body } = message(e, &labelled(), waited);
+        (title, body)
+    }
+
+    fn pr(state: &str, ci: Ci, head: &str) -> PullView {
+        PullView {
+            forge: "github".into(),
+            number: 12,
+            url: "https://github.com/acme/api/pull/12".into(),
+            title: "Fix login".into(),
+            state: state.into(),
+            draft: false,
+            review: String::new(),
+            ci,
+            failed: vec!["test".into()],
+            head: head.into(),
+            base: "main".into(),
+            mergeable: Mergeable::Unknown,
+        }
+    }
+
+    fn with_pull(pull: PullView) -> StateView {
+        one_machine(vec![SessionView {
+            pull: Some(pull),
+            ..session("s1", "hp", Activity::Idle)
+        }])
+    }
+
+    fn kinds(events: &[Event]) -> Vec<PullChange> {
+        events
+            .iter()
+            .filter_map(|e| match e {
+                Event::Pull { change, .. } => Some(*change),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn primed(first: PullView) -> (Tracker, Instant) {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        assert_eq!(t.observe(&with_pull(first), t0), vec![]);
+        (t, t0)
+    }
+
+    #[test]
+    fn ci_failing_is_told_once_per_commit() {
+        let (mut t, t0) = primed(pr("open", Ci::Pending, "a"));
+        let failing = || with_pull(pr("open", Ci::Failing, "a"));
+        assert_eq!(kinds(&t.observe(&failing(), t0)), [PullChange::CiFailed]);
+        assert_eq!(t.observe(&failing(), t0), vec![]);
+        t.observe(&with_pull(pr("open", Ci::Pending, "a")), t0);
+        assert_eq!(
+            t.observe(&failing(), t0),
+            vec![],
+            "a rerun on the same commit"
+        );
+        assert_eq!(
+            kinds(&t.observe(&with_pull(pr("open", Ci::Failing, "b")), t0)),
+            [PullChange::CiFailed]
+        );
+    }
+
+    #[test]
+    fn a_pull_request_seen_for_the_first_time_says_nothing() {
+        let (mut t, t0) = primed(pr("open", Ci::Pending, "a"));
+        let mut other = pr("open", Ci::Failing, "x");
+        other.url = "https://github.com/acme/api/pull/13".into();
+        let both = one_machine(vec![
+            SessionView {
+                pull: Some(pr("open", Ci::Pending, "a")),
+                ..session("s1", "hp", Activity::Idle)
+            },
+            SessionView {
+                pull: Some(other),
+                ..session("s2", "hp", Activity::Idle)
+            },
+        ]);
+        assert_eq!(t.observe(&both, t0), vec![]);
+    }
+
+    #[test]
+    fn conflicts_are_told_once_and_again_after_they_cleared() {
+        let (mut t, t0) = primed(pr("open", Ci::Passing, "a"));
+        let with = |m: Mergeable| {
+            let mut p = pr("open", Ci::Passing, "a");
+            p.mergeable = m;
+            with_pull(p)
+        };
+        assert_eq!(
+            kinds(&t.observe(&with(Mergeable::Conflicting), t0)),
+            [PullChange::Conflicts]
+        );
+        assert_eq!(t.observe(&with(Mergeable::Unknown), t0), vec![]);
+        assert_eq!(t.observe(&with(Mergeable::Conflicting), t0), vec![]);
+        t.observe(&with(Mergeable::Clean), t0);
+        assert_eq!(
+            kinds(&t.observe(&with(Mergeable::Conflicting), t0)),
+            [PullChange::Conflicts]
+        );
+    }
+
+    #[test]
+    fn ready_to_merge_needs_an_approval_green_ci_and_no_conflict() {
+        let (mut t, t0) = primed(pr("open", Ci::Pending, "a"));
+        let ready = |ci: Ci, review: &str, m: Mergeable, draft: bool| {
+            let mut p = pr("open", ci, "a");
+            p.review = review.into();
+            p.mergeable = m;
+            p.draft = draft;
+            with_pull(p)
+        };
+        assert_eq!(
+            t.observe(&ready(Ci::Passing, "", Mergeable::Clean, false), t0),
+            vec![]
+        );
+        assert_eq!(
+            t.observe(&ready(Ci::Pending, "approved", Mergeable::Clean, false), t0),
+            vec![]
+        );
+        assert_eq!(
+            t.observe(
+                &ready(Ci::Passing, "approved", Mergeable::Unknown, false),
+                t0
+            ),
+            vec![]
+        );
+        assert_eq!(
+            t.observe(&ready(Ci::Passing, "approved", Mergeable::Clean, true), t0),
+            vec![]
+        );
+        assert_eq!(
+            kinds(&t.observe(&ready(Ci::Passing, "approved", Mergeable::Clean, false), t0)),
+            [PullChange::Ready]
+        );
+        assert_eq!(
+            t.observe(&ready(Ci::None, "approved", Mergeable::Clean, false), t0),
+            vec![],
+            "once per commit"
+        );
+    }
+
+    #[test]
+    fn merged_and_closed_are_told_when_they_happen() {
+        let (mut t, t0) = primed(pr("open", Ci::Passing, "a"));
+        assert_eq!(
+            kinds(&t.observe(&with_pull(pr("merged", Ci::Passing, "a")), t0)),
+            [PullChange::Merged]
+        );
+        assert_eq!(
+            t.observe(&with_pull(pr("merged", Ci::Passing, "a")), t0),
+            vec![]
+        );
+        let (mut t, t0) = primed(pr("open", Ci::Passing, "a"));
+        assert_eq!(
+            kinds(&t.observe(&with_pull(pr("closed", Ci::Failing, "b")), t0)),
+            [PullChange::Closed],
+            "a closed pull request is not told as failing"
+        );
+        let (mut t, t0) = primed(pr("merged", Ci::Passing, "a"));
+        assert_eq!(
+            t.observe(&with_pull(pr("merged", Ci::Passing, "a")), t0),
+            vec![]
+        );
+    }
+
+    #[test]
+    fn one_pull_request_in_two_sessions_is_told_once() {
+        let (mut t, t0) = primed(pr("open", Ci::Pending, "a"));
+        let twice = one_machine(vec![
+            SessionView {
+                pull: Some(pr("open", Ci::Failing, "a")),
+                ..session("s1", "hp", Activity::Idle)
+            },
+            SessionView {
+                pull: Some(pr("open", Ci::Failing, "a")),
+                ..session("s2", "hp", Activity::Idle)
+            },
+        ]);
+        assert_eq!(kinds(&t.observe(&twice, t0)), [PullChange::CiFailed]);
+    }
+
+    #[test]
+    fn pull_request_messages_name_the_folder_and_the_number() {
+        let event = |change: PullChange, forge: &str| {
+            let mut pull = pr("open", Ci::Failing, "a");
+            pull.forge = forge.into();
+            Event::Pull {
+                machine: "devbox".into(),
+                session_id: "s1".into(),
+                tmux: None,
+                folder: "acme/api".into(),
+                change,
+                pull,
+            }
+        };
+        let said = |change, forge| texts(&event(change, forge), 0);
+        assert_eq!(
+            said(PullChange::CiFailed, "github"),
+            (
+                "acme/api: CI failed on #12".into(),
+                "Fix login, on devbox. Failed: test".into()
+            )
+        );
+        assert_eq!(
+            said(PullChange::Conflicts, "gitlab").0,
+            "acme/api: !12 has merge conflicts with main"
+        );
+        assert_eq!(
+            said(PullChange::Ready, "github").0,
+            "acme/api: #12 is ready to merge"
+        );
+        assert_eq!(
+            said(PullChange::Merged, "github").0,
+            "acme/api: #12 was merged"
+        );
+        assert_eq!(
+            said(PullChange::Closed, "github").0,
+            "acme/api: #12 was closed without merging"
+        );
+        assert_eq!(said(PullChange::Merged, "github").1, "Fix login, on devbox");
     }
 
     #[test]

@@ -51,6 +51,9 @@ pub struct Session {
     pub ticket: String,
     pub tmux: Option<String>,
     pub activity: Activity,
+    // The error line an idle agent's last turn ended on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<String>,
 }
 
 impl Session {
@@ -280,6 +283,10 @@ pub fn parse(
     }
     for c in raw.agents {
         let activity = activity(&c);
+        let stopped = match (activity, c.screen.as_deref()) {
+            (Activity::Idle, Some(screen)) => crate::detect::stopped(&c.agent, screen),
+            _ => None,
+        };
         let folder = label(&c.cwd);
         let branch = snap.folders.get(&folder).cloned().unwrap_or_default();
         let runs = c
@@ -298,6 +305,7 @@ pub fn parse(
             branch,
             tmux: c.tmux,
             activity,
+            stopped,
         };
         if !runs.is_empty() {
             snap.runs.insert(session.id(), runs);
@@ -620,6 +628,35 @@ mod tests {
         assert_eq!(activity("claude", 40.0, "❯ \n"), Activity::Idle);
         assert_eq!(activity("aider", 40.0, prompt), Activity::Active);
         assert_eq!(activity("aider", 0.0, prompt), Activity::Idle);
+    }
+
+    #[test]
+    fn an_idle_agent_says_the_error_its_turn_ended_on() {
+        let session = |screen: &str| {
+            let json = serde_json::json!({
+                "agents": [{"agent": "claude", "pid": 1, "cwd": "/w", "cpu": 0.0, "tmux": "t", "title": "", "screen": screen}],
+                "tmux": [], "folders": [], "ports": []
+            });
+            parse(
+                &json.to_string(),
+                &machine("hp", "/w"),
+                Path::new("/w"),
+                None,
+            )
+            .unwrap()
+            .sessions
+            .remove(0)
+        };
+        let idle = session("  ⎿  API Error: 500 Internal server error\n\n❯ \n");
+        assert_eq!(idle.activity, Activity::Idle);
+        assert_eq!(
+            idle.stopped.as_deref(),
+            Some("API Error: 500 Internal server error")
+        );
+        let working = session("  ⎿  API Error: 500\n✻ Thinking… (3s · esc to interrupt)\n❯ \n");
+        assert_eq!(working.activity, Activity::Active);
+        assert_eq!(working.stopped, None, "an agent at work has not stopped");
+        assert_eq!(session("● Done.\n❯ \n").stopped, None);
     }
 
     #[test]

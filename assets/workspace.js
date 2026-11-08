@@ -3,8 +3,8 @@ const STORE = "workspace.v4";
 // A workspace is one folder on one machine: the same folder name on two machines is two places.
 const SEP = "\t";
 const phone = matchMedia("(max-width: 760px)");
-const RANK = { blocked: 0, done: 1, working: 2, idle: 3 };
-const WORD = { blocked: "blocked", done: "done", working: "working", idle: "idle" };
+const RANK = { blocked: 0, error: 0, done: 1, working: 2, idle: 3 };
+const WORD = { blocked: "blocked", error: "stopped on an error", done: "done", working: "working", idle: "idle" };
 
 let state = null;
 let saved = { folder: "", tabs: [], tab: 0, focus: "", hidden: [] };
@@ -83,6 +83,7 @@ function stateOf(s) {
   if (s.stale) return "";
   if (s.activity === "blocked") return "blocked";
   if (s.activity === "active") return "working";
+  if (s.stopped) return "error";
   return done.has(keyOf(s)) ? "done" : "idle";
 }
 

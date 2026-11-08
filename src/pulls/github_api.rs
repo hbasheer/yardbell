@@ -16,7 +16,7 @@ const BASE: &str = "https://api.github.com";
 const HOST: &str = "github.com";
 const TIMEOUT: Duration = Duration::from_secs(20);
 const USER_AGENT: &str = "yardbell";
-const QUERY: &str = "query($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { pullRequests(headRefName: $branch, first: 5, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { number url title state isDraft reviewDecision headRefOid createdAt author { login } comments(last: 50) { nodes { id author { login } body url viewerDidAuthor isMinimized } } reviews(last: 50) { nodes { id author { login } body state } } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state targetUrl } } } } } } } } } } }";
+pub(crate) const QUERY: &str = "query($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { pullRequests(headRefName: $branch, first: 5, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { number url title state isDraft reviewDecision headRefOid createdAt mergeable baseRefName author { login } comments(last: 50) { nodes { id author { login } body url viewerDidAuthor isMinimized } } reviews(last: 50) { nodes { id author { login } body state } } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state targetUrl } } } } } } } } } } }";
 
 fn nodes(value: &Value) -> Value {
     value["nodes"].clone()

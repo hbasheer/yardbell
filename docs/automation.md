@@ -708,6 +708,7 @@ switches for badges and cards do not turn it off, since you put the step there.
 | CI green on the same commit at two reads in a row | Follows **pass**. The second read catches a check that registers late. |
 | CI green, **Also wait for an approval** on, and no approval yet | Keeps waiting. |
 | A failed check, or a reviewer asking for changes | Follows **fail**, once per set of failures. |
+| Merge conflicts with the base branch | Follows **fail** once per commit, even with CI green, and never passes while they last. |
 | A check that was cancelled, went stale or waits for someone, with nothing failing and nothing still running | Waits for you and names the check. See below. |
 | CI still running | Keeps waiting. |
 | No checks at all after 10 minutes | Waits for you, because nothing says it passed. **Continue on pass** carries on. |
@@ -733,7 +734,8 @@ Other results keep their meaning. On GitHub, `SUCCESS`, `SKIPPED` and `NEUTRAL` 
 GitLab, a pipeline that is `skipped` or waiting on a `manual` job counts as no checks, so the run waits for
 you after 10 minutes.
 
-**Its report** starts with what failed, then lists the unresolved comments with who said them and
+**Its report** starts with what failed, then, for a conflict, asks to rebase onto the base branch and
+resolve it, then lists the unresolved comments with who said them and
 where, then each failed check with its link and the last lines of its log, for up to 4 checks. Yardbell
 leaves out GitHub review threads and GitLab comments that are marked resolved. Use `{report}` in the Fix
 step's instructions. It arrives quoted, because logs and comments are written by others.

@@ -18,6 +18,7 @@ fn session(name: &str, activity: Activity) -> Session {
         ticket: "-".into(),
         tmux: Some(name.into()),
         activity,
+        stopped: None,
     }
 }
 

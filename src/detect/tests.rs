@@ -98,3 +98,82 @@ fn horizontal_rules_and_regions() {
     assert_eq!(after_last_horizontal_rule("x\n────\ny\n"), "y\n");
     assert_eq!(prompt_box_body(CLAUDE_PROMPT_BOX).map(str::trim), Some("❯"));
 }
+
+const CODEX_COMPOSER: &str = "\
+› Ask Codex to do anything
+
+  100% context left · ⏎ send";
+
+#[test]
+fn claude_stopped_on_an_api_error() {
+    let screen = format!(
+        "⏺ Bash(cargo test)\n  ⎿  running 3 tests\n  ⎿  API Error: 529 {{\"type\":\"error\",\"error\":{{\"type\":\"overloaded_error\"}}}}\n\n{CLAUDE_PROMPT_BOX}"
+    );
+    assert_eq!(
+        stopped("claude", &screen).as_deref(),
+        Some("API Error: 529 {\"type\":\"error\",\"error\":{\"type\":\"overloaded_error\"}}")
+    );
+}
+
+#[test]
+fn claude_stopped_at_its_usage_limit() {
+    let screen = format!(
+        "● Reading the logs.\n  ⎿  You've hit your limit · resets 3pm\n\n{CLAUDE_PROMPT_BOX}"
+    );
+    assert_eq!(
+        stopped("claude", &screen).as_deref(),
+        Some("You've hit your limit · resets 3pm")
+    );
+}
+
+#[test]
+fn an_error_answered_since_is_not_where_it_stopped() {
+    let screen = format!("  ⎿  API Error: Request timed out.\n\n> try again\n\n● Done. The tests pass.\n\n{CLAUDE_PROMPT_BOX}");
+    assert_eq!(stopped("claude", &screen), None);
+    let fine = format!("● Done. The tests pass.\n\n{CLAUDE_PROMPT_BOX}");
+    assert_eq!(stopped("claude", &fine), None);
+}
+
+#[test]
+fn a_retry_still_under_way_is_not_a_stop() {
+    let screen = format!(
+        "  ⎿  API Error (Request timed out.) · Retrying in 5 seconds… (attempt 2/10)\n\n{CLAUDE_PROMPT_BOX}"
+    );
+    assert_eq!(stopped("claude", &screen), None);
+}
+
+#[test]
+fn codex_stopped_on_an_error_but_not_on_an_interrupt() {
+    let screen = format!(
+        "• Ran cargo test\n\n■ stream disconnected before completion: error sending request\n\n{CODEX_COMPOSER}"
+    );
+    assert_eq!(
+        stopped("codex", &screen).as_deref(),
+        Some("stream disconnected before completion: error sending request")
+    );
+    let limit = format!("■ You've hit your usage limit. Try again at 3:00 PM.\n\n{CODEX_COMPOSER}");
+    assert!(stopped("codex", &limit).is_some_and(|s| s.starts_with("You've hit your usage limit")));
+    let interrupted = format!(
+        "■ Conversation interrupted - tell the model what to do differently.\n\n{CODEX_COMPOSER}"
+    );
+    assert_eq!(stopped("codex", &interrupted), None);
+    let answered = format!("■ stream disconnected\n\n› again\n\n• Fixed it.\n\n{CODEX_COMPOSER}");
+    assert_eq!(stopped("codex", &answered), None);
+}
+
+#[test]
+fn agents_without_error_signs_never_stop() {
+    let screen = "  ⎿  API Error: 500\n";
+    assert_eq!(stopped("aider", screen), None);
+    assert_eq!(
+        stopped("claude-code", screen).as_deref(),
+        Some("API Error: 500")
+    );
+}
+
+#[test]
+fn a_long_error_line_is_clipped() {
+    let screen = format!("  ⎿  API Error: {}\n", "x".repeat(400));
+    let line = stopped("claude", &screen).unwrap();
+    assert!(line.chars().count() <= 161 && line.ends_with('…'), "{line}");
+}

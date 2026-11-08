@@ -112,6 +112,11 @@ pub struct PhoneNotifications {
     pub pipeline_waiting: bool,
     pub pipeline_finished: bool,
     pub proposals: bool,
+    pub pull_ci_failed: bool,
+    pub pull_conflicts: bool,
+    pub pull_ready: bool,
+    pub pull_merged: bool,
+    pub pull_closed: bool,
 }
 
 impl Default for PhoneNotifications {
@@ -125,6 +130,11 @@ impl Default for PhoneNotifications {
             pipeline_waiting: true,
             pipeline_finished: true,
             proposals: true,
+            pull_ci_failed: true,
+            pull_conflicts: true,
+            pull_ready: true,
+            pull_merged: true,
+            pull_closed: true,
         }
     }
 }

@@ -199,6 +199,8 @@ async fn insights_carry_the_sessions_pull_request() {
         ci: crate::pulls::Ci::Passing,
         failed: Vec::new(),
         head: String::new(),
+        base: String::new(),
+        mergeable: crate::pulls::Mergeable::Unknown,
     };
     r.app.state.set_pulls(
         [(("hp".to_string(), path, s.branch.clone()), view)]

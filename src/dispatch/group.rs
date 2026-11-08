@@ -933,6 +933,7 @@ mod tests {
                     path: String::new(),
                     worktree: false,
                     setup: None,
+                    stopped: None,
                 })
                 .collect(),
             ended: vec![],

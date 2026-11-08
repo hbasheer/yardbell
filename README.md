@@ -18,7 +18,8 @@ plain HTML UI, plus apps for macOS, Linux and Android.
 - **Machine health first.** Connection state with the reason when something fails, memory drawn to
   scale with the agents' share, CPU load, disk use and mesh VPN status.
 - **Every agent session.** Ten agents out of the box and any CLI agent you add. Folder, ticket,
-  branch, and whether the agent is working, idle or waiting for you, read from its own screen.
+  branch, and whether the agent is working, idle or waiting for you, read from its own screen. A
+  **Board** puts every machine's sessions in lanes: needs you, working, in review, ready to merge.
 - **A terminal anywhere.** Any tmux session in the browser, the desktop app or the phone, with
   scrollback, a key row on phones, and the screen you use setting the session's size.
 - **Workspace.** Every terminal in one sidebar by machine and folder, with tabs and split panes,
@@ -40,11 +41,12 @@ plain HTML UI, plus apps for macOS, Linux and Android.
   you paste is saved as a secret by itself.
 - **Proposals.** Changes asked for by other MCP clients, such as Claude Code with Yardbell added, wait
   in one inbox until you approve, edit or reject them.
-- **GitHub and GitLab.** Each session shows its branch's pull or merge request with its state and CI, through local `gh` or `glab`, or a token.
+- **GitHub and GitLab.** Each session shows its branch's pull or merge request with its state, CI and any merge conflicts, through local `gh` or `glab`, or a token.
   Settings says which service each of your folders uses and whether `gh` and each GitLab token work.
 - **Phone notifications.** The Android app says when an agent waits for you, a session ends, a
-  machine goes down, memory runs low, a pipeline needs you or finishes, or a proposal waits, with no
-  other app to install.
+  machine goes down, memory runs low, a pipeline needs you or finishes, a proposal waits, or a
+  session's pull request fails CI, gets conflicts, is ready to merge or is merged, with no other app
+  to install.
 - **Add machines from the UI.** Mesh peers, ssh key setup, `~/.ssh/config`, tool checks and a folder
   picker, without editing a file.
 - **Mesh VPN aware.** NordVPN Meshnet, Tailscale, Headscale, NetBird and ZeroTier, and the apps

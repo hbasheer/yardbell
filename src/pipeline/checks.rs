@@ -1,5 +1,6 @@
 use crate::pulls::{
-    both, clip, noun, said_by, says_what_broke, what_failed, Check, Ci, Note, Pull, Unsettled,
+    base_of, both, clip, noun, said_by, says_what_broke, what_failed, Check, Ci, Mergeable, Note,
+    Pull, Unsettled,
 };
 use chrono::{DateTime, Local};
 use regex::Regex;
@@ -15,6 +16,7 @@ const COMMENT_CHARS: usize = 1200;
 const REPORT_MAX: usize = 12_000;
 const CHANGES: &str = "review:changes";
 const CHECK: &str = "check:";
+const CONFLICT: &str = "conflict:";
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Read {
@@ -219,6 +221,9 @@ fn failures(watch: &Watch, pull: &Pull) -> Vec<String> {
             set.push(format!("{CHECK}{}:{how}", check.name));
         }
     }
+    if pull.mergeable == Mergeable::Conflicting {
+        set.push(format!("{CONFLICT}{}", pull.head));
+    }
     if asks_for_changes(pull) {
         set.push(CHANGES.to_string());
         set.extend(pull.asking.iter().cloned());
@@ -229,6 +234,13 @@ fn failures(watch: &Watch, pull: &Pull) -> Vec<String> {
 
 fn report(pull: &Pull, headline: String) -> String {
     let mut out = vec![headline];
+    if pull.mergeable == Mergeable::Conflicting {
+        out.push(String::new());
+        out.push(format!(
+            "Rebase it onto {}, resolve the conflicts and push.",
+            base_of(pull)
+        ));
+    }
     let comments = unresolved(pull);
     if !comments.is_empty() {
         out.push(String::new());
@@ -316,13 +328,32 @@ fn what_happened(pull: &Pull, at: &str) -> String {
 
 fn failure_headline(pull: &Pull) -> String {
     let at = format!("{} at {}", noun(pull), short(&pull.head));
-    match (pull.ci == Ci::Failing, asks_for_changes(pull)) {
-        (true, true) => format!(
-            "CI failed on {} and changes are requested on {at}.",
-            what_failed(&pull.failed)
-        ),
-        (true, false) => format!("CI failed on {} for {at}.", what_failed(&pull.failed)),
-        _ => format!("Changes are requested on {at}."),
+    let conflict = format!("has merge conflicts with {}", base_of(pull));
+    let failed = what_failed(&pull.failed);
+    let failing = pull.ci == Ci::Failing;
+    let changes = asks_for_changes(pull);
+    if pull.mergeable != Mergeable::Conflicting {
+        return match (failing, changes) {
+            (true, true) => format!("CI failed on {failed} and changes are requested on {at}."),
+            (true, false) => format!("CI failed on {failed} for {at}."),
+            _ => format!("Changes are requested on {at}."),
+        };
+    }
+    match (failing, changes) {
+        (true, true) => {
+            format!("CI failed on {failed} and changes are requested on {at}, and it {conflict}.")
+        }
+        (true, false) => format!("CI failed on {failed} for {at}, and it {conflict}."),
+        (false, true) => format!("Changes are requested on {at}, and it {conflict}."),
+        (false, false) => {
+            let mut letters = at.chars();
+            let first = letters.next().map(|c| c.to_uppercase().collect::<String>());
+            format!(
+                "{}{} {conflict}.",
+                first.unwrap_or_default(),
+                letters.as_str()
+            )
+        }
     }
 }
 
@@ -352,6 +383,9 @@ pub fn judge(
     }
     if !asks_for_changes(pull) {
         watch.sent.retain(|e| e != CHANGES);
+    }
+    if pull.mergeable == Mergeable::Clean {
+        watch.sent.retain(|e| !e.starts_with(CONFLICT));
     }
     if pull.ci == Ci::Failing && note_failures(watch, pull) {
         let stuck = same_way(watch).or_else(|| {
@@ -458,7 +492,7 @@ pub fn wants_detail(watch: &Watch, pull: &Pull, require_approval: bool) -> bool 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::pulls::UnsettledCheck;
+    use crate::pulls::{Mergeable, UnsettledCheck};
 
     fn now() -> DateTime<Local> {
         Local::now()
@@ -483,6 +517,8 @@ mod tests {
             asking: vec![],
             resolved: vec![],
             unsettled: vec![],
+            base: "main".into(),
+            mergeable: Mergeable::Unknown,
         }
     }
 
@@ -1035,5 +1071,69 @@ mod tests {
         };
         assert_eq!(r.chars().count(), REPORT_MAX);
         assert!(r.contains("Read me"));
+    }
+    fn conflicting(head: &str, ci: Ci) -> Pull {
+        Pull {
+            mergeable: Mergeable::Conflicting,
+            ..pull(head, ci)
+        }
+    }
+
+    #[test]
+    fn a_conflict_fails_once_per_commit_even_with_ci_green() {
+        let mut w = Watch::default();
+        let Verdict::Fail(r) = see(&mut w, &conflicting("aaaaaaaa", Ci::Passing)) else {
+            panic!("{w:?}")
+        };
+        assert!(
+            r.starts_with("Pull request #12 at aaaaaaa has merge conflicts with main."),
+            "{r}"
+        );
+        assert!(r.contains("Rebase it onto main"), "{r}");
+        assert!(
+            matches!(see(&mut w, &conflicting("aaaaaaaa", Ci::Passing)), Verdict::Hold(s) if s.contains("already sent")),
+            "a Fix that pushed nothing leaves the same conflict"
+        );
+        assert!(is_fail(&see(&mut w, &conflicting("bbbbbbbb", Ci::Passing))));
+    }
+
+    #[test]
+    fn a_conflict_never_passes_on_green() {
+        let mut w = Watch::default();
+        see(&mut w, &conflicting("a", Ci::Passing));
+        for _ in 0..3 {
+            assert!(!matches!(
+                see(&mut w, &conflicting("a", Ci::Passing)),
+                Verdict::Pass(_)
+            ));
+        }
+    }
+
+    #[test]
+    fn a_conflict_and_a_failure_are_told_together() {
+        let mut w = Watch::default();
+        let p = Pull {
+            mergeable: Mergeable::Conflicting,
+            ..failing("a", vec![check("test", "error: boom")])
+        };
+        let Verdict::Fail(r) = see(&mut w, &p) else {
+            panic!()
+        };
+        assert!(
+            r.starts_with("CI failed on test for pull request #12 at a, and it has merge conflicts with main."),
+            "{r}"
+        );
+    }
+
+    #[test]
+    fn a_cleared_conflict_on_the_same_commit_is_news_when_it_comes_back() {
+        let mut w = Watch::default();
+        see(&mut w, &conflicting("a", Ci::Passing));
+        let clean = Pull {
+            mergeable: Mergeable::Clean,
+            ..pull("a", Ci::Passing)
+        };
+        see(&mut w, &clean);
+        assert!(is_fail(&see(&mut w, &conflicting("a", Ci::Passing))));
     }
 }

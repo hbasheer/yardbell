@@ -1,5 +1,6 @@
 use super::{
-    last_lines, Check, Ci, Note, Pull, Unsettled, UnsettledCheck, LOG_BYTES, LOG_LINES, SEEN_NOTES,
+    last_lines, Check, Ci, Mergeable, Note, Pull, Unsettled, UnsettledCheck, LOG_BYTES, LOG_LINES,
+    SEEN_NOTES,
 };
 use crate::config::PullRequests;
 use crate::secrets::Secrets;
@@ -743,6 +744,12 @@ struct RawMr {
     head_pipeline: Option<RawPipeline>,
     #[serde(default)]
     created_at: Option<String>,
+    #[serde(default)]
+    target_branch: String,
+    #[serde(default)]
+    has_conflicts: bool,
+    #[serde(default)]
+    detailed_merge_status: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -855,7 +862,18 @@ pub(super) fn parse_mr(json: &str) -> Result<Pull, String> {
         asking: Vec::new(),
         resolved: Vec::new(),
         unsettled: Vec::new(),
+        base: raw.target_branch,
+        mergeable: mergeable_of(raw.has_conflicts, raw.detailed_merge_status.as_deref()),
     })
+}
+
+// GitLab keeps the last answer in has_conflicts while it checks again after a push.
+fn mergeable_of(has_conflicts: bool, status: Option<&str>) -> Mergeable {
+    match (has_conflicts, status) {
+        (_, Some("unchecked" | "checking" | "preparing")) => Mergeable::Unknown,
+        (true, _) | (_, Some("conflict")) => Mergeable::Conflicting,
+        (false, _) => Mergeable::Clean,
+    }
 }
 
 pub(super) fn review_of(reviewers_json: Option<&str>, approvals_json: Option<&str>) -> String {
@@ -1059,6 +1077,28 @@ mod tests {
             v["state"] = state.into();
             assert_eq!(parse_mr(&v.to_string()).unwrap().state, want, "{state}");
         }
+    }
+
+    #[test]
+    fn a_merge_request_in_conflict_is_read() {
+        let mut v: serde_json::Value = serde_json::from_str(MR).unwrap();
+        v["has_conflicts"] = true.into();
+        v["target_branch"] = "main".into();
+        let p = parse_mr(&v.to_string()).unwrap();
+        assert_eq!(
+            (p.mergeable, p.base.as_str()),
+            (Mergeable::Conflicting, "main")
+        );
+        v["has_conflicts"] = false.into();
+        assert_eq!(
+            parse_mr(&v.to_string()).unwrap().mergeable,
+            Mergeable::Clean
+        );
+        v["detailed_merge_status"] = "checking".into();
+        assert_eq!(
+            parse_mr(&v.to_string()).unwrap().mergeable,
+            Mergeable::Unknown
+        );
     }
 
     #[test]

@@ -290,6 +290,7 @@ mod tests {
     use crate::config::HostTerminal;
     use crate::pipeline::engine::tests::{at, run_of};
     use crate::pipeline::record::{WaitKind, Waiting};
+    use crate::pulls::Mergeable;
     use crate::snapshot::{Activity, Health};
     use crate::state::{MachineView, SessionView};
 
@@ -336,6 +337,7 @@ mod tests {
             path: "/r/app".into(),
             worktree: true,
             setup: None,
+            stopped: None,
         }
     }
 
@@ -383,6 +385,8 @@ mod tests {
                 ci,
                 failed: vec![],
                 head: head.into(),
+                base: String::new(),
+                mergeable: Mergeable::Unknown,
             },
         )
     }

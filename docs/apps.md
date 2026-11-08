@@ -99,11 +99,14 @@ on by default.
 - an agent finished or is waiting for you (it has been idle for 20 seconds),
 - a session ended,
 - a machine went down (it has been unreachable for a minute) or came back,
-- a machine's memory passed 95%.
+- a machine's memory passed 95%,
+- a session's pull or merge request failed CI, got merge conflicts, became ready to merge, was
+  merged or was closed without merging (see [Phone notifications](#phone-notifications) for when).
 
-Each kind has a switch under **Notifications** in the tray menu. All four are on by default and the
-choice is kept between launches. These switches are for the desktop app on that computer; phone
-notifications have their own in Settings. Click an agent notification to open that session's terminal.
+Each kind has a switch under **Notifications** in the tray menu, with one **Pull requests** switch
+for all the pull request ones. All are on by default and the choice is kept between launches. These
+switches are for the desktop app on that computer; phone notifications have their own in Settings.
+Click an agent or pull request notification to open that session's terminal.
 Notifications that stay in the macOS Notification Center or in GNOME's list keep their click
 routing. Once 8 of them are waiting, newer ones show without an **Open** button until older ones
 are cleared.
@@ -126,8 +129,8 @@ window and `Ctrl+Q` quits.
 ## Phone notifications
 
 Yardbell can tell your phone when an agent is waiting for you, a session ends, a machine goes down
-or comes back, a machine's memory reaches 95%, a pipeline run needs you or finishes, or a proposal
-waits. No browser tab or desktop app has to be open.
+or comes back, a machine's memory reaches 95%, a pipeline run needs you or finishes, a proposal
+waits, or something happens to a session's pull or merge request. No browser tab or desktop app has to be open.
 
 The Android app does it with nothing to set up. While it is signed in to a server, it keeps a
 connection to it in the background and shows its notifications. Android asks once whether Yardbell
@@ -140,7 +143,22 @@ restarted in between. The **Phone notifications** section of the Settings page s
 is connected.
 
 **The wait.** An agent counts as waiting once it has been idle for 20 seconds after working, or at
-once when it shows a question or a permission prompt. Yardbell then holds the notification for 2
+once when it shows a question or a permission prompt, or when its turn ended on an error (then the
+notification says "stopped on an error" and quotes the line; see **Error** under
+[Dashboard](usage.md#dashboard)). Yardbell then holds the notification for 2
 minutes and only sends it if the agent is still waiting, so nothing arrives when you answer it in
 time. Change the minutes next to **Agent waiting**, or set 0 to be told right away. The other kinds
 are sent at once. Each kind has its own switch, and a saved change applies on the next check.
+
+**Pull and merge requests.** These come from the same checks as the badges on the dashboard, so
+they arrive within a couple of minutes, and each has its own switch:
+
+- **CI failed:** once per commit, so running the same commit again says nothing new.
+- **Merge conflicts:** once per commit, and again if the conflict comes back after it was cleared.
+- **Ready to merge:** approved, CI green or no CI, no conflicts, and not a draft. Once per commit.
+  A repository that does not ask for reviews has no approval, so it never says this.
+- **Merged** and **Closed without merging:** when the state changes.
+
+A pull request is told about only while a session works on its branch, and one Yardbell sees for the
+first time, also after a restart, only sets what is known. One pull request in two sessions is told
+once.
