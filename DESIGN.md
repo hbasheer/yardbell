@@ -328,7 +328,7 @@ Compact and bevelled; the Brand button is the only filled one in a region.
 
 ### Chips (badges and counts)
 - **Style:** 12px/500 text in a pill with a 1px Rule border, Ink 2 text, 2px by 8px padding.
-- **State:** Working is a Blue Wash pill with Blue Ink text and a 6px pulsing dot (1.6s, disabled under reduced motion). Idle, Outside tmux and Last known are plain outline pills. The header count is a muted 13px outline pill.
+- **State:** Working is a Blue Wash pill with Blue Ink text and a 6px pulsing dot (1.6s, disabled under reduced motion). Idle, Outside tmux and Last known are plain outline pills. Error (an idle agent whose last turn ended on an error) is a Fault Red tinted pill with the error line in its tooltip. The header count is a muted 13px outline pill.
 
 ### Cards / Containers
 - **Corner Style:** 12px; 8px for nested lists inside a card.

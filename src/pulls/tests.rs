@@ -351,6 +351,7 @@ impl Rig {
             ticket: "ENG-1".into(),
             tmux: tmux.map(str::to_string),
             activity: Activity::Active,
+            stopped: None,
         };
         let mut snap = Snapshot {
             sessions: vec![session(Some("hp-app"), 1), session(None, 2)],
@@ -720,6 +721,7 @@ fn gitlab_rig(stub: &Stub) -> Rig {
         ticket: "ENG-2".into(),
         tmux: Some("hp-web".into()),
         activity: Activity::Active,
+        stopped: None,
     });
     snap.folders.insert("web".into(), "eng-2".into());
     snap.folder_paths.insert("web".into(), "/r/web".into());

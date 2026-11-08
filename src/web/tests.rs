@@ -100,6 +100,7 @@ fn rig() -> Rig {
         ticket: "ENG-1301".into(),
         tmux: Some("hp-eng-1301".into()),
         activity: crate::snapshot::Activity::Idle,
+        stopped: None,
     });
     snap.sessions.push(crate::snapshot::Session {
         machine: "hp".into(),
@@ -111,6 +112,7 @@ fn rig() -> Rig {
         ticket: "-".into(),
         tmux: None,
         activity: crate::snapshot::Activity::Idle,
+        stopped: None,
     });
     state.update(MachineStatus {
         name: "hp".into(),

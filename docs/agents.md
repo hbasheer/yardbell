@@ -41,6 +41,11 @@ agents:
     process: my-agent             # process name to look for, when it differs from the command
 ```
 
+Whether an agent is working, idle or waiting for you is read from its screen. For Claude Code and
+Codex, Yardbell also reads whether an idle agent's last turn ended on an error, using the wording
+those two print (checked against Claude Code 2.1.319 and Codex 0.165.0); other agents show Idle
+after an error.
+
 Ended sessions resume with the agent they ran. Memory used by every agent process counts toward the
 blue share of the memory bar.
 

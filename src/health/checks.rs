@@ -337,6 +337,7 @@ mod tests {
             path: "/r/app".into(),
             worktree: true,
             setup: None,
+            stopped: None,
         }
     }
 

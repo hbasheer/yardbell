@@ -143,7 +143,9 @@ restarted in between. The **Phone notifications** section of the Settings page s
 is connected.
 
 **The wait.** An agent counts as waiting once it has been idle for 20 seconds after working, or at
-once when it shows a question or a permission prompt. Yardbell then holds the notification for 2
+once when it shows a question or a permission prompt, or when its turn ended on an error (then the
+notification says "stopped on an error" and quotes the line; see **Error** under
+[Dashboard](usage.md#dashboard)). Yardbell then holds the notification for 2
 minutes and only sends it if the agent is still waiting, so nothing arrives when you answer it in
 time. Change the minutes next to **Agent waiting**, or set 0 to be told right away. The other kinds
 are sent at once. Each kind has its own switch, and a saved change applies on the next check.

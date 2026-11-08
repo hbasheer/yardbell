@@ -692,8 +692,8 @@ async function catchUp(showNew = true) {
 
 function trackedItem(t, state) {
   const s = state?.sessions.find((x) => x.machine === t.machine && x.tmux === t.name && !x.stale);
-  const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : "idle";
-  const tone = !s ? "" : s.activity === "blocked" ? "warn" : s.activity === "active" ? "ok" : "";
+  const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : s.stopped ? "stopped on an error" : "idle";
+  const tone = !s ? "" : s.activity === "blocked" ? "warn" : s.activity === "active" ? "ok" : s.stopped ? "bad" : "";
   return html`<span class="dispatch-session"><span class="dot ${tone}"></span>${s
     ? html`<a href=${termUrl(t.machine, t.name)} target="_blank" rel="noopener">${t.name}</a>`
     : t.name}<span class="muted">${t.machine} · ${word}</span></span>`;

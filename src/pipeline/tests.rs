@@ -166,6 +166,7 @@ impl World for Fake {
                     path: format!("/r/{name}"),
                     worktree: true,
                     setup: None,
+                    stopped: None,
                 })
                 .collect(),
             ended: vec![],

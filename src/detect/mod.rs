@@ -2,9 +2,13 @@
 // unchanged from herdr so they can be refreshed by copying files; only the parts Yardbell can
 // feed are kept. tmux has no OSC progress, so that region is always empty.
 
+mod stopped;
+
 use regex::Regex;
 use serde::Deserialize;
 use std::sync::OnceLock;
+
+pub use stopped::stopped;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenState {

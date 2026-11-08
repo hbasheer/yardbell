@@ -206,6 +206,7 @@ function disk(m) {
 function statusBadge(s) {
   if (s.stale) return html`<span class="badge">Last known</span>`;
   if (s.activity === "blocked") return html`<span class="badge blocked" title="Waiting for your answer or approval">Needs you</span>`;
+  if (s.stopped) return html`<span class="badge failed" title="Its last turn ended on: ${s.stopped}">Error</span>`;
   return s.activity === "active"
     ? html`<span class="badge busy">Working</span>`
     : html`<span class="badge">Idle</span>`;

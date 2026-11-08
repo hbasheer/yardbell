@@ -64,11 +64,23 @@ pub fn message(event: &Event, view: &StateView, waited_minutes: u64) -> Message 
     let (title, body) = match event {
         Event::AgentIdle {
             machine,
+            session_id,
             folder,
             agent,
             ..
         } => {
             let who = format!("{} on {machine}", agent_label(view, agent));
+            let error = view
+                .sessions
+                .iter()
+                .find(|s| s.id == *session_id)
+                .and_then(|s| s.stopped.as_deref());
+            if let Some(error) = error {
+                return Message {
+                    title: format!("{folder} stopped on an error"),
+                    body: format!("{who}: {error}"),
+                };
+            }
             let body = match waited_minutes {
                 0 => format!("{who} finished or needs you"),
                 1 => format!("{who} has been waiting for 1 minute"),
@@ -385,7 +397,8 @@ impl Tracker {
                         continue;
                     }
                     let since = *state.idle_since.get_or_insert(now);
-                    if now.duration_since(since) >= IDLE_AFTER {
+                    // An error is as sure a stop as a question, so it need not wait to be sure.
+                    if s.stopped.is_some() || now.duration_since(since) >= IDLE_AFTER {
                         state.notified = true;
                         events.push(Event::AgentIdle {
                             machine: s.machine.clone(),
@@ -460,6 +473,7 @@ mod tests {
             path: String::new(),
             worktree: false,
             setup: None,
+            stopped: None,
         }
     }
 
@@ -983,6 +997,27 @@ mod tests {
             texts(&memory(96), 0),
             ("devbox memory at 96%".into(), String::new())
         );
+    }
+
+    #[test]
+    fn an_agent_stopped_on_an_error_is_told_at_once_with_the_error() {
+        let mut t = Tracker::new();
+        let t0 = Instant::now();
+        let active = one_machine(vec![session("s1", "hp", Activity::Active)]);
+        let stopped = || {
+            let mut v = one_machine(vec![SessionView {
+                stopped: Some("API Error: 529 overloaded".into()),
+                ..session("s1", "hp", Activity::Idle)
+            }]);
+            v.agents = labelled().agents;
+            v
+        };
+        assert_eq!(t.observe(&active, t0), vec![]);
+        assert_eq!(t.observe(&stopped(), secs(t0, 2)), vec![idle_event()]);
+        assert_eq!(t.observe(&stopped(), secs(t0, 40)), vec![]);
+        let Message { title, body } = message(&idle_event(), &stopped(), 0);
+        assert_eq!(title, "api stopped on an error");
+        assert_eq!(body, "Claude Code on hp: API Error: 529 overloaded");
     }
 
     fn texts(e: &Event, waited: u64) -> (String, String) {

@@ -19,6 +19,11 @@ stop leaves the list at once.
 
 - **Top bar:** search sessions by folder, branch, ticket or agent (press `/`), show All, Working or
   Idle sessions (an agent waiting for you shows **Needs you** and counts as idle), **Refresh** to check every machine right away, Add machine and New session.
+- **Error:** an idle Claude Code or Codex session whose last turn ended on an error rather than an
+  answer, such as `API Error: 529`, a usage limit (`You've hit your limit · resets 3pm`) or Codex's
+  `■ stream disconnected`, shows a red **Error** instead of Idle. Hover it for the line. It counts
+  as idle and lasts until the agent writes something after it. Pressing Esc in Codex is not an
+  error.
 - **Machine header:** fold the section away, **+** starts a new session on that machine, the terminal
   button opens a plain shell there (no agent, in its own tmux session), and the **⋯** menu has
   Machine settings, Copy ssh command and Remove machine.
@@ -42,7 +47,7 @@ five lanes, by what each needs next:
 
 | Lane | Holds |
 |---|---|
-| **Needs you** | An agent waiting for your answer, or an idle one whose pull request failed CI, has merge conflicts or has changes requested. |
+| **Needs you** | An agent waiting for your answer or stopped on an error, or an idle one whose pull request failed CI, has merge conflicts or has changes requested. |
 | **Working** | The agent is working, whatever its pull request says. |
 | **In review** | An idle agent with an open pull request that is a draft, has CI running or waits for a review. |
 | **Ready to merge** | Approved, CI green (or no CI) and no known merge conflict. |

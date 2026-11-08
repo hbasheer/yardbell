@@ -1561,10 +1561,11 @@ class Suite:
                 s('idle', pr({})),
                 s('idle', pr({state: 'merged'})),
                 s('idle', undefined),
+                {activity: 'idle', stopped: 'API Error: 529', pull: pr({review: 'approved'})},
               ].map(B.lane);
             })()"""
         )
-        want = ["needs", "working", "needs", "needs", "needs", "ready", "ready", "review", "review", "review", "idle", "idle"]
+        want = ["needs", "working", "needs", "needs", "needs", "ready", "ready", "review", "review", "review", "idle", "idle", "needs"]
         if lanes != want:
             raise Failure(f"the lanes are {lanes}, not {want}")
         self.pull_session()

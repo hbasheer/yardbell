@@ -1731,6 +1731,7 @@ body.resizing iframe { pointer-events: none; }
 .ws-state.working { background: var(--ok); animation: pulse 1.6s ease-in-out infinite; }
 .ws-state.done { background: var(--accent); }
 .ws-state.blocked { background: var(--warn); box-shadow: 0 0 0 3px color-mix(in srgb, var(--warn) 25%, transparent); }
+.ws-state.error { background: var(--bad); box-shadow: 0 0 0 3px color-mix(in srgb, var(--bad) 25%, transparent); }
 @media (prefers-reduced-motion: reduce) { .ws-state.working { animation: none; } }
 .ws-pane-no { flex: none; display: inline-grid; place-items: center; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 4px; background: var(--hover); color: var(--muted); font: 600 11px/1 var(--mono); }
 .ws-empty { margin: 12px 8px; color: var(--muted); }
