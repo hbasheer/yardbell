@@ -432,6 +432,8 @@ async fn pulls_from_the_cards() {
                 ci: crate::pulls::Ci::Failing,
                 failed: vec!["rspec".into()],
                 head: String::new(),
+                base: String::new(),
+                mergeable: crate::pulls::Mergeable::Unknown,
             },
         )]
         .into(),

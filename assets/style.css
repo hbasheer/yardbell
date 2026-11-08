@@ -1293,6 +1293,7 @@ dialog.shot-view { width: fit-content; min-width: min(320px, calc(100vw - 32px))
 .pull-note-head strong { color: var(--ink); font-weight: 600; }
 .pull-note-head code { font: 12px var(--mono); }
 .pull-note-body { margin: 0; color: var(--ink); font-size: 13.5px; line-height: 1.55; white-space: pre-wrap; overflow-wrap: anywhere; }
+.pull-conflict { margin: 0; color: var(--ink); font-size: 13.5px; line-height: 1.55; overflow-wrap: anywhere; }
 .pull-note-body.clamped { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; overflow: hidden; }
 .pull-notes .link-btn { justify-self: start; }
 .pull-notes .pull-more { border-left-color: transparent; color: var(--muted); font-size: 12.5px; }

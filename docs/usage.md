@@ -27,7 +27,8 @@ stop leaves the list at once.
   opens only with its **Open** button, so Stop and the other buttons are easy to hit.
 - **Pull requests:** a session whose branch has a pull request on GitHub, or a merge request on a
   GitLab host you listed, shows its number (`#12` or `!12`) and state next to the branch: CI
-  failing, changes requested, CI running, approved, CI passing, merged or closed. Hover it for the
+  failing, conflicts, changes requested, CI running, approved, CI passing, merged or closed.
+  **Conflicts** means it can no longer merge into its base branch without a rebase. Hover it for the
   title and the checks that failed, click it to open it. Yardbell asks `gh` on the session's
   machine, or GitLab's API, every two minutes or so. A branch with no pull request has no badge. When
   something stops Yardbell from asking, such as `gh` not being signed in or a GitLab host that is not
@@ -541,17 +542,19 @@ from the next message, in open conversations too. Beside the Dispatch heading, a
 runs on, or that a new one starts on, and leads to the setting.
 
 Dispatch also watches the pull requests and GitLab merge requests of your sessions. When a
-session's CI goes from passing or running to failing, or a reviewer leaves a comment, a review or
-asks for changes, a card appears in the conversation that follows that session, or in a new
+session's CI goes from passing or running to failing, it gets merge conflicts with its base branch,
+or a reviewer leaves a comment, a review or asks for changes, a card appears in the conversation that follows that session, or in a new
 conversation named after the pull request or merge request, which then follows the session. A CI
 card lists the failed checks (on GitLab, the failed jobs), each folded to its name and the line of
 its log that says what broke, with a link; open one for the last lines of the failed log when GitHub
 Actions or GitLab has them. A review card shows each comment, with its file and
-line for a comment on the code. **Send to session** types a short instruction into the session,
+line for a comment on the code. A conflict card names the base branch, and its instruction asks the
+agent to rebase onto it, resolve the conflicts and push. **Send to session** types a short instruction into the session,
 like "CI failed on test for pull request #12: error: test failed. Fix it and push.", which **What it
 sends** on the card shows before you send it. It is a step like Dispatch's own, so your rules for typing into sessions
 apply: it is sent at once, waits below for you to approve or edit it, or is refused. Each failure
-(one commit) and each comment gets one card, also after a restart, and a pull request seen for the
+(one commit), each conflict (one commit, and again if it comes back after being cleared) and each
+comment gets one card, also after a restart, and a pull request seen for the
 first time only sets what is known, so old comments never turn into cards.
 
 A pipeline run with a [Wait for CI and reviews](automation.md#wait-for-ci-and-reviews) step takes these

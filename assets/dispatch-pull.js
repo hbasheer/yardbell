@@ -14,10 +14,12 @@ const KINDS = {
   ci: { word: "CI failed", badge: "failed" },
   changes_requested: { word: "Changes requested", badge: "blocked" },
   review: { word: "New comments", badge: "blocked" },
+  conflict: { word: "Merge conflicts", badge: "blocked" },
 };
 
 function kindOf(e) {
   if (e.kind === "ci") return KINDS.ci;
+  if (e.kind === "conflict") return KINDS.conflict;
   return (e.notes || []).some((n) => n.kind === "changes_requested") ? KINDS.changes_requested : KINDS.review;
 }
 
@@ -104,6 +106,18 @@ async function sendToSession(e, index) {
   ctx.draw();
 }
 
+function conflict(e) {
+  const pull = e.pull || {};
+  const base = pull.base ? html`<code>${pull.base}</code>` : "its base branch";
+  return html`<p class="pull-conflict">${window.YardbellPull.noun(pull)} ${window.YardbellPull.ref(pull)} can no longer merge into ${base} without conflicts.</p>`;
+}
+
+function body(e, index) {
+  if (e.kind === "ci") return checks(e, index);
+  if (e.kind === "conflict") return conflict(e);
+  return notes(e, index);
+}
+
 export function pullCard(e, index) {
   const pull = e.pull || {};
   const kind = kindOf(e);
@@ -117,7 +131,7 @@ export function pullCard(e, index) {
       </div>
       <span class="badge ${kind.badge}">${kind.word}</span>
     </header>
-    ${e.kind === "ci" ? checks(e, index) : notes(e, index)}
+    ${body(e, index)}
     <div class="session-card-actions">
       ${canSend ? html`<button class="btn primary" type="button" ?disabled=${!e.name} title="Type this into ${e.name}, as your Dispatch rules allow" @click=${() => sendToSession(e, index)}><span class="btn-label">${sent?.again ? "Send again" : "Send to session"}</span></button>` : nothing}
       <a class="btn quiet" href=${ctx.termUrl(e.machine, e.name)} target="_blank" rel="noopener">Open</a>

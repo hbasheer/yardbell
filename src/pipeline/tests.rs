@@ -3725,6 +3725,8 @@ mod ci_wait {
             asking: vec![],
             resolved: vec![],
             unsettled: vec![],
+            base: "main".into(),
+            mergeable: crate::pulls::Mergeable::Unknown,
         })
     }
 

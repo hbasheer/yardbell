@@ -185,6 +185,14 @@ pub fn untold(card: &mut Value) -> Option<String> {
             names("checks", "name").join(", "),
             text(card, "instruction")
         ),
+        "conflict" => format!(
+            "{subject} has merge conflicts with {}. Yardbell offers to send: {}",
+            match text(pull, "base") {
+                "" => "its base branch",
+                base => base,
+            },
+            text(card, "instruction")
+        ),
         _ => format!(
             "{subject} has new review comments from {}. Yardbell offers to send: {}",
             names("notes", "author").join(", "),
@@ -323,6 +331,18 @@ mod tests {
         let told = super::untold(&mut c).unwrap();
         assert!(
             told.starts_with("Merge request !7 (Fix login) of hp-app on hp failed CI on test."),
+            "{told}"
+        );
+    }
+
+    #[test]
+    fn dispatch_hears_about_a_conflict_as_one() {
+        let mut c = card("conflict:1:a");
+        c["kind"] = json!("conflict");
+        c["instruction"] = json!("Pull request #7 has merge conflicts with main. Rebase it onto main, resolve the conflicts and push.");
+        let told = super::untold(&mut c).unwrap();
+        assert!(
+            told.starts_with("Pull request #7 (Fix login) of hp-app on hp has merge conflicts with its base branch. Yardbell offers to send: Pull request #7 has merge"),
             "{told}"
         );
     }

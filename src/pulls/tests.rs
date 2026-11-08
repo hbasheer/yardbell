@@ -186,6 +186,7 @@ fn kinds(changes: &[Change]) -> Vec<&str> {
         .map(|c| match c {
             Change::Failed(_) => "failed",
             Change::Reviewed(_) => "reviewed",
+            Change::Conflicted => "conflicted",
         })
         .collect()
 }
@@ -1794,4 +1795,104 @@ fn other_github_conclusions_keep_what_they_mean_today() {
         assert_eq!(pull.ci, Ci::Failing, "{word}");
         assert!(pull.unsettled.is_empty(), "{word}");
     }
+}
+
+fn merging(mergeable: &str, sha: &str) -> Pull {
+    let mut v: Value = serde_json::from_str(&view_with("passing", sha, &[])).unwrap();
+    v["mergeable"] = json!(mergeable);
+    v["baseRefName"] = json!("main");
+    parse_view(&v.to_string()).unwrap()
+}
+
+#[test]
+fn whether_a_pull_request_can_merge_is_read_from_gh() {
+    assert!(super::github::view_command("x").contains("mergeable"));
+    assert!(super::github::view_command("x").contains("baseRefName"));
+    let p = merging("CONFLICTING", "a");
+    assert_eq!(
+        (p.mergeable, p.base.as_str()),
+        (Mergeable::Conflicting, "main")
+    );
+    assert_eq!(merging("MERGEABLE", "a").mergeable, Mergeable::Clean);
+    assert_eq!(merging("UNKNOWN", "a").mergeable, Mergeable::Unknown);
+    assert_eq!(
+        parse_view(VIEW).unwrap().mergeable,
+        Mergeable::Unknown,
+        "not asked"
+    );
+    let view = PullView::from(&p);
+    assert_eq!(
+        serde_json::to_value(&view).unwrap()["mergeable"],
+        "conflicting"
+    );
+}
+
+#[test]
+fn a_conflict_is_reported_once_per_commit_and_again_after_it_cleared() {
+    let conflicted = |changes: &[Change]| changes.contains(&Change::Conflicted);
+    let (seen, first) = observe(None, &merging("CONFLICTING", "a"), "d");
+    assert!(first.is_empty(), "the first sighting only sets the state");
+    let (seen, clean) = observe(Some(&seen), &merging("MERGEABLE", "a"), "d");
+    assert!(clean.is_empty());
+    let (seen, back) = observe(Some(&seen), &merging("CONFLICTING", "a"), "d");
+    assert!(
+        conflicted(&back),
+        "a conflict back after a clean read is news: {back:?}"
+    );
+    let (seen, again) = observe(Some(&seen), &merging("CONFLICTING", "a"), "d");
+    assert!(again.is_empty());
+    let (seen, unknown) = observe(Some(&seen), &merging("UNKNOWN", "a"), "d");
+    assert!(unknown.is_empty());
+    let (seen, recomputed) = observe(Some(&seen), &merging("CONFLICTING", "a"), "d");
+    assert!(
+        recomputed.is_empty(),
+        "GitHub working it out again is not a new conflict"
+    );
+    let (_, pushed) = observe(Some(&seen), &merging("CONFLICTING", "b"), "d");
+    assert!(
+        conflicted(&pushed),
+        "a new commit still in conflict is news"
+    );
+}
+
+#[test]
+fn a_closed_pull_request_in_conflict_says_nothing() {
+    let (seen, _) = observe(None, &merging("MERGEABLE", "a"), "d");
+    let mut closed = merging("CONFLICTING", "a");
+    closed.state = "closed".into();
+    let (_, changes) = observe(Some(&seen), &closed, "d");
+    assert!(changes.is_empty());
+}
+
+#[test]
+fn a_conflict_instruction_names_the_base_branch() {
+    let p = merging("CONFLICTING", "a");
+    assert_eq!(
+        conflict_instruction(&p),
+        "Pull request #12 has merge conflicts with main. Rebase it onto main, resolve the conflicts and push."
+    );
+    let mut nameless = p.clone();
+    nameless.base.clear();
+    assert!(conflict_instruction(&nameless).contains("onto its base branch"));
+    let n = Notice {
+        machine: "hp".into(),
+        session: "hp-app".into(),
+        path: "/r/app".into(),
+        branch: "fix".into(),
+        pull: p.clone(),
+        change: Change::Conflicted,
+    };
+    let c = card(&n, &[], &[]);
+    assert_eq!(c["kind"], "conflict");
+    assert_eq!(c["key"], "conflict:https://github.com/acme/app/pull/12:a");
+    assert_eq!(c["instruction"], conflict_instruction(&p));
+}
+
+#[test]
+fn the_timeline_says_when_a_conflict_appears() {
+    let (seen, _) = observe(None, &merging("MERGEABLE", "a"), "d");
+    let p = merging("CONFLICTING", "a");
+    let (_, changes) = observe(Some(&seen), &p, "d");
+    let events = timeline_events(Some(&seen), &p, &changes);
+    assert_eq!(texts(&events), ["Merge conflicts with main"]);
 }

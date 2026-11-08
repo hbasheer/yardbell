@@ -27,7 +27,7 @@ fn pull(state: &str, number: u64) -> serde_json::Value {
     json!({
         "number": number, "url": format!("https://github.com/acme/app/pull/{number}"),
         "title": "Fix login", "state": state, "isDraft": false, "reviewDecision": "CHANGES_REQUESTED",
-        "headRefOid": "abc", "author": { "login": "me" }, "createdAt": "2026-10-30T10:00:00Z",
+        "headRefOid": "abc", "mergeable": "CONFLICTING", "baseRefName": "main", "author": { "login": "me" }, "createdAt": "2026-10-30T10:00:00Z",
         "comments": { "nodes": [{ "id": "c1", "author": { "login": "reviewer" }, "body": "Please fix", "url": "https://github.com/c1", "viewerDidAuthor": false, "isMinimized": false }] },
         "reviews": { "nodes": [{ "id": "r1", "author": { "login": "reviewer" }, "body": "No", "state": "CHANGES_REQUESTED" }] },
         "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "contexts": { "nodes": [
@@ -56,6 +56,8 @@ async fn a_token_reads_a_pull_request_as_gh_does() {
     assert_eq!(found.number, 12);
     assert_eq!(found.ci, super::Ci::Failing);
     assert_eq!(found.failed[0].name, "CI / test");
+    assert_eq!(found.mergeable, super::Mergeable::Conflicting);
+    assert_eq!(found.base, "main");
     assert!(
         found.notes.iter().any(|n| n.id == "c1"),
         "{:?}",
@@ -186,4 +188,10 @@ async fn the_setting_picks_which_way_github_is_asked() {
     either.configure(&cfg, &Err("no secrets".into()));
     let got = either.fetch(&machine(), "/r/app", "fix").await;
     assert!(matches!(&got, Fetched::Failed(_)), "{got:?}");
+}
+
+#[test]
+fn the_token_query_asks_whether_it_can_merge() {
+    assert!(super::github_api::QUERY.contains("mergeable"));
+    assert!(super::github_api::QUERY.contains("baseRefName"));
 }

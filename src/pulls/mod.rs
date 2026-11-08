@@ -50,6 +50,16 @@ pub enum Ci {
     Failing,
 }
 
+// GitHub works out whether a pull request can merge after each push, and says UNKNOWN until then.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mergeable {
+    #[default]
+    Unknown,
+    Clean,
+    Conflicting,
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Check {
     pub name: String,
@@ -105,6 +115,8 @@ pub struct Pull {
     pub asking: Vec<String>,
     pub resolved: Vec<String>,
     pub unsettled: Vec<UnsettledCheck>,
+    pub base: String,
+    pub mergeable: Mergeable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -121,6 +133,10 @@ pub struct PullView {
     pub failed: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub head: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base: String,
+    #[serde(default)]
+    pub mergeable: Mergeable,
 }
 
 impl From<&Pull> for PullView {
@@ -136,6 +152,8 @@ impl From<&Pull> for PullView {
             ci: p.ci,
             failed: p.failed.iter().map(|c| c.name.clone()).collect(),
             head: p.head.clone(),
+            base: p.base.clone(),
+            mergeable: p.mergeable,
         }
     }
 }
@@ -268,12 +286,17 @@ pub struct Seen {
     // against what it never knew is no change.
     #[serde(default)]
     pub known: bool,
+    // The commit whose conflict was told. A clean read clears it, so a conflict that comes back
+    // is told again, while GitHub saying UNKNOWN as it works it out again leaves it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conflict: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     Failed(Vec<Check>),
     Reviewed(Vec<Note>),
+    Conflicted,
 }
 
 fn failure_of(pull: &Pull) -> String {
@@ -312,6 +335,7 @@ pub fn observe(seen: Option<&Seen>, pull: &Pull, day: &str) -> (Seen, Vec<Change
             draft: pull.draft,
             review: pull.review.clone(),
             known: true,
+            conflict: conflict_of(pull).unwrap_or_default(),
         };
         return (next, Vec::new());
     };
@@ -344,7 +368,21 @@ pub fn observe(seen: Option<&Seen>, pull: &Pull, day: &str) -> (Seen, Vec<Change
             changes.push(Change::Reviewed(new));
         }
     }
+    match pull.mergeable {
+        Mergeable::Clean => next.conflict.clear(),
+        Mergeable::Conflicting if seen.conflict != pull.head => {
+            next.conflict.clone_from(&pull.head);
+            if open {
+                changes.push(Change::Conflicted);
+            }
+        }
+        _ => {}
+    }
     (next, changes)
+}
+
+fn conflict_of(pull: &Pull) -> Option<String> {
+    (pull.mergeable == Mergeable::Conflicting).then(|| pull.head.clone())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -464,6 +502,14 @@ fn now_entry(text: String, url: &str) -> Event {
 
 // What the session's Insights timeline says about a check: the pull request found, then what
 // changed since the last check that a person reviewing it would care about.
+pub(crate) fn base_of(pull: &Pull) -> &str {
+    if pull.base.is_empty() {
+        "its base branch"
+    } else {
+        &pull.base
+    }
+}
+
 pub fn timeline_events(before: Option<&Seen>, pull: &Pull, changes: &[Change]) -> Vec<Event> {
     let Some(before) = before else {
         return vec![Event {
@@ -487,6 +533,12 @@ pub fn timeline_events(before: Option<&Seen>, pull: &Pull, changes: &[Change]) -
             both(&pull.approvers)
         };
         out.push(now_entry(format!("{who} approved"), &pull.url));
+    }
+    if changes.contains(&Change::Conflicted) {
+        out.push(now_entry(
+            format!("Merge conflicts with {}", base_of(pull)),
+            &pull.url,
+        ));
     }
     for change in changes {
         let Change::Reviewed(notes) = change else {
@@ -547,6 +599,14 @@ pub fn ci_instruction(pull: &Pull, checks: &[Check]) -> String {
     )
 }
 
+pub fn conflict_instruction(pull: &Pull) -> String {
+    let base = base_of(pull);
+    format!(
+        "{} has merge conflicts with {base}. Rebase it onto {base}, resolve the conflicts and push.",
+        titled(pull)
+    )
+}
+
 pub(crate) fn said_by(n: &Note) -> String {
     let who = if n.author.is_empty() {
         "A reviewer"
@@ -597,6 +657,7 @@ fn card_key(n: &Notice) -> String {
             n.pull.url,
             notes.first().map(|n| n.id.as_str()).unwrap_or_default()
         ),
+        Change::Conflicted => format!("conflict:{}:{}", n.pull.url, n.pull.head),
     }
 }
 
@@ -604,6 +665,7 @@ pub fn card(n: &Notice, checks: &[Check], notes: &[Note]) -> Value {
     let (kind, instruction) = match &n.change {
         Change::Failed(_) => ("ci", ci_instruction(&n.pull, checks)),
         Change::Reviewed(_) => ("review", review_instruction(&n.pull, notes)),
+        Change::Conflicted => ("conflict", conflict_instruction(&n.pull)),
     };
     let more = notes.len().saturating_sub(NOTES_PER_CARD);
     let notes: Vec<Note> = notes
@@ -1093,6 +1155,7 @@ impl Pulls {
                 let all = with_comments_on_lines(self.github.as_ref(), m, &n.path, notes, gitlab);
                 card(n, &[], &all.await)
             }
+            Change::Conflicted => card(n, &[], &[]),
         }
     }
 
