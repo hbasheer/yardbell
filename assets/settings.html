@@ -168,6 +168,7 @@
           <label class="choice phone-wait">after <input type="number" name="wait_minutes" min="0" max="60" step="1" inputmode="numeric" required> minutes</label>
         </div>
         <label class="choice"><input type="checkbox" name="session_ended">Session ended</label>
+        <label class="choice"><input type="checkbox" name="limit_reset">Usage limit reset</label>
         <label class="choice"><input type="checkbox" name="machines">Machine down or back</label>
         <label class="choice"><input type="checkbox" name="memory">Memory at 95%</label>
         <label class="choice"><input type="checkbox" name="pipeline_waiting">Pipeline needs you</label>
@@ -439,6 +440,7 @@
           <label class="conn-setting"><span><strong>Show them on sessions</strong><small>A session shows its branch's pull or merge request, with its state and CI.</small></span><input type="checkbox" class="switch" name="enabled"></label>
           <label class="conn-setting"><span><strong>Post a card in Dispatch</strong><small>When CI fails or a reviewer comments.</small></span><input type="checkbox" class="switch" name="cards"></label>
           <label class="conn-setting"><span><strong>Review my sessions' pull requests</strong><small>When a session's pull or merge request opens or gets new commits, once the session is idle with that commit checked out. A read-only reviewer runs the tests and its findings come back in Dispatch. Each review uses your agent's tokens, and Dispatch rules for reviews still apply.</small></span><select name="review_sessions"><option value="off">Off</option><option value="ask">Ask me first</option><option value="auto">Automatically</option></select></label>
+          <label class="conn-setting"><span><strong>Merge with</strong><small>What <strong>Merge</strong> on a ready session and Dispatch's merge step use. GitLab merges as each project is set up, and can only be told to squash.</small></span><select name="merge_method"><option value="merge">A merge commit</option><option value="squash">Squash</option><option value="rebase">Rebase</option></select></label>
           <label class="conn-setting"><span><strong>Check every</strong><small>How often Yardbell asks about each branch.</small></span><span class="conn-seconds"><input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required>seconds</span></label>
           <div class="conn-settings-foot" id="pr-save" hidden>
             <p class="help" id="pr-note" role="status"></p>
@@ -609,7 +611,7 @@
       <div class="conn-step" id="forge-gitlab" hidden>
         <label class="choice"><input type="checkbox" name="use_gitlab" form="pr-form">Show GitLab merge requests on sessions</label>
         <fieldset class="conn-via"><legend>How it connects</legend>
-          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="token" form="pr-form"><span><strong>A token for each host</strong><small>Yardbell asks GitLab's API from here. The token needs the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Paste it on the host below, and it is saved as a secret.</small></span></label>
+          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="token" form="pr-form"><span><strong>A token for each host</strong><small>Yardbell asks GitLab's API from here. The token needs the <code>read_api</code> scope. A pipeline that opens merge requests, or merging from Yardbell, needs <code>api</code>. Paste it on the host below, and it is saved as a secret.</small></span></label>
           <label class="conn-via-option"><input type="radio" name="gitlab_via" value="glab" form="pr-form"><span><strong>Local glab</strong><small>Yardbell asks <code>glab</code> on each session's machine. Each machine needs it installed and signed in with <code>glab auth login</code>.</small></span></label>
         </fieldset>
         <div class="pr-part-head"><strong>Hosts</strong><button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button></div>

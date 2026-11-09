@@ -80,6 +80,7 @@ server to `~/.claude.json` by hand.
 | `remove_worktree` | remove a worktree that would lose nothing; never a main checkout, never forced |
 | `integrate_branches` | merge or rebase several branches, in order, onto a new branch in its own worktree; stops at the first conflict |
 | `push_branch` | push a branch, never forced, after a scan for keys, tokens and saved secret values |
+| `merge_pull` | merge a session's pull or merge request, only when it is open, approved, green and free of conflicts, and only at the commit that was checked |
 | `move_session` | move a session's branch, uncommitted changes and task to another machine, without committing or pushing |
 
 These read Yardbell's own settings and data, change nothing, and never show a secret: a setting

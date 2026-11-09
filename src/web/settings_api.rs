@@ -106,6 +106,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             "pull_ready": phone.pull_ready,
             "pull_merged": phone.pull_merged,
             "pull_closed": phone.pull_closed,
+            "limit_reset": phone.limit_reset,
         },
         "health_checks": cfg.health_checks,
         "mcp_servers": cfg.mcp_servers,

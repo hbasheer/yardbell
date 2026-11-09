@@ -3,7 +3,7 @@ use rand::Rng;
 use serde_json::{json, Value};
 
 const ID_LEN: usize = 8;
-const CHANGING: [&str; 19] = [
+const CHANGING: [&str; 20] = [
     "save_connector",
     "start_session",
     "send_to_session",
@@ -14,6 +14,7 @@ const CHANGING: [&str; 19] = [
     "remove_worktree",
     "integrate_branches",
     "push_branch",
+    "merge_pull",
     "move_session",
     "remember",
     "change_settings",
@@ -206,6 +207,7 @@ fn what(action: &Value) -> String {
             text(input, "into")
         ),
         "push_branch" => format!("pushing {} on {machine}", text(input, "branch")),
+        "merge_pull" => format!("merging the pull request of {session} on {machine}"),
         "run_command" => format!("running \"{}\" on {machine}", text(input, "command")),
         "move_session" => match text(input, "to") {
             "" => format!("moving {session} from {machine} to the machine with the most room"),

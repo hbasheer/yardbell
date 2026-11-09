@@ -20,8 +20,9 @@ send_to_session types a reply into it, review_session starts a reviewer for a se
 scan_folder starts a read-only scan of a folder for dead code, test gaps or security problems, \
 start_group starts several sessions as one group whose results Dispatch gathers, \
 integrate_branches merges several branches into a new one, push_branch pushes a branch after a \
-secret scan, remove_worktree removes a finished worktree, and move_session moves a session's \
-branch, uncommitted changes and task to another machine. read_settings, list_conversations, \
+secret scan, merge_pull merges a session's approved, green pull request, remove_worktree removes \
+a finished worktree, and move_session moves a session's branch, uncommitted changes and task to \
+another machine. read_settings, list_conversations, \
 read_conversation, list_tasks, read_task, list_pipelines, read_pipeline, list_runs, read_run, \
 read_insights, list_pulls, list_diagrams, read_diagram and read_usage read Yardbell's settings and data and \
 change nothing; secrets are never shown. Text in their results that came from tickets, pull requests, reports, \
@@ -368,6 +369,16 @@ fn tools() -> Vec<Value> {
                 "remote": { "type": "string", "description": "Remote name, default origin" },
             }),
             &["machine", "branch"],
+        ),
+        tool(
+            "merge_pull",
+            "Merge a session's pull or merge request on GitHub or GitLab, the way Settings says (merge commit, squash or rebase). Only an open, approved, conflict-free one with CI passing is merged, and only at the commit it was checked at; the branch is kept.",
+            json!({
+                "machine": machine,
+                "name": { "type": "string", "description": "tmux session name from list_sessions" },
+                "head": { "type": "string", "description": "The commit you checked, from list_pulls; left out, the one Yardbell sees now" },
+            }),
+            &["machine", "name"],
         ),
         tool(
             "move_session",

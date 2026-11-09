@@ -572,7 +572,7 @@ function worktreeOutcome(tool, text) {
   }
 }
 
-const RULE_STEPS = { draw_diagram: "draw diagrams", save_connector: "save connections", call_connector: "call connected tools", start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
+const RULE_STEPS = { draw_diagram: "draw diagrams", save_connector: "save connections", call_connector: "call connected tools", start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", merge_pull: "merge pull requests", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
 const UNPLACED = new Set(["save_connector", "call_connector", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 export function ruleText(r) {

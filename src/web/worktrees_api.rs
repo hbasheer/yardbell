@@ -13,11 +13,12 @@ use serde::Deserialize;
 use serde_json::{json, Value};
 use std::sync::Arc;
 
-pub const TOOLS: [&str; 4] = [
+pub const TOOLS: [&str; 5] = [
     "remove_worktree",
     "integrate_branches",
     "push_branch",
     "move_session",
+    "merge_pull",
 ];
 
 pub fn routes() -> Router<Arc<AppState>> {
@@ -28,6 +29,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/worktrees/{machine}/integrate", post(integrate_route))
         .route("/worktrees/{machine}/push", post(push_route))
         .route("/sessions/{machine}/{name}/move", post(move_route))
+        .route("/sessions/{machine}/{name}/merge", post(merge_route))
         .route("/sessions/{machine}/{name}/task", get(task_route))
         .route(
             "/api/settings/worktree-setup",
@@ -129,6 +131,15 @@ pub struct PushBranch {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct MergePull {
+    pub machine: String,
+    pub name: String,
+    // The commit the person looked at; empty means the one the badge shows now.
+    #[serde(default)]
+    pub head: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct MoveSession {
     pub machine: String,
     pub name: String,
@@ -184,6 +195,11 @@ pub fn check(app: &AppState, cfg: &Config, tool: &str, input: &Value) -> Result<
                 )));
             }
         }
+        "merge_pull" => {
+            let r: MergePull = arg(input.clone())?;
+            find_machine(cfg, &r.machine)?;
+            session_on(app, &r.machine, &r.name)?;
+        }
         "move_session" => {
             let r: MoveSession = arg(input.clone())?;
             find_machine(cfg, &r.machine)?;
@@ -208,6 +224,7 @@ pub async fn run_tool(app: &AppState, tool: &str, args: Value) -> Result<Value, 
         "integrate_branches" => integrate(app, &arg(args)?).await,
         "push_branch" => push(app, &arg(args)?).await,
         "move_session" => move_session(app, &arg(args)?).await,
+        "merge_pull" => merge_pull(app, &arg(args)?).await,
         other => Err(bad(format!("unknown tool {other}"))),
     }
 }
@@ -611,6 +628,58 @@ async fn move_route(
     body["name"] = json!(name);
     let r: MoveSession = arg(body)?;
     Ok(Json(move_session(&app, &r).await?).into_response())
+}
+
+async fn merge_route(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((machine, name)): UrlPath<(String, String)>,
+    Json(body): Json<Value>,
+) -> Result<Response, ApiError> {
+    let mut body = with_machine(body, &machine);
+    body["name"] = json!(name);
+    let r: MergePull = arg(body)?;
+    Ok(Json(merge_pull(&app, &r).await?).into_response())
+}
+
+pub async fn merge_pull(app: &AppState, r: &MergePull) -> Result<Value, ApiError> {
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &r.machine)?;
+    let view = app.state.view(&cfg, app.ports.as_ref(), "localhost");
+    let s = view
+        .sessions
+        .iter()
+        .find(|s| s.machine == m.name && s.tmux.as_deref() == Some(r.name.as_str()))
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                format!("no session named {} on {}", r.name, m.name),
+            )
+        })?;
+    if s.path.is_empty() || s.branch.is_empty() {
+        return Err(bad(format!(
+            "{} is not on a branch Yardbell can find a pull request for",
+            r.name
+        )));
+    }
+    let head = match r.head.trim() {
+        "" => s.pull.as_ref().map(|p| p.head.clone()).unwrap_or_default(),
+        head => head.to_string(),
+    };
+    let secrets = crate::secrets::Secrets::for_config(&app.cfg_path).map_err(|e| e.to_string());
+    let pull = app
+        .pulls
+        .merge(&cfg, &secrets, &m, &s.path, &s.branch, &head)
+        .await
+        .map_err(|why| ApiError(StatusCode::CONFLICT, why))?;
+    app.state.touch();
+    Ok(json!({
+        "merged": true,
+        "machine": m.name,
+        "name": r.name,
+        "branch": s.branch,
+        "method": cfg.pull_requests.merge_method.as_str(),
+        "pull": pull,
+    }))
 }
 
 async fn task_route(

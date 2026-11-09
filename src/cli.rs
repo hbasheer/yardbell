@@ -313,6 +313,7 @@ pub async fn serve(
             dir.join("proposals.json"),
         )),
         pipelines: pipelines.clone(),
+        pulls: pulls.clone(),
         releases: crate::about::github(),
         refresh: Arc::new(move |machine: Option<String>| {
             let poller = poller.clone();
@@ -329,6 +330,7 @@ pub async fn serve(
     let app = Arc::new(AppState::new(path, services, &cfg, Arc::new(Instant::now)));
     crate::health::Ledger::load(dir.join("health.json")).start_loop(app.clone());
     crate::web::review_pulls::start(app.clone(), pulls);
+    crate::web::limits::start_loop(app.clone());
     pipelines.clone().start_loop(
         app.clone(),
         crate::pipeline::forge::Forge::new(runner.clone(), ssh.clone()),

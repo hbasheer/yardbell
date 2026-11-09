@@ -80,7 +80,7 @@ function clock(stamp) {
 
 const PHONE_SWITCHES = [
   "agent_waiting", "session_ended", "machines", "memory", "pipeline_waiting", "pipeline_finished", "proposals",
-  "pull_ci_failed", "pull_conflicts", "pull_ready", "pull_merged", "pull_closed",
+  "pull_ci_failed", "pull_conflicts", "pull_ready", "pull_merged", "pull_closed", "limit_reset",
 ];
 
 function renderPhone(p) {
@@ -219,7 +219,7 @@ function renderDispatch() {
   loadDiagramMachines();
 }
 
-const RULE_STEPS = { any: "Any step", call_connector: "Call a connected tool", call_tool: "Call an MCP tool", run_command: "Run a command", save_connector: "Save a connection", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
+const RULE_STEPS = { any: "Any step", call_connector: "Call a connected tool", call_tool: "Call an MCP tool", run_command: "Run a command", save_connector: "Save a connection", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", merge_pull: "Merge a pull request", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
 const UNPLACED = new Set(["save_connector", "call_connector", "call_tool", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 const RULE_APPROVALS = { allow: "Allow", prompt: "Ask me", deny: "Deny" };
 let rules = [];
@@ -975,6 +975,7 @@ function renderPullRequests() {
   f.elements.cards.checked = value.cards;
   f.elements.review_sessions.value = value.review_sessions || "off";
   f.elements.poll_seconds.value = value.poll_seconds;
+  f.elements.merge_method.value = value.merge_method || "merge";
   f.elements.use_github.checked = value.use_github !== false;
   f.elements.use_gitlab.checked = value.use_gitlab !== false;
   f.elements.github_via.value = value.github_via || "gh";
@@ -1668,6 +1669,7 @@ $("pr-form").addEventListener("submit", async (e) => {
     use_github: f.elements.use_github.checked,
     use_gitlab: f.elements.use_gitlab.checked,
     poll_seconds: Number(f.elements.poll_seconds.value),
+    merge_method: f.elements.merge_method.value,
     github_via: f.elements.github_via.value,
     github_token: f.elements.github_token.value,
     gitlab_via: f.elements.gitlab_via.value,

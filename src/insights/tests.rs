@@ -19,6 +19,7 @@ fn session(name: &str, activity: Activity) -> Session {
         tmux: Some(name.into()),
         activity,
         stopped: None,
+        resets: None,
     }
 }
 

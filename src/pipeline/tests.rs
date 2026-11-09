@@ -168,6 +168,7 @@ impl World for Fake {
                     setup: None,
                     stopped: None,
                     review: None,
+                    resets: None,
                 })
                 .collect(),
             ended: vec![],

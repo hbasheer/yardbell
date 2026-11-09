@@ -85,6 +85,7 @@ pub struct AppState {
     pub pairing: std::sync::Mutex<Vec<(String, Instant)>>,
     pub viewers: Viewers,
     pub worktrees: crate::worktrees::Worktrees,
+    pub pulls: Arc<crate::pulls::Pulls>,
     tasks: std::sync::Mutex<HashMap<(String, String), String>>,
     installed: std::sync::Mutex<HashMap<String, (Instant, Vec<String>)>>,
     servers: tokio::sync::Mutex<Option<(Instant, Vec<crate::discover::Found>)>>,
@@ -114,6 +115,7 @@ pub struct Services {
     pub pipelines: Arc<crate::pipeline::Pipelines>,
     pub proposals: Arc<crate::proposals::Proposals>,
     pub worktrees: crate::worktrees::Worktrees,
+    pub pulls: Arc<crate::pulls::Pulls>,
     pub refresh: Refresh,
     pub releases: crate::about::Fetch,
 }
@@ -135,6 +137,7 @@ impl AppState {
             pipelines,
             proposals,
             worktrees,
+            pulls,
             refresh,
             releases,
         } = services;
@@ -166,6 +169,7 @@ impl AppState {
             pairing: std::sync::Mutex::new(Vec::new()),
             viewers: Viewers::default(),
             worktrees,
+            pulls,
             tasks: std::sync::Mutex::new(HashMap::new()),
             installed: std::sync::Mutex::new(HashMap::new()),
             servers: tokio::sync::Mutex::new(None),
@@ -2398,6 +2402,7 @@ async fn remove_machine(
 mod connectors_api;
 pub(crate) mod diagrams_api;
 mod insights_api;
+pub mod limits;
 mod mcp_auth_api;
 pub(crate) mod pipeline_api;
 mod proposals_api;

@@ -8,7 +8,7 @@ use regex::Regex;
 use serde::Deserialize;
 use std::sync::OnceLock;
 
-pub use stopped::stopped;
+pub use stopped::{resets, stopped};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ScreenState {

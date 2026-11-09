@@ -478,6 +478,7 @@ span.mg-fold { cursor: default; }
 .b-branch { margin-top: 2px; }
 .b-marks { display: flex; align-items: baseline; flex-wrap: wrap; gap: 4px 10px; margin-top: 6px; font-size: 12px; }
 .b-meta { display: flex; align-items: center; justify-content: space-between; gap: 6px 8px; margin-top: 8px; color: var(--muted); font-size: 12px; }
+.b-actions { display: flex; justify-content: flex-end; margin-top: 8px; }
 .b-where { min-width: 0; overflow-wrap: anywhere; }
 .b-empty { margin: 0; padding: 12px; color: var(--muted); font-size: 13px; }
 @media (pointer: fine) {

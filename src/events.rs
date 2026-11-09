@@ -43,6 +43,13 @@ pub enum Event {
         change: PullChange,
         pull: PullView,
     },
+    LimitReset {
+        machine: String,
+        session_id: String,
+        tmux: Option<String>,
+        folder: String,
+        agent: String,
+    },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -112,6 +119,18 @@ pub fn message(event: &Event, view: &StateView, waited_minutes: u64) -> Message 
             pull,
             ..
         } => pull_message(machine, folder, *change, pull),
+        Event::LimitReset {
+            machine,
+            folder,
+            agent,
+            ..
+        } => (
+            format!("{folder}: the usage limit has reset"),
+            format!(
+                "{} on {machine} stopped at its limit and can go on",
+                agent_label(view, agent)
+            ),
+        ),
     };
     Message { title, body }
 }
@@ -230,6 +249,8 @@ pub struct Tracker {
     sessions: HashMap<String, SessionState>,
     machines: HashMap<String, MachineState>,
     pulls: HashMap<String, PullState>,
+    // The reset each session was told about, so a limit is told once however long it waits.
+    limits: HashMap<String, String>,
     primed: bool,
 }
 
@@ -247,6 +268,7 @@ impl Tracker {
         self.observe_machines(view, now, &mut events);
         self.observe_sessions(view, now, &mut events);
         self.observe_pulls(view, &mut events);
+        self.observe_limits(view, chrono::Utc::now(), &mut events);
         if !std::mem::replace(&mut self.primed, true) {
             events.clear();
         }
@@ -301,6 +323,42 @@ impl Tracker {
                     percent: percent.min(u8::MAX as u64) as u8,
                 });
             }
+        }
+    }
+
+    fn observe_limits(
+        &mut self,
+        view: &StateView,
+        now: chrono::DateTime<chrono::Utc>,
+        events: &mut Vec<Event>,
+    ) {
+        let live: HashSet<&str> = view
+            .sessions
+            .iter()
+            .filter(|s| !s.stale)
+            .map(|s| s.id.as_str())
+            .collect();
+        self.limits.retain(|id, _| live.contains(id.as_str()));
+        for s in view
+            .sessions
+            .iter()
+            .filter(|s| !s.stale && s.stopped.is_some())
+        {
+            let Some(resets) = s.resets.as_deref() else {
+                continue;
+            };
+            let passed = chrono::DateTime::parse_from_rfc3339(resets).is_ok_and(|at| at <= now);
+            if !passed || self.limits.get(&s.id).is_some_and(|told| told == resets) {
+                continue;
+            }
+            self.limits.insert(s.id.clone(), resets.to_string());
+            events.push(Event::LimitReset {
+                machine: s.machine.clone(),
+                session_id: s.id.clone(),
+                tmux: s.tmux.clone(),
+                folder: s.folder.clone(),
+                agent: s.agent.clone(),
+            });
         }
     }
 
@@ -475,6 +533,7 @@ mod tests {
             setup: None,
             stopped: None,
             review: None,
+            resets: None,
         }
     }
 
@@ -1008,6 +1067,7 @@ mod tests {
         let stopped = || {
             let mut v = one_machine(vec![SessionView {
                 stopped: Some("API Error: 529 overloaded".into()),
+                resets: None,
                 ..session("s1", "hp", Activity::Idle)
             }]);
             v.agents = labelled().agents;
@@ -1019,6 +1079,68 @@ mod tests {
         let Message { title, body } = message(&idle_event(), &stopped(), 0);
         assert_eq!(title, "api stopped on an error");
         assert_eq!(body, "Claude Code on hp: API Error: 529 overloaded");
+    }
+
+    #[test]
+    fn a_usage_limit_is_told_once_when_its_reset_time_passes() {
+        let mut t = Tracker::new();
+        let limited = |resets: &str| {
+            let mut v = one_machine(vec![SessionView {
+                stopped: Some("You've hit your limit · resets 3pm".into()),
+                resets: Some(resets.into()),
+                ..session("s1", "hp", Activity::Idle)
+            }]);
+            v.agents = labelled().agents;
+            v
+        };
+        let at = |text: &str| {
+            chrono::DateTime::parse_from_rfc3339(text)
+                .unwrap()
+                .with_timezone(&chrono::Utc)
+        };
+        let reset = "2026-11-09T15:00:00+03:00";
+        let told = |t: &mut Tracker, now: &str| {
+            let mut events = Vec::new();
+            t.observe_limits(&limited(reset), at(now), &mut events);
+            events
+        };
+        assert_eq!(told(&mut t, "2026-11-09T14:59:00+03:00"), vec![]);
+        let event = Event::LimitReset {
+            machine: "hp".into(),
+            session_id: "s1".into(),
+            tmux: Some("eng-1".into()),
+            folder: "api".into(),
+            agent: "claude".into(),
+        };
+        assert_eq!(
+            told(&mut t, "2026-11-09T15:00:30+03:00"),
+            vec![event.clone()]
+        );
+        assert_eq!(told(&mut t, "2026-11-09T16:00:00+03:00"), vec![]);
+        let Message { title, body } = message(&event, &limited(reset), 0);
+        assert_eq!(title, "api: the usage limit has reset");
+        assert_eq!(body, "Claude Code on hp stopped at its limit and can go on");
+
+        let mut events = Vec::new();
+        let next = "2026-11-09T20:00:00+03:00";
+        t.observe_limits(&limited(next), at("2026-11-09T20:01:00+03:00"), &mut events);
+        assert_eq!(events.len(), 1, "a later limit is told again");
+    }
+
+    #[test]
+    fn an_error_without_a_reset_time_is_never_told_as_reset() {
+        let mut t = Tracker::new();
+        let mut v = one_machine(vec![SessionView {
+            stopped: Some("API Error: 529 overloaded".into()),
+            resets: None,
+            ..session("s1", "hp", Activity::Idle)
+        }]);
+        let mut events = Vec::new();
+        t.observe_limits(&v, chrono::Utc::now(), &mut events);
+        v.sessions[0].stopped = None;
+        v.sessions[0].resets = Some("2026-11-09T15:00:00+03:00".into());
+        t.observe_limits(&v, chrono::Utc::now(), &mut events);
+        assert_eq!(events, vec![], "only a session still stopped is told");
     }
 
     fn texts(e: &Event, waited: u64) -> (String, String) {

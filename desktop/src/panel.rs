@@ -407,6 +407,7 @@ mod tests {
             setup: None,
             stopped: None,
             review: None,
+            resets: None,
         }
     }
 

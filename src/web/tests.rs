@@ -101,6 +101,7 @@ fn rig() -> Rig {
         tmux: Some("hp-eng-1301".into()),
         activity: crate::snapshot::Activity::Idle,
         stopped: None,
+        resets: None,
     });
     snap.sessions.push(crate::snapshot::Session {
         machine: "hp".into(),
@@ -113,6 +114,7 @@ fn rig() -> Rig {
         tmux: None,
         activity: crate::snapshot::Activity::Idle,
         stopped: None,
+        resets: None,
     });
     state.update(MachineStatus {
         name: "hp".into(),
@@ -174,6 +176,15 @@ fn rig() -> Rig {
         )),
         proposals: Arc::new(crate::proposals::Proposals::load(
             dir.path().join("proposals.json"),
+        )),
+        pulls: Arc::new(crate::pulls::Pulls::new(
+            Arc::new(crate::pulls::GitHub::new(
+                fake.clone(),
+                Ssh::new(dir.path().join("state4")),
+            )),
+            Arc::new(crate::pulls::GitLab::new()),
+            crate::pulls::Remotes::new(fake.clone(), Ssh::new(dir.path().join("state5"))),
+            dir.path().join("pulls.json"),
         )),
         refresh: {
             let refreshes = refreshes.clone();
@@ -1336,6 +1347,7 @@ async fn phone_settings_are_saved_and_validated() {
             "pull_ready": true,
             "pull_merged": true,
             "pull_closed": true,
+            "limit_reset": true,
         })
     );
     let (status, body) = save_phone(
@@ -1349,6 +1361,7 @@ async fn phone_settings_are_saved_and_validated() {
             "memory": false,
             "pull_ready": false,
             "pull_closed": false,
+            "limit_reset": false,
         }),
     )
     .await;
@@ -1371,6 +1384,7 @@ async fn phone_settings_are_saved_and_validated() {
             "pull_ready": false,
             "pull_merged": true,
             "pull_closed": false,
+            "limit_reset": false,
         })
     );
 
@@ -1639,6 +1653,7 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "remove_worktree",
             "integrate_branches",
             "push_branch",
+            "merge_pull",
             "move_session",
             "change_settings",
             "save_task",
@@ -3637,7 +3652,8 @@ async fn send_to_session_on_a_pull_request_card_follows_the_dispatch_rules() {
             "Pull request #12: Inbox",
             card,
         )
-        .unwrap();
+        .unwrap()
+        .0;
     let url = format!("/dispatch/conversations/{id}/pulls");
     r.fake.stub("load-buffer", Output::ok_with(""));
 
@@ -3698,6 +3714,220 @@ async fn send_to_session_on_a_pull_request_card_follows_the_dispatch_rules() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+fn limited(r: &Rig, resets: chrono::DateTime<chrono::Utc>) {
+    let mut snap = Snapshot::default();
+    snap.folders.insert("slot2".into(), "eng-1301-inbox".into());
+    snap.folder_paths
+        .insert("slot2".into(), "/r/slots/slot2".into());
+    snap.sessions.push(crate::snapshot::Session {
+        machine: "hp".into(),
+        agent: "claude".into(),
+        pid: 9,
+        cwd: "/r/slots/slot2".into(),
+        folder: "slot2".into(),
+        branch: "eng-1301-inbox".into(),
+        ticket: "ENG-1301".into(),
+        tmux: Some("hp-eng-1301".into()),
+        activity: crate::snapshot::Activity::Idle,
+        stopped: Some("You've hit your limit · resets 3pm".into()),
+        resets: Some(resets.to_rfc3339()),
+    });
+    r.app.state.update(MachineStatus {
+        name: "hp".into(),
+        up: true,
+        reason: None,
+        snapshot: Some(snap),
+        checked_at: chrono::Local::now(),
+    });
+}
+
+fn limit_cards(r: &Rig) -> Vec<serde_json::Value> {
+    r.app
+        .dispatch
+        .list()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| r.app.dispatch.get(c["id"].as_str().unwrap()))
+        .flat_map(|c| c["events"].as_array().cloned().unwrap_or_default())
+        .filter(|e| e["kind"] == "limit")
+        .collect()
+}
+
+#[tokio::test]
+async fn a_usage_limit_card_waits_for_its_reset_and_follows_the_rules() {
+    let r = rig();
+    r.fake.stub("load-buffer", Output::ok_with(""));
+    let now = chrono::Utc::now();
+    set_rules(&r, "ask", json!([]));
+
+    limited(&r, now + chrono::Duration::minutes(5));
+    crate::web::limits::round(&r.app, now).await;
+    assert!(limit_cards(&r).is_empty(), "not reset yet");
+
+    limited(&r, now - chrono::Duration::minutes(1));
+    crate::web::limits::round(&r.app, now).await;
+    crate::web::limits::round(&r.app, now).await;
+    let cards = limit_cards(&r);
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    assert_eq!(cards[0]["instruction"], "continue");
+    assert_eq!(cards[0]["name"], "hp-eng-1301");
+    assert!(
+        cards[0]["sent"].is_null(),
+        "the rules ask, so it waits for a click"
+    );
+    assert!(!ran(&r, "load-buffer"));
+
+    limited(&r, now + chrono::Duration::hours(23));
+    crate::web::limits::round(&r.app, now + chrono::Duration::hours(23)).await;
+    assert_eq!(
+        limit_cards(&r).len(),
+        1,
+        "an unsent card stands for the stop when its time rolls over"
+    );
+}
+
+#[tokio::test]
+async fn a_rule_that_allows_typing_resumes_the_session_at_its_reset() {
+    let r = rig();
+    r.fake.stub("load-buffer", Output::ok_with(""));
+    set_rules(
+        &r,
+        "ask",
+        json!([{ "action": "send_to_session", "machine": "hp", "approval": "allow" }]),
+    );
+    let now = chrono::Utc::now();
+    limited(&r, now - chrono::Duration::minutes(1));
+    crate::web::limits::round(&r.app, now).await;
+    let cards = limit_cards(&r);
+    assert_eq!(cards.len(), 1);
+    assert!(cards[0]["sent"]["step"].is_string(), "{cards:?}");
+    let at = r
+        .fake
+        .calls()
+        .iter()
+        .position(|c| c.join(" ").contains("load-buffer"))
+        .unwrap();
+    assert_eq!(r.fake.inputs()[at].as_deref(), Some("continue"));
+}
+
+#[tokio::test]
+async fn an_old_reset_or_a_working_agent_gets_no_card() {
+    let now = chrono::Utc::now();
+    let session = |activity, resets: chrono::DateTime<chrono::Utc>| crate::state::SessionView {
+        id: "hp:t".into(),
+        machine: "hp".into(),
+        agent: "claude".into(),
+        pid: 1,
+        folder: "app".into(),
+        ticket: "-".into(),
+        branch: "main".into(),
+        activity,
+        attachable: true,
+        tmux: Some("t".into()),
+        stale: false,
+        ports: vec![],
+        pull: None,
+        pull_why: None,
+        path: "/r/app".into(),
+        worktree: false,
+        setup: None,
+        stopped: Some("You've hit your limit · resets 3pm".into()),
+        resets: Some(resets.to_rfc3339()),
+        review: None,
+    };
+    let due = |s| crate::web::limits::due(&s, now);
+    assert!(due(session(crate::snapshot::Activity::Idle, now)).is_some());
+    assert!(due(session(crate::snapshot::Activity::Active, now)).is_none());
+    assert!(due(session(
+        crate::snapshot::Activity::Idle,
+        now - chrono::Duration::hours(7)
+    ))
+    .is_none());
+}
+
+fn ready_pull_json(sha: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/gh_pr_view.json"
+    )))
+    .unwrap();
+    v["headRefOid"] = json!(sha);
+    v["reviewDecision"] = json!("APPROVED");
+    v["mergeable"] = json!("MERGEABLE");
+    v["baseRefName"] = json!("main");
+    v["reviews"] = json!([]);
+    v["statusCheckRollup"] = json!([{ "__typename": "CheckRun", "name": "test", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "" }]);
+    v.to_string()
+}
+
+#[tokio::test]
+async fn merge_on_a_session_merges_its_pull_request_at_the_commit_shown() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    r.fake.stub(
+        "gh pr view 'eng-1301-inbox'",
+        Output::ok_with(&ready_pull_json("abc")),
+    );
+    r.fake.stub("gh pr merge", Output::ok_with(""));
+    let url = "/sessions/hp/hp-eng-1301/merge";
+
+    let (status, body) = step_post(&r, &c, url, json!({ "head": "old" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("new commits since you looked"));
+    assert!(!ran(&r, "gh pr merge"));
+
+    let (status, body) = step_post(&r, &c, url, json!({ "head": "abc" })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["merged"], true);
+    assert_eq!(body["method"], "merge");
+    assert_eq!(body["pull"]["number"], 12);
+    let calls: Vec<String> = r.fake.calls().iter().map(|c| c.join(" ")).collect();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.contains("gh pr merge 12 --merge --match-head-commit 'abc'")),
+        "{calls:?}"
+    );
+
+    let (status, _) = step_post(&r, &c, "/sessions/hp/nobody/merge", json!({})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dispatch_asks_before_merging_unless_a_rule_allows_it() {
+    let r = rig();
+    set_rules(&r, "ask", json!([]));
+    let cfg = r.app.config().unwrap();
+    let input = json!({ "machine": "hp", "name": "hp-eng-1301" });
+    crate::mcp::check(&r.app, &cfg, "merge_pull", &input).unwrap();
+    let step = crate::mcp::step_of(&r.app, "merge_pull", &input);
+    assert_eq!(
+        step.folders.as_deref(),
+        Some(&["slot2".to_string(), "/r/slots/slot2".to_string()][..])
+    );
+    let verdict = crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);
+    assert_eq!(verdict.approval, crate::config::Approval::Prompt);
+    set_rules(
+        &r,
+        "ask",
+        json!([{ "action": "merge_pull", "folder": "slot2", "approval": "allow" }]),
+    );
+    let cfg = r.app.config().unwrap();
+    let verdict = crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);
+    assert_eq!(verdict.approval, crate::config::Approval::Allow);
+    assert!(crate::mcp::check(
+        &r.app,
+        &cfg,
+        "merge_pull",
+        &json!({ "machine": "hp", "name": "nobody" })
+    )
+    .is_err());
 }
 
 #[tokio::test]

@@ -197,6 +197,7 @@ mod tests {
                     setup: None,
                     stopped: None,
                     review: None,
+                    resets: None,
                 })
                 .collect(),
             ended: vec![],

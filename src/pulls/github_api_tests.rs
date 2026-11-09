@@ -195,3 +195,71 @@ fn the_token_query_asks_whether_it_can_merge() {
     assert!(super::github_api::QUERY.contains("mergeable"));
     assert!(super::github_api::QUERY.contains("baseRefName"));
 }
+
+#[tokio::test]
+async fn a_token_merges_at_the_commit_it_was_checked_at() {
+    let s = stub().await;
+    s.answer("/repos/acme/app/pulls/12/merge", 200, r#"{"merged":true}"#);
+    let fake = Arc::new(FakeRunner::default());
+    let api = api(&fake, &s.base, "git@github.com:acme/app.git");
+    let mut found =
+        super::github::parse_view(include_str!("../../tests/fixtures/gh_pr_view.json")).unwrap();
+    found.head = "abc".into();
+    api.merge(
+        &machine(),
+        "/r/app",
+        "fix",
+        &found,
+        crate::config::MergeMethod::Rebase,
+    )
+    .await
+    .unwrap();
+    let asked = s.asked.lock().unwrap().clone();
+    let (method, at, auth, body) = asked.last().unwrap();
+    assert_eq!(
+        (method.as_str(), at.as_str()),
+        ("PUT", "/repos/acme/app/pulls/12/merge")
+    );
+    assert_eq!(auth, "Bearer shh-gh-token");
+    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body, json!({ "merge_method": "rebase", "sha": "abc" }));
+
+    s.answer(
+        "/repos/acme/app/pulls/12/merge",
+        409,
+        r#"{"message":"Head branch was modified"}"#,
+    );
+    let why = api
+        .merge(
+            &machine(),
+            "/r/app",
+            "fix",
+            &found,
+            crate::config::MergeMethod::Merge,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        why,
+        "the branch has new commits since Yardbell checked it, so it was not merged"
+    );
+    s.answer(
+        "/repos/acme/app/pulls/12/merge",
+        405,
+        r#"{"message":"Required status check \"test\" is expected."}"#,
+    );
+    let why = api
+        .merge(
+            &machine(),
+            "/r/app",
+            "fix",
+            &found,
+            crate::config::MergeMethod::Merge,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        why,
+        "GitHub will not merge it: Required status check \"test\" is expected."
+    );
+}

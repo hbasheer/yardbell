@@ -17,6 +17,14 @@ and the project uses [Semantic Versioning](https://semver.org).
 - **Review every push.** **Review my sessions' pull requests** under Settings, GitHub and GitLab (`review_sessions:
   ask` or `auto`) reviews a session's pull request when it opens or gets new commits, once per head commit, after the
   session is idle with that commit checked out. Dispatch rules for reviews still apply. Off by default.
+- **Merge from Yardbell.** A session whose pull or merge request is ready (approved, CI green, no conflicts) has a
+  **Merge** button on its row and its Board card. It asks first, reads the pull request again, and merges only if it is
+  still ready and nothing was pushed since the page showed it. **Merge with** in Settings, GitHub and GitLab picks a
+  merge commit, squash or rebase. Dispatch can merge too, with a `merge_pull` step that asks unless a rule allows it.
+- **Resume after a usage limit.** A Claude Code or Codex session stopped at a usage limit that names its reset time
+  shows **Limit until** that time, in the machine's own time zone. When it passes, Dispatch posts a **Limit reset**
+  card whose **Send to session** types `continue`, sent on its own where a rule allows typing into the session, and the
+  phone notifies (**Usage limit reset** under Phone notifications).
 
 ## [0.10.411] - 2026-11-08
 
