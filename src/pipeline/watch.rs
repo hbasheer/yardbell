@@ -121,6 +121,7 @@ mod tests {
                     worktree: true,
                     setup: None,
                     stopped: None,
+                    resets: None,
                 })
                 .collect(),
             ended: vec![],

@@ -23,7 +23,11 @@ stop leaves the list at once.
   answer, such as `API Error: 529`, a usage limit (`You've hit your limit · resets 3pm`) or Codex's
   `■ stream disconnected`, shows a red **Error** instead of Idle. Hover it for the line. It counts
   as idle and lasts until the agent writes something after it. Pressing Esc in Codex is not an
-  error.
+  error. A usage limit that names its reset time shows **Limit until 15:00** instead, read in the
+  machine's own time zone. Once that time passes, Dispatch posts a **Limit reset** card whose **Send
+  to session** types `continue`, and the phone says so (**Usage limit reset** under Phone
+  notifications). A Dispatch rule that allows typing into that session sends it on its own; any
+  other rule leaves the card for you. A reset more than six hours old gets no card.
 - **Machine header:** fold the section away, **+** starts a new session on that machine, the terminal
   button opens a plain shell there (no agent, in its own tmux session), and the **⋯** menu has
   Machine settings, Copy ssh command and Remove machine.
@@ -53,8 +57,13 @@ five lanes, by what each needs next:
 | **Ready to merge** | Approved, CI green (or no CI) and no known merge conflict. |
 | **Idle** | An idle agent with no open pull request, including one whose pull request was merged or closed. |
 
-Each card shows the folder, ticket, branch, the pull request badge, the machine and the agent. Click
-it (or tap it on a phone) to open its terminal; `j`, `k` and `Enter` work as on the list. Search, the
+Each card shows the folder, ticket, branch, the pull request badge, the machine and the agent. A card
+in **Ready to merge** has a **Merge** button, as does the session's row on **Machines**: it asks
+first, then merges on GitHub or GitLab the way **Merge with** in Settings, GitHub and GitLab says (a
+merge commit unless you pick squash or rebase). It reads the pull request again and merges only if it
+is still open, approved, green and free of conflicts, at the commit the page showed, so a push since
+is never merged unseen. The branch is kept. Dispatch can merge too, with its `merge_pull` step, which
+asks unless a rule allows it. Click a card (or tap it on a phone) to open its terminal; `j`, `k` and `Enter` work as on the list. Search, the
 All, Working and Idle switch and a machine picked in the sidebar filter the board too. The choice
 is kept in the address (`?view=board`) and in this browser, so the dashboard opens the way you left
 it. Sessions outside tmux and ended ones stay on **Machines**.

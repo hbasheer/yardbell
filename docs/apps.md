@@ -97,6 +97,7 @@ on by default.
 **Notifications.** The app checks the server every 5 seconds and shows a system notification when:
 
 - an agent finished or is waiting for you (it has been idle for 20 seconds),
+- an agent that stopped at its usage limit can go on, because the reset time it printed passed,
 - a session ended,
 - a machine went down (it has been unreachable for a minute) or came back,
 - a machine's memory passed 95%,
@@ -104,7 +105,7 @@ on by default.
   merged or was closed without merging (see [Phone notifications](#phone-notifications) for when).
 
 Each kind has a switch under **Notifications** in the tray menu, with one **Pull requests** switch
-for all the pull request ones. All are on by default and the choice is kept between launches. These
+for all the pull request ones. A usage limit reset follows the agents switch. All are on by default and the choice is kept between launches. These
 switches are for the desktop app on that computer; phone notifications have their own in Settings.
 Click an agent or pull request notification to open that session's terminal.
 Notifications that stay in the macOS Notification Center or in GNOME's list keep their click
@@ -158,6 +159,9 @@ they arrive within a couple of minutes, and each has its own switch:
 - **Ready to merge:** approved, CI green or no CI, no conflicts, and not a draft. Once per commit.
   A repository that does not ask for reviews has no approval, so it never says this.
 - **Merged** and **Closed without merging:** when the state changes.
+
+**Usage limit reset:** an agent stopped at a usage limit that printed when it resets, such as
+`resets 3pm`, is told about once that time passes, in the machine's own time zone, and once per stop.
 
 A pull request is told about only while a session works on its branch, and one Yardbell sees for the
 first time, also after a restart, only sets what is known. One pull request in two sessions is told

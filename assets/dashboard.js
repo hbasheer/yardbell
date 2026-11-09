@@ -206,7 +206,12 @@ function disk(m) {
 function statusBadge(s) {
   if (s.stale) return html`<span class="badge">Last known</span>`;
   if (s.activity === "blocked") return html`<span class="badge blocked" title="Waiting for your answer or approval">Needs you</span>`;
-  if (s.stopped) return html`<span class="badge failed" title="Its last turn ended on: ${s.stopped}">Error</span>`;
+  if (s.stopped) {
+    const resets = s.resets ? new Date(s.resets) : null;
+    const when = resets ? resets.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    const next = !resets ? "" : resets > Date.now() ? ` Its limit resets at ${when}, and Dispatch then offers to resume it.` : ` Its limit reset at ${when}.`;
+    return html`<span class="badge failed" title="Its last turn ended on: ${s.stopped}.${next}">${resets && resets > Date.now() ? `Limit until ${when}` : "Error"}</span>`;
+  }
   return s.activity === "active"
     ? html`<span class="badge busy">Working</span>`
     : html`<span class="badge">Idle</span>`;
@@ -228,12 +233,19 @@ function termUrl(s) {
   return `/term/${encodeURIComponent(s.machine)}/${encodeURIComponent(s.tmux)}`;
 }
 
+function mergeButton(s) {
+  const p = s.pull;
+  if (!p || p.state !== "open" || !s.tmux || s.stale || !Board.ready(p)) return "";
+  const ref = window.YardbellPull.ref(p);
+  return html`<button class="btn" type="button" data-act="merge" data-id=${s.id} title=${`Merge ${window.YardbellPull.noun(p).toLowerCase()} ${ref} into ${p.base || "its base branch"}`}>Merge ${ref}</button>`;
+}
+
 function actions(s) {
   if (!s.attachable || s.stale) return "";
   const host = onHost && current.host_terminal !== "none"
     ? html`<button class="btn" type="button" data-act="host" data-machine=${s.machine} data-name=${s.tmux}>Terminal app</button>` : "";
   return html`<div class="row-actions">
-    <a class="btn" href=${termUrl(s)} target="_blank" rel="noopener">${ICONS.open}Open</a>${host}
+    <a class="btn" href=${termUrl(s)} target="_blank" rel="noopener">${ICONS.open}Open</a>${host}${mergeButton(s)}
     <button class="btn quiet" type="button" data-act="insights" data-machine=${s.machine} data-name=${s.tmux} title="When it worked, waited and idled, and the tools and tests it ran">Insights</button>
     <button class="btn quiet" type="button" data-act="move-machine" data-id=${s.id} title="Move this session's branch, changes and task to another machine">Move</button>
     <button class="btn quiet danger stop" type="button" data-act="stop" data-machine=${s.machine} data-name=${s.tmux}>Stop</button>
@@ -392,7 +404,8 @@ function boardCard(s) {
   const body = html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}</div>
     ${s.branch ? html`<div class="b-branch branch">${s.branch}</div>` : ""}
     ${marks.length ? html`<div class="b-marks">${marks}</div>` : ""}
-    <div class="b-meta"><span class="b-where">${where}</span>${statusBadge(s)}</div>`;
+    <div class="b-meta"><span class="b-where">${where}</span>${statusBadge(s)}</div>
+    ${Board.lane(s) === "ready" ? html`<div class="b-actions">${mergeButton(s)}</div>` : ""}`;
   if (!s.attachable || s.stale) return html`<li class="b-card${s.stale ? " stale" : ""}" data-name=${s.tmux || ""}>${body}</li>`;
   return html`<li class="b-card openable${focusedId === s.id ? " kb" : ""}" data-id=${s.id} data-name=${s.tmux} data-href=${termUrl(s)} tabindex="0" aria-label="Open ${short(s.folder)} on ${s.machine}">${body}</li>`;
 }
@@ -539,7 +552,7 @@ $("groups").addEventListener("click", (e) => {
   }
   if (e.target.closest("a, button")) return;
   // On a touch screen the whole row as one target swallowed taps meant for Stop and the other
-  // buttons beside Open, so there only Open opens a row. A board card has no such buttons.
+  // buttons beside Open, so there only Open opens a row. A board card's one button is left out above.
   if (touch.matches && !e.target.closest(".b-card")) return;
   openRow(e.target.closest(".openable"));
 });
@@ -695,6 +708,27 @@ function followMenuTrigger() {
   else closeMenu(false);
 }
 
+async function mergePull(s, b) {
+  const p = s.pull;
+  const ref = window.YardbellPull.ref(p);
+  const noun = window.YardbellPull.noun(p).toLowerCase();
+  const sure = await ask(
+    `Merge ${ref}?`,
+    `${p.title ? `${p.title}. ` : ""}It merges into ${p.base || "its base branch"} on ${p.forge === "gitlab" ? "GitLab" : "GitHub"}, the way Settings says, and only if nothing was pushed to the ${noun} since this page showed it. The branch is kept.`,
+    { confirm: "Merge" },
+  );
+  if (!sure) return;
+  b.disabled = true;
+  try {
+    await api("POST", `/sessions/${encodeURIComponent(s.machine)}/${encodeURIComponent(s.tmux)}/merge`, { head: p.head });
+    toast(`Merged ${ref}`, "ok");
+    Live.soon();
+  } catch (err) {
+    b.disabled = false;
+    toast(err.message);
+  }
+}
+
 async function ask(title, body, options) {
   const back = document.activeElement;
   const visible = back?.matches(":focus-visible");
@@ -782,6 +816,11 @@ document.addEventListener("click", async (e) => {
   }
   if (act === "insights") {
     window.YardbellInsights.open({ machine, name, onSuggest: window.YardbellInsights.handOver });
+    return;
+  }
+  if (act === "merge") {
+    const s = current?.sessions.find((x) => x.id === id);
+    if (s?.pull) mergePull(s, b);
     return;
   }
   if (act === "move-machine") {

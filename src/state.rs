@@ -108,6 +108,8 @@ pub struct SessionView {
     pub setup: Option<SetupRun>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -501,6 +503,7 @@ impl State {
                     branch: s.branch.clone(),
                     activity: s.activity,
                     stopped: s.stopped.clone(),
+                    resets: s.resets.clone(),
                     attachable: s.attachable(),
                     tmux: s.tmux.clone(),
                     stale: !up,
@@ -606,6 +609,7 @@ mod tests {
             tmux: Some(tmux.into()),
             activity: Activity::Idle,
             stopped: None,
+            resets: None,
         }
     }
 
@@ -686,6 +690,7 @@ mod tests {
         let state = State::default();
         let stopped = Session {
             stopped: Some("API Error: 529".into()),
+            resets: None,
             ..session("hp", "hp-a", "slot2")
         };
         state.update(up("hp", vec![stopped, session("hp", "hp-b", "app")]));

@@ -1,5 +1,5 @@
 use super::{Check, Ci, Fetched, Forge, Mergeable, Note, Pull, Unsettled, UnsettledCheck};
-use crate::config::Machine;
+use crate::config::{Machine, MergeMethod};
 use crate::shell::{quote, Duration, Output, Runner};
 use crate::ssh::Ssh;
 use futures::future::BoxFuture;
@@ -44,6 +44,34 @@ fn in_folder(path: &str, cmd: &str) -> String {
     )
 }
 
+const MERGE_TIMEOUT: Duration = Duration::from_secs(60);
+
+// --match-head-commit makes GitHub refuse the merge when the branch moved on since it was checked.
+pub fn merge_command(pull: &Pull, method: MergeMethod) -> String {
+    format!(
+        "gh pr merge {} --{} --match-head-commit {}",
+        pull.number,
+        method.as_str(),
+        quote(&pull.head)
+    )
+}
+
+pub fn merge_error(out: &Output, machine: &str) -> String {
+    if out.status == Some(NO_GH) {
+        return super::no_gh(machine);
+    }
+    if out.timed_out {
+        return format!("gh did not finish merging on {machine}");
+    }
+    let said = out
+        .stderr
+        .lines()
+        .map(str::trim)
+        .find(|l| !l.is_empty())
+        .unwrap_or("no reason given");
+    format!("gh could not merge it: {said}")
+}
+
 pub fn view_command(branch: &str) -> String {
     format!("gh pr view {} --json {FIELDS}", quote(branch))
 }
@@ -58,6 +86,25 @@ impl Forge for GitHub {
         Box::pin(async move {
             let out = self.gh(m, path, &view_command(branch), VIEW_TIMEOUT).await;
             classify(&out)
+        })
+    }
+
+    fn merge<'a>(
+        &'a self,
+        m: &'a Machine,
+        path: &'a str,
+        _branch: &'a str,
+        pull: &'a Pull,
+        method: MergeMethod,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let out = self
+                .gh(m, path, &merge_command(pull, method), MERGE_TIMEOUT)
+                .await;
+            match out.ok() {
+                true => Ok(()),
+                false => Err(merge_error(&out, &m.name)),
+            }
         })
     }
 

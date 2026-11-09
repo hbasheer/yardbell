@@ -31,7 +31,10 @@ pub fn note_for(event: &Event, view: &StateView) -> Note {
 }
 
 fn target_for(event: &Event) -> Target {
-    let (Event::AgentIdle { machine, tmux, .. } | Event::Pull { machine, tmux, .. }) = event else {
+    let (Event::AgentIdle { machine, tmux, .. }
+    | Event::Pull { machine, tmux, .. }
+    | Event::LimitReset { machine, tmux, .. }) = event
+    else {
         return Target::Main;
     };
     match tmux.as_deref().filter(|tmux| !tmux.is_empty()) {
@@ -45,7 +48,7 @@ fn target_for(event: &Event) -> Target {
 
 pub fn allowed(event: &Event, s: &Switches) -> bool {
     match event {
-        Event::AgentIdle { .. } => s.agent_idle,
+        Event::AgentIdle { .. } | Event::LimitReset { .. } => s.agent_idle,
         Event::SessionEnded { .. } => s.session_ended,
         Event::MachineDown { .. } | Event::MachineUp { .. } => s.machine,
         Event::MemoryHigh { .. } => s.memory,

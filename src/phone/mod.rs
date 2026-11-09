@@ -144,6 +144,7 @@ pub fn push_for(event: &Event, view: &StateView, base: Option<&str>, waited_minu
             PullChange::Merged => ("tada", 2),
             PullChange::Closed => ("no_entry_sign", 2),
         },
+        Event::LimitReset { .. } => ("battery", 3),
     };
     Push {
         title,
@@ -170,6 +171,11 @@ fn link(event: &Event, base: &str) -> String {
             ..
         }
         | Event::Pull {
+            machine,
+            tmux: Some(tmux),
+            ..
+        }
+        | Event::LimitReset {
             machine,
             tmux: Some(tmux),
             ..
@@ -202,6 +208,7 @@ fn enabled(settings: &PhoneNotifications, event: &Event) -> bool {
             PullChange::Merged => settings.pull_merged,
             PullChange::Closed => settings.pull_closed,
         },
+        Event::LimitReset { .. } => settings.limit_reset,
     }
 }
 
@@ -289,6 +296,7 @@ mod tests {
             worktree: false,
             setup: None,
             stopped: None,
+            resets: None,
         }
     }
 

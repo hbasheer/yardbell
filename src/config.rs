@@ -117,6 +117,7 @@ pub struct PhoneNotifications {
     pub pull_ready: bool,
     pub pull_merged: bool,
     pub pull_closed: bool,
+    pub limit_reset: bool,
 }
 
 impl Default for PhoneNotifications {
@@ -135,6 +136,7 @@ impl Default for PhoneNotifications {
             pull_ready: true,
             pull_merged: true,
             pull_closed: true,
+            limit_reset: true,
         }
     }
 }
@@ -234,6 +236,31 @@ pub struct PullRequests {
     pub github_token: String,
     #[serde(skip_serializing_if = "is_token")]
     pub gitlab_via: GitlabVia,
+    #[serde(skip_serializing_if = "is_merge_commit")]
+    pub merge_method: MergeMethod,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeMethod {
+    #[default]
+    Merge,
+    Squash,
+    Rebase,
+}
+
+impl MergeMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MergeMethod::Merge => "merge",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Rebase => "rebase",
+        }
+    }
+}
+
+fn is_merge_commit(method: &MergeMethod) -> bool {
+    *method == MergeMethod::Merge
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -340,6 +367,7 @@ impl Default for PullRequests {
             github_via: GithubVia::Gh,
             github_token: String::new(),
             gitlab_via: GitlabVia::Token,
+            merge_method: MergeMethod::Merge,
         }
     }
 }

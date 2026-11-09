@@ -29,5 +29,5 @@
     return "review";
   }
 
-  window.YardbellBoard = { LANES, lane };
+  window.YardbellBoard = { LANES, lane, ready };
 })();

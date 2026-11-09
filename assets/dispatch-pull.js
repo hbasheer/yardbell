@@ -15,11 +15,13 @@ const KINDS = {
   changes_requested: { word: "Changes requested", badge: "blocked" },
   review: { word: "New comments", badge: "blocked" },
   conflict: { word: "Merge conflicts", badge: "blocked" },
+  limit: { word: "Limit reset", badge: "blocked" },
 };
 
 function kindOf(e) {
   if (e.kind === "ci") return KINDS.ci;
   if (e.kind === "conflict") return KINDS.conflict;
+  if (e.kind === "limit") return KINDS.limit;
   return (e.notes || []).some((n) => n.kind === "changes_requested") ? KINDS.changes_requested : KINDS.review;
 }
 
@@ -112,21 +114,32 @@ function conflict(e) {
   return html`<p class="pull-conflict">${window.YardbellPull.noun(pull)} ${window.YardbellPull.ref(pull)} can no longer merge into ${base} without conflicts.</p>`;
 }
 
+function limit(e) {
+  const at = e.resets ? new Date(e.resets).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+  return html`<p class="pull-conflict">It stopped at its usage limit${e.error ? html`: <code>${e.error}</code>` : nothing}. The limit reset${at ? ` at ${at}` : ""}, so it can go on.</p>`;
+}
+
+function title(e) {
+  const pull = e.pull || {};
+  if (e.kind === "limit") return html`${e.folder || e.name}`;
+  return html`${pull.url ? html`<a href=${pull.url} target="_blank" rel="noopener">${window.YardbellPull.ref(pull)}</a>` : window.YardbellPull.ref(pull)} ${pull.title}`;
+}
+
 function body(e, index) {
   if (e.kind === "ci") return checks(e, index);
   if (e.kind === "conflict") return conflict(e);
+  if (e.kind === "limit") return limit(e);
   return notes(e, index);
 }
 
 export function pullCard(e, index) {
-  const pull = e.pull || {};
   const kind = kindOf(e);
   const sent = sentNote(e);
   const canSend = !sent || sent.again;
   return html`<div class="session-card pull-card ${e.kind === "ci" ? "failed" : "blocked"}">
     <header class="session-card-head">
       <div class="session-card-id">
-        <strong>${pull.url ? html`<a href=${pull.url} target="_blank" rel="noopener">${window.YardbellPull.ref(pull)}</a>` : window.YardbellPull.ref(pull)} ${pull.title}</strong>
+        <strong>${title(e)}</strong>
         <span class="session-card-where">${e.name} on ${e.machine}${e.branch ? html` · <code>${e.branch}</code>` : nothing}</span>
       </div>
       <span class="badge ${kind.badge}">${kind.word}</span>

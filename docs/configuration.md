@@ -203,6 +203,7 @@ phone_notifications:
   pull_ready: true
   pull_merged: true
   pull_closed: true
+  limit_reset: true
 ```
 
 Every key is optional. The values above are the defaults. Older configs may still have `server`,
@@ -223,6 +224,7 @@ Every key is optional. The values above are the defaults. Older configs may stil
 | `pull_ready` | `true` | Notify when it is approved, green and free of conflicts. |
 | `pull_merged` | `true` | Notify when it is merged. |
 | `pull_closed` | `true` | Notify when it is closed without merging. |
+| `limit_reset` | `true` | Notify when an agent that stopped at its usage limit can go on, because the reset time it printed has passed. |
 
 ### `health_checks` (optional)
 
@@ -413,7 +415,7 @@ and `deny`.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, `remember`, `run_command` (a pipeline's [Run a command](automation.md#run-a-command) step, which only a `deny` stops), or `any` (the default). |
+| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `merge_pull`, `move_session`, `remember`, `run_command` (a pipeline's [Run a command](automation.md#run-a-command) step, which only a `deny` stops), or `any` (the default). |
 | `machine` | no | A machine name, or `any` (the default). |
 | `folder` | no | A folder pattern. Empty matches every folder. |
 | `approval` | yes | `allow`, `prompt` or `deny`. |
@@ -546,6 +548,7 @@ pull_requests:
   cards: true          # false: badges only, no cards in Dispatch
   use_github: true     # false: gh is never asked for badges and cards
   use_gitlab: true     # false: GitLab hosts are kept but never asked for badges and cards
+  merge_method: merge  # how Merge merges: merge, squash or rebase
   gitlab:              # optional
     - host: git.example.com               # the host as the remote URL names it
       token: '${secret:gitlab}'           # a personal access token with read_api
@@ -559,7 +562,10 @@ most once every `poll_seconds`, separately from the machine check every `poll_se
 level, and the branches of one machine are asked one after another. What has already been posted
 is kept in `pulls.json` in the state folder, so a restart never posts a card twice.
 
-A GitLab token needs only the `read_api` scope: Yardbell never writes to GitLab. Make one in GitLab
+A GitLab token needs only the `read_api` scope to show badges and cards. Merging from Yardbell
+(**Merge** on a ready session, or Dispatch's `merge_pull`) needs the `api` scope, and so does a
+pipeline that opens merge requests. GitLab merges as each project is set up, with a merge commit or a
+fast-forward, so `merge_method` only tells it whether to squash. Make one in GitLab
 from your avatar, **Edit profile**, **Access tokens**, and save it under **Secrets** in Settings.
 `url` is for an instance whose web address differs from the host in your remote, such as another
 port. The token is sent only to that address, in a header, and never goes over ssh, into

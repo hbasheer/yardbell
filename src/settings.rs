@@ -102,6 +102,8 @@ pub struct PhoneEdit {
     pub pull_merged: bool,
     #[serde(default = "on")]
     pub pull_closed: bool,
+    #[serde(default = "on")]
+    pub limit_reset: bool,
 }
 
 fn on() -> bool {
@@ -598,6 +600,7 @@ impl Settings {
         phone.pull_ready = edit.pull_ready;
         phone.pull_merged = edit.pull_merged;
         phone.pull_closed = edit.pull_closed;
+        phone.limit_reset = edit.limit_reset;
         cfg.validate().map_err(|e| e.to_string())?;
         let backup = self.backup_config()?;
         self.save(&cfg, backup, None)
