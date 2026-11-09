@@ -358,8 +358,22 @@ On the **Runs** tab:
   rather than starting the agent again.
 - **Stop this run**, or **Drop** while it waits for you, ends a run and stops its sessions. It stays in
   the list.
-- **Delete this run** works in any state. A run still going is stopped first, its sessions close and
-  teardown runs, then its record goes. The worktree, the branch and any pull request stay.
+- **Click a step** on the canvas, or its name in the list, to see what it did: its outcome, when it
+  started and ended, how long it took, how many times it ran, the machine, folder and session, its
+  report and details, your answer if it asked, and each round it ran. Click it again, the empty
+  canvas or **This run** to go back. The run's own view lists its whole history, failed review
+  rounds included, and its final report.
+- Under the canvas, a picked step shows its live terminal while its session is open. Once the
+  session is gone, it shows the agent's saved transcript, read only, as a conversation with each
+  tool call and its result. Yardbell reads Claude Code transcripts from the step's folder on its
+  machine, so the machine has to be reachable; when there is none, it says why. This works for runs
+  that finished before the transcript view existed.
+- **Delete this run** shows once a run is done or dropped; drop a run still going first.
+  **Delete finished runs** at the top of the list deletes every done or dropped run of the pipeline
+  and keeps the others. Deleting removes only the run's record. Branches, pushed commits, pull and
+  merge requests, worktrees, Dispatch conversations and transcripts stay, and the question names any
+  worktree it made and any session still open. **Delete** in the pipeline's bar removes the pipeline
+  and its finished runs, and refuses while any of its runs is still going.
 
 [How a run works](automation.md#how-a-run-works) explains sessions, results and waiting.
 

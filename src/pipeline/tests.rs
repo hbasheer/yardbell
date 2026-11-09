@@ -2335,7 +2335,7 @@ mod pipelines {
     }
 
     #[tokio::test]
-    async fn deleting_a_running_run_stops_it_then_removes_it() {
+    async fn a_run_still_going_is_not_deleted() {
         let (p, _dir) = pipelines();
         let def = p
             .library()
@@ -2346,7 +2346,6 @@ mod pipelines {
             .unwrap()
             .remove(0);
         run.step = "implement".into();
-        run.state = RunState::Running;
         run.pending = None;
         let st = run.state_of("implement");
         st.session = "hp-main".into();
@@ -2355,28 +2354,49 @@ mod pipelines {
         st.made = "/r/made".into();
         st.repo = "/r/repo".into();
         let id = run.id.clone();
-        p.put(run);
+        for (state, word) in [
+            (RunState::Queued, "queued"),
+            (RunState::Running, "running"),
+            (RunState::Waiting, "waiting"),
+        ] {
+            run.state = state;
+            p.put(run.clone());
+            assert_eq!(
+                p.delete_run(&id),
+                Err(super::super::Refusal::Going(format!(
+                    "COM-1 Fix is still {word}. Drop it first"
+                )))
+            );
+            assert_eq!(p.run(&id).unwrap().state, state, "it is left as it was");
+            assert!(p.runs().iter().any(|r| r.id == id), "and still listed");
+        }
         let fake = Arc::new(Fake::default());
         fake.session("hp", "hp-main", "b", Activity::Active);
-        assert!(p.delete_run(&id));
+        p.drop_run(&id).unwrap();
+        assert!(p.delete_run(&id).is_ok(), "a dropped run can go");
         assert!(
             p.runs().iter().all(|r| r.id != id),
             "it leaves the lists at once"
         );
-        assert_eq!(p.run(&id).unwrap().state, RunState::Dropped);
+        assert!(
+            p.run(&id).is_some(),
+            "its record waits for the drop to finish"
+        );
         tick(&p, &fake, None, chrono::Local::now()).await;
         assert!(fake
             .calls()
             .iter()
             .any(|c| c.starts_with("stop_session") && c.contains("hp-main")));
-        assert_eq!(*fake.teardowns.lock().unwrap(), vec!["hp:/r/made"]);
         tick(&p, &fake, None, chrono::Local::now()).await;
         assert!(p.run(&id).is_none());
-        assert!(!p.delete_run(&id), "it is gone");
+        assert!(matches!(
+            p.delete_run(&id),
+            Err(super::super::Refusal::Missing(_))
+        ));
     }
 
     #[tokio::test]
-    async fn deleting_an_ended_run_removes_it_at_once() {
+    async fn deleting_an_ended_run_removes_only_its_record() {
         let (p, _dir) = pipelines();
         let def = p
             .library()
@@ -2388,10 +2408,25 @@ mod pipelines {
             .remove(0);
         run.state = RunState::Done;
         run.pending = None;
+        let st = run.state_of("implement");
+        st.session = "hp-left".into();
+        st.machine = "hp".into();
+        st.path = "/r/made".into();
+        st.made = "/r/made".into();
+        st.repo = "/r/repo".into();
         let id = run.id.clone();
         p.put(run);
-        assert!(p.delete_run(&id));
+        let fake = Arc::new(Fake::default());
+        fake.session("hp", "hp-left", "b", Activity::Idle);
+        assert!(p.delete_run(&id).is_ok());
         assert!(p.run(&id).is_none());
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        assert!(
+            !fake.calls().iter().any(|c| c.contains("hp-left")),
+            "a session that outlived the run is left alone: {:?}",
+            fake.calls()
+        );
+        assert!(fake.teardowns.lock().unwrap().is_empty());
     }
 
     #[tokio::test]
@@ -2409,11 +2444,59 @@ mod pipelines {
         run.pending = Some(Effect::StopSessions);
         let id = run.id.clone();
         p.put(run);
-        assert!(p.delete_run(&id));
+        assert!(p.delete_run(&id).is_ok());
         assert!(p.run(&id).is_some());
+        assert!(
+            matches!(p.delete_run(&id), Err(super::super::Refusal::Missing(_))),
+            "a run already going is not a run to delete again"
+        );
         let fake = Arc::new(Fake::default());
         tick(&p, &fake, None, chrono::Local::now()).await;
         assert!(p.run(&id).is_none());
+    }
+
+    #[tokio::test]
+    async fn clearing_a_pipeline_deletes_only_its_ended_runs() {
+        let (p, _dir) = pipelines();
+        let def = p
+            .library()
+            .copy_template("Implement my tickets", &cfg())
+            .unwrap();
+        let other = p
+            .library()
+            .copy_template("Review my merge requests", &cfg())
+            .unwrap();
+        let mut ids = Vec::new();
+        for (n, state) in [RunState::Done, RunState::Dropped, RunState::Waiting]
+            .into_iter()
+            .enumerate()
+        {
+            let mut run = p
+                .start(&def.id, vec![ticket(&format!("COM-{n}"))], "you")
+                .unwrap()
+                .remove(0);
+            run.state = state;
+            run.pending = None;
+            ids.push(run.id.clone());
+            p.put(run);
+        }
+        let mut theirs = p
+            .start(&other.id, vec![Subject::default()], "you")
+            .unwrap()
+            .remove(0);
+        theirs.state = RunState::Done;
+        theirs.pending = None;
+        p.put(theirs.clone());
+        let theirs = theirs.id;
+        let mut cleared = p.clear_ended(&def.id);
+        cleared.sort();
+        let mut ended = ids[..2].to_vec();
+        ended.sort();
+        assert_eq!(cleared, ended);
+        let left: Vec<String> = p.runs().into_iter().map(|r| r.id).collect();
+        assert!(left.contains(&ids[2]), "the waiting run stays");
+        assert!(left.contains(&theirs), "another pipeline's run stays");
+        assert!(p.clear_ended(&def.id).is_empty());
     }
 
     #[tokio::test]
@@ -2494,7 +2577,7 @@ mod pipelines {
     }
 
     #[tokio::test]
-    async fn deleting_a_pipeline_stops_its_runs_sessions() {
+    async fn a_pipeline_with_runs_going_is_not_deleted() {
         let (p, _dir) = pipelines();
         let def = p
             .library()
@@ -2507,22 +2590,35 @@ mod pipelines {
         run.step = "implement".into();
         run.state = RunState::Running;
         run.pending = None;
-        let st = run.state_of("implement");
-        st.machine = "hp".into();
-        st.session = "hp-busy".into();
+        let id = run.id.clone();
         p.put(run);
-        let fake = Arc::new(Fake::default());
-        fake.session("hp", "hp-busy", "com-1-fix", Activity::Active);
-        p.delete(&def.id).unwrap();
-        assert!(p.runs().is_empty());
-        tick(&p, &fake, None, chrono::Local::now()).await;
-        assert!(
-            fake.calls()
-                .iter()
-                .any(|c| c.starts_with("stop_session") && c.contains("hp-busy")),
-            "{:?}",
-            fake.calls()
+        assert_eq!(
+            p.delete(&def.id),
+            Err(super::super::Refusal::Going(format!(
+                "{} has 1 run still queued, running or waiting. Drop them first",
+                def.name
+            )))
         );
+        assert!(p.library().get(&def.id).is_some());
+        assert_eq!(p.runs().len(), 1);
+        p.drop_run(&id).unwrap();
+        assert_eq!(
+            p.delete(&def.id),
+            Err(super::super::Refusal::Going(format!(
+                "{} is still stopping 1 run. Try again in a moment",
+                def.name
+            ))),
+            "its sessions are stopped first"
+        );
+        let fake = Arc::new(Fake::default());
+        tick(&p, &fake, None, chrono::Local::now()).await;
+        assert!(p.delete(&def.id).is_ok());
+        assert!(p.library().get(&def.id).is_none());
+        assert!(p.runs().is_empty());
+        assert!(matches!(
+            p.delete(&def.id),
+            Err(super::super::Refusal::Missing(_))
+        ));
     }
 
     #[tokio::test]

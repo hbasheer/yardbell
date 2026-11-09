@@ -22,6 +22,7 @@ mod mcp_read;
 mod memory;
 mod pipeline;
 mod proposals;
+mod transcript;
 mod worktrees;
 
 struct FakePorts;

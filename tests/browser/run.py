@@ -501,7 +501,7 @@ def review_pipeline():
     }
 
 
-def pipeline_runs():
+def pipeline_runs(root):
     definition = review_pipeline()
 
     def run(id, number, title, state, step, steps, waiting=None):
@@ -549,6 +549,36 @@ def pipeline_runs():
                   "tokens": {"sources": {"nowhere:a.jsonl": {"input": 12400, "output": 100000, "cache_write": 500000,
                                                               "cache_read": 3000000}},
                              "limit": 500000, "raised": True}},
+        # Finished on this machine, with a transcript the test writes, and a test that failed once.
+        "run-f": {**run("run-f", 76, "Export timeout", "done", "",
+                        [("understand", "pass", "The export times out after 30 seconds."),
+                         ("root-cause", "pass", "The query loads every row."),
+                         ("test", "pass", "Specs pass after the batch fix."),
+                         ("report", "pass", "Ready to merge.")]),
+                  "steps": {
+                      "understand": {"runs": 1, "machine": MACHINE, "path": os.path.join(root, "demo-app"),
+                                     "session": "hp-com-1276-run-f", "made": os.path.join(root, "demo-app"), "outcome": "pass",
+                                     "report": "The export times out after 30 seconds.",
+                                     "details": ["Repro: export 50k rows", "Risk: low"], "answer": "Use the staging data",
+                                     "started": "2026-01-05T10:00:00+00:00", "ended": "2026-01-05T10:12:30+00:00"},
+                      "root-cause": {"runs": 1, "machine": "nowhere", "outcome": "pass", "report": "The query loads every row.",
+                                     "started": "2026-01-05T10:13:00+00:00", "ended": "2026-01-05T10:20:00+00:00"},
+                      "test": {"runs": 2, "machine": "nowhere", "outcome": "pass", "report": "Specs pass after the batch fix.",
+                               "started": "2026-01-05T10:40:00+00:00", "ended": "2026-01-05T10:50:00+00:00"},
+                      "report": {"runs": 1, "outcome": "pass", "report": "Ready to merge.",
+                                 "started": "2026-01-05T10:51:00+00:00", "ended": "2026-01-05T10:52:00+00:00"},
+                  },
+                  "history": [{"step": "", "at": "2026-01-05T09:59:00+00:00", "note": "started by a trigger"},
+                              {"step": "understand", "outcome": "pass", "at": "2026-01-05T10:00:00+00:00"},
+                              {"step": "root-cause", "outcome": "pass", "at": "2026-01-05T10:13:00+00:00"},
+                              {"step": "test", "outcome": "fail", "at": "2026-01-05T10:21:00+00:00"},
+                              {"step": "root-cause", "outcome": "pass", "at": "2026-01-05T10:30:00+00:00"},
+                              {"step": "test", "outcome": "pass", "at": "2026-01-05T10:40:00+00:00"},
+                              {"step": "report", "outcome": "pass", "at": "2026-01-05T10:51:00+00:00"}],
+                  "definition": {**definition, "steps": [{**st, "agent": "claude"} if st["id"] == "understand" else st
+                                                         for st in definition["steps"]]},
+                  "report": "Export timeout: the batch fix is ready to merge.",
+                  "tokens": {"sources": {f"{MACHINE}:t1.jsonl": {"input": 10, "output": 20}}}},
         "run-e": {**run("run-e", 94, "Tokens unknown", "waiting", "test",
                         [("understand", "pass", "Clear."), ("root-cause", "pass", "Yes.")],
                         {"kind": "token_unknown", "step": "test",
@@ -588,7 +618,7 @@ class Yardbell:
         with open(os.path.join(self.state, "pipelines", "review.json"), "w") as f:
             json.dump({"history": [{"version": 1, "saved": ago_stamp(60), "definition": review_pipeline()}]}, f)
         with open(os.path.join(self.state, "runs.json"), "w") as f:
-            json.dump(pipeline_runs(), f)
+            json.dump(pipeline_runs(self.root), f)
         with open(os.path.join(self.state, "health.json"), "w") as f:
             json.dump({"run_waiting:run-a:root-cause:NeedsYou": {
                 "check": "run_waiting", "title": "", "detail": "", "link": "", "since": ago_stamp(300), "notified": True,
@@ -2131,7 +2161,7 @@ class Suite:
         b.wait(f"document.querySelector('{card}')", "the review pipeline's card")
         text = b.js(f"document.querySelector('{card}').textContent.replace(/\\s+/g, ' ')")
         for want in ("When a GitLab merge request on git.example.com adds me as reviewer",
-                     "Understand", "Test ⟲ Root cause", "v1", "1 running · 4 waiting · 1 held a long time · 1 done", "Needs you"):
+                     "Understand", "Test ⟲ Root cause", "v1", "1 running · 4 waiting · 1 held a long time · 2 done", "Needs you"):
             if want not in text:
                 raise Failure(f"the card does not say {want!r}: {text}")
         if b.js(f"document.querySelector('{card} input[type=checkbox]').checked"):
@@ -2934,7 +2964,7 @@ class Suite:
           const real = window.fetch;
           window.fetch = async (url, init) => {
             const res = await real(url, init);
-            if (!String(url).startsWith('/api/runs')) return res;
+            if (String(url) !== '/api/runs') return res;
             const body = await res.json();
             for (const r of body.runs) {
               r.terminals = r.id === 'run-a'
@@ -4601,31 +4631,153 @@ class Suite:
         b.wait("document.querySelector('#pl-need')?.textContent.includes('Show the terminal')", "what to do next")
         self.check_errors("a run with no result")
 
-    def test_delete_a_run_in_progress(self):
+    # The whole graph in view first, so a real click lands on the card and not beside the canvas.
+    def pick_node(self, step):
+        self.b.js("[...document.querySelectorAll('.pl-zoom button')].find((x) => x.textContent.trim() === 'Fit').click()")
+        self.b.click(f'.pl-node[data-step="{step}"]')
+
+    def write_transcript(self):
+        path = os.path.join(self.y.root, "demo-app")
+        folder = os.path.join(self.y.env["HOME"], ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", path))
+        os.makedirs(folder, exist_ok=True)
+        lines = [
+            {"type": "user", "timestamp": "2026-01-05T10:00:05Z",
+             "message": {"role": "user", "content": "Read COM-1276 and the merge request.\nstep: understand-1-run-f"}},
+            {"type": "assistant", "timestamp": "2026-01-05T10:01:00Z", "message": {"content": [
+                {"type": "thinking", "thinking": "not shown"},
+                {"type": "text", "text": "Reading the **export** code."},
+                {"type": "tool_use", "id": "tu1", "name": "Bash", "input": {"command": "bin/rspec spec/export_spec.rb"}}]}},
+            {"type": "user", "timestamp": "2026-01-05T10:02:00Z", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": "tu1", "is_error": True, "content": "1 example, 1 failure"}]}},
+            {"type": "assistant", "timestamp": "2026-01-05T10:12:00Z", "message": {"content": [
+                {"type": "text", "text": "The export times out after 30 seconds."}]}},
+        ]
+        with open(os.path.join(folder, "t1.jsonl"), "w") as f:
+            f.write("".join(json.dumps(line, separators=(",", ":")) + "\n" for line in lines))
+
+    def test_a_finished_runs_steps_show_their_result_and_transcript(self):
+        b = self.b
+        self.write_transcript()
+        b.goto(self.url("/pipeline?p=review&run=run-f"))
+        b.wait("document.getElementById('pl-run-history')", "the run's history")
+        rounds = b.js("[...document.querySelectorAll('#pl-run-history li')].map((x) => x.textContent.replace(/\\s+/g, ' ').trim())")
+        tests = [r for r in rounds if "Test" in r]
+        if len(tests) != 2 or "failed" not in tests[0] or "passed" not in tests[1]:
+            raise Failure(f"the history does not show the failed test round and the one after: {rounds}")
+        if "the batch fix is ready to merge" not in b.js("document.querySelector('.pl-detail').textContent"):
+            raise Failure("the run's final report is missing")
+        self.pick_node("understand")
+        b.wait("document.getElementById('pl-step')", "the step's result")
+        if not b.js("document.querySelector('.pl-node[data-step=\"understand\"]').classList.contains('selected')"):
+            raise Failure("the picked step is not marked on the graph")
+        panel = b.js("document.getElementById('pl-step').innerText.replace(/\\s+/g, ' ')")
+        for want in ("Outcome passed", "Took 13 min", "Ran Once", f"Machine {MACHINE}", "demo-app", "hp-com-1276-run-f",
+                     "The export times out after 30 seconds.", "Repro: export 50k rows", "Use the staging data"):
+            if want not in panel:
+                raise Failure(f"the step's result does not say {want!r}: {panel}")
+        b.wait("document.querySelector('#pl-transcript')?.textContent.includes('1 example, 1 failure')", "the transcript")
+        said = b.js("document.getElementById('pl-transcript').textContent")
+        for want in ("Sent by Yardbell", "Read COM-1276", "bin/rspec spec/export_spec.rb", "Read only, from t1.jsonl"):
+            if want not in said:
+                raise Failure(f"the transcript does not show {want!r}: {said}")
+        if "not shown" in said:
+            raise Failure("the agent's thinking is shown")
+        if b.js("document.querySelector('#pl-transcript .msg.md strong')?.textContent") != "export":
+            raise Failure("the agent's reply is not read as Markdown")
+        if not b.js("document.querySelector('#pl-transcript .tool.bad')"):
+            raise Failure("the failed tool call is not marked")
+        if b.js("document.querySelector('.pl-terminal iframe')"):
+            raise Failure("a step with no session left shows a terminal")
+        self.pick_node("test")
+        b.wait("document.getElementById('pl-step')?.textContent.includes('2 times')", "the step that ran twice")
+        if b.js("document.querySelectorAll('#pl-step-history li').length") != 2 or not b.js("document.querySelector('#pl-step-history li.failed')"):
+            raise Failure("the step's own rounds are not listed with the failed one")
+        b.wait("document.getElementById('pl-no-transcript')?.textContent.includes('Test ran on shell. Yardbell can only read Claude Code transcripts.')", "why it has no transcript")
+        self.pick_node("report")
+        b.wait("document.getElementById('pl-no-transcript')?.textContent.includes('ran in Dispatch')", "the Dispatch step's note")
+        b.click("#pl-step-back")
+        b.wait("!document.getElementById('pl-step') && document.getElementById('pl-run-history')", "back on the run")
+        if new_step := b.js("new URLSearchParams(location.search).get('step')"):
+            raise Failure(f"the address still names {new_step}")
+        b.click('.pl-st-open[data-step="understand"]')
+        b.wait("document.getElementById('pl-step')?.textContent.includes('Repro')", "the step opened from the list")
+        b.goto(self.url("/pipeline?p=review&run=run-f&step=understand"))
+        b.wait("document.querySelector('#pl-transcript')", "the step kept after a reload")
+        try:
+            b.viewport(390, 844, 3)
+            b.wait("document.getElementById('pl-step')", "the step on a phone")
+            if b.js("document.documentElement.scrollWidth") > b.js("innerWidth"):
+                raise Failure("the step's result scrolls sideways on a phone")
+        finally:
+            b.viewport(1280, 800)
+        self.check_errors("a finished run's steps")
+
+    def test_a_step_with_a_live_session_shows_its_terminal(self):
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-a"))
-        b.wait("document.getElementById('pl-delete-run')", "Delete this run on a run in progress")
-        b.js("""window.__deleted = []; const real = window.fetch; window.fetch = (u, o) => {
-          if (o && o.method === 'DELETE') { window.__deleted.push(String(u)); return Promise.resolve(new Response('{"deleted":"run-a"}', {headers: {'content-type': 'application/json'}})); }
-          return real(u, o);
-        }""")
-        b.click("#pl-delete-run")
-        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Its agent sessions stop')", "the question saying what stops")
-        b.click("dialog.confirm[open] [data-answer=yes]")
-        b.wait("window.__deleted.length === 1", "the delete")
-        if "/api/runs/run-a" not in b.js("window.__deleted[0]"):
-            raise Failure("the wrong run was deleted")
-        self.check_errors("deleting a run in progress")
+        b.wait("document.querySelector('.pl-terminal')", "the terminal area")
+        b.js("""(() => {
+          const real = window.fetch;
+          window.fetch = async (url, init) => {
+            const res = await real(url, init);
+            if (String(url) !== '/api/runs') return res;
+            const body = await res.json();
+            for (const r of body.runs) if (r.id === 'run-a') {
+              r.steps['root-cause'].session = 'hp-term-a';
+              r.terminals = [{ step: 'root-cause', name: 'hp-term-a', machine: 'hp', label: 'Root cause', current: true }];
+            }
+            return new Response(JSON.stringify(body), { status: 200, headers: { 'Content-Type': 'application/json' } });
+          };
+        })()""")
+        self.pick_node("root-cause")
+        b.wait("document.querySelector('.pl-terminal iframe')?.getAttribute('src') === '/term/hp/hp-term-a?embed=1' && document.querySelector('.pl-live')",
+               "the step's live terminal")
+        self.pick_node("understand")
+        b.wait("document.getElementById('pl-no-transcript')?.textContent.includes('can only read Claude Code transcripts')", "the other step's note")
+        self.pick_node("understand")
+        b.wait("!document.getElementById('pl-step')", "a second click closing the step")
+        self.check_errors("a step with a live session")
+
+    def test_a_run_in_progress_cannot_be_deleted(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-a"))
+        b.wait("document.querySelector('.pl-detail')", "the run in progress")
+        if b.js("document.getElementById('pl-delete-run')"):
+            raise Failure("a run still waiting offers Delete")
+        said = b.js("""(async () => { const r = await fetch('/api/runs/run-a', { method: 'DELETE' }); return [r.status, (await r.json()).error]; })()""")
+        if said[0] != 409 or "Drop it first" not in said[1]:
+            raise Failure(f"deleting a waiting run answered {said}")
+        b.click("#pl-delete")
+        b.wait("document.getElementById('toast').textContent.includes('still queued, running or waiting')", "why the pipeline cannot go")
+        if b.js("document.querySelector('dialog.confirm[open]')"):
+            raise Failure("the pipeline delete asks although it is refused")
+        if b.js("(async () => (await fetch('/api/pipelines/review')).status)()") != 200:
+            raise Failure("the pipeline was deleted with runs still going")
+        self.check_errors("a run in progress")
 
     def test_delete_a_finished_run(self):
         b = self.b
         b.goto(self.url("/pipeline?p=review&run=run-c"))
         b.wait("document.getElementById('pl-delete-run')", "Delete this run on a finished run")
         b.click("#pl-delete-run")
-        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
+        b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Branches, pushed commits')", "the question saying what stays")
         b.click("dialog.confirm[open] [data-answer=yes]")
         b.wait("(async () => !(await (await fetch('/api/runs')).json()).runs.some((r) => r.id === 'run-c'))()", "the run gone")
         self.check_errors("deleting a run")
+
+    # Last: it deletes every finished run the other tests use.
+    def test_delete_finished_runs_keeps_the_ones_going(self):
+        b = self.b
+        b.goto(self.url("/pipeline?p=review&run=run-f"))
+        b.wait("document.getElementById('pl-clear-runs')", "Delete finished runs")
+        b.click("#pl-clear-runs")
+        tree = os.path.join(self.y.root, "demo-app")
+        b.wait(f"document.querySelector('dialog.confirm[open]')?.textContent.includes('This worktree stays on disk: {tree} on {MACHINE}')", "the question naming the worktree that stays")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait("(async () => { const runs = (await (await fetch('/api/runs')).json()).runs.filter((r) => r.pipeline === 'review'); return !runs.some((r) => ['done', 'dropped'].includes(r.state)) && runs.some((r) => r.id === 'run-a'); })()",
+               "the finished runs gone and the others kept")
+        b.wait("!document.getElementById('pl-clear-runs') && new URLSearchParams(location.search).get('run') !== 'run-f'", "the page following")
+        self.check_errors("deleting finished runs")
 
     def check_errors(self, where):
         if self.b.errors:

@@ -434,6 +434,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         )
         .route("/composer.js", get(|| async { asset("composer.js") }))
         .route("/attachments.js", get(|| async { asset("attachments.js") }))
+        .route("/markdown.js", get(|| async { asset("markdown.js") }))
         .route("/dispatch/conversations", get(dispatch_list))
         .route("/dispatch/conversations/{id}", get(dispatch_get))
         .route(
@@ -2293,6 +2294,7 @@ mod pulls_api;
 mod review_api;
 mod scan_api;
 mod settings_api;
+mod transcript_api;
 mod triggers_api;
 pub mod worktrees_api;
 

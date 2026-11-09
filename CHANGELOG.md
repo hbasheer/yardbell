@@ -5,6 +5,14 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **See what each step did.** Click a step of any run, finished or not, for its outcome, times, rounds, machine,
+  folder, session, report, details and your answer. A step whose session has gone shows the agent's saved Claude Code
+  transcript as a read-only conversation, with tool calls and their results. A run lists its whole history, so a
+  review sent back to its fix shows each round. Runs that finished earlier show this too.
+- **Delete finished runs.** **Delete finished runs** clears a pipeline's done and dropped runs at once. A run still
+  queued, running or waiting has to be dropped before it can be deleted, and a pipeline with such runs cannot be
+  deleted. Deleting removes only the record, and the question names any worktree or open session that stays.
+
 ## [0.10.404] - 2026-11-02
 
 - **Attach files to Dispatch.** Drop, paste or pick screenshots, PDFs and text files into a Dispatch message, and

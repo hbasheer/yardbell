@@ -10,6 +10,7 @@ pub mod run;
 pub mod store;
 pub mod templates;
 pub mod tokens;
+pub mod transcript;
 pub mod triggers;
 pub mod watch;
 
@@ -34,6 +35,31 @@ const TICK: std::time::Duration = std::time::Duration::from_secs(10);
 const COMMAND_WATCH: std::time::Duration = std::time::Duration::from_secs(2);
 pub const KEEP_FINISHED: usize = 50;
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum Refusal {
+    Missing(String),
+    Going(String),
+    Failed(String),
+}
+
+impl std::fmt::Display for Refusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Refusal::Missing(e) | Refusal::Going(e) | Refusal::Failed(e) => f.write_str(e),
+        }
+    }
+}
+
+fn state_word(state: RunState) -> &'static str {
+    match state {
+        RunState::Queued => "queued",
+        RunState::Running => "running",
+        RunState::Waiting => "waiting",
+        RunState::Done => "done",
+        RunState::Dropped => "dropped",
+    }
+}
+
 pub struct Pipelines {
     library: Library,
     store: Store,
@@ -44,8 +70,6 @@ pub struct Pipelines {
     memory: Mutex<engine::MemoryWatch>,
     ticking: tokio::sync::Mutex<()>,
     linear: Mutex<Arc<linear::Linear>>,
-    // Sessions of runs that went with a deleted pipeline, stopped on the next round.
-    orphans: Mutex<Vec<(String, String)>>,
     connector_health: crate::connectors::Health,
     mcp_auth: crate::mcp_client::oauth::Auth,
     due_limit: Mutex<std::time::Duration>,
@@ -85,7 +109,6 @@ impl Pipelines {
             memory: Mutex::new(Default::default()),
             ticking: tokio::sync::Mutex::new(()),
             linear: Mutex::new(Arc::new(linear::Linear::new())),
-            orphans: Mutex::new(Vec::new()),
             connector_health: Default::default(),
             mcp_auth: Default::default(),
             due_limit: Mutex::new(DUE_LIMIT),
@@ -184,20 +207,37 @@ impl Pipelines {
         self.store.put(run);
     }
 
-    pub fn delete(&self, pipeline: &str) -> Result<(), String> {
-        self.library.delete(pipeline)?;
-        let sessions = self
+    // A run still going holds sessions and maybe a worktree, so it is dropped first, by the person.
+    // One dropped a moment ago still has its sessions to stop, which its record carries.
+    pub fn delete(&self, pipeline: &str) -> Result<(), Refusal> {
+        let def = self
+            .library
+            .get(pipeline)
+            .ok_or_else(|| Refusal::Missing(format!("there is no pipeline {pipeline}")))?;
+        let mine: Vec<Run> = self
             .store
             .all()
             .into_iter()
-            .filter(|r| r.pipeline == pipeline && r.state.active())
-            .flat_map(|r| r.steps.into_values())
-            .filter(|st| !st.session.is_empty())
-            .map(|st| (st.machine, st.session));
-        self.orphans
-            .lock()
-            .expect("pipelines orphans")
-            .extend(sessions);
+            .filter(|r| r.pipeline == pipeline)
+            .collect();
+        let runs = |n: usize| if n == 1 { "run" } else { "runs" };
+        let going = mine.iter().filter(|r| r.state.active()).count();
+        if going > 0 {
+            return Err(Refusal::Going(format!(
+                "{} has {going} {} still queued, running or waiting. Drop them first",
+                def.name,
+                runs(going)
+            )));
+        }
+        let stopping = mine.iter().filter(|r| r.pending.is_some()).count();
+        if stopping > 0 {
+            return Err(Refusal::Going(format!(
+                "{} is still stopping {stopping} {}. Try again in a moment",
+                def.name,
+                runs(stopping)
+            )));
+        }
+        self.library.delete(pipeline).map_err(Refusal::Failed)?;
         self.store.remove_pipeline(pipeline);
         Ok(())
     }
@@ -361,18 +401,37 @@ impl Pipelines {
         })
     }
 
-    // A run still going is dropped first, so its sessions stop and its worktree is torn down as
-    // for any drop. It leaves the lists at once; its record goes when that is done.
-    pub fn delete_run(&self, id: &str) -> bool {
-        let Some(run) = self.store.get(id) else {
-            return false;
-        };
+    // Only the record goes: sessions, worktrees, branches and pull requests stay. A run whose
+    // teardown is still under way leaves the lists at once and its record goes when that is done.
+    pub fn delete_run(&self, id: &str) -> Result<(), Refusal> {
+        let run = self
+            .store
+            .get(id)
+            .filter(|r| !r.deleting)
+            .ok_or_else(|| Refusal::Missing(format!("{id} is not a run")))?;
         if run.state.active() {
-            let _ = self.drop_run(id);
+            return Err(Refusal::Going(format!(
+                "{} is still {}. Drop it first",
+                run.subject.label(),
+                state_word(run.state)
+            )));
         }
         self.store.update(id, |r| r.deleting = true);
         self.finish_deleting(id);
-        true
+        Ok(())
+    }
+
+    pub fn clear_ended(&self, pipeline: &str) -> Vec<String> {
+        let ended: Vec<String> = self
+            .runs()
+            .into_iter()
+            .filter(|r| r.pipeline == pipeline && !r.state.active())
+            .map(|r| r.id)
+            .collect();
+        ended
+            .into_iter()
+            .filter(|id| self.delete_run(id).is_ok())
+            .collect()
     }
 
     fn finish_deleting(&self, id: &str) {
@@ -433,17 +492,6 @@ impl Pipelines {
             }
         }
         let view = world.view();
-        let orphans: Vec<_> = std::mem::take(&mut *self.orphans.lock().expect("pipelines orphans"));
-        for (machine, name) in orphans {
-            if view
-                .sessions
-                .iter()
-                .any(|s| s.tmux.as_deref() == Some(name.as_str()))
-            {
-                let input = serde_json::json!({ "machine": machine, "name": name });
-                let _ = world.perform("stop_session", input).await;
-            }
-        }
         self.store.prune(KEEP_FINISHED);
         for run in self.store.all().into_iter().filter(|r| r.deleting) {
             self.finish_deleting(&run.id);

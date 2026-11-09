@@ -46,6 +46,37 @@ pub fn transcript_lines_command(path: &str, needle: &str) -> String {
     )
 }
 
+pub const STEP_TRANSCRIPT_MAX: usize = 16 * 1024 * 1024;
+pub const STEP_TRANSCRIPT_FILE: &str = "@@file ";
+pub const STEP_TRANSCRIPT_SKIPPED: &str = "@@skipped";
+const STEP_TRANSCRIPT_LINE_MAX: usize = 200_000;
+const STEP_TRANSCRIPT_WAIT: Duration = Duration::from_secs(30);
+
+// Every transcript in the step's folder that holds one of its markers, named first by the files
+// the run counted tokens in, else by the newest in the folder. Only conversation lines leave the
+// machine; one too long to send back is named, not sent.
+pub fn step_transcript_command(path: &str, names: &[String], needles: &[String]) -> String {
+    let needles: Vec<String> = needles.iter().map(|n| format!("-e {}", quote(n))).collect();
+    let names: Vec<String> = names.iter().map(|n| quote(n)).collect();
+    format!(
+        "d=\"${{CLAUDE_CONFIG_DIR:-$HOME/.claude}}/projects/$(printf %s {} | sed 's/[^a-zA-Z0-9]/-/g')\"; \
+         cd \"$d\" 2>/dev/null || exit 0; \
+         one() {{ [ -f \"$1\" ] && [ ! -L \"$1\" ] && grep -q -F {needles} -- \"$1\" || return 1; \
+         printf '%s%s\\n' {} \"$1\"; grep -E '\"type\":\"(user|assistant)\"' -- \"$1\" | \
+         awk -v skip={} '{{ if (length($0) < {}) print; else print skip }}'; }}; \
+         {{ found=0; set -- {}; for f in \"$@\"; do one \"$f\" && found=1; done; \
+         if [ $found = 0 ]; then for f in $(ls -tr -- *.jsonl 2>/dev/null | tail -n 32); do one \"$f\"; done; fi; }} \
+         | head -c {}; true",
+        quote(path),
+        quote(STEP_TRANSCRIPT_FILE),
+        quote(STEP_TRANSCRIPT_SKIPPED),
+        STEP_TRANSCRIPT_LINE_MAX,
+        names.join(" "),
+        STEP_TRANSCRIPT_MAX,
+        needles = needles.join(" "),
+    )
+}
+
 pub const RESULT_FOLDER: &str = "yardbell-result";
 pub const RESULT_FILE_MAX: usize = 64 * 1024;
 
@@ -404,6 +435,17 @@ impl Sessions {
             .ok()
     }
 
+    pub async fn step_transcript(
+        &self,
+        m: &Machine,
+        path: &str,
+        names: &[String],
+        needles: &[String],
+    ) -> Result<String, String> {
+        let cmd = step_transcript_command(path, names, needles);
+        self.script(m, &cmd, STEP_TRANSCRIPT_WAIT).await
+    }
+
     pub async fn result_file(&self, m: &Machine, path: &str, name: &str) -> Option<String> {
         self.output(m, &result_file_command(path, name)).await.ok()
     }
@@ -711,6 +753,48 @@ mod tests {
             .output()
             .unwrap();
         assert!(out.status.success() && out.stdout.is_empty());
+    }
+
+    #[test]
+    fn a_steps_transcripts_come_back_with_only_their_conversation() {
+        let home = tempfile::tempdir().unwrap();
+        let dir = home.path().join(".claude/projects/-r-app-wt-com-1");
+        std::fs::create_dir_all(&dir).unwrap();
+        let user = r#"{"type":"user","message":{"content":"go\nstep: fix-1-ab12"}}"#;
+        let summary = r#"{"type":"summary","summary":"step: fix-1-ab12"}"#;
+        let long = format!(
+            r#"{{"type":"assistant","x":"{}"}}"#,
+            "a".repeat(STEP_TRANSCRIPT_LINE_MAX)
+        );
+        std::fs::write(dir.join("a.jsonl"), format!("{user}\n{summary}\n{long}\n")).unwrap();
+        std::fs::write(
+            dir.join("b.jsonl"),
+            "{\"type\":\"user\",\"message\":{\"content\":\"other\"}}\n",
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(dir.join("a.jsonl"), dir.join("link.jsonl")).unwrap();
+        let read = |names: &[&str]| {
+            let names: Vec<String> = names.iter().map(|n| n.to_string()).collect();
+            let script =
+                step_transcript_command("/r/app_wt/com-1", &names, &["step: fix-1-ab12".into()]);
+            let out = std::process::Command::new("sh")
+                .args(["-c", &script])
+                .env("HOME", home.path())
+                .env_remove("CLAUDE_CONFIG_DIR")
+                .output()
+                .unwrap();
+            assert!(out.status.success());
+            String::from_utf8_lossy(&out.stdout).to_string()
+        };
+        let want = format!("@@file a.jsonl\n{user}\n@@skipped\n");
+        assert_eq!(read(&["a.jsonl"]), want);
+        assert_eq!(
+            read(&["b.jsonl"]),
+            want,
+            "a named file without the marker falls back to the folder"
+        );
+        assert_eq!(read(&[]), want, "the link to a.jsonl is not read");
+        assert_eq!(read(&["link.jsonl", "gone.jsonl"]), want);
     }
 
     fn shell(script: &str) -> String {
