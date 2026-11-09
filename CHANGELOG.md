@@ -5,6 +5,15 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Merge from Yardbell.** A session whose pull or merge request is ready (approved, CI green, no conflicts) has a
+  **Merge** button on its row and its Board card. It asks first, reads the pull request again, and merges only if it is
+  still ready and nothing was pushed since the page showed it. **Merge with** in Settings, GitHub and GitLab picks a
+  merge commit, squash or rebase. Dispatch can merge too, with a `merge_pull` step that asks unless a rule allows it.
+- **Resume after a usage limit.** A Claude Code or Codex session stopped at a usage limit that names its reset time
+  shows **Limit until** that time, in the machine's own time zone. When it passes, Dispatch posts a **Limit reset**
+  card whose **Send to session** types `continue`, sent on its own where a rule allows typing into the session, and the
+  phone notifies (**Usage limit reset** under Phone notifications).
+
 ## [0.10.411] - 2026-11-08
 
 - **Merge conflicts.** A pull or merge request that can no longer merge into its base branch shows **conflicts** on its

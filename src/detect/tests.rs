@@ -177,3 +177,78 @@ fn a_long_error_line_is_clipped() {
     let line = stopped("claude", &screen).unwrap();
     assert!(line.chars().count() <= 161 && line.ends_with('…'), "{line}");
 }
+
+fn machine_time(at: &str) -> chrono::DateTime<chrono::FixedOffset> {
+    chrono::DateTime::parse_from_rfc3339(at).unwrap()
+}
+
+fn reset(line: &str, now: &str) -> Option<String> {
+    resets(line, machine_time(now)).map(|t| t.to_rfc3339())
+}
+
+#[test]
+fn a_usage_limit_says_when_it_resets_in_the_machines_time() {
+    let now = "2026-11-09T13:10:00+03:00";
+    assert_eq!(
+        reset("You've hit your limit · resets 3pm", now).as_deref(),
+        Some("2026-11-09T15:00:00+03:00")
+    );
+    assert_eq!(
+        reset("You've hit your limit · resets 3:30pm (Asia/Riyadh)", now).as_deref(),
+        Some("2026-11-09T15:30:00+03:00")
+    );
+    assert_eq!(
+        reset("You've reached your weekly limit · resets Nov 12, 9am", now).as_deref(),
+        Some("2026-11-12T09:00:00+03:00")
+    );
+    assert_eq!(
+        reset("You've hit your usage limit. Try again at 3:00 PM.", now).as_deref(),
+        Some("2026-11-09T15:00:00+03:00")
+    );
+    assert_eq!(
+        reset(
+            "You've hit your usage limit. Try again at Nov 12th, 2026 12:05 AM.",
+            now
+        )
+        .as_deref(),
+        Some("2026-11-12T00:05:00+03:00")
+    );
+}
+
+#[test]
+fn a_reset_without_a_date_is_the_nearest_one() {
+    assert_eq!(
+        reset(
+            "You've hit your limit · resets 11pm",
+            "2026-11-09T01:00:00+00:00"
+        )
+        .as_deref(),
+        Some("2026-11-08T23:00:00+00:00"),
+        "two hours ago, not tomorrow night"
+    );
+    assert_eq!(
+        reset(
+            "You've hit your limit · resets 1am",
+            "2026-11-09T22:00:00+00:00"
+        )
+        .as_deref(),
+        Some("2026-11-10T01:00:00+00:00")
+    );
+    assert_eq!(
+        reset(
+            "You've hit your limit · resets Jan 2, 4pm",
+            "2026-12-30T10:00:00+00:00"
+        )
+        .as_deref(),
+        Some("2027-01-02T16:00:00+00:00")
+    );
+}
+
+#[test]
+fn an_error_without_a_reset_time_has_none() {
+    let now = "2026-11-09T13:10:00+03:00";
+    assert_eq!(reset("API Error: 529 overloaded", now), None);
+    assert_eq!(reset("You're out of usage credits", now), None);
+    assert_eq!(reset("You've hit your limit · resets soon", now), None);
+    assert_eq!(reset("You've hit your limit · resets 13pm", now), None);
+}

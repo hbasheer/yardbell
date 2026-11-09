@@ -12,7 +12,7 @@ pub use gitlab::{accesses, accesses_for, Answer, GitLab, GitLabAccess, Mr};
 pub(crate) use gitlab::{glab_error, run_glab};
 pub use remote::{folder_remotes_command, parse_folder_remotes, service_of, Remotes, Repo};
 
-use crate::config::{Config, Machine};
+use crate::config::{Config, Machine, MergeMethod};
 use crate::dispatch::Dispatch;
 use crate::insights::{Event, Insights};
 use crate::secrets::Secrets;
@@ -186,6 +186,16 @@ pub trait Forge: Send + Sync {
         path: &'a str,
         review: &'a Note,
     ) -> BoxFuture<'a, Vec<Note>>;
+    fn merge<'a>(
+        &'a self,
+        _m: &'a Machine,
+        _path: &'a str,
+        _branch: &'a str,
+        _pull: &'a Pull,
+        _method: MergeMethod,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("Yardbell cannot merge on this forge".into()) })
+    }
     fn resolved_comments<'a>(
         &'a self,
         _m: &'a Machine,
@@ -379,6 +389,41 @@ pub fn observe(seen: Option<&Seen>, pull: &Pull, day: &str) -> (Seen, Vec<Change
         _ => {}
     }
     (next, changes)
+}
+
+// A merge goes ahead only on what the board calls ready, and only on the commit the person looked
+// at: anything pushed since then has not been seen by anyone.
+pub fn merge_refusal(pull: &Pull, head: &str) -> Option<String> {
+    let it = format!("The {}", noun(pull));
+    if pull.state != "open" {
+        return Some(format!("{it} is {}", pull.state));
+    }
+    if pull.draft {
+        return Some(format!("{it} is a draft"));
+    }
+    if !head.is_empty() && pull.head != head {
+        return Some(format!(
+            "{it} has new commits since you looked, so look again before merging"
+        ));
+    }
+    match pull.ci {
+        Ci::Failing => return Some(format!("{it} is failing CI")),
+        Ci::Pending => return Some(format!("CI is still running on the {}", noun(pull))),
+        Ci::Passing | Ci::None => {}
+    }
+    if pull.review != "approved" {
+        return Some(format!("{it} is not approved"));
+    }
+    if pull.mergeable == Mergeable::Conflicting {
+        return Some(format!(
+            "{it} has merge conflicts with {}",
+            match pull.base.as_str() {
+                "" => "its base branch",
+                base => base,
+            }
+        ));
+    }
+    None
 }
 
 fn conflict_of(pull: &Pull) -> Option<String> {
@@ -1157,6 +1202,71 @@ impl Pulls {
             }
             Change::Conflicted => card(n, &[], &[]),
         }
+    }
+
+    pub async fn merge(
+        &self,
+        cfg: &Config,
+        secrets: &Result<Secrets, String>,
+        m: &Machine,
+        path: &str,
+        branch: &str,
+        head: &str,
+    ) -> Result<PullView, String> {
+        self.github.configure(&cfg.pull_requests, secrets);
+        let hosts = match cfg.pull_requests.use_gitlab {
+            true => accesses_for(cfg, secrets),
+            false => Vec::new(),
+        };
+        let target = Target {
+            machine: m.name.clone(),
+            path: path.to_string(),
+            branch: branch.to_string(),
+            sessions: Vec::new(),
+        };
+        let method = cfg.pull_requests.merge_method;
+        let pull = match self.on_gitlab(m, &target, &hosts, Instant::now()).await {
+            Some((access, repo)) => {
+                let pull = match self.gitlab.fetch(&access, &repo.project, branch).await {
+                    Answer::Pull(pull) => *pull,
+                    Answer::Partial(_) => {
+                        return Err(format!(
+                            "{} did not give the whole merge request this time, so it was not merged. Try again",
+                            access.host
+                        ))
+                    }
+                    Answer::NoPull => return Err(format!("{branch} has no open merge request")),
+                    Answer::Refused(why) | Answer::Failed(why) => return Err(why),
+                };
+                if let Some(why) = merge_refusal(&pull, head) {
+                    return Err(why);
+                }
+                self.gitlab
+                    .merge(&access, &repo.project, &pull, method == MergeMethod::Squash)
+                    .await?;
+                pull
+            }
+            None if !cfg.pull_requests.use_github => {
+                return Err("GitHub is off in Settings, under GitHub and GitLab".into())
+            }
+            None => {
+                let pull = match self.github.fetch(m, path, branch).await {
+                    Fetched::Found(pull) => *pull,
+                    Fetched::NoPull => return Err(format!("{branch} has no pull request")),
+                    Fetched::NoTool => return Err(no_gh(&m.name)),
+                    Fetched::Failed(why) => return Err(gh_failed(&why)),
+                };
+                if let Some(why) = merge_refusal(&pull, head) {
+                    return Err(why);
+                }
+                self.github.merge(m, path, branch, &pull, method).await?;
+                pull
+            }
+        };
+        if let Some(entry) = self.lock().entries.get_mut(&target.key()) {
+            entry.next = Instant::now();
+        }
+        Ok(PullView::from(&pull))
     }
 
     pub async fn round(

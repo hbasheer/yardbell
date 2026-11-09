@@ -1085,6 +1085,7 @@ mod tests {
             worktree: false,
             setup: None,
             stopped: None,
+            resets: None,
         }
     }
 

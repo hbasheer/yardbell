@@ -32,6 +32,7 @@ SCAN_CHAT = "browserscan00001"
 SHOT_FILE = "shotbrowsertest1.png"
 PULL_CHAT = "browsertestpull0"
 GITLAB_CHAT = "browsergitlab001"
+LIMIT_CHAT = "browserlimit0001"
 GROUP_CHAT = "browsergroup0001"
 RESULTS_CHAT = "browserresults01"
 MEMORY_CHAT = "browsermemory001"
@@ -62,6 +63,22 @@ FAKE_PR = {
     ],
     "comments": [],
     "reviews": [],
+}
+MERGE_SESSION = "hp-merge-test"
+MERGE_BRANCH = "ready-to-merge"
+READY_PR = {
+    **FAKE_PR,
+    "number": 34,
+    "url": "https://github.com/acme/demo-app/pull/34",
+    "title": "Add the merge button",
+    "reviewDecision": "APPROVED",
+    "headRefOid": "def456",
+    "mergeable": "MERGEABLE",
+    "baseRefName": "main",
+    "statusCheckRollup": [
+        {"__typename": "CheckRun", "name": "test", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS",
+         "detailsUrl": "https://github.com/acme/demo-app/actions/runs/333/job/444"},
+    ],
 }
 PAGES = ["/", "/workspace", "/dispatch", "/settings", "/add"]
 TRIGGER = "Morning summary"
@@ -598,11 +615,19 @@ class Yardbell:
             json.dump(inbox_proposals(), f)
         self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
         threading.Thread(target=self.linear.serve_forever, daemon=True).start()
-        # gh on the server's PATH answers for every branch with one failing pull request.
+        # gh on the server's PATH answers for every branch with one failing pull request, except
+        # one branch whose pull request is ready to merge; a merge is written down, not done.
         fake_bin = os.path.join(tmp, "bin")
         os.makedirs(fake_bin)
+        self.merges = os.path.join(tmp, "gh-merges.log")
         with open(os.path.join(fake_bin, "gh"), "w") as f:
-            f.write(f"#!/bin/sh\nif [ \"$1 $2\" = \"pr view\" ]; then\ncat <<'EOF'\n{json.dumps(FAKE_PR)}\nEOF\nexit 0\nfi\nexit 1\n")
+            f.write(
+                "#!/bin/sh\n"
+                f"if [ \"$1 $2 $3\" = \"pr view {MERGE_BRANCH}\" ]; then\ncat <<'EOF'\n{json.dumps(READY_PR)}\nEOF\nexit 0\nfi\n"
+                f"if [ \"$1 $2\" = \"pr view\" ]; then\ncat <<'EOF'\n{json.dumps(FAKE_PR)}\nEOF\nexit 0\nfi\n"
+                f"if [ \"$1 $2\" = \"pr merge\" ]; then\necho \"$*\" >> {self.merges}\nexit 0\nfi\n"
+                "exit 1\n"
+            )
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
         # Voice input shells out to ffmpeg and whisper-cli; the fakes skip the conversion and
         # answer with a fixed transcription, so no real model or ffmpeg is needed.
@@ -742,6 +767,12 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "instruction": "echo merge''-sent",
             "at": "2026-01-01T10:00:00+00:00",
         }])
+        limit = conversation(LIMIT_CHAT, "Usage limit: demo-app", [{
+            "role": "pull", "kind": "limit", "key": "limit:browser",
+            "machine": MACHINE, "name": PULL_SESSION, "path": os.path.join(self.root, "demo-app"), "branch": "main",
+            "folder": "demo-app", "error": "You've hit your limit · resets 3pm", "resets": "2026-01-01T15:00:00+00:00",
+            "instruction": "continue", "at": "2026-01-01T15:00:30+00:00",
+        }])
         with open(os.path.join(self.state, "dispatch", "memory.md"), "w") as f:
             f.write(f"# Dispatch memory\n\n- {MEMORY_OLD}\n- Branches are named after the ticket\n")
         insight = conversation(INSIGHTS_CHAT, "Fix the login", [
@@ -774,7 +805,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
              "review": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login"},
              "already": {"text": "Commit ab12cd3 already has a finished review, which said ready, by hp-demo-app-2.", "conversation": REVIEW_CHAT}},
         ])
-        for chat in (short, long, review, review_again, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
+        for chat in (short, long, review, review_again, pull, merge_request, limit, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
                      settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat(),
                      review_card_chat(), run_steps_chat(),
                      proposed_pipeline(PROPOSAL_CHAT, (("propstp1", "Built in the builder"),
@@ -1798,6 +1829,59 @@ class Suite:
                 raise Failure(f"the card does not show {expected!r}:\n{text}")
         if "#12" in text or "pull request" in text.lower():
             raise Failure(f"the merge request card still says pull request:\n{text}")
+
+    def test_a_usage_limit_card_offers_to_resume(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={LIMIT_CHAT}"))
+        b.wait("document.querySelector('#dispatch-log .pull-card .badge')?.textContent === 'Limit reset'", "the limit reset card")
+        text = b.js("document.querySelector('#dispatch-log .pull-card').innerText")
+        for expected in ("demo-app", "You've hit your limit · resets 3pm", "so it can go on", "Send to session"):
+            if expected not in text:
+                raise Failure(f"the card does not show {expected!r}:\n{text}")
+        if "#" in text.split("\n")[0]:
+            raise Failure(f"the limit card names a pull request:\n{text}")
+        b.click("#dispatch-log .pull-card .pull-sends summary")
+        if "continue" not in b.js("document.querySelector('#dispatch-log .pull-card .pull-sends').innerText"):
+            raise Failure("the card does not say it sends continue")
+
+    def test_merge_on_the_board_merges_a_ready_pull_request(self):
+        b = self.b
+        worktree = os.path.join(os.path.dirname(self.y.root), "merge-wt")
+        if not os.path.exists(worktree):
+            git("worktree", "add", "-q", "-b", MERGE_BRANCH, worktree, cwd=os.path.join(self.y.root, "demo-app"))
+        r = self.y.tmux("new", "-d", "-s", MERGE_SESSION, "-c", worktree, self.y.shell)
+        if r.returncode:
+            raise Failure(f"tmux new failed: {r.stderr}")
+        try:
+            self.api("POST", "/refresh")
+            b.js("localStorage.removeItem('yardbell.dashboard.view')")
+            b.goto(self.url("/?view=board"))
+            b.wait(
+                f"(async () => (await (await fetch('/state')).json()).sessions.find((s) => s.tmux === {json.dumps(MERGE_SESSION)})?.pull?.review === 'approved')()",
+                "the ready pull request in /state",
+                timeout=45,
+            )
+            button = f"document.querySelector('.b-lane[data-lane=ready] .b-card[data-name={json.dumps(MERGE_SESSION)}] [data-act=merge]')"
+            b.wait(button, "the Merge button on the Ready to merge card")
+            if b.js(f"{button}.textContent.trim()") != "Merge #34":
+                raise Failure(f"the button says {b.js(f'{button}.textContent')!r}")
+            if b.js("!!document.querySelector('.b-lane[data-lane=needs] [data-act=merge]')"):
+                raise Failure("a session that is not ready offers Merge")
+            b.click(f".b-lane[data-lane=ready] .b-card[data-name={json.dumps(MERGE_SESSION)}] [data-act=merge]")
+            b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Merge #34?')", "the question before merging")
+            if os.path.exists(self.y.merges):
+                raise Failure("it merged before it was confirmed")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait("document.getElementById('toast').textContent === 'Merged #34'", "the merged toast")
+            with open(self.y.merges) as f:
+                said = f.read().strip()
+            if said != "pr merge 34 --merge --match-head-commit def456":
+                raise Failure(f"gh was asked to {said!r}")
+            b.goto(self.url("/?view=machines"))
+            b.wait(f"document.querySelector('.s-row [data-name={json.dumps(MERGE_SESSION)}]')?.closest('.s-row').querySelector('[data-act=merge]')", "Merge on the session's row too")
+        finally:
+            self.y.tmux("kill-session", "-t", f"={MERGE_SESSION}")
+            b.js("localStorage.removeItem('yardbell.dashboard.view')")
 
     def test_board_lays_sessions_into_lanes(self):
         b = self.b

@@ -22,8 +22,8 @@ impl Dispatch {
         path: &str,
         title: &str,
         card: Value,
-    ) -> Option<String> {
-        let id = {
+    ) -> Option<(String, usize)> {
+        let (id, index) = {
             let mut chats = self.shared.lock();
             let posted = chats
                 .values()
@@ -50,6 +50,7 @@ impl Dispatch {
                     .collect(),
             );
             let same_pull = || {
+                card["pull"]["url"].as_str()?;
                 newest(
                     chats
                         .values()
@@ -90,11 +91,27 @@ impl Dispatch {
             let c = chats.get_mut(&id).expect("conversation exists");
             c.stored.events.push(card.clone());
             c.stored.updated = now();
-            id
+            (id, c.stored.events.len() - 1)
         };
         self.shared.save(&id);
         self.shared.send_live(&id, &card);
-        Some(id)
+        Some((id, index))
+    }
+
+    // A usage limit card nobody has sent yet stands for the stop, so the same stop is not posted
+    // again when the reset time it names rolls over to the next day.
+    pub fn limit_waiting(&self, machine: &str, session: &str) -> bool {
+        self.shared
+            .lock()
+            .values()
+            .flat_map(|c| &c.stored.events)
+            .any(|e| {
+                is_pull(e)
+                    && e["kind"] == "limit"
+                    && e["machine"] == machine
+                    && e["name"] == session
+                    && !e["sent"].is_object()
+            })
     }
 
     // Claims the card for one send, so a second click or a second device cannot type it twice. A
@@ -155,6 +172,15 @@ pub fn untold(card: &mut Value) -> Option<String> {
         return None;
     }
     card["told"] = json!(true);
+    if text(card, "kind") == "limit" {
+        return Some(format!(
+            "{} on {} stopped at its usage limit ({}), and the limit has reset. Yardbell offers to send: {}",
+            text(card, "name"),
+            text(card, "machine"),
+            text(card, "error"),
+            text(card, "instruction")
+        ));
+    }
     let pull = &card["pull"];
     let (kind, mark) = if text(pull, "forge") == "gitlab" {
         ("Merge request", '!')
@@ -233,7 +259,9 @@ mod tests {
             &Ok(json!({ "machine": "hp", "name": "hp-app", "path": "/r/app" })),
         );
         assert_eq!(
-            dispatch.post_pull("hp", "hp-app", "/r/app", "t", card("ci:1")),
+            dispatch
+                .post_pull("hp", "hp-app", "/r/app", "t", card("ci:1"))
+                .map(|(id, _)| id),
             Some(id.clone())
         );
         assert_eq!(
@@ -261,7 +289,8 @@ mod tests {
                 "Pull request #7: Fix login",
                 card("ci:1"),
             )
-            .unwrap();
+            .unwrap()
+            .0;
         let convo = dispatch.get(&id).unwrap();
         assert_eq!(convo["title"], "Pull request #7: Fix login");
         assert_eq!(convo["sessions"][0]["name"], "hp-app");
@@ -273,7 +302,9 @@ mod tests {
             "the same card after a restart"
         );
         assert_eq!(
-            reopened.post_pull("hp", "hp-other", "/r/app", "t", card("ci:2")),
+            reopened
+                .post_pull("hp", "hp-other", "/r/app", "t", card("ci:2"))
+                .map(|(id, _)| id),
             Some(id),
             "a card for the same pull request joins its conversation"
         );
@@ -285,7 +316,8 @@ mod tests {
         let dispatch = fake_claude(dir.path(), "true");
         let id = dispatch
             .post_pull("hp", "hp-app", "/r/app", "t", card("ci:1"))
-            .unwrap();
+            .unwrap()
+            .0;
         dispatch.pull_claim(&id, 0).unwrap();
         assert!(dispatch.pull_claim(&id, 0).is_err());
         let step = dispatch

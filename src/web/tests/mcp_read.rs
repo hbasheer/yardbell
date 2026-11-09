@@ -373,6 +373,7 @@ async fn insights_for_a_session_and_a_machine() {
         tmux: Some("hp-app".into()),
         activity: crate::snapshot::Activity::Active,
         stopped: None,
+        resets: None,
     };
     let now = chrono::Local::now();
     r.app.insights.observe(
@@ -533,6 +534,7 @@ async fn a_machine_wide_insights_read_is_a_summary() {
         tmux: Some("hp-app".into()),
         activity: crate::snapshot::Activity::Active,
         stopped: None,
+        resets: None,
     };
     let now = chrono::Local::now();
     r.app.insights.observe(

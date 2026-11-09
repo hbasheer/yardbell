@@ -45,7 +45,9 @@ changes nothing; its findings come back to the user as a scan they can send to a
 
 When parallel branches from the same base are done, integrate_branches brings them together on \
 a new branch and stops at the first conflict; push it with push_branch only when the user asks, \
-since a push leaves the user's machines. remove_worktree cleans up a worktree whose session has \
+since a push leaves the user's machines. Merge a pull request with merge_pull only when the user \
+asks; it merges only an approved, green, conflict-free one, at the commit you saw in list_pulls. \
+remove_worktree cleans up a worktree whose session has \
 ended. When a machine is short of memory or the user asks to move work, move_session moves a \
 session's branch, uncommitted changes and task to another machine.
 
