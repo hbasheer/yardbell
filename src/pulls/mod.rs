@@ -12,7 +12,7 @@ pub use gitlab::{accesses, accesses_for, Answer, GitLab, GitLabAccess, Mr};
 pub(crate) use gitlab::{glab_error, run_glab};
 pub use remote::{folder_remotes_command, parse_folder_remotes, service_of, Remotes, Repo};
 
-use crate::config::{Config, Machine, MergeMethod};
+use crate::config::{Config, Machine, MergeMethod, ReviewSessions};
 use crate::dispatch::Dispatch;
 use crate::insights::{Event, Insights};
 use crate::secrets::Secrets;
@@ -230,7 +230,7 @@ pub struct Target {
 }
 
 impl Target {
-    fn key(&self) -> Key {
+    pub fn key(&self) -> Key {
         (self.machine.clone(), self.path.clone(), self.branch.clone())
     }
 }
@@ -300,6 +300,11 @@ pub struct Seen {
     // is told again, while GitHub saying UNKNOWN as it works it out again leaves it.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub conflict: String,
+    // The head commit a review was asked for, or empty when this head is still to be reviewed.
+    // None until reviews of sessions' pull requests are on, so turning them on reviews only what
+    // is pushed after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -346,6 +351,7 @@ pub fn observe(seen: Option<&Seen>, pull: &Pull, day: &str) -> (Seen, Vec<Change
             review: pull.review.clone(),
             known: true,
             conflict: conflict_of(pull).unwrap_or_default(),
+            reviewed: None,
         };
         return (next, Vec::new());
     };
@@ -515,8 +521,15 @@ fn kind(p: &Pull) -> &'static str {
 }
 
 pub fn noun(p: &Pull) -> String {
-    let mark = if p.forge == "gitlab" { '!' } else { '#' };
-    format!("{} {mark}{}", kind(p), p.number)
+    noun_of(&p.forge, p.number)
+}
+
+// "merge request !12" or "pull request #12".
+pub fn noun_of(forge: &str, number: u64) -> String {
+    match forge {
+        "gitlab" => format!("merge request !{number}"),
+        _ => format!("pull request #{number}"),
+    }
 }
 
 fn titled(p: &Pull) -> String {
@@ -902,6 +915,53 @@ impl Pulls {
         self.lock().health.clone()
     }
 
+    pub fn pull(&self, key: &Key) -> Option<Pull> {
+        self.lock().entries.get(key)?.pull.clone()
+    }
+
+    // Whether this head of the pull request still needs the review a new commit asks for. A pull
+    // request known from before reviews were on counts its head as reviewed.
+    pub fn review_due(&self, url: &str, head: &str) -> bool {
+        {
+            let mut inner = self.lock();
+            let Some(seen) = inner.seen.get_mut(url) else {
+                return false;
+            };
+            if let Some(done) = &seen.reviewed {
+                return done != head;
+            }
+            seen.reviewed = Some(head.to_string());
+        }
+        self.save();
+        false
+    }
+
+    pub fn reviewed(&self, url: &str, head: &str) {
+        {
+            let mut inner = self.lock();
+            let Some(seen) = inner.seen.get_mut(url) else {
+                return;
+            };
+            seen.reviewed = Some(head.to_string());
+        }
+        self.save();
+    }
+
+    // With reviews off, nothing is due; turned on again, what was pushed meanwhile is not either.
+    pub fn forget_reviews(&self) {
+        let forgot = {
+            let mut inner = self.lock();
+            let mut forgot = false;
+            for seen in inner.seen.values_mut() {
+                forgot |= seen.reviewed.take().is_some();
+            }
+            forgot
+        };
+        if forgot {
+            self.save();
+        }
+    }
+
     // Why each branch without a badge has none, when something is wrong rather than there simply
     // being no pull request.
     pub fn whys(&self, targets: &[Target]) -> HashMap<Key, String> {
@@ -1049,6 +1109,7 @@ impl Pulls {
             }))
             .await;
         let day = today();
+        let reviews_on = cfg.pull_requests.review_sessions != ReviewSessions::Off;
         let mut notices = Vec::new();
         let mut entries: Vec<(String, String, Event)> = Vec::new();
         let mut changed = false;
@@ -1134,7 +1195,10 @@ impl Pulls {
                 let first_and_partial = |p: &Pull| partial && !inner.seen.contains_key(&p.url);
                 if let Some(p) = pull.as_ref().filter(|p| !first_and_partial(p)) {
                     let before = inner.seen.get(&p.url).cloned();
-                    let (seen, changes) = observe(before.as_ref(), p, &day);
+                    let (mut seen, changes) = observe(before.as_ref(), p, &day);
+                    if before.is_none() && reviews_on {
+                        seen.reviewed = Some(String::new());
+                    }
                     for event in timeline_events(before.as_ref(), p, &changes) {
                         for session in &t.sessions {
                             entries.push((t.machine.clone(), session.clone(), event.clone()));

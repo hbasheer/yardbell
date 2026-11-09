@@ -50,6 +50,7 @@ pub enum By {
     Dispatch,
     You,
     Pipeline,
+    Yardbell,
 }
 
 pub fn event(
@@ -69,6 +70,7 @@ pub fn event(
             By::You => "you",
             By::Dispatch => "dispatch",
             By::Pipeline => "pipeline",
+            By::Yardbell => "yardbell",
         },
         "status": status,
         "at": at,
@@ -318,7 +320,28 @@ fn ran(action: &Value) -> Option<String> {
     })
 }
 
+// A step Yardbell proposed on its own, because a session's pull request got new commits.
+fn yardbell_outcome(action: &Value) -> Option<String> {
+    let why = "because its pull request got new commits";
+    match text(action, "status") {
+        "approved" | "edited" => Some(format!(
+            "Yardbell asked for {} {why}{}.",
+            subject(action),
+            ran(action)?
+        )),
+        "rejected" => Some(format!(
+            "Yardbell asked for {} {why}. I rejected it.",
+            subject(action)
+        )),
+        "withdrawn" => Some(String::new()),
+        _ => None,
+    }
+}
+
 fn action_outcome(action: &Value) -> Option<String> {
+    if action["by"] == "yardbell" {
+        return yardbell_outcome(action);
+    }
     let mine = action["by"] == "you";
     match text(action, "status") {
         "approved" | "edited" if mine => {
@@ -350,9 +373,13 @@ fn subject(action: &Value) -> String {
 }
 
 fn reviewed(of: &Value) -> String {
-    match text(of, "branch") {
+    let work = match text(of, "branch") {
         "" => format!("the work of {}", text(of, "name")),
         branch => format!("branch {branch}"),
+    };
+    match serde_json::from_value::<super::review::ReviewedPull>(of["pull"].clone()) {
+        Ok(pull) => format!("{work} ({})", pull.words()),
+        Err(_) => work,
     }
 }
 
@@ -560,6 +587,36 @@ mod tests {
     }
 
     #[test]
+    fn a_review_yardbell_asked_for_is_told_as_yardbell_s() {
+        let of = json!({ "machine": "hp", "name": "hp-app", "path": "/r/app", "branch": "eng-1",
+            "pull": { "forge": "gitlab", "number": 7, "url": "u", "base": "main" } });
+        let review: ReviewOf = serde_json::from_value(of).unwrap();
+        let mut step = event(
+            "start_session",
+            json!({ "machine": "hp", "path": "/r/app", "prompt": "review" }),
+            By::Yardbell,
+            Some(&review),
+            "pending",
+            "t",
+        );
+        assert_eq!(step["by"], "yardbell");
+        step["status"] = json!("approved");
+        step["result"] = result(&Ok(json!({ "machine": "hp", "name": "hp-app-2" })), "t2");
+        let mut events = vec![step.clone()];
+        assert_eq!(
+            untold(&mut events),
+            ["Yardbell asked for a review of branch eng-1 (merge request !7) on hp because its pull request got new commits, and it started as hp-app-2 on hp."]
+        );
+        step["status"] = json!("rejected");
+        step["result"] = Value::Null;
+        let mut events = vec![step];
+        assert_eq!(
+            untold(&mut events),
+            ["Yardbell asked for a review of branch eng-1 (merge request !7) on hp because its pull request got new commits. I rejected it."]
+        );
+    }
+
+    #[test]
     fn a_finished_review_tells_the_commit_it_read() {
         let review = json!({ "role": "review", "machine": "hp", "name": "hp-app-2", "verdict": "ready", "summary": "Fine.",
             "of": { "machine": "hp", "name": "hp-app", "branch": "eng-1", "pin": { "head": "abcdef1234", "changes": "h" } } });
@@ -567,6 +624,11 @@ mod tests {
             review_finished(&review),
             "The review of branch eng-1 by hp-app-2 on hp finished: ready. It read commit abcdef1 with uncommitted changes. Fine. No findings."
         );
+        let mut of_mr = review.clone();
+        of_mr["of"]["pull"] = json!({ "forge": "gitlab", "number": 12, "url": "https://g/x/-/merge_requests/12", "base": "develop" });
+        assert!(review_finished(&of_mr).starts_with(
+            "The review of branch eng-1 (merge request !12) by hp-app-2 on hp finished"
+        ));
     }
 
     #[test]

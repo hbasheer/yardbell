@@ -109,6 +109,8 @@ pub struct SessionView {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stopped: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resets: Option<String>,
 }
 
@@ -523,6 +525,7 @@ impl State {
                     worktree: snap.linked.contains(&s.folder),
                     setup: inner.setups.get(&(m.name.clone(), path.clone())).cloned(),
                     path,
+                    review: None,
                 });
             }
         }

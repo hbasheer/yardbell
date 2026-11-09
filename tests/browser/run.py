@@ -1768,8 +1768,20 @@ class Suite:
         title = b.js(f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]').closest('.s-row').querySelector('.pr-badge').title")
         if title != "Pull request #12: Fix the login redirect. CI failing on CI / test. Review required.":
             raise Failure(f"the badge title says {title!r}")
+        row = f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]').closest('.s-row')"
+        review = b.js(f"{row}.querySelector('[data-act=review-pull]')?.textContent.trim()")
+        if review != "Review #12":
+            raise Failure(f"the row offers {review!r} instead of Review #12")
+        # The newest seeded review of fix-login is a step still waiting for approval.
+        mark = b.wait(f"{row}.querySelector('.review-mark')?.textContent", "the review mark beside the badge")
+        if mark != "review waiting":
+            raise Failure(f"the review mark says {mark!r}")
+        href = b.js(f"{row}.querySelector('.review-mark').getAttribute('href')")
+        if not href.startswith("/dispatch?c="):
+            raise Failure(f"the review mark links to {href!r}")
         b.goto(self.url("/workspace"))
         b.wait("document.querySelector('#tree .ws-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace sidebar")
+        b.wait("document.querySelector('#tree .ws-review')?.textContent === 'review waiting'", "the review mark in the Workspace sidebar")
 
     def test_pull_request_card_sends_to_the_session(self):
         b = self.b

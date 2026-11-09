@@ -121,6 +121,7 @@ mod tests {
                     worktree: true,
                     setup: None,
                     stopped: None,
+                    review: None,
                     resets: None,
                 })
                 .collect(),

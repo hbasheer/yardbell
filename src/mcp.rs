@@ -1,5 +1,5 @@
 use crate::config::{Approval, Config};
-use crate::dispatch::{By, ChildStart, MemoryChange, ReviewOf, Rule, Step};
+use crate::dispatch::{By, ChildStart, MemoryChange, ReviewOf, ReviewedPull, Rule, Step};
 use crate::web::{find_machine, start_session, ApiError, AppState, NewSession};
 use axum::extract::State as AxState;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -267,7 +267,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "review_session",
-            "Start a reviewer for a session's work: a new session in the same folder that reviews its branch against the branch it was made from, runs the tests, changes no files, and ends with a report of findings. name is the session to review. It is refused when the same commit and uncommitted changes already have a finished review or one running; say so to the user, and set again only if they ask to run it again.",
+            "Start a reviewer for a session's work: a new session in the same folder that reviews its branch against the branch it was made from (or, when the branch has an open pull or merge request, against that request's base, and the review records the request), runs the tests, changes no files, and ends with a report of findings. name is the session to review. It is refused when the same commit and uncommitted changes already have a finished review or one running; say so to the user, and set again only if they ask to run it again.",
             json!({
                 "machine": machine,
                 "name": session,
@@ -1122,7 +1122,23 @@ pub fn review_plan(
         agent.to_string()
     };
     let shots = screenshots(&snap, running.map(|s| s.folder.as_str()), &path);
-    let prompt = crate::dispatch::review_prompt(&branch, focus, shots.as_ref());
+    let folder = running.map(|s| s.folder.clone()).or_else(|| {
+        snap.folder_paths
+            .iter()
+            .find(|(_, p)| **p == path)
+            .map(|(label, _)| label.clone())
+    });
+    let pull = folder
+        .and_then(|folder| app.state.pull_of(&m.name, &folder, &branch))
+        .filter(|p| p.state == "open" && !branch.is_empty())
+        .map(|p| ReviewedPull {
+            forge: p.forge,
+            number: p.number,
+            url: p.url,
+            base: p.base,
+            head: p.head,
+        });
+    let prompt = crate::dispatch::review_prompt(&branch, pull.as_ref(), focus, shots.as_ref());
     let mut input = json!({
         "machine": m.name,
         "path": path,
@@ -1141,6 +1157,7 @@ pub fn review_plan(
         scan: String::new(),
         pin: None,
         again: false,
+        pull,
     };
     Ok((input, of))
 }
@@ -1220,6 +1237,7 @@ pub fn scan_plan(
         scan: kind.key().to_string(),
         pin: None,
         again: false,
+        pull: None,
     };
     Ok((input, of))
 }

@@ -973,6 +973,7 @@ function renderPullRequests() {
   const f = $("pr-form");
   f.elements.enabled.checked = value.enabled;
   f.elements.cards.checked = value.cards;
+  f.elements.review_sessions.value = value.review_sessions || "off";
   f.elements.poll_seconds.value = value.poll_seconds;
   f.elements.merge_method.value = value.merge_method || "merge";
   f.elements.use_github.checked = value.use_github !== false;
@@ -1664,6 +1665,7 @@ $("pr-form").addEventListener("submit", async (e) => {
   const body = {
     enabled: f.elements.enabled.checked,
     cards: f.elements.cards.checked,
+    review_sessions: f.elements.review_sessions.value,
     use_github: f.elements.use_github.checked,
     use_gitlab: f.elements.use_gitlab.checked,
     poll_seconds: Number(f.elements.poll_seconds.value),

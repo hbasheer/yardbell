@@ -268,6 +268,12 @@ function pullMark(p) {
   return `<span class="ws-pr ${tone}" title="${esc(window.YardbellPull.describe(p))}" aria-label="${esc(window.YardbellPull.noun(p))} ${esc(window.YardbellPull.ref(p))}, ${esc(word)}">${esc(window.YardbellPull.ref(p))}</span>`;
 }
 
+function reviewMark(s) {
+  const m = window.YardbellPull.reviewMark(s);
+  if (!m) return "";
+  return `<span class="ws-pr ws-review ${m.tone}" title="${esc(m.title)}">${esc(m.word)}</span>`;
+}
+
 function dot(st) {
   return `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
 }
@@ -304,7 +310,7 @@ function renderSide() {
     const where = n && !phone.matches ? `<span class="ws-pane-no" title="In pane ${n}">${n}</span>` : "";
     return `<li><button type="button" class="ws-item${n && key === focusedLeaf()?.key ? " current" : ""}${s.stale ? " stale" : ""}" data-key="${esc(key)}"${s.stale ? " disabled" : ""}>
       ${dot(st)}
-      <span class="ws-item-main"><span class="ws-item-title">${esc(title(s))}</span><span class="ws-item-sub">${pullMark(s.pull)}${esc([agentLabel(s.agent), s.branch].filter(Boolean).join(" · "))}</span></span>
+      <span class="ws-item-main"><span class="ws-item-title">${esc(title(s))}</span><span class="ws-item-sub">${pullMark(s.pull)}${reviewMark(s)}${esc([agentLabel(s.agent), s.branch].filter(Boolean).join(" · "))}</span></span>
       <span class="ws-item-word ${st}">${esc(WORD[st] || "last known")}</span>${where}
     </button></li>`;
   };
@@ -1112,11 +1118,35 @@ function paneMenu(button, leaf) {
     const what = s ? title(s) : other.key ? other.key.split("/").pop() : "empty pane";
     return [{ label: `Swap with ${n + 1} · ${what}`, run: () => swapPanes(leaf.pane, other.pane) }];
   });
+  const s = sessionFor(leaf.key);
+  const review = window.YardbellPull.reviewable(s)
+    ? [{ label: `Review ${window.YardbellPull.noun(s.pull).toLowerCase()} ${window.YardbellPull.ref(s.pull)}`, run: () => reviewPull(machine, name) }]
+    : [];
   showMenu(button.getBoundingClientRect(), [
+    ...review,
     { label: "Insights", run: () => window.YardbellInsights.open({ machine, name, onSuggest: (data) => askDispatch(data) }) },
     { label: "Suggest a better prompt", run: () => askDispatch({ machine, name }) },
     ...swaps,
   ], button);
+}
+
+// The review runs in Dispatch, so the conversation it went to opens in the panel, or on a phone
+// as the Dispatch page.
+async function reviewPull(machine, name) {
+  let conversation;
+  try {
+    conversation = await window.YardbellPull.review(machine, name);
+  } catch (err) {
+    toast(err.message);
+    return;
+  }
+  const url = `/dispatch?c=${encodeURIComponent(conversation)}`;
+  if (phone.matches) {
+    location.href = url;
+    return;
+  }
+  showDispatch(true);
+  $("ws-dispatch").querySelector("iframe").src = url;
 }
 
 // Dispatch's panel takes the request; on a phone, or with the panel closed for good, the

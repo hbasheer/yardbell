@@ -532,6 +532,7 @@ mod tests {
             worktree: false,
             setup: None,
             stopped: None,
+            review: None,
             resets: None,
         }
     }

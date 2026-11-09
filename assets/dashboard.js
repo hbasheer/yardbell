@@ -246,6 +246,7 @@ function actions(s) {
     ? html`<button class="btn" type="button" data-act="host" data-machine=${s.machine} data-name=${s.tmux}>Terminal app</button>` : "";
   return html`<div class="row-actions">
     <a class="btn" href=${termUrl(s)} target="_blank" rel="noopener">${ICONS.open}Open</a>${host}${mergeButton(s)}
+    ${window.YardbellPull.reviewable(s) ? html`<button class="btn quiet" type="button" data-act="review-pull" data-machine=${s.machine} data-name=${s.tmux} title=${`Start a reviewer that reads ${window.YardbellPull.noun(s.pull).toLowerCase()} ${window.YardbellPull.ref(s.pull)} against ${s.pull.base || "its base"}, runs the tests and changes nothing`}>Review ${window.YardbellPull.ref(s.pull)}</button>` : ""}
     <button class="btn quiet" type="button" data-act="insights" data-machine=${s.machine} data-name=${s.tmux} title="When it worked, waited and idled, and the tools and tests it ran">Insights</button>
     <button class="btn quiet" type="button" data-act="move-machine" data-id=${s.id} title="Move this session's branch, changes and task to another machine">Move</button>
     <button class="btn quiet danger stop" type="button" data-act="stop" data-machine=${s.machine} data-name=${s.tmux}>Stop</button>
@@ -283,6 +284,12 @@ function pullBadge(p) {
   return html`<a class="pr-badge ${tone}" href=${p.url} target="_blank" rel="noopener" title=${window.YardbellPull.describe(p)}><span class="pr-num">${window.YardbellPull.ref(p)}</span>${word}</a>`;
 }
 
+function reviewBadge(s) {
+  const m = window.YardbellPull.reviewMark(s);
+  if (!m) return "";
+  return html`<a class="pr-badge review-mark ${m.tone}" href=${m.href} title=${m.title}>${m.word}</a>`;
+}
+
 function pullWhy(s) {
   if (s.pull || !s.pull_why) return "";
   return html`<a class="pr-why" href="/settings#pull-requests" title=${s.pull_why}>No PR info</a>`;
@@ -299,7 +306,7 @@ function identity(s, extra = "") {
   const branch = s.branch ? html`<span class="branch">${s.branch}</span>` : "";
   const agent = s.agent ? html`<span class="agent">${agentLabel(s.agent)}</span>` : "";
   return html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}${extra}</div>
-    <div class="s-sub">${branch}${pullBadge(s.pull)}${pullWhy(s)}${setupFlag(s)}${agent}</div>`;
+    <div class="s-sub">${branch}${pullBadge(s.pull)}${reviewBadge(s)}${pullWhy(s)}${setupFlag(s)}${agent}</div>`;
 }
 
 function sessionRow(s) {
@@ -399,7 +406,7 @@ function group(state, m) {
 
 function boardCard(s) {
   const ticket = s.ticket !== "-" ? html`<span class="ticket">${s.ticket}</span>` : "";
-  const marks = [pullBadge(s.pull), pullWhy(s), setupFlag(s)].filter((m) => m !== "");
+  const marks = [pullBadge(s.pull), reviewBadge(s), pullWhy(s), setupFlag(s)].filter((m) => m !== "");
   const where = [s.machine, s.agent ? agentLabel(s.agent) : ""].filter(Boolean).join(" · ");
   const body = html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}</div>
     ${s.branch ? html`<div class="b-branch branch">${s.branch}</div>` : ""}
@@ -816,6 +823,17 @@ document.addEventListener("click", async (e) => {
   }
   if (act === "insights") {
     window.YardbellInsights.open({ machine, name, onSuggest: window.YardbellInsights.handOver });
+    return;
+  }
+  if (act === "review-pull") {
+    b.disabled = true;
+    try {
+      const conversation = await window.YardbellPull.review(machine, name);
+      location.href = `/dispatch?c=${encodeURIComponent(conversation)}`;
+    } catch (err) {
+      b.disabled = false;
+      toast(err.message);
+    }
     return;
   }
   if (act === "merge") {
