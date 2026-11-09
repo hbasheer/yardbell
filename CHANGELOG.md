@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.412] - 2026-11-09
+
 - **Reviews know the pull request.** A review of a session with an open pull or merge request compares against that
   request's base branch, not "usually main", records which request and commit it covered, and its card links the
   request and says when the folder held a different commit than the one pushed.
