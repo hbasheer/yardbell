@@ -5,7 +5,7 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
-## [0.10.412] - 2026-11-09
+## [0.10.413] - 2026-11-09
 
 - **Reviews know the pull request.** A review of a session with an open pull or merge request compares against that
   request's base branch, not "usually main", records which request and commit it covered, and its card links the
@@ -17,6 +17,9 @@ and the project uses [Semantic Versioning](https://semver.org).
 - **Review every push.** **Review my sessions' pull requests** under Settings, GitHub and GitLab (`review_sessions:
   ask` or `auto`) reviews a session's pull request when it opens or gets new commits, once per head commit, after the
   session is idle with that commit checked out. Dispatch rules for reviews still apply. Off by default.
+
+## [0.10.412] - 2026-11-09
+
 - **Merge from Yardbell.** A session whose pull or merge request is ready (approved, CI green, no conflicts) has a
   **Merge** button on its row and its Board card. It asks first, reads the pull request again, and merges only if it is
   still ready and nothing was pushed since the page showed it. **Merge with** in Settings, GitHub and GitLab picks a
