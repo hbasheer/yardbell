@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.412] - 2026-11-09
+
 - **Merge from Yardbell.** A session whose pull or merge request is ready (approved, CI green, no conflicts) has a
   **Merge** button on its row and its Board card. It asks first, reads the pull request again, and merges only if it is
   still ready and nothing was pushed since the page showed it. **Merge with** in Settings, GitHub and GitLab picks a
