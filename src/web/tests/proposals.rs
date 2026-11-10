@@ -606,7 +606,7 @@ async fn an_outside_client_cannot_propose_passing_a_command() {
         assert_eq!(result["isError"], true, "{result}");
         assert!(text(&result).contains(says), "{result}");
         still_waiting(&r, &run);
-        r.app.pipelines.delete_run(&run);
+        r.app.pipelines.drop_run(&run).unwrap();
     }
     assert!(r.app.proposals.list().is_empty());
 }
@@ -639,7 +639,7 @@ async fn approving_a_proposal_cannot_pass_a_command() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     still_waiting(&r, &run);
-    r.app.pipelines.delete_run(&run);
+    r.app.pipelines.drop_run(&run).unwrap();
 
     let run = command_wait(&r, WaitKind::Stopped, Some(true));
     propose(

@@ -1,4 +1,5 @@
 import { html, render, nothing } from "/vendor/lit-html/lit-html.js";
+import { markdown } from "/markdown.js";
 import { canvas, settle, nodeState, triggerWords, setConnectors, icon, toWorld, centreOf, NODE_W, KINDS, WORDS } from "/pipeline-canvas.js";
 
 const $ = (id) => document.getElementById(id);
@@ -279,16 +280,46 @@ function stateWord(run, d) {
   }
 }
 
+const ENDED = ["done", "dropped"];
+
+// Deleting removes only the run's record, so the dialog names what is left behind.
+function staying(runs) {
+  const trees = [...new Set(runs.flatMap((r) => Object.values(r.steps || {}).filter((st) => st.made).map((st) => `${st.made} on ${st.machine}`)))];
+  const open = runs.flatMap((r) => (r.sessions_left || []).map((t) => `${t.name} on ${t.machine}`));
+  const lines = ["Branches, pushed commits, pull and merge requests, Dispatch conversations and the agents' transcripts stay."];
+  if (trees.length) lines.push(`${trees.length === 1 ? "This worktree stays on disk" : "These worktrees stay on disk"}: ${trees.join(", ")}.`);
+  if (open.length) {
+    const it = open.length === 1 ? "it" : "them";
+    lines.push(`${open.length === 1 ? "This session is still open and stays open" : "These sessions are still open and stay open"}: ${open.join(", ")}. Stop ${it} from the dashboard when you no longer need ${it}.`);
+  }
+  return lines.join("\n");
+}
+
+function forget(...keys) {
+  const q = params();
+  for (const k of keys) q.delete(k);
+  history.replaceState(null, "", `${location.pathname}?${q}`);
+}
+
 async function removeRun(run) {
-  const going = !["done", "dropped"].includes(run.state);
-  const lose = going ? "The run stops. Its agent sessions stop and close, and its record and reports go." : "Its record and reports go.";
-  const keep = going ? "The worktree, the branch and any pull request stay." : "The branch and any pull request stay.";
-  if (!(await ask("Delete this run?", `${lose} ${keep}`, { confirm: "Delete", danger: true }))) return;
+  const body = `Its record goes: the step results, reports and history shown here.\n${staying([run])}`;
+  if (!(await ask("Delete this run?", body, { confirm: "Delete", danger: true }))) return;
   doing(async () => {
     await api("DELETE", `/api/runs/${encodeURIComponent(run.id)}`);
-    const q = params();
-    q.delete("run");
-    history.replaceState(null, "", `${location.pathname}?${q}`);
+    forget("run", "step");
+    await load();
+  });
+}
+
+async function clearRuns(d) {
+  const ended = runsOf(d.id).filter((r) => ENDED.includes(r.state));
+  const n = ended.length;
+  const body = `${n === 1 ? "Its record goes" : "Their records go"}: the step results, reports and history. Runs still queued, running or waiting are kept.\n${staying(ended)}`;
+  if (!(await ask(`Delete ${n} finished ${n === 1 ? "run" : "runs"}?`, body, { confirm: "Delete", danger: true }))) return;
+  doing(async () => {
+    const out = await api("POST", `/api/pipelines/${encodeURIComponent(d.id)}/clear-runs`);
+    if (out.deleted.includes(params().get("run"))) forget("run", "step");
+    toast(`Deleted ${out.deleted.length} finished ${out.deleted.length === 1 ? "run" : "runs"}`, "ok");
     await load();
   });
 }
@@ -403,9 +434,35 @@ function report(text) {
   return html`<details class="pl-report"><summary>${lines.slice(0, 2).join("\n")}</summary>${lines.slice(2).join("\n")}</details>`;
 }
 
+function took(from, to) {
+  const secs = Math.round((Date.parse(to) - Date.parse(from)) / 1000);
+  if (!from || !to || Number.isNaN(secs) || secs < 0) return "";
+  if (secs < 60) return `${secs} s`;
+  const mins = Math.round(secs / 60);
+  if (mins < 60) return `${mins} min`;
+  return `${Math.floor(mins / 60)} h ${mins % 60} min`;
+}
+
+// Every step entered, in order, so a review sent back to its fix shows each round.
+function entryWord(run, e, last) {
+  if (e.outcome) return WORDS[e.outcome];
+  if (last && !ENDED.includes(run.state)) return run.state === "waiting" ? "waiting for you" : run.state;
+  return "ended without a result";
+}
+
+function runHistory(run, d, only) {
+  const rows = (run.history || []).map((e, i, all) => ({ e, last: i === all.length - 1 })).filter(({ e }) => (only ? e.step === only : true));
+  if (!rows.length) return nothing;
+  return html`<ol class="pl-run-history" id=${only ? "pl-step-history" : "pl-run-history"}>${rows.map(({ e, last }) => html`<li class=${e.outcome === "fail" ? "failed" : e.outcome === "needs_you" ? "waiting" : ""}>
+    <time>${clock(e.at)}</time>
+    <span>${e.step ? html`${only ? "" : html`<b>${nameOf(d, e.step)}</b> `}${entryWord(run, e, last)}` : html`<b>Run</b> ${e.note || "started"}`}${e.step && e.note ? html` <small>${e.note}</small>` : nothing}</span>
+  </li>`)}</ol>`;
+}
+
 function detail(run, d) {
   const s = run.subject || {};
   const pr = s.pr;
+  const ended = ENDED.includes(run.state);
   return html`<aside class="pl-detail">
     <div>
       <h3>${label(run)}</h3>
@@ -424,23 +481,76 @@ function detail(run, d) {
     ${run.teardown_problem ? html`<p class="pl-teardown-problem" role="alert">${run.teardown_problem}</p>` : nothing}
     <div class="pl-need-actions">
       ${["queued", "running"].includes(run.state) ? html`<button class="btn quiet danger" type="button" ?disabled=${busy} @click=${() => act(run, "drop")}>Stop this run</button>` : nothing}
-      <button class="btn quiet danger" type="button" id="pl-delete-run" ?disabled=${busy} @click=${() => removeRun(run)}>Delete this run</button>
+      ${ended ? html`<button class="btn quiet danger" type="button" id="pl-delete-run" ?disabled=${busy} @click=${() => removeRun(run)}>Delete this run</button>` : nothing}
     </div>
     <ol class="pl-steps">${d.steps.filter((st) => run.steps?.[st.id]).map((st) => {
       const state = run.steps[st.id];
       const n = nodeState(run, st);
       return html`<li class=${`pl-st ${n.cls}`}>
         <span class="pl-mark" aria-hidden="true">${n.mark}</span>
-        <div><span class="pl-st-name">${st.name}</span> <small>${n.note}</small>${state.overridden ? html` <small class="pl-overridden">Passed by a person after its command failed</small>` : nothing}${state.pin?.head ? html`<small class="pl-st-commit">Read <code title=${state.pin.head}>${state.pin.head.slice(0, 7)}</code>${state.pin.changes ? " with uncommitted changes" : ""}</small>` : nothing}${state.report ? report(state.report) : nothing}</div>
+        <div><button class="pl-st-name pl-st-open" type="button" data-step=${st.id} @click=${() => pickStep(st.id)}>${st.name}</button> <small>${n.note}</small>${state.overridden ? html` <small class="pl-overridden">Passed by a person after its command failed</small>` : nothing}${state.pin?.head ? html`<small class="pl-st-commit">Read <code title=${state.pin.head}>${state.pin.head.slice(0, 7)}</code>${state.pin.changes ? " with uncommitted changes" : ""}</small>` : nothing}${state.report ? report(state.report) : nothing}</div>
         <time>${clock(state.ended || state.started)}</time>
       </li>`;
     })}</ol>
     ${run.report ? html`<div class="pl-final"><p class="pl-field-head">Report</p><pre class="session-screen">${run.report}</pre></div>` : nothing}
+    ${run.history?.length ? html`<div class="pl-final"><p class="pl-field-head">History <span>Every step it entered, in order</span></p>${runHistory(run, d)}</div>` : nothing}
+  </aside>`;
+}
+
+function fact(name, value) {
+  return value ? html`<dt>${name}</dt><dd>${value}</dd>` : nothing;
+}
+
+function stepPanel(run, d, step) {
+  const st = run.steps?.[step.id];
+  const n = nodeState(run, step);
+  const last = st?.runs > 1;
+  return html`<aside class="pl-detail pl-step-panel" id="pl-step" aria-label=${`${step.name} in this run`}>
+    <div>
+      <button class="btn quiet small-link pl-step-back" type="button" id="pl-step-back" @click=${() => pickStep(null)}>${chevron("left")}<span>This run</span></button>
+      <h3>${step.name}</h3>
+      <p class="pl-detail-meta">${KINDS[step.kind] || step.kind} · ${st ? n.note : "not reached in this run"}</p>
+    </div>
+    ${st ? html`
+      <dl class="pl-facts">
+        ${fact("Outcome", st.outcome ? WORDS[st.outcome] : n.cls === "now" || n.cls === "waiting" ? n.note : "No result")}
+        ${fact(last ? "Last started" : "Started", clock(st.started))}
+        ${fact(last ? "Last ended" : "Ended", clock(st.ended))}
+        ${fact("Took", took(st.started, st.ended))}
+        ${fact("Ran", st.runs === 1 ? "Once" : st.runs ? `${st.runs} times` : "")}
+        ${fact("Machine", st.machine)}
+        ${fact("Folder", st.path ? html`<code>${st.path}</code>` : "")}
+        ${fact("Session", st.session ? html`<code>${st.session}</code>` : "")}
+      </dl>
+      ${st.overridden ? html`<p class="pl-overridden">Passed by a person after its command failed.</p>` : nothing}
+      ${st.report ? html`<div class="pl-final"><p class="pl-field-head">Report</p><p class="pl-report">${st.report}</p></div>` : nothing}
+      ${st.details?.length ? html`<div class="pl-final"><p class="pl-field-head">Details</p><ul class="pl-step-details">${st.details.map((x) => html`<li>${x}</li>`)}</ul></div>` : nothing}
+      ${st.answer ? html`<div class="pl-final"><p class="pl-field-head">Your answer</p><p class="pl-report">${st.answer}</p></div>` : nothing}
+      ${st.ran ? html`<p class="help">Its command ${st.ran.passed ? "passed" : "failed"}: <code>${st.ran.command}</code></p>` : nothing}
+      <div class="pl-final"><p class="pl-field-head">Each time it ran</p>${runHistory(run, d, step.id)}</div>
+    ` : html`<p class="help">The run has not reached this step.</p>`}
   </aside>`;
 }
 
 // Which session's terminal is shown, per run, when the person picked one themselves.
 const shownTerminal = new Map();
+// What each step's transcript held when it was read, by run, step and attempt.
+const transcripts = new Map();
+let logHidden = false;
+
+function pickedStep(d) {
+  const id = params().get("step");
+  return d.steps.find((s) => s.id === id) || null;
+}
+
+function pickStep(id) {
+  const q = params();
+  if (id && q.get("step") !== id) q.set("step", id);
+  else q.delete("step");
+  history.replaceState(null, "", `${location.pathname}?${q}`);
+  logHidden = false;
+  draw();
+}
 
 async function stopSession(run, t) {
   const after = t.current ? "The agent in it stops. The step then waits for you." : "The agent in it stops.";
@@ -457,22 +567,81 @@ function toggleTerminal() {
   draw();
 }
 
-function terminal(run) {
+function readTranscript(run, step, key) {
+  transcripts.set(key, { loading: true });
+  api("GET", `/api/runs/${encodeURIComponent(run.id)}/steps/${encodeURIComponent(step.id)}/transcript`)
+    .then((out) => transcripts.set(key, out), (err) => transcripts.set(key, { error: err.message }))
+    .finally(draw);
+}
+
+function toolGroups(items) {
+  const out = [];
+  for (const item of items) {
+    if (item.kind === "tool" && out.at(-1)?.kind === "tools") out.at(-1).list.push(item);
+    else out.push(item.kind === "tool" ? { kind: "tools", list: [item] } : item);
+  }
+  return out;
+}
+
+function said(item) {
+  const by = html`<span class="msg-by">Sent by Yardbell${item.at ? ` · ${clock(item.at)}` : ""}</span>`;
+  if (item.text.length <= 280) return html`<div class="msg user by-yardbell">${by}${item.text}</div>`;
+  return html`<div class="msg user by-yardbell">${by}<details class="msg-more"><summary>${item.text.slice(0, 120).trim()}…</summary>${item.text}</details></div>`;
+}
+
+function conversation(out) {
+  const t = out.transcript;
+  return html`<div class="pl-transcript" id="pl-transcript">
+    ${t.dropped ? html`<p class="help">The ${t.dropped} oldest entries are left out.</p>` : nothing}
+    ${toolGroups(t.items).map((x) => x.kind === "prompt" ? said(x)
+      : x.kind === "agent" ? html`<div class="msg md">${markdown(x.text)}</div>`
+      : html`<div class="tool-group">${x.list.map((c) => html`<details class=${`tool ${c.failed ? "bad" : c.result ? "ok" : ""}`}><summary><span class="mark"></span>${c.name}${c.input ? html` <code class="pl-tool-input">${c.input}</code>` : nothing}</summary>${c.result ? html`<pre>${c.result}</pre>` : html`<p class="help">No result was saved.</p>`}</details>`)}</div>`)}
+    ${t.skipped ? html`<p class="help">${t.skipped} ${t.skipped === 1 ? "line was" : "lines were"} too long to read, such as large tool output.</p>` : nothing}
+    ${t.cut ? html`<p class="help">The transcript is over 16 MB, so its end is missing here.</p>` : nothing}
+    <p class="help">Read only, from ${t.files.join(", ")} in <code>${out.path}</code> on ${out.machine}.</p>
+  </div>`;
+}
+
+function stepLog(run, step) {
+  const st = run.steps?.[step.id];
+  const key = `${run.id}:${step.id}:${st?.runs}:${st?.ended}`;
+  const got = st ? transcripts.get(key) : { available: false, why: "The run has not reached this step." };
+  if (!got) readTranscript(run, step, key);
+  const head = html`<header class="pl-terminal-head">
+    <button class="btn quiet small-link" type="button" id="pl-terminal-toggle" aria-expanded=${logHidden ? "false" : "true"} @click=${() => { logHidden = !logHidden; draw(); }}>${logHidden ? "Show transcript" : "Hide transcript"}</button>
+    <strong>${step.name}</strong>
+    <span class="pl-bar-space"></span>
+    ${got?.available || got?.error ? html`<button class="btn quiet small-link" type="button" id="pl-log-reload" @click=${() => readTranscript(run, step, key)}>Read again</button>` : nothing}
+  </header>`;
+  let body;
+  if (!got || got.loading) body = html`<p class="help" role="status">Reading the transcript${st?.machine ? ` from ${st.machine}` : ""}…</p>`;
+  else if (got.error) body = html`<p class="help" role="alert">${got.error}</p>`;
+  else if (!got.available) body = html`<p class="help" id="pl-no-transcript">${got.why}${run.conversation && ["plan", "report"].includes(step.kind) ? html` <a href=${`/dispatch?c=${encodeURIComponent(run.conversation)}`}>Open the conversation</a>` : nothing}</p>`;
+  else body = conversation(got);
+  return html`<section class="pl-terminal pl-log">${head}${logHidden ? nothing : html`<div class="pl-log-body">${body}</div>`}</section>`;
+}
+
+function terminal(run, step) {
   const list = run.terminals || [];
-  if (!list.length) return html`<section class="pl-terminal empty"><p class="help">This run has no live session.</p></section>`;
-  const shown = list.find((t) => t.name === shownTerminal.get(run.id)) || list.find((t) => t.current) || list[0];
+  const live = step && list.find((t) => t.name === run.steps?.[step.id]?.session);
+  if (step && !live) return stepLog(run, step);
+  if (!list.length) return html`<section class="pl-terminal empty"><p class="help">This run has no live session. Pick a step to see what it did.</p></section>`;
+  const shown = live || list.find((t) => t.name === shownTerminal.get(run.id)) || list.find((t) => t.current) || list[0];
+  const open = step ? !logHidden : terminalOpen;
+  const toggle = step ? () => { logHidden = !logHidden; draw(); } : toggleTerminal;
   const src = `/term/${encodeURIComponent(shown.machine)}/${encodeURIComponent(shown.name)}`;
   return html`<section class="pl-terminal">
     <header class="pl-terminal-head">
-      <button class="btn quiet small-link" type="button" id="pl-terminal-toggle" aria-expanded=${terminalOpen ? "true" : "false"} @click=${toggleTerminal}>${terminalOpen ? "Hide terminal" : "Show terminal"}</button>
-      ${list.length > 1
+      <button class="btn quiet small-link" type="button" id="pl-terminal-toggle" aria-expanded=${open ? "true" : "false"} @click=${toggle}>${open ? "Hide terminal" : "Show terminal"}</button>
+      ${list.length > 1 && !live
         ? html`<div class="segmented pl-terminal-switch" role="group" aria-label="Sessions of this run">${list.map((t) => html`<button type="button" aria-pressed=${t === shown ? "true" : "false"} @click=${() => { shownTerminal.set(run.id, t.name); draw(); }}>${t.label}</button>`)}</div>`
-        : html`<strong>${shown.label}</strong>`}
+        : html`<strong>${live ? step.name : shown.label}</strong>`}
+      ${live ? html`<small class="pl-live">Live</small>` : nothing}
       <span class="pl-bar-space"></span>
       <a class="btn quiet small-link" href=${src} target="_blank" rel="noopener">Open</a>
       <button class="btn quiet danger small-link" type="button" id="pl-stop-session" ?disabled=${busy} @click=${() => stopSession(run, shown)}>Stop session</button>
     </header>
-    ${terminalOpen ? html`<iframe class="pl-terminal-frame" title=${`Terminal of ${shown.label}`} src=${`${src}?embed=1`}></iframe>` : nothing}
+    ${open ? html`<iframe class="pl-terminal-frame" title=${`Terminal of ${shown.label}`} src=${`${src}?embed=1`}></iframe>` : nothing}
   </section>`;
 }
 
@@ -483,20 +652,28 @@ function runsTab(d) {
   const pick = (r) => {
     const q = params();
     q.set("run", r.id);
+    q.delete("step");
     history.replaceState(null, "", `${location.pathname}?${q}`);
     draw();
   };
   const dot = { waiting: "wait", queued: "run", running: "run", done: "ok", dropped: "off" };
+  const shape = chosen.definition || d;
+  const step = pickedStep(shape);
+  const ended = runs.filter((r) => ENDED.includes(r.state)).length;
+  const open = step ? !logHidden : terminalOpen && chosen.terminals?.length;
   return html`<div class="pl-run-view">
-    <nav class="pl-run-list" aria-label="Runs">${runs.map((r) => html`<button type="button" class=${`pl-run-item ${r === chosen ? "sel" : ""}`} data-id=${r.id} aria-current=${r === chosen ? "true" : "false"} @click=${() => pick(r)}>
-      <span class="pl-run-title"><span class=${`pl-dot ${asksForYou(r) ? "wait" : dot[r.state] || "off"}`}></span>${label(r)}</span>
-      <small>${stateWord(r, r.definition || d)}</small>
-    </button>`)}</nav>
-    <div class=${`pl-run-main ${terminalOpen && chosen.terminals?.length ? "" : "terminal-closed"}`}>
-      ${canvas({ def: chosen.definition || d, run: chosen, key: `${d.id}:${chosen.version}:${chosen.id}` })}
-      ${terminal(chosen)}
+    <nav class="pl-run-list" aria-label="Runs">
+      ${ended ? html`<div class="pl-run-list-head"><button class="btn quiet danger small-link" type="button" id="pl-clear-runs" ?disabled=${busy} @click=${() => clearRuns(d)}>Delete finished runs</button></div>` : nothing}
+      ${runs.map((r) => html`<button type="button" class=${`pl-run-item ${r === chosen ? "sel" : ""}`} data-id=${r.id} aria-current=${r === chosen ? "true" : "false"} @click=${() => pick(r)}>
+        <span class="pl-run-title"><span class=${`pl-dot ${asksForYou(r) ? "wait" : dot[r.state] || "off"}`}></span>${label(r)}</span>
+        <small>${stateWord(r, r.definition || d)}</small>
+      </button>`)}
+    </nav>
+    <div class=${`pl-run-main ${open ? "" : "terminal-closed"}`}>
+      ${canvas({ def: shape, run: chosen, selected: step?.id || null, on: { select: pickStep }, key: `${d.id}:${chosen.version}:${chosen.id}` })}
+      ${terminal(chosen, step)}
     </div>
-    ${detail(chosen, chosen.definition || d)}
+    ${step ? stepPanel(chosen, shape, step) : detail(chosen, shape)}
   </div>`;
 }
 
@@ -1479,7 +1656,13 @@ const ask = (title, body, options) => window.YardbellNav.confirm(title, body, op
 const leave = () => ask("Leave without saving your changes?", "Your changes to this pipeline are lost.", { confirm: "Leave", danger: true });
 
 async function removePipeline(d) {
-  if (!(await ask(`Delete ${d.name} and its runs?`, "Its history goes too.", { confirm: "Delete", danger: true }))) return;
+  const going = runsOf(d.id).filter((r) => !ENDED.includes(r.state)).length;
+  if (going) {
+    toast(`${d.name} has ${going} ${going === 1 ? "run" : "runs"} still queued, running or waiting. Drop ${going === 1 ? "it" : "them"} first.`);
+    return;
+  }
+  const body = `Its versions and its finished runs' records go.\n${staying(runsOf(d.id))}`;
+  if (!(await ask(`Delete ${d.name} and its runs?`, body, { confirm: "Delete", danger: true }))) return;
   doing(async () => {
     await api("DELETE", `/api/pipelines/${encodeURIComponent(d.id)}`);
     go("");

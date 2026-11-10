@@ -195,7 +195,7 @@ async fn history_and_restore() {
 }
 
 #[tokio::test]
-async fn switching_on_checks_the_trigger_and_delete_drops_runs() {
+async fn switching_on_checks_the_trigger_and_delete_waits_for_runs_to_end() {
     let r = rig();
     let c = cookie(&r.app).await;
     let id = copy(&r, &c, REVIEW).await;
@@ -230,10 +230,29 @@ async fn switching_on_checks_the_trigger_and_delete_drops_runs() {
     );
     let (_, runs) = call(&r, &c, "GET", &format!("/api/pipelines/{id}/runs"), None).await;
     assert_eq!(runs["runs"].as_array().unwrap().len(), 1);
+    let (status, body) = call(&r, &c, "DELETE", &format!("/api/pipelines/{id}"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(
+        body["error"]
+            .as_str()
+            .unwrap()
+            .ends_with("has 1 run still queued, running or waiting. Drop them first"),
+        "{body}"
+    );
+    let run = runs["runs"][0]["id"].as_str().unwrap();
+    let (status, _) = call(&r, &c, "POST", &format!("/api/runs/{run}/drop"), None).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, body) = call(&r, &c, "DELETE", &format!("/api/pipelines/{id}"), None).await;
+    assert_eq!(status, StatusCode::CONFLICT, "still stopping: {body}");
+    let mut stopped = r.app.pipelines.run(run).unwrap();
+    stopped.pending = None;
+    r.app.pipelines.put(stopped);
     let (status, _) = call(&r, &c, "DELETE", &format!("/api/pipelines/{id}"), None).await;
     assert_eq!(status, StatusCode::OK);
     assert!(r.app.pipelines.runs().is_empty());
     let (status, _) = call(&r, &c, "GET", &format!("/api/pipelines/{id}"), None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    let (status, _) = call(&r, &c, "DELETE", &format!("/api/pipelines/{id}"), None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -780,7 +799,7 @@ async fn run_now_takes_a_connector_item() {
 }
 
 #[tokio::test]
-async fn a_run_can_be_deleted_in_any_state() {
+async fn a_run_is_deleted_only_once_it_has_ended() {
     let r = rig();
     let c = cookie(&r.app).await;
     let id = copy(&r, &c, IMPLEMENT).await;
@@ -792,21 +811,67 @@ async fn a_run_can_be_deleted_in_any_state() {
         .remove(0);
     let url = format!("/api/runs/{}", run.id);
     let (status, body) = call(&r, &c, "DELETE", &url, None).await;
-    assert_eq!(
-        status,
-        StatusCode::OK,
-        "a run in progress can be deleted: {body}"
-    );
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert_eq!(body["error"], "a run is still running. Drop it first");
     let (_, listed) = call(&r, &c, "GET", "/api/runs", None).await;
-    assert_eq!(listed["runs"], json!([]));
-    let mut stopping = r.app.pipelines.run(&run.id).unwrap();
-    assert_eq!(stopping.state, RunState::Dropped);
-    stopping.pending = None;
-    r.app.pipelines.put(stopping);
+    assert_eq!(
+        listed["runs"][0]["state"], "running",
+        "it is left as it was"
+    );
+    let (status, _) = call(&r, &c, "POST", &format!("{url}/drop"), None).await;
+    assert_eq!(status, StatusCode::OK);
     let (status, body) = call(&r, &c, "DELETE", &url, None).await;
     assert_eq!(status, StatusCode::OK, "{body}");
-    assert!(r.app.pipelines.run(&run.id).is_none());
+    let (_, listed) = call(&r, &c, "GET", "/api/runs", None).await;
+    assert_eq!(listed["runs"], json!([]));
     let (status, _) = call(&r, &c, "DELETE", &url, None).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "a run already going");
+    assert!(
+        r.app.pipelines.run(&run.id).unwrap().deleting,
+        "its record goes once its sessions have stopped"
+    );
+}
+
+#[tokio::test]
+async fn clearing_runs_deletes_the_ended_ones() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    let mut ids = Vec::new();
+    for state in [RunState::Done, RunState::Dropped, RunState::Waiting] {
+        let mut run = r
+            .app
+            .pipelines
+            .start(&id, vec![Subject::default()], "you")
+            .unwrap()
+            .remove(0);
+        run.state = state;
+        run.pending = None;
+        ids.push(run.id.clone());
+        r.app.pipelines.put(run);
+    }
+    let url = format!("/api/pipelines/{id}/clear-runs");
+    let (status, body) = call(&r, &c, "POST", &url, None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let mut deleted: Vec<String> = serde_json::from_value(body["deleted"].clone()).unwrap();
+    deleted.sort();
+    let mut ended = ids[..2].to_vec();
+    ended.sort();
+    assert_eq!(deleted, ended);
+    let (_, listed) = call(&r, &c, "GET", "/api/runs", None).await;
+    let left: Vec<&str> = listed["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(left, vec![ids[2].as_str()]);
+    let (status, body) = call(&r, &c, "POST", &url, None).await;
+    assert_eq!(
+        (status, body["deleted"].clone()),
+        (StatusCode::OK, json!([]))
+    );
+    let (status, _) = call(&r, &c, "POST", "/api/pipelines/nope/clear-runs", None).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
 
@@ -865,9 +930,38 @@ async fn an_ended_run_lists_no_terminals() {
     let st = run.state_of("review");
     st.session = live.1;
     st.machine = live.0;
+    let tag = run.tag().to_string();
     r.app.pipelines.put(run);
     let (_, body) = call(&r, &c, "GET", "/api/runs", None).await;
     assert_eq!(body["runs"][0]["terminals"], json!([]));
+    assert_eq!(
+        body["runs"][0]["sessions_left"],
+        json!([]),
+        "a name without the run's tag may be someone else's session"
+    );
+    let mut snap = r.app.state.snapshot("hp").unwrap();
+    let mut kept = snap.sessions[0].clone();
+    kept.tmux = Some(format!("hp-com-1-{tag}"));
+    snap.sessions.push(kept);
+    r.app.state.update(crate::probe::MachineStatus {
+        name: "hp".into(),
+        up: true,
+        reason: None,
+        snapshot: Some(snap),
+        checked_at: chrono::Local::now(),
+    });
+    let mut run = r.app.pipelines.runs().remove(0);
+    run.state_of("fix").session = format!("hp-com-1-{tag}");
+    run.state_of("fix").machine = "hp".into();
+    run.state_of("fix").started = "2026-01-01T10:00:00Z".into();
+    r.app.pipelines.put(run);
+    let (_, body) = call(&r, &c, "GET", "/api/runs", None).await;
+    assert_eq!(body["runs"][0]["terminals"], json!([]));
+    assert_eq!(
+        body["runs"][0]["sessions_left"][0]["name"],
+        format!("hp-com-1-{tag}")
+    );
+    assert_eq!(body["runs"][0]["sessions_left"][0]["label"], "Fix");
 }
 
 #[tokio::test]

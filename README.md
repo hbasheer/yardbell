@@ -20,21 +20,25 @@ plain HTML UI, plus apps for macOS, Linux and Android.
 - **Every agent session.** Ten agents out of the box and any CLI agent you add. Folder, ticket,
   branch, and whether the agent is working, idle or waiting for you, read from its own screen. A
   **Board** puts every machine's sessions in lanes: needs you, working, in review, ready to merge.
+  An agent stopped at a usage limit shows when the limit resets, and Dispatch offers to type
+  `continue` once it has.
 - **A terminal anywhere.** Any tmux session in the browser, the desktop app or the phone, with
   scrollback, a key row on phones, and the screen you use setting the session's size.
-- **Workspace.** Every terminal in one sidebar by machine and folder, with tabs and split panes,
-  and Dispatch in a panel beside them.
+- **Workspace.** Every terminal in one sidebar by machine and folder, with tabs, panes laid out as
+  an even grid that you rearrange by dragging, and Dispatch in a panel beside them.
 - **New sessions where you want them.** Pick a machine, one of its installed agents, a folder and a
   branch; other branches get their own git worktree.
 - **Ports, already tunnelled.** Docker Compose ports from each session's folder, forwarded to the
   host with live status.
 - **Pipelines.** Steps you draw on a canvas, from a trigger (by hand, a schedule, a Linear ticket, a
   connected tool like Trello, a webhook, or a review request on GitHub or GitLab) to a report. A run uses one agent session, plus a read-only
-  one for reviews, shows its live terminal, and waits for you only when it must.
+  one for reviews, shows its live terminal, and waits for you only when it must. Click any step of
+  any run for its result, every round it ran and the agent's saved transcript.
 - **Dispatch.** Describe a task and Yardbell picks the machine with the repository and the most room,
   then starts an agent there. It can also read and change Yardbell itself, and build and run
-  pipelines, with your rules deciding what waits for you. It sits beside your terminals in the
-  Workspace, and hides with one click.
+  pipelines, with your rules deciding what waits for you. Type, dictate, or drop in screenshots,
+  logs and PDFs, and it can read its replies aloud. It sits beside your terminals in the Workspace,
+  and hides with one click.
 - **Connections.** Sign in to Trello, Jira and other tools from your browser, with no token to paste, or
   connect any MCP server by its address. Trello can start pipeline runs, and a **Use a connected tool** step
   does one action in any connected tool with no agent. A tool with no MCP server connects with a token, and a token
@@ -42,11 +46,15 @@ plain HTML UI, plus apps for macOS, Linux and Android.
 - **Proposals.** Changes asked for by other MCP clients, such as Claude Code with Yardbell added, wait
   in one inbox until you approve, edit or reject them.
 - **GitHub and GitLab.** Each session shows its branch's pull or merge request with its state, CI and any merge conflicts, through local `gh` or `glab`, or a token.
-  Settings says which service each of your folders uses and whether `gh` and each GitLab token work.
+  A ready one has a **Merge** button, and a read-only reviewer can check each one, on request or
+  on every push. Settings says which service each of your folders uses and whether `gh` and each
+  GitLab token work.
 - **Phone notifications.** The Android app says when an agent waits for you, a session ends, a
   machine goes down, memory runs low, a pipeline needs you or finishes, a proposal waits, or a
   session's pull request fails CI, gets conflicts, is ready to merge or is merged, with no other app
   to install.
+- **Diagrams.** Interactive architecture maps of your repositories, drawn by an agent with
+  [Archify](https://github.com/tt-a1i/archify) on the machine you pick.
 - **Add machines from the UI.** Mesh peers, ssh key setup, `~/.ssh/config`, tool checks and a folder
   picker, without editing a file.
 - **Mesh VPN aware.** NordVPN Meshnet, Tailscale, Headscale, NetBird and ZeroTier, and the apps
@@ -62,7 +70,7 @@ plain HTML UI, plus apps for macOS, Linux and Android.
 
 ## How a pipeline works
 
-![A pipeline run waiting for an answer at its Root cause step](docs/screenshots/pipeline.png)
+![A finished run with its Implement step open: the step's result beside the canvas and the agent's transcript below](docs/screenshots/pipeline.png)
 
 1. **Something starts a run:** **Run now**, a schedule, a Linear ticket assigned to you, an item in a
    connected tool, a webhook, or a review request. **Plan** can pick the machine, folder and branch for it.
@@ -76,7 +84,8 @@ plain HTML UI, plus apps for macOS, Linux and Android.
 5. **The run waits only when it must,** such as when an agent asks something, a rule refuses a step or
    a step hits its limit. Your phone says so and the run page shows what to do.
 6. **When the run ends,** every session stops and the worktree and branch stay. A teardown command,
-   such as `docker compose down`, can clear what the worktree started.
+   such as `docker compose down`, can clear what the worktree started. Each step keeps its result,
+   and its saved transcript opens from the run, so you can see what it did long after.
 
 Two templates are ready to copy: **Implement my tickets** and **Review my merge requests**.
 [Pipelines](docs/automation.md#pipelines) explains every step and setting.

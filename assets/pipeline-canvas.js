@@ -418,11 +418,14 @@ function card(s, { run, editable, selected, problems, on, ox, oy }) {
   const n = nodeState(run, s);
   const problem = problems?.some((p) => p.startsWith(`${s.name}: `) || p === `${s.name} is never reached`);
   const d = describe(s);
-  const cls = ["pl-node", `kind-${s.kind}`, n.cls, editable ? "editable" : "", selected === s.id ? "selected" : "", problem ? "problem" : ""].join(" ");
+  const pickable = editable || !!on?.select;
+  const cls = ["pl-node", `kind-${s.kind}`, n.cls, pickable ? "editable" : "", selected === s.id ? "selected" : "", problem ? "problem" : ""].join(" ");
+  const label = editable ? `${s.name}, ${d.who}` : `${s.name}, ${n.note}. Show its result`;
   return html`<div class=${cls} data-step=${s.id} data-x=${s.x} data-y=${s.y} style=${`left:${s.x + ox}px;top:${s.y + oy}px`}
-      tabindex=${editable ? "0" : nothing} role=${editable ? "button" : nothing} aria-label=${editable ? `${s.name}, ${d.who}` : nothing}
-      @keydown=${editable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); on?.select?.(s.id); } } : nothing}
-      @click=${editable ? (e) => { e.stopPropagation(); on?.select?.(s.id); } : nothing}>
+      tabindex=${pickable ? "0" : nothing} role=${pickable ? "button" : nothing} aria-label=${pickable ? label : nothing}
+      aria-pressed=${pickable && !editable ? String(selected === s.id) : nothing}
+      @keydown=${pickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); on?.select?.(s.id); } } : nothing}
+      @click=${pickable ? (e) => { e.stopPropagation(); on?.select?.(s.id); } : nothing}>
     ${editable ? html`<span class="pl-port in" aria-hidden="true"></span>` : nothing}
     ${body({ iconKind: s.kind, name: s.name, mark: run ? n.mark : "", who: d.who, does: run ? n.note : d.does, tags: d.tags })}
     ${editable ? OUTCOMES.map((o) => html`<span class=${`pl-port out ${o}`} data-outcome=${o} title=${`On ${LINE_WORDS[o]}`} style=${`top:${PORT_Y[o] * 100}%`}></span>`) : nothing}

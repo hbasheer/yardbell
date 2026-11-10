@@ -800,7 +800,7 @@ async fn the_runs_page_cannot_pass_a_command_that_did_not_run() {
             "{body}"
         );
         still_waiting(&r, &run);
-        r.app.pipelines.delete_run(&run);
+        r.app.pipelines.drop_run(&run).unwrap();
     }
 }
 
@@ -879,7 +879,7 @@ async fn an_allow_rule_cannot_pass_a_command_that_failed_or_did_not_run() {
         assert_eq!(result["isError"], true, "{result}");
         assert!(text(&result).contains(says), "{result}");
         still_waiting(&r, &run);
-        r.app.pipelines.delete_run(&run);
+        r.app.pipelines.drop_run(&run).unwrap();
     }
     let run = command_wait(&r, WaitKind::Stopped, Some(true));
     let args = json!({ "id": run, "action": "continue_pass" });

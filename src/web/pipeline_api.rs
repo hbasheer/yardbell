@@ -2,6 +2,7 @@ use super::{ApiError, AppState};
 use crate::pipeline::definition::{Definition, Outcome, Trigger};
 use crate::pipeline::linear::Ticket;
 use crate::pipeline::record::{PrRef, Run, RunState, Subject, TicketRef};
+use crate::pipeline::Refusal;
 use crate::triggers::LINEAR_SECRET;
 use axum::extract::{Path, State as AxState};
 use axum::http::StatusCode;
@@ -24,6 +25,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/pipelines/{id}/history", get(history))
         .route("/api/pipelines/{id}/restore", post(restore))
         .route("/api/pipelines/{id}/runs", get(runs).post(start))
+        .route("/api/pipelines/{id}/clear-runs", post(clear_runs))
         .route("/api/pipelines/{id}/webhook-token", post(webhook_token))
         .route("/hooks/pipeline/{id}/{token}", post(hook).head(hook_head))
         .route("/api/runs", get(all_runs))
@@ -35,10 +37,22 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/runs/{id}/continue", post(continue_on))
         .route("/api/runs/{id}/drop", post(drop_run))
         .route("/api/runs/{id}/stop-session", post(stop_session))
+        .route(
+            "/api/runs/{id}/steps/{step}/transcript",
+            get(super::transcript_api::transcript),
+        )
 }
 
 fn bad(msg: String) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, msg)
+}
+
+fn refused(e: Refusal) -> ApiError {
+    match e {
+        Refusal::Missing(e) => ApiError(StatusCode::NOT_FOUND, e),
+        Refusal::Going(e) => ApiError(StatusCode::CONFLICT, e),
+        Refusal::Failed(e) => ApiError::internal(e),
+    }
 }
 
 fn problems(list: Vec<String>) -> Response {
@@ -189,8 +203,7 @@ async fn delete(
     AxState(app): AxState<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    found(&app, &id)?;
-    app.pipelines.delete(&id).map_err(ApiError::internal)?;
+    app.pipelines.delete(&id).map_err(refused)?;
     app.state.touch();
     Ok(Json(json!({ "deleted": id })).into_response())
 }
@@ -249,7 +262,9 @@ async fn restore(
 }
 
 // Each run with its live sessions, newest first, for the terminal on the run page. Steps sharing
-// a session are named by the newest of them.
+// a session are named by the newest of them. An ended run shows no terminal; a session that
+// outlived it is listed apart, so deleting the run can say it stays. Only a name carrying the
+// run's tag counts, since older runs named sessions that someone may have started again since.
 fn with_terminals(app: &AppState, runs: Vec<Run>) -> Result<Vec<Value>, ApiError> {
     let cfg = app.config()?;
     let view = app.state.view(&cfg, app.ports.as_ref(), "localhost");
@@ -262,7 +277,7 @@ fn with_terminals(app: &AppState, runs: Vec<Run>) -> Result<Vec<Value>, ApiError
             let current = run.steps.get(&run.step).map(|st| st.session.as_str());
             let mut seen = Vec::new();
             let mut terminals = Vec::new();
-            for (id, st) in steps.into_iter().filter(|_| run.state.active()) {
+            for (id, st) in steps {
                 if st.session.is_empty() || seen.contains(&st.session.as_str()) {
                     continue;
                 }
@@ -281,8 +296,15 @@ fn with_terminals(app: &AppState, runs: Vec<Run>) -> Result<Vec<Value>, ApiError
                     }));
                 }
             }
+            let (terminals, left): (Vec<Value>, Vec<Value>) =
+                terminals.into_iter().partition(|_| run.state.active());
+            let left: Vec<Value> = left
+                .into_iter()
+                .filter(|t| t["name"].as_str().is_some_and(|n| n.contains(run.tag())))
+                .collect();
             let mut out = json!(run);
             out["terminals"] = json!(terminals);
+            out["sessions_left"] = json!(left);
             out["tokens_used"] = json!(run.tokens.used());
             out["tokens_from_cache"] = json!(run.tokens.cache_read());
             out
@@ -739,14 +761,21 @@ async fn delete_run(
     AxState(app): AxState<Arc<AppState>>,
     Path(id): Path<String>,
 ) -> Result<Response, ApiError> {
-    if !app.pipelines.delete_run(&id) {
-        return Err(ApiError(
-            StatusCode::NOT_FOUND,
-            format!("{id} is not a run"),
-        ));
-    }
+    app.pipelines.delete_run(&id).map_err(refused)?;
     app.state.touch();
     Ok(Json(json!({ "deleted": id })).into_response())
+}
+
+async fn clear_runs(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    found(&app, &id)?;
+    let deleted = app.pipelines.clear_ended(&id);
+    if !deleted.is_empty() {
+        app.state.touch();
+    }
+    Ok(Json(json!({ "deleted": deleted })).into_response())
 }
 
 async fn drop_run(
