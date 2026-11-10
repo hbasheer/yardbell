@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.10.414] - 2026-11-10
+
 - **See what each step did.** Click a step of any run, finished or not, for its outcome, times, rounds, machine,
   folder, session, report, details and your answer. A step whose session has gone shows the agent's saved Claude Code
   transcript as a read-only conversation, with tool calls and their results. A run lists its whole history, so a
