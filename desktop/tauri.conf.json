@@ -28,7 +28,8 @@
       "icons/icon.png"
     ],
     "macOS": {
-      "signingIdentity": "-"
+      "signingIdentity": "-",
+      "entitlements": "Entitlements.plist"
     }
   }
 }

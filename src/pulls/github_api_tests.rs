@@ -27,7 +27,7 @@ fn pull(state: &str, number: u64) -> serde_json::Value {
     json!({
         "number": number, "url": format!("https://github.com/acme/app/pull/{number}"),
         "title": "Fix login", "state": state, "isDraft": false, "reviewDecision": "CHANGES_REQUESTED",
-        "headRefOid": "abc", "author": { "login": "me" }, "createdAt": "2026-10-30T10:00:00Z",
+        "headRefOid": "abc", "mergeable": "CONFLICTING", "baseRefName": "main", "author": { "login": "me" }, "createdAt": "2026-10-30T10:00:00Z",
         "comments": { "nodes": [{ "id": "c1", "author": { "login": "reviewer" }, "body": "Please fix", "url": "https://github.com/c1", "viewerDidAuthor": false, "isMinimized": false }] },
         "reviews": { "nodes": [{ "id": "r1", "author": { "login": "reviewer" }, "body": "No", "state": "CHANGES_REQUESTED" }] },
         "commits": { "nodes": [{ "commit": { "statusCheckRollup": { "contexts": { "nodes": [
@@ -56,6 +56,8 @@ async fn a_token_reads_a_pull_request_as_gh_does() {
     assert_eq!(found.number, 12);
     assert_eq!(found.ci, super::Ci::Failing);
     assert_eq!(found.failed[0].name, "CI / test");
+    assert_eq!(found.mergeable, super::Mergeable::Conflicting);
+    assert_eq!(found.base, "main");
     assert!(
         found.notes.iter().any(|n| n.id == "c1"),
         "{:?}",
@@ -186,4 +188,78 @@ async fn the_setting_picks_which_way_github_is_asked() {
     either.configure(&cfg, &Err("no secrets".into()));
     let got = either.fetch(&machine(), "/r/app", "fix").await;
     assert!(matches!(&got, Fetched::Failed(_)), "{got:?}");
+}
+
+#[test]
+fn the_token_query_asks_whether_it_can_merge() {
+    assert!(super::github_api::QUERY.contains("mergeable"));
+    assert!(super::github_api::QUERY.contains("baseRefName"));
+}
+
+#[tokio::test]
+async fn a_token_merges_at_the_commit_it_was_checked_at() {
+    let s = stub().await;
+    s.answer("/repos/acme/app/pulls/12/merge", 200, r#"{"merged":true}"#);
+    let fake = Arc::new(FakeRunner::default());
+    let api = api(&fake, &s.base, "git@github.com:acme/app.git");
+    let mut found =
+        super::github::parse_view(include_str!("../../tests/fixtures/gh_pr_view.json")).unwrap();
+    found.head = "abc".into();
+    api.merge(
+        &machine(),
+        "/r/app",
+        "fix",
+        &found,
+        crate::config::MergeMethod::Rebase,
+    )
+    .await
+    .unwrap();
+    let asked = s.asked.lock().unwrap().clone();
+    let (method, at, auth, body) = asked.last().unwrap();
+    assert_eq!(
+        (method.as_str(), at.as_str()),
+        ("PUT", "/repos/acme/app/pulls/12/merge")
+    );
+    assert_eq!(auth, "Bearer shh-gh-token");
+    let body: serde_json::Value = serde_json::from_str(body).unwrap();
+    assert_eq!(body, json!({ "merge_method": "rebase", "sha": "abc" }));
+
+    s.answer(
+        "/repos/acme/app/pulls/12/merge",
+        409,
+        r#"{"message":"Head branch was modified"}"#,
+    );
+    let why = api
+        .merge(
+            &machine(),
+            "/r/app",
+            "fix",
+            &found,
+            crate::config::MergeMethod::Merge,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        why,
+        "the branch has new commits since Yardbell checked it, so it was not merged"
+    );
+    s.answer(
+        "/repos/acme/app/pulls/12/merge",
+        405,
+        r#"{"message":"Required status check \"test\" is expected."}"#,
+    );
+    let why = api
+        .merge(
+            &machine(),
+            "/r/app",
+            "fix",
+            &found,
+            crate::config::MergeMethod::Merge,
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(
+        why,
+        "GitHub will not merge it: Required status check \"test\" is expected."
+    );
 }

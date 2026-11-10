@@ -101,6 +101,8 @@ fn rig() -> Rig {
         ticket: "ENG-1301".into(),
         tmux: Some("hp-eng-1301".into()),
         activity: crate::snapshot::Activity::Idle,
+        stopped: None,
+        resets: None,
     });
     snap.sessions.push(crate::snapshot::Session {
         machine: "hp".into(),
@@ -112,6 +114,8 @@ fn rig() -> Rig {
         ticket: "-".into(),
         tmux: None,
         activity: crate::snapshot::Activity::Idle,
+        stopped: None,
+        resets: None,
     });
     state.update(MachineStatus {
         name: "hp".into(),
@@ -173,6 +177,15 @@ fn rig() -> Rig {
         )),
         proposals: Arc::new(crate::proposals::Proposals::load(
             dir.path().join("proposals.json"),
+        )),
+        pulls: Arc::new(crate::pulls::Pulls::new(
+            Arc::new(crate::pulls::GitHub::new(
+                fake.clone(),
+                Ssh::new(dir.path().join("state4")),
+            )),
+            Arc::new(crate::pulls::GitLab::new()),
+            crate::pulls::Remotes::new(fake.clone(), Ssh::new(dir.path().join("state5"))),
+            dir.path().join("pulls.json"),
         )),
         refresh: {
             let refreshes = refreshes.clone();
@@ -1330,6 +1343,12 @@ async fn phone_settings_are_saved_and_validated() {
             "pipeline_waiting": true,
             "pipeline_finished": true,
             "proposals": true,
+            "pull_ci_failed": true,
+            "pull_conflicts": true,
+            "pull_ready": true,
+            "pull_merged": true,
+            "pull_closed": true,
+            "limit_reset": true,
         })
     );
     let (status, body) = save_phone(
@@ -1341,6 +1360,9 @@ async fn phone_settings_are_saved_and_validated() {
             "session_ended": false,
             "machines": false,
             "memory": false,
+            "pull_ready": false,
+            "pull_closed": false,
+            "limit_reset": false,
         }),
     )
     .await;
@@ -1358,6 +1380,12 @@ async fn phone_settings_are_saved_and_validated() {
             "pipeline_waiting": true,
             "pipeline_finished": true,
             "proposals": true,
+            "pull_ci_failed": true,
+            "pull_conflicts": true,
+            "pull_ready": false,
+            "pull_merged": true,
+            "pull_closed": false,
+            "limit_reset": false,
         })
     );
 
@@ -1626,6 +1654,7 @@ async fn mcp_initialize_lists_tools_and_accepts_notifications() {
             "remove_worktree",
             "integrate_branches",
             "push_branch",
+            "merge_pull",
             "move_session",
             "change_settings",
             "save_task",
@@ -2641,6 +2670,7 @@ async fn a_review_card_shows_its_diff_and_screenshots() {
         scan: String::new(),
         pin: None,
         again: false,
+        pull: None,
     };
     let screen = "⏺ YARDBELL REVIEW\n  verdict: changes needed\n  base: main\n  summary: One.\n  - high: src/inbox.rs:2: The count is wrong. [screenshot: login.png]\n  END REVIEW";
     let cfg = r.app.config().unwrap();
@@ -2931,6 +2961,104 @@ async fn dispatch_settings_are_saved_and_checked() {
 }
 
 #[tokio::test]
+async fn voice_settings_are_saved_and_refuse_a_raw_key() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice",
+        r#"{"input":"api","api_key":"sk-raw-key"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("${secret:"), "{body}");
+    assert!(
+        !std::fs::read_to_string(&r.app.cfg_path)
+            .unwrap()
+            .contains("sk-raw-key"),
+        "a refused key must not land in yardbell.yml"
+    );
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice",
+        r#"{"input":"local","whisper_model":" ~/models/ggml-base.en.bin ","language":" en "}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let saved = r.app.config().unwrap().voice;
+    assert_eq!(saved.input, crate::config::VoiceInput::Local);
+    assert_eq!(saved.whisper_model, "~/models/ggml-base.en.bin");
+    assert_eq!(saved.language, "en");
+    let (_, _, body) = send(
+        &r.app,
+        Request::get("/api/settings")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let shown: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(shown["voice"]["input"], "local");
+    let (_, _, body) = send(
+        &r.app,
+        Request::get("/dispatch/runs-on")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let runs: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(runs["voice_input"], true);
+}
+
+async fn post_audio(r: &Rig, c: &str) -> (StatusCode, String) {
+    let req = Request::post("/dispatch/transcribe")
+        .header(header::COOKIE, c)
+        .header(header::CONTENT_TYPE, "audio/webm;codecs=opus")
+        .body(Body::from(vec![1u8, 2, 3]))
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    (status, body)
+}
+
+#[tokio::test]
+async fn transcribe_turns_a_recording_into_text_or_says_voice_is_off() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, body) = post_audio(&r, &c).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(body.contains("Settings"), "{body}");
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice",
+        r#"{"input":"local","whisper_model":"/models/ggml-base.en.bin"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    r.fake.stub("ffmpeg", Output::ok_with(""));
+    r.fake
+        .stub("whisper-cli", Output::ok_with(" Start the review. \n"));
+    let (status, body) = post_audio(&r, &c).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let out: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(out["text"], "Start the review.");
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice/check",
+        r#"{"input":"local","whisper_model":"/models/ggml-base.en.bin"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let check: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(check["ok"], false, "the model file does not exist: {body}");
+    assert!(check["message"].as_str().unwrap().contains("no model file"));
+}
+
+#[tokio::test]
 async fn dispatch_says_which_agent_and_model_it_runs_on() {
     let r = rig();
     let c = cookie(&r.app).await;
@@ -2956,6 +3084,7 @@ async fn dispatch_says_which_agent_and_model_it_runs_on() {
                 "claude": { "label": "Claude Code", "model": "" },
                 "codex": { "label": "Codex", "model": "" },
             },
+            "voice_input": false,
         }),
         "nothing set keeps Claude Code on its own default model"
     );
@@ -2983,6 +3112,7 @@ async fn dispatch_says_which_agent_and_model_it_runs_on() {
                 "claude": { "label": "Claude Code", "model": "haiku" },
                 "codex": { "label": "Codex CLI", "model": "gpt-6.1-sol" },
             },
+            "voice_input": false,
         }),
         "the label is the one sessions show for the agent"
     );
@@ -3523,7 +3653,8 @@ async fn send_to_session_on_a_pull_request_card_follows_the_dispatch_rules() {
             "Pull request #12: Inbox",
             card,
         )
-        .unwrap();
+        .unwrap()
+        .0;
     let url = format!("/dispatch/conversations/{id}/pulls");
     r.fake.stub("load-buffer", Output::ok_with(""));
 
@@ -3584,6 +3715,220 @@ async fn send_to_session_on_a_pull_request_card_follows_the_dispatch_rules() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+fn limited(r: &Rig, resets: chrono::DateTime<chrono::Utc>) {
+    let mut snap = Snapshot::default();
+    snap.folders.insert("slot2".into(), "eng-1301-inbox".into());
+    snap.folder_paths
+        .insert("slot2".into(), "/r/slots/slot2".into());
+    snap.sessions.push(crate::snapshot::Session {
+        machine: "hp".into(),
+        agent: "claude".into(),
+        pid: 9,
+        cwd: "/r/slots/slot2".into(),
+        folder: "slot2".into(),
+        branch: "eng-1301-inbox".into(),
+        ticket: "ENG-1301".into(),
+        tmux: Some("hp-eng-1301".into()),
+        activity: crate::snapshot::Activity::Idle,
+        stopped: Some("You've hit your limit · resets 3pm".into()),
+        resets: Some(resets.to_rfc3339()),
+    });
+    r.app.state.update(MachineStatus {
+        name: "hp".into(),
+        up: true,
+        reason: None,
+        snapshot: Some(snap),
+        checked_at: chrono::Local::now(),
+    });
+}
+
+fn limit_cards(r: &Rig) -> Vec<serde_json::Value> {
+    r.app
+        .dispatch
+        .list()
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|c| r.app.dispatch.get(c["id"].as_str().unwrap()))
+        .flat_map(|c| c["events"].as_array().cloned().unwrap_or_default())
+        .filter(|e| e["kind"] == "limit")
+        .collect()
+}
+
+#[tokio::test]
+async fn a_usage_limit_card_waits_for_its_reset_and_follows_the_rules() {
+    let r = rig();
+    r.fake.stub("load-buffer", Output::ok_with(""));
+    let now = chrono::Utc::now();
+    set_rules(&r, "ask", json!([]));
+
+    limited(&r, now + chrono::Duration::minutes(5));
+    crate::web::limits::round(&r.app, now).await;
+    assert!(limit_cards(&r).is_empty(), "not reset yet");
+
+    limited(&r, now - chrono::Duration::minutes(1));
+    crate::web::limits::round(&r.app, now).await;
+    crate::web::limits::round(&r.app, now).await;
+    let cards = limit_cards(&r);
+    assert_eq!(cards.len(), 1, "{cards:?}");
+    assert_eq!(cards[0]["instruction"], "continue");
+    assert_eq!(cards[0]["name"], "hp-eng-1301");
+    assert!(
+        cards[0]["sent"].is_null(),
+        "the rules ask, so it waits for a click"
+    );
+    assert!(!ran(&r, "load-buffer"));
+
+    limited(&r, now + chrono::Duration::hours(23));
+    crate::web::limits::round(&r.app, now + chrono::Duration::hours(23)).await;
+    assert_eq!(
+        limit_cards(&r).len(),
+        1,
+        "an unsent card stands for the stop when its time rolls over"
+    );
+}
+
+#[tokio::test]
+async fn a_rule_that_allows_typing_resumes_the_session_at_its_reset() {
+    let r = rig();
+    r.fake.stub("load-buffer", Output::ok_with(""));
+    set_rules(
+        &r,
+        "ask",
+        json!([{ "action": "send_to_session", "machine": "hp", "approval": "allow" }]),
+    );
+    let now = chrono::Utc::now();
+    limited(&r, now - chrono::Duration::minutes(1));
+    crate::web::limits::round(&r.app, now).await;
+    let cards = limit_cards(&r);
+    assert_eq!(cards.len(), 1);
+    assert!(cards[0]["sent"]["step"].is_string(), "{cards:?}");
+    let at = r
+        .fake
+        .calls()
+        .iter()
+        .position(|c| c.join(" ").contains("load-buffer"))
+        .unwrap();
+    assert_eq!(r.fake.inputs()[at].as_deref(), Some("continue"));
+}
+
+#[tokio::test]
+async fn an_old_reset_or_a_working_agent_gets_no_card() {
+    let now = chrono::Utc::now();
+    let session = |activity, resets: chrono::DateTime<chrono::Utc>| crate::state::SessionView {
+        id: "hp:t".into(),
+        machine: "hp".into(),
+        agent: "claude".into(),
+        pid: 1,
+        folder: "app".into(),
+        ticket: "-".into(),
+        branch: "main".into(),
+        activity,
+        attachable: true,
+        tmux: Some("t".into()),
+        stale: false,
+        ports: vec![],
+        pull: None,
+        pull_why: None,
+        path: "/r/app".into(),
+        worktree: false,
+        setup: None,
+        stopped: Some("You've hit your limit · resets 3pm".into()),
+        resets: Some(resets.to_rfc3339()),
+        review: None,
+    };
+    let due = |s| crate::web::limits::due(&s, now);
+    assert!(due(session(crate::snapshot::Activity::Idle, now)).is_some());
+    assert!(due(session(crate::snapshot::Activity::Active, now)).is_none());
+    assert!(due(session(
+        crate::snapshot::Activity::Idle,
+        now - chrono::Duration::hours(7)
+    ))
+    .is_none());
+}
+
+fn ready_pull_json(sha: &str) -> String {
+    let mut v: serde_json::Value = serde_json::from_str(include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/gh_pr_view.json"
+    )))
+    .unwrap();
+    v["headRefOid"] = json!(sha);
+    v["reviewDecision"] = json!("APPROVED");
+    v["mergeable"] = json!("MERGEABLE");
+    v["baseRefName"] = json!("main");
+    v["reviews"] = json!([]);
+    v["statusCheckRollup"] = json!([{ "__typename": "CheckRun", "name": "test", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "" }]);
+    v.to_string()
+}
+
+#[tokio::test]
+async fn merge_on_a_session_merges_its_pull_request_at_the_commit_shown() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    r.fake.stub(
+        "gh pr view 'eng-1301-inbox'",
+        Output::ok_with(&ready_pull_json("abc")),
+    );
+    r.fake.stub("gh pr merge", Output::ok_with(""));
+    let url = "/sessions/hp/hp-eng-1301/merge";
+
+    let (status, body) = step_post(&r, &c, url, json!({ "head": "old" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body["error"]
+        .as_str()
+        .unwrap()
+        .contains("new commits since you looked"));
+    assert!(!ran(&r, "gh pr merge"));
+
+    let (status, body) = step_post(&r, &c, url, json!({ "head": "abc" })).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["merged"], true);
+    assert_eq!(body["method"], "merge");
+    assert_eq!(body["pull"]["number"], 12);
+    let calls: Vec<String> = r.fake.calls().iter().map(|c| c.join(" ")).collect();
+    assert!(
+        calls
+            .iter()
+            .any(|c| c.contains("gh pr merge 12 --merge --match-head-commit 'abc'")),
+        "{calls:?}"
+    );
+
+    let (status, _) = step_post(&r, &c, "/sessions/hp/nobody/merge", json!({})).await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dispatch_asks_before_merging_unless_a_rule_allows_it() {
+    let r = rig();
+    set_rules(&r, "ask", json!([]));
+    let cfg = r.app.config().unwrap();
+    let input = json!({ "machine": "hp", "name": "hp-eng-1301" });
+    crate::mcp::check(&r.app, &cfg, "merge_pull", &input).unwrap();
+    let step = crate::mcp::step_of(&r.app, "merge_pull", &input);
+    assert_eq!(
+        step.folders.as_deref(),
+        Some(&["slot2".to_string(), "/r/slots/slot2".to_string()][..])
+    );
+    let verdict = crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);
+    assert_eq!(verdict.approval, crate::config::Approval::Prompt);
+    set_rules(
+        &r,
+        "ask",
+        json!([{ "action": "merge_pull", "folder": "slot2", "approval": "allow" }]),
+    );
+    let cfg = r.app.config().unwrap();
+    let verdict = crate::dispatch::decide_step(cfg.dispatch.approval, &cfg.dispatch.rules, &step);
+    assert_eq!(verdict.approval, crate::config::Approval::Allow);
+    assert!(crate::mcp::check(
+        &r.app,
+        &cfg,
+        "merge_pull",
+        &json!({ "machine": "hp", "name": "nobody" })
+    )
+    .is_err());
 }
 
 #[tokio::test]
@@ -3944,6 +4289,7 @@ async fn a_scan_card_shows_the_files_its_findings_name_and_sends_them() {
         scan: "security".into(),
         pin: None,
         again: false,
+        pull: None,
     };
     let screen = "⏺ YARDBELL SCAN\n  verdict: 2 issues found\n  summary: A token and an injection.\n  - high: config/deploy.yml:3: A token is committed.\n  - medium: src/run.rs:2: The branch goes into sh -c.\n  END SCAN";
     let card = finished_scan(&r, &id, of.clone(), screen);
@@ -4300,6 +4646,7 @@ async fn pull_request_settings_are_saved_with_tokens_kept_hidden() {
 
 const PIN_A: &str = "aaaaaaaa11111111111111111111111111111111";
 const PIN_B: &str = "bbbbbbbb22222222222222222222222222222222";
+const PIN_C: &str = "cccccccc33333333333333333333333333333333";
 
 fn stub_pin(r: &Rig, head: &str, changes: &str) {
     r.fake.restub(
@@ -4570,4 +4917,389 @@ async fn a_finished_review_notes_when_the_code_changed_while_it_ran() {
         None,
         "it does not count"
     );
+}
+
+fn merge_request(head: &str) -> crate::pulls::PullView {
+    crate::pulls::PullView {
+        forge: "gitlab".into(),
+        number: 7,
+        url: "https://git.example.com/app/-/merge_requests/7".into(),
+        title: "Inbox".into(),
+        state: "open".into(),
+        draft: false,
+        review: String::new(),
+        ci: crate::pulls::Ci::Passing,
+        failed: Vec::new(),
+        head: head.into(),
+        base: "develop".into(),
+        mergeable: crate::pulls::Mergeable::Clean,
+    }
+}
+
+fn with_merge_request(r: &Rig, head: &str) {
+    r.app.state.set_pulls(std::collections::HashMap::from([(
+        (
+            "hp".to_string(),
+            "/r/slots/slot2".to_string(),
+            "eng-1301-inbox".to_string(),
+        ),
+        merge_request(head),
+    )]));
+}
+
+#[tokio::test]
+async fn review_pull_request_starts_against_its_base_in_the_conversation_that_follows_it() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    with_merge_request(&r, PIN_A);
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301-2\n"));
+    stub_pin(&r, PIN_B, "");
+    let ask = json!({ "machine": "hp", "name": "hp-eng-1301" });
+    let (status, body) = step_post(&r, &c, "/dispatch/reviews", ask.clone()).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let id = body["conversation"].as_str().unwrap().to_string();
+    let step = &body["step"];
+    assert_eq!(
+        (&step["by"], &step["status"]),
+        (&json!("you"), &json!("approved"))
+    );
+    assert_eq!(
+        step["review"]["pull"],
+        json!({ "forge": "gitlab", "number": 7, "url": "https://git.example.com/app/-/merge_requests/7", "base": "develop", "head": PIN_A })
+    );
+    assert_eq!(step["review"]["pin"]["head"], PIN_B);
+    let prompt = step["input"]["prompt"].as_str().unwrap();
+    assert!(
+        prompt.contains("which is merge request !7 (https://git.example.com/app/-/merge_requests/7) into develop: the commits that are not on origin/develop"),
+        "{prompt}"
+    );
+    assert!(prompt.contains("Its latest pushed commit is aaaaaaa;"));
+    let convo = r.app.dispatch.get(&id).unwrap();
+    assert_eq!(convo["title"], "Review of merge request !7");
+    let names: Vec<&str> = convo["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["hp-eng-1301", "hp-eng-1301-2"]);
+
+    let (status, again) = step_post(&r, &c, "/dispatch/reviews", ask).await;
+    assert_eq!(status, StatusCode::OK, "{again}");
+    assert_eq!(again["conversation"], json!(id), "it follows the session");
+    assert_eq!(again["step"]["status"], "pending", "the same code waits");
+    assert!(again["step"]["already"]["text"]
+        .as_str()
+        .unwrap()
+        .contains("already has a review running"));
+
+    let (status, body) = step_post(
+        &r,
+        &c,
+        "/dispatch/reviews",
+        json!({ "machine": "hp", "name": "nope" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(body["error"], "no session named nope on hp");
+}
+
+async fn session_review(r: &Rig, c: &str, name: &str) -> Value {
+    let req = Request::get("/state")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    let view: Value = serde_json::from_str(&body).unwrap();
+    view["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["tmux"] == name)
+        .unwrap()["review"]
+        .clone()
+}
+
+#[tokio::test]
+async fn a_session_shows_its_newest_review() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    assert_eq!(session_review(&r, &c, "hp-eng-1301").await, Value::Null);
+    let id = dispatch_conversation(&r).await;
+    let card = session_card(&r, &id);
+    let (status, step) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/reviews"),
+        json!({ "card": card }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{step}");
+    let mark = session_review(&r, &c, "hp-eng-1301").await;
+    assert_eq!(
+        (&mark["state"], &mark["conversation"]),
+        (&json!("asking"), &json!(id))
+    );
+    finished_review(&r, &id, json!({ "head": PIN_A, "top": "/r/slots/slot2" }));
+    let mark = session_review(&r, &c, "hp-eng-1301").await;
+    assert_eq!(
+        (&mark["state"], mark["findings"].as_u64(), &mark["commit"]),
+        (&json!("ready"), Some(0), &json!(PIN_A))
+    );
+}
+
+struct OnePull(std::sync::Mutex<String>);
+
+impl crate::pulls::Forge for OnePull {
+    fn fetch<'a>(
+        &'a self,
+        _m: &'a crate::config::Machine,
+        _path: &'a str,
+        branch: &'a str,
+    ) -> futures::future::BoxFuture<'a, crate::pulls::Fetched> {
+        let head = self.0.lock().unwrap().clone();
+        let found = branch == "eng-1301-inbox";
+        Box::pin(async move {
+            if !found {
+                return crate::pulls::Fetched::NoPull;
+            }
+            crate::pulls::Fetched::Found(Box::new(crate::pulls::Pull {
+                forge: "github".into(),
+                number: 7,
+                url: "https://github.com/o/app/pull/7".into(),
+                title: "Inbox".into(),
+                state: "open".into(),
+                draft: false,
+                review: String::new(),
+                ci: crate::pulls::Ci::Pending,
+                failed: Vec::new(),
+                head,
+                author: "me".into(),
+                notes: Vec::new(),
+                created: String::new(),
+                approvers: Vec::new(),
+                asking: Vec::new(),
+                resolved: Vec::new(),
+                unsettled: Vec::new(),
+                base: "main".into(),
+                mergeable: crate::pulls::Mergeable::Unknown,
+            }))
+        })
+    }
+
+    fn failure_log<'a>(
+        &'a self,
+        _m: &'a crate::config::Machine,
+        _path: &'a str,
+        _check: &'a crate::pulls::Check,
+    ) -> futures::future::BoxFuture<'a, String> {
+        Box::pin(async { String::new() })
+    }
+
+    fn review_comments<'a>(
+        &'a self,
+        _m: &'a crate::config::Machine,
+        _path: &'a str,
+        _review: &'a crate::pulls::Note,
+    ) -> futures::future::BoxFuture<'a, Vec<crate::pulls::Note>> {
+        Box::pin(async { Vec::new() })
+    }
+}
+
+struct Watch {
+    forge: Arc<OnePull>,
+    pulls: crate::pulls::Pulls,
+    checked: std::collections::HashMap<crate::pulls::Key, std::time::Instant>,
+    now: std::time::Instant,
+}
+
+impl Watch {
+    fn new(r: &Rig, head: &str) -> Watch {
+        let forge = Arc::new(OnePull(std::sync::Mutex::new(head.into())));
+        let pulls = crate::pulls::Pulls::new(
+            forge.clone(),
+            Arc::new(crate::pulls::GitLab::new()),
+            crate::pulls::Remotes::new(r.fake.clone(), Ssh::new(r._dir.path().join("state"))),
+            r._dir.path().join("pulls.json"),
+        );
+        Watch {
+            forge,
+            pulls,
+            checked: std::collections::HashMap::new(),
+            now: std::time::Instant::now(),
+        }
+    }
+
+    async fn push(&mut self, r: &Rig, head: &str) {
+        *self.forge.0.lock().unwrap() = head.into();
+        self.now += std::time::Duration::from_secs(600);
+        let cfg = r.app.config().unwrap();
+        let targets = crate::pulls::targets(&cfg, &r.app.state);
+        self.pulls.poll(&cfg, &[], &targets, self.now).await;
+        r.app.state.set_pulls(self.pulls.views());
+    }
+
+    async fn round(&mut self, r: &Rig) {
+        self.now += std::time::Duration::from_secs(61);
+        super::review_pulls::round(&r.app, &self.pulls, &mut self.checked, self.now).await;
+    }
+}
+
+fn review_sessions(r: &Rig, mode: &str) {
+    let mut pr = r.app.config().unwrap().pull_requests;
+    pr.review_sessions = serde_json::from_value(json!(mode)).unwrap();
+    r.app.settings.set_pull_requests(pr).unwrap();
+}
+
+fn yardbell_steps(r: &Rig) -> Vec<Value> {
+    r.app
+        .dispatch
+        .list()
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|c| {
+            r.app.dispatch.get(c["id"].as_str().unwrap()).unwrap()["events"]
+                .as_array()
+                .unwrap()
+                .clone()
+        })
+        .filter(|e| e["by"] == "yardbell")
+        .collect()
+}
+
+#[tokio::test]
+async fn a_session_s_pull_request_is_reviewed_once_per_new_head_when_the_session_is_done() {
+    let r = rig();
+    review_sessions(&r, "ask");
+    let mut w = Watch::new(&r, PIN_A);
+    stub_pin(&r, PIN_B, "");
+    w.push(&r, PIN_A).await;
+    w.round(&r).await;
+    assert!(
+        yardbell_steps(&r).is_empty(),
+        "the folder is not at the pushed commit yet"
+    );
+
+    stub_pin(&r, PIN_A, "");
+    w.round(&r).await;
+    let steps = yardbell_steps(&r);
+    assert_eq!(
+        steps.len(),
+        1,
+        "a pull request first seen with reviews on is reviewed"
+    );
+    assert_eq!(steps[0]["status"], "pending", "Ask waits for the person");
+    assert_eq!(steps[0]["review"]["name"], "hp-eng-1301");
+    assert_eq!(steps[0]["review"]["pull"]["number"], 7);
+    assert_eq!(steps[0]["review"]["pull"]["head"], PIN_A);
+    let id = r
+        .app
+        .dispatch
+        .list()
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["title"] == "Review of pull request #7")
+        .map(|c| c["id"].as_str().unwrap().to_string())
+        .expect("a conversation that follows the session");
+    assert_eq!(
+        r.app.dispatch.get(&id).unwrap()["sessions"][0]["name"],
+        "hp-eng-1301"
+    );
+
+    w.round(&r).await;
+    w.push(&r, PIN_A).await;
+    w.round(&r).await;
+    assert_eq!(
+        yardbell_steps(&r).len(),
+        1,
+        "the same head is reviewed once"
+    );
+
+    review_sessions(&r, "auto");
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301-2\n"));
+    stub_pin(&r, PIN_B, "");
+    w.push(&r, PIN_B).await;
+    w.round(&r).await;
+    let steps = yardbell_steps(&r);
+    assert_eq!(steps.len(), 2, "a new head is reviewed again");
+    assert_eq!(steps[1]["status"], "approved", "Automatically starts it");
+    assert_eq!(steps[1]["review"]["pin"]["head"], PIN_B);
+
+    set_rules(
+        &r,
+        "allow",
+        json!([{ "action": "review_session", "approval": "deny" }]),
+    );
+    stub_pin(&r, PIN_C, "");
+    w.push(&r, PIN_C).await;
+    w.round(&r).await;
+    assert_eq!(
+        yardbell_steps(&r).len(),
+        2,
+        "a rule that refuses reviews wins"
+    );
+}
+
+#[tokio::test]
+async fn turning_reviews_on_does_not_review_what_was_already_open() {
+    let r = rig();
+    let mut w = Watch::new(&r, PIN_A);
+    stub_pin(&r, PIN_A, "");
+    w.push(&r, PIN_A).await;
+    w.round(&r).await;
+    review_sessions(&r, "auto");
+    w.round(&r).await;
+    w.round(&r).await;
+    assert!(yardbell_steps(&r).is_empty(), "open before reviews were on");
+
+    r.fake.stub("tmux new", Output::ok_with("hp-eng-1301-2\n"));
+    stub_pin(&r, PIN_B, "");
+    w.push(&r, PIN_B).await;
+    w.round(&r).await;
+    assert_eq!(yardbell_steps(&r).len(), 1, "pushed after, so reviewed");
+
+    review_sessions(&r, "off");
+    w.round(&r).await;
+    stub_pin(&r, PIN_C, "");
+    w.push(&r, PIN_C).await;
+    review_sessions(&r, "auto");
+    w.round(&r).await;
+    assert_eq!(
+        yardbell_steps(&r).len(),
+        1,
+        "what was pushed while reviews were off is not reviewed when they come back"
+    );
+}
+
+#[tokio::test]
+async fn a_busy_session_is_not_reviewed_until_it_is_idle() {
+    let r = rig();
+    review_sessions(&r, "ask");
+    let mut snap = r.app.state.snapshot("hp").unwrap();
+    snap.sessions[0].activity = crate::snapshot::Activity::Active;
+    r.app.state.update(MachineStatus {
+        name: "hp".into(),
+        up: true,
+        reason: None,
+        snapshot: Some(snap.clone()),
+        checked_at: chrono::Local::now(),
+    });
+    let mut w = Watch::new(&r, PIN_A);
+    stub_pin(&r, PIN_A, "");
+    w.push(&r, PIN_A).await;
+    w.round(&r).await;
+    assert!(yardbell_steps(&r).is_empty(), "still working");
+    snap.sessions[0].activity = crate::snapshot::Activity::Idle;
+    r.app.state.update(MachineStatus {
+        name: "hp".into(),
+        up: true,
+        reason: None,
+        snapshot: Some(snap),
+        checked_at: chrono::Local::now(),
+    });
+    w.round(&r).await;
+    assert_eq!(yardbell_steps(&r).len(), 1);
 }

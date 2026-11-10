@@ -1,5 +1,6 @@
 use super::{
-    last_lines, Check, Ci, Note, Pull, Unsettled, UnsettledCheck, LOG_BYTES, LOG_LINES, SEEN_NOTES,
+    last_lines, Check, Ci, Mergeable, Note, Pull, Unsettled, UnsettledCheck, LOG_BYTES, LOG_LINES,
+    SEEN_NOTES,
 };
 use crate::config::PullRequests;
 use crate::secrets::Secrets;
@@ -166,14 +167,27 @@ pub(crate) async fn run_glab(
     endpoint: &str,
     post: &[(&str, &str)],
 ) -> crate::shell::Output {
+    let method = if post.is_empty() { "GET" } else { "POST" };
+    run_glab_as(runner, ssh, m, host, endpoint, method, post).await
+}
+
+async fn run_glab_as(
+    runner: &dyn Runner,
+    ssh: &Ssh,
+    m: &crate::config::Machine,
+    host: &str,
+    endpoint: &str,
+    method: &str,
+    fields: &[(&str, &str)],
+) -> crate::shell::Output {
     let mut cmd = format!(
         "GLAB_CHECK_UPDATE=false NO_COLOR=1 NO_PROMPT=1; export GLAB_CHECK_UPDATE NO_COLOR NO_PROMPT; command -v glab >/dev/null 2>&1 || exit {NO_GLAB}; glab api --hostname {} {}",
         quote(host),
         quote(endpoint)
     );
-    if !post.is_empty() {
-        cmd.push_str(" --method POST");
-        for (key, value) in post {
+    if method != "GET" {
+        cmd.push_str(&format!(" --method {method}"));
+        for (key, value) in fields {
             cmd.push_str(&format!(
                 " --raw-field {}",
                 quote(&format!("{key}={value}"))
@@ -215,6 +229,14 @@ pub(crate) fn glab_error(status: Option<i32>, stderr: &str, host: &str, machine:
         Problem::NotFound => format!(
             "{host} does not have this project, or the glab login on {machine} cannot see it"
         ),
+    }
+}
+
+fn not_merged(code: &str) -> String {
+    match code {
+        "405" | "406" => "GitLab will not merge it now: it is not open, is a draft, has conflicts or waits for its pipeline or approvals".into(),
+        "409" => "the branch has new commits since Yardbell checked it, so it was not merged".into(),
+        code => format!("GitLab answered {code} and did not merge it"),
     }
 }
 
@@ -315,6 +337,76 @@ impl GitLab {
             return Err(Problem::Failed(format!("glab timed out on {}", m.name)));
         }
         Err(glab_problem(out.status, &out.stderr, &access.host, &m.name))
+    }
+
+    // A merge request merges as its project is set up to, with a merge commit or a fast-forward;
+    // squashing is the one choice a request can make. The sha makes GitLab refuse a branch that
+    // moved on since it was checked.
+    pub async fn merge(
+        &self,
+        access: &GitLabAccess,
+        project: &str,
+        pull: &Pull,
+        squash: bool,
+    ) -> Result<(), String> {
+        let iid = pull.number.to_string();
+        let segments = ["projects", project, "merge_requests", iid.as_str(), "merge"];
+        let squash = if squash { "true" } else { "false" };
+        let fields = [("sha", pull.head.as_str()), ("squash", squash)];
+        if access.glab {
+            let (Some((runner, ssh)), Some(m)) = (&self.runner, &access.machine) else {
+                return Err(
+                    "glab cannot be asked from here, so check the connection's settings".into(),
+                );
+            };
+            let out = run_glab_as(
+                runner.as_ref(),
+                ssh,
+                m,
+                &access.host,
+                &endpoint(&segments, &[]),
+                "PUT",
+                &fields,
+            )
+            .await;
+            if out.ok() {
+                return Ok(());
+            }
+            if out.timed_out {
+                return Err(format!("glab timed out on {}", m.name));
+            }
+            let code = ["405", "406", "409"]
+                .into_iter()
+                .find(|code| out.stderr.contains(&format!("HTTP {code}")));
+            return Err(match code {
+                Some(code) => not_merged(code),
+                None => glab_error(out.status, &out.stderr, &access.host, &m.name),
+            });
+        }
+        let token = access.token.as_ref().map_err(Clone::clone)?;
+        let bad = || format!("{} has an address Yardbell cannot read", access.host);
+        let mut url = Url::parse(&access.api).map_err(|_| bad())?;
+        url.path_segments_mut()
+            .map_err(|_| bad())?
+            .pop_if_empty()
+            .extend(segments);
+        let res = self
+            .http
+            .put(url)
+            .header("PRIVATE-TOKEN", token)
+            .form(&fields)
+            .send()
+            .await
+            .map_err(|e| match unanswered(&access.host, e) {
+                Problem::Refused(m) | Problem::Failed(m) => m,
+                _ => format!("GitLab at {} did not answer", access.host),
+            })?;
+        match res.status() {
+            s if s.is_success() => Ok(()),
+            StatusCode::UNAUTHORIZED => Err(refused(access)),
+            StatusCode::FORBIDDEN => Err(forbidden(access, project)),
+            s => Err(not_merged(s.as_str())),
+        }
     }
 
     async fn get(
@@ -743,6 +835,12 @@ struct RawMr {
     head_pipeline: Option<RawPipeline>,
     #[serde(default)]
     created_at: Option<String>,
+    #[serde(default)]
+    target_branch: String,
+    #[serde(default)]
+    has_conflicts: bool,
+    #[serde(default)]
+    detailed_merge_status: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -855,7 +953,18 @@ pub(super) fn parse_mr(json: &str) -> Result<Pull, String> {
         asking: Vec::new(),
         resolved: Vec::new(),
         unsettled: Vec::new(),
+        base: raw.target_branch,
+        mergeable: mergeable_of(raw.has_conflicts, raw.detailed_merge_status.as_deref()),
     })
+}
+
+// GitLab keeps the last answer in has_conflicts while it checks again after a push.
+fn mergeable_of(has_conflicts: bool, status: Option<&str>) -> Mergeable {
+    match (has_conflicts, status) {
+        (_, Some("unchecked" | "checking" | "preparing")) => Mergeable::Unknown,
+        (true, _) | (_, Some("conflict")) => Mergeable::Conflicting,
+        (false, _) => Mergeable::Clean,
+    }
 }
 
 pub(super) fn review_of(reviewers_json: Option<&str>, approvals_json: Option<&str>) -> String {
@@ -1059,6 +1168,28 @@ mod tests {
             v["state"] = state.into();
             assert_eq!(parse_mr(&v.to_string()).unwrap().state, want, "{state}");
         }
+    }
+
+    #[test]
+    fn a_merge_request_in_conflict_is_read() {
+        let mut v: serde_json::Value = serde_json::from_str(MR).unwrap();
+        v["has_conflicts"] = true.into();
+        v["target_branch"] = "main".into();
+        let p = parse_mr(&v.to_string()).unwrap();
+        assert_eq!(
+            (p.mergeable, p.base.as_str()),
+            (Mergeable::Conflicting, "main")
+        );
+        v["has_conflicts"] = false.into();
+        assert_eq!(
+            parse_mr(&v.to_string()).unwrap().mergeable,
+            Mergeable::Clean
+        );
+        v["detailed_merge_status"] = "checking".into();
+        assert_eq!(
+            parse_mr(&v.to_string()).unwrap().mergeable,
+            Mergeable::Unknown
+        );
     }
 
     #[test]

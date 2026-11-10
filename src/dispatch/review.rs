@@ -1,12 +1,15 @@
 mod diff;
 mod evidence;
 mod files;
+mod mark;
 mod pin;
 mod scan;
 
+use diff::valid_sha;
 pub use diff::{changed_file, changed_files, valid_base, valid_path, Anchor};
 pub use evidence::{gather, valid_file as valid_evidence_file};
 pub use files::{file_view, places};
+pub use mark::{mark_for, marks, Mark};
 pub(in crate::dispatch) use pin::earlier_in;
 pub use pin::{read as read_pin, standing as pin_standing, Pin};
 pub use scan::{prompt as scan_prompt, Kind as ScanKind};
@@ -41,6 +44,26 @@ pub struct ReviewOf {
     // Asked to read code that already has a review.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub again: bool,
+    // The pull or merge request of the reviewed branch, as it stood when the review was asked for.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pull: Option<ReviewedPull>,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ReviewedPull {
+    pub forge: String,
+    pub number: u64,
+    pub url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub head: String,
+}
+
+impl ReviewedPull {
+    pub fn words(&self) -> String {
+        crate::pulls::noun_of(&self.forge, self.number)
+    }
 }
 
 impl ReviewOf {
@@ -65,17 +88,44 @@ pub fn evidence_folder() -> String {
         .collect()
 }
 
-pub fn prompt(branch: &str, focus: &str, shots: Option<&Screenshots>) -> String {
+pub fn prompt(
+    branch: &str,
+    pull: Option<&ReviewedPull>,
+    focus: &str,
+    shots: Option<&Screenshots>,
+) -> String {
     let what = if branch.is_empty() {
         "the current branch".to_string()
     } else {
         format!("branch {branch}")
     };
+    let scope = match pull.filter(|p| valid_base(&p.base)) {
+        Some(p) => {
+            let pushed = if valid_sha(&p.head) {
+                format!(
+                    " Its latest pushed commit is {}; if this folder's HEAD is a different \
+commit, say so in the summary.",
+                    &p.head[..7]
+                )
+            } else {
+                String::new()
+            };
+            format!(
+                ", which is {} ({}) into {base}: the commits that are not on origin/{base} (or \
+{base} when there is no origin/{base}), counted from their merge base, and any uncommitted \
+changes.{pushed}",
+                p.words(),
+                p.url,
+                base = p.base
+            )
+        }
+        None => ": the commits that are not on the branch it was made from (usually main, or \
+origin/main when this is main) and any uncommitted changes."
+            .to_string(),
+    };
     let mut text = format!(
-        "Review the work on {what} in this folder: the commits that are not on the branch it was \
-made from (usually main, or origin/main when this is main) and any uncommitted changes. Run the \
-project's tests and linters if it has them. Do not change, stage or commit any files in the \
-branch."
+        "Review the work on {what} in this folder{scope} Run the project's tests and linters if \
+it has them. Do not change, stage or commit any files in the branch."
     );
     let focus = focus.trim();
     if !focus.is_empty() {
@@ -478,7 +528,10 @@ mod tests {
 
     #[test]
     fn the_prompt_alone_is_not_a_report() {
-        let echoed = format!("> {}\n\n⏺ Reading the diff.", prompt("eng-1", "", None));
+        let echoed = format!(
+            "> {}\n\n⏺ Reading the diff.",
+            prompt("eng-1", None, "", None)
+        );
         assert_eq!(parse(&echoed), None, "the template's verdict is not one");
         assert_eq!(
             parse(CLAUDE_SCREEN.replace("  END REVIEW", "").as_str()),
@@ -517,18 +570,18 @@ mod tests {
 
     #[test]
     fn the_prompt_names_the_branch_and_the_focus() {
-        let text = prompt("eng-1", "  the migration ", None);
+        let text = prompt("eng-1", None, "  the migration ", None);
         assert!(text.starts_with("Review the work on branch eng-1 in this folder"));
         assert!(text.contains("Pay special attention to this: the migration"));
         assert!(text.contains("\n\nYARDBELL REVIEW\nverdict: ready, or changes needed\n"));
-        assert!(prompt("", "", None).starts_with("Review the work on the current branch"));
+        assert!(prompt("", None, "", None).starts_with("Review the work on the current branch"));
         assert!(text.contains("\nbase: the branch or commit you compared against\n"));
         assert!(!text.contains("screenshot"), "no app, no screenshots");
         let shots = Screenshots {
             folder: "abcdef123456".into(),
             apps: vec!["http://localhost:3020 (rails)".into()],
         };
-        let text = prompt("eng-1", "", Some(&shots));
+        let text = prompt("eng-1", None, "", Some(&shots));
         assert!(text.contains(
             "The app is running at http://localhost:3020 (rails). Screenshots are optional"
         ));
@@ -537,6 +590,41 @@ mod tests {
         assert!(text.contains("at most 6 screenshots of up to 2 MB each"));
         assert_eq!(parse(&format!("> {text}")), None);
         assert_eq!(evidence_folder().len(), 12);
+    }
+
+    #[test]
+    fn a_pull_request_names_its_base_and_its_pushed_commit() {
+        let mr = ReviewedPull {
+            forge: "gitlab".into(),
+            number: 12,
+            url: "https://git.example.com/a/b/-/merge_requests/12".into(),
+            base: "develop".into(),
+            head: "0123456789abcdef0123456789abcdef01234567".into(),
+        };
+        let text = prompt("eng-1", Some(&mr), "", None);
+        assert!(text.starts_with(
+            "Review the work on branch eng-1 in this folder, which is merge request !12 \
+(https://git.example.com/a/b/-/merge_requests/12) into develop: the commits that are not on \
+origin/develop (or develop when there is no origin/develop), counted from their merge base"
+        ));
+        assert!(text.contains("Its latest pushed commit is 0123456;"));
+        assert!(!text.contains("usually main"));
+        assert_eq!(parse(&format!("> {text}")), None);
+
+        let pr = ReviewedPull {
+            forge: "github".into(),
+            head: String::new(),
+            ..mr.clone()
+        };
+        let text = prompt("eng-1", Some(&pr), "", None);
+        assert!(text.contains("which is pull request #12"));
+        assert!(!text.contains("latest pushed commit"));
+
+        let odd = ReviewedPull {
+            base: "$(rm -rf ~)".into(),
+            ..mr
+        };
+        assert!(prompt("eng-1", Some(&odd), "", None).contains("usually main"));
     }
 
     #[test]

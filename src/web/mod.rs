@@ -85,6 +85,7 @@ pub struct AppState {
     pub pairing: std::sync::Mutex<Vec<(String, Instant)>>,
     pub viewers: Viewers,
     pub worktrees: crate::worktrees::Worktrees,
+    pub pulls: Arc<crate::pulls::Pulls>,
     tasks: std::sync::Mutex<HashMap<(String, String), String>>,
     installed: std::sync::Mutex<HashMap<String, (Instant, Vec<String>)>>,
     servers: tokio::sync::Mutex<Option<(Instant, Vec<crate::discover::Found>)>>,
@@ -114,6 +115,7 @@ pub struct Services {
     pub pipelines: Arc<crate::pipeline::Pipelines>,
     pub proposals: Arc<crate::proposals::Proposals>,
     pub worktrees: crate::worktrees::Worktrees,
+    pub pulls: Arc<crate::pulls::Pulls>,
     pub refresh: Refresh,
     pub releases: crate::about::Fetch,
 }
@@ -135,6 +137,7 @@ impl AppState {
             pipelines,
             proposals,
             worktrees,
+            pulls,
             refresh,
             releases,
         } = services;
@@ -166,6 +169,7 @@ impl AppState {
             pairing: std::sync::Mutex::new(Vec::new()),
             viewers: Viewers::default(),
             worktrees,
+            pulls,
             tasks: std::sync::Mutex::new(HashMap::new()),
             installed: std::sync::Mutex::new(HashMap::new()),
             servers: tokio::sync::Mutex::new(None),
@@ -399,6 +403,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/theme.js", get(|| async { asset("theme.js") }))
         .route("/side.js", get(|| async { asset("side.js") }))
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
+        .route("/board.js", get(|| async { asset("board.js") }))
         .route(
             "/vendor/lit-html/lit-html.js",
             get(|| async { asset("vendor/lit-html/lit-html.js") }),
@@ -433,6 +438,7 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(|| async { asset("pipeline-canvas.js") }),
         )
         .route("/composer.js", get(|| async { asset("composer.js") }))
+        .route("/voice.js", get(|| async { asset("voice.js") }))
         .route("/attachments.js", get(|| async { asset("attachments.js") }))
         .route("/markdown.js", get(|| async { asset("markdown.js") }))
         .route("/dispatch/conversations", get(dispatch_list))
@@ -479,6 +485,7 @@ pub fn router(app: Arc<AppState>) -> Router {
             "/dispatch/conversations/{id}/groups/{group}",
             post(dispatch_decide_group),
         )
+        .route("/dispatch/reviews", post(dispatch_review_session))
         .route(
             "/dispatch/conversations/{id}/reviews",
             post(dispatch_request_review),
@@ -503,6 +510,10 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route(
             "/dispatch/ask",
             post(dispatch_ask).layer(DefaultBodyLimit::max(ASK_LIMIT)),
+        )
+        .route(
+            "/dispatch/transcribe",
+            post(dispatch_transcribe).layer(DefaultBodyLimit::max(crate::voice::AUDIO_MAX)),
         )
         .route(
             "/mcp",
@@ -700,11 +711,27 @@ async fn state_json(
     view.mesh = Some(app.host_mesh.check(&cfg).await);
     view.server = Some(server_view(&cfg));
     view.proposals = app.proposals.waiting();
+    with_reviews(&app, &mut view);
     let reply = StateReply {
         view,
         problems: app.state.problems(),
     };
     Ok(([(BUILD_HEADER, page_build())], Json(reply)).into_response())
+}
+
+fn with_reviews(app: &AppState, view: &mut crate::state::StateView) {
+    let running: std::collections::HashSet<(String, String)> = view
+        .sessions
+        .iter()
+        .filter_map(|s| Some((s.machine.clone(), s.tmux.clone()?)))
+        .collect();
+    let alive =
+        |machine: &str, name: &str| running.contains(&(machine.to_string(), name.to_string()));
+    let marks = app.dispatch.review_marks(&alive);
+    for s in &mut view.sessions {
+        s.review = crate::dispatch::review_mark_for(&marks, &s.machine, &s.path, &s.branch)
+            .and_then(|m| serde_json::to_value(m).ok());
+    }
 }
 
 const LIVE_SETTLE: Duration = Duration::from_millis(100);
@@ -864,13 +891,42 @@ async fn dispatch_runs_on(AxState(app): AxState<Arc<AppState>>) -> Response {
         })
         .collect();
     let runs_on = settings.runs_on;
+    let voice_input = cfg
+        .as_ref()
+        .is_some_and(|c| c.voice.input != crate::config::VoiceInput::Off);
     Json(json!({
         "runs_on": runs_on,
         "label": label(runs_on),
         "model": settings.model_for(runs_on),
         "agents": agents,
+        "voice_input": voice_input,
     }))
     .into_response()
+}
+
+async fn dispatch_transcribe(
+    AxState(app): AxState<Arc<AppState>>,
+    headers: HeaderMap,
+    body: axum::body::Bytes,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let mime = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("audio/webm")
+        .to_string();
+    let runner = app.dispatch.runner();
+    let text = crate::voice::transcribe(
+        runner.as_ref(),
+        &cfg.voice,
+        &crate::voice::ModelStore::default(),
+        &app.secrets()?,
+        &body,
+        &mime,
+    )
+    .await
+    .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
+    Ok(Json(json!({ "text": text })).into_response())
 }
 
 async fn dispatch_usage(AxState(app): AxState<Arc<AppState>>) -> Response {
@@ -1450,16 +1506,19 @@ async fn dispatch_request_review(
             })?,
     };
     let text = |k: &str| card[k].as_str().unwrap_or_default().to_string();
+    let event = propose_review(&app, id, &text("machine"), &text("name"), &text("path")).await?;
+    Ok(Json(event).into_response())
+}
+
+async fn propose_review(
+    app: &AppState,
+    id: &str,
+    machine: &str,
+    name: &str,
+    path: &str,
+) -> Result<Value, ApiError> {
     let cfg = app.config()?;
-    let (input, of) = crate::mcp::review_plan(
-        &app,
-        &cfg,
-        &text("machine"),
-        &text("name"),
-        &text("path"),
-        "",
-        "",
-    )?;
+    let (input, of) = crate::mcp::review_plan(app, &cfg, machine, name, path, "", "")?;
     let m = find_machine(&cfg, &of.machine)?;
     let pin = crate::dispatch::read_pin(&app.folders, &m, &of.path).await;
     let event = app
@@ -1473,14 +1532,71 @@ async fn dispatch_request_review(
             None,
         )
         .map_err(refused)?;
-    let event = match app.dispatch.earlier_review(&m.name, &pin) {
+    match app.dispatch.earlier_review(&m.name, &pin) {
         Some(earlier) => app
             .dispatch
             .note_already(id, event["id"].as_str().unwrap_or_default(), earlier)
-            .map_err(refused)?,
-        None => event,
+            .map_err(refused),
+        None => Ok(event),
+    }
+}
+
+#[derive(Deserialize)]
+struct SessionInput {
+    machine: String,
+    name: String,
+}
+
+// Review pull request on a session, from the dashboard or the Workspace. The person asked for it
+// there, so it starts at once in the conversation that follows the session, unless the same code
+// already has a review: then it waits there and says so.
+async fn dispatch_review_session(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<SessionInput>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &req.machine)?;
+    let snap = app.state.snapshot(&m.name).unwrap_or_default();
+    let session = snap
+        .sessions
+        .iter()
+        .find(|s| s.tmux.as_deref() == Some(req.name.as_str()))
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::NOT_FOUND,
+                format!("no session named {} on {}", req.name, m.name),
+            )
+        })?;
+    let path = snap
+        .folder_paths
+        .get(&session.folder)
+        .cloned()
+        .unwrap_or_else(|| session.cwd.clone());
+    let pull = app.state.pull_of(&m.name, &session.folder, &session.branch);
+    let title = match &pull {
+        Some(p) => format!("Review of {}", crate::pulls::noun_of(&p.forge, p.number)),
+        None => format!("Review of {}", session.branch),
     };
-    Ok(Json(event).into_response())
+    let id = app.dispatch.conversation_for(&crate::dispatch::PullPlace {
+        machine: &m.name,
+        session: &req.name,
+        path: &path,
+        title: &title,
+        url: pull.as_ref().map_or("", |p| p.url.as_str()),
+    });
+    let step = propose_review(&app, &id, &m.name, &req.name, &path).await?;
+    let step = if step["already"].is_object() {
+        step
+    } else {
+        let approve = Decision {
+            decision: "approve".into(),
+            input: None,
+            again: false,
+        };
+        decide(&app, &id, step["id"].as_str().unwrap_or_default(), &approve).await?
+    };
+    app.state.touch();
+    Ok(Json(json!({ "conversation": id, "step": step })).into_response())
 }
 
 #[derive(Deserialize)]
@@ -2287,11 +2403,13 @@ async fn remove_machine(
 mod connectors_api;
 pub(crate) mod diagrams_api;
 mod insights_api;
+pub mod limits;
 mod mcp_auth_api;
 pub(crate) mod pipeline_api;
 mod proposals_api;
 mod pulls_api;
 mod review_api;
+pub mod review_pulls;
 mod scan_api;
 mod settings_api;
 mod transcript_api;

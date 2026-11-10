@@ -1,6 +1,6 @@
 [package]
 name = "yardbell-android"
-version = "0.10.404"
+version = "0.10.413"
 edition = "2021"
 publish = false
 
@@ -18,13 +18,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "2"
 url = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "io-util"] }
 
 [target.'cfg(any(target_os = "android", target_os = "ios"))'.dependencies]
 tauri-plugin-barcode-scanner = "2"
 
 [dev-dependencies]
 tempfile = "3"
-tokio = { version = "1", features = ["macros", "rt-multi-thread", "net"] }
 axum = "0.8"
 
 # Most of the APK is this library, built once per phone architecture.

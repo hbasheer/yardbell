@@ -7,6 +7,8 @@ const Nav = window.YardbellNav;
 const Live = window.YardbellLive;
 const NewSession = window.YardbellNewSession;
 const Worktree = window.YardbellWorktree;
+const Board = window.YardbellBoard;
+const VIEW_KEY = "yardbell.dashboard.view";
 let current = null;
 let lastJson = "";
 let lastRender = 0;
@@ -14,6 +16,7 @@ let lastOk = 0;
 let focusedId = "";
 let selected = new URLSearchParams(location.search).get("machine") || "";
 const filters = { q: "", status: "all" };
+let layout = "machines";
 let sshHosts = null;
 
 const ICONS = {
@@ -203,6 +206,12 @@ function disk(m) {
 function statusBadge(s) {
   if (s.stale) return html`<span class="badge">Last known</span>`;
   if (s.activity === "blocked") return html`<span class="badge blocked" title="Waiting for your answer or approval">Needs you</span>`;
+  if (s.stopped) {
+    const resets = s.resets ? new Date(s.resets) : null;
+    const when = resets ? resets.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "";
+    const next = !resets ? "" : resets > Date.now() ? ` Its limit resets at ${when}, and Dispatch then offers to resume it.` : ` Its limit reset at ${when}.`;
+    return html`<span class="badge failed" title="Its last turn ended on: ${s.stopped}.${next}">${resets && resets > Date.now() ? `Limit until ${when}` : "Error"}</span>`;
+  }
   return s.activity === "active"
     ? html`<span class="badge busy">Working</span>`
     : html`<span class="badge">Idle</span>`;
@@ -224,12 +233,20 @@ function termUrl(s) {
   return `/term/${encodeURIComponent(s.machine)}/${encodeURIComponent(s.tmux)}`;
 }
 
+function mergeButton(s) {
+  const p = s.pull;
+  if (!p || p.state !== "open" || !s.tmux || s.stale || !Board.ready(p)) return "";
+  const ref = window.YardbellPull.ref(p);
+  return html`<button class="btn" type="button" data-act="merge" data-id=${s.id} title=${`Merge ${window.YardbellPull.noun(p).toLowerCase()} ${ref} into ${p.base || "its base branch"}`}>Merge ${ref}</button>`;
+}
+
 function actions(s) {
   if (!s.attachable || s.stale) return "";
   const host = onHost && current.host_terminal !== "none"
     ? html`<button class="btn" type="button" data-act="host" data-machine=${s.machine} data-name=${s.tmux}>Terminal app</button>` : "";
   return html`<div class="row-actions">
-    <a class="btn" href=${termUrl(s)} target="_blank" rel="noopener">${ICONS.open}Open</a>${host}
+    <a class="btn" href=${termUrl(s)} target="_blank" rel="noopener">${ICONS.open}Open</a>${host}${mergeButton(s)}
+    ${window.YardbellPull.reviewable(s) ? html`<button class="btn quiet" type="button" data-act="review-pull" data-machine=${s.machine} data-name=${s.tmux} title=${`Start a reviewer that reads ${window.YardbellPull.noun(s.pull).toLowerCase()} ${window.YardbellPull.ref(s.pull)} against ${s.pull.base || "its base"}, runs the tests and changes nothing`}>Review ${window.YardbellPull.ref(s.pull)}</button>` : ""}
     <button class="btn quiet" type="button" data-act="insights" data-machine=${s.machine} data-name=${s.tmux} title="When it worked, waited and idled, and the tools and tests it ran">Insights</button>
     <button class="btn quiet" type="button" data-act="move-machine" data-id=${s.id} title="Move this session's branch, changes and task to another machine">Move</button>
     <button class="btn quiet danger stop" type="button" data-act="stop" data-machine=${s.machine} data-name=${s.tmux}>Stop</button>
@@ -267,6 +284,12 @@ function pullBadge(p) {
   return html`<a class="pr-badge ${tone}" href=${p.url} target="_blank" rel="noopener" title=${window.YardbellPull.describe(p)}><span class="pr-num">${window.YardbellPull.ref(p)}</span>${word}</a>`;
 }
 
+function reviewBadge(s) {
+  const m = window.YardbellPull.reviewMark(s);
+  if (!m) return "";
+  return html`<a class="pr-badge review-mark ${m.tone}" href=${m.href} title=${m.title}>${m.word}</a>`;
+}
+
 function pullWhy(s) {
   if (s.pull || !s.pull_why) return "";
   return html`<a class="pr-why" href="/settings#pull-requests" title=${s.pull_why}>No PR info</a>`;
@@ -283,7 +306,7 @@ function identity(s, extra = "") {
   const branch = s.branch ? html`<span class="branch">${s.branch}</span>` : "";
   const agent = s.agent ? html`<span class="agent">${agentLabel(s.agent)}</span>` : "";
   return html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}${extra}</div>
-    <div class="s-sub">${branch}${pullBadge(s.pull)}${pullWhy(s)}${setupFlag(s)}${agent}</div>`;
+    <div class="s-sub">${branch}${pullBadge(s.pull)}${reviewBadge(s)}${pullWhy(s)}${setupFlag(s)}${agent}</div>`;
 }
 
 function sessionRow(s) {
@@ -381,6 +404,33 @@ function group(state, m) {
   </section>`;
 }
 
+function boardCard(s) {
+  const ticket = s.ticket !== "-" ? html`<span class="ticket">${s.ticket}</span>` : "";
+  const marks = [pullBadge(s.pull), reviewBadge(s), pullWhy(s), setupFlag(s)].filter((m) => m !== "");
+  const where = [s.machine, s.agent ? agentLabel(s.agent) : ""].filter(Boolean).join(" · ");
+  const body = html`<div class="s-line"><span class="folder">${short(s.folder)}</span>${ticket}</div>
+    ${s.branch ? html`<div class="b-branch branch">${s.branch}</div>` : ""}
+    ${marks.length ? html`<div class="b-marks">${marks}</div>` : ""}
+    <div class="b-meta"><span class="b-where">${where}</span>${statusBadge(s)}</div>
+    ${Board.lane(s) === "ready" ? html`<div class="b-actions">${mergeButton(s)}</div>` : ""}`;
+  if (!s.attachable || s.stale) return html`<li class="b-card${s.stale ? " stale" : ""}" data-name=${s.tmux || ""}>${body}</li>`;
+  return html`<li class="b-card openable${focusedId === s.id ? " kb" : ""}" data-id=${s.id} data-name=${s.tmux} data-href=${termUrl(s)} tabindex="0" aria-label="Open ${short(s.folder)} on ${s.machine}">${body}</li>`;
+}
+
+function board(machines, visible) {
+  const order = new Map(machines.map((m, i) => [m.name, i]));
+  const lanes = new Map(Board.LANES.map((l) => [l.key, []]));
+  for (const s of visible) lanes.get(Board.lane(s)).push(s);
+  for (const list of lanes.values()) list.sort((a, b) => (order.get(a.machine) ?? 0) - (order.get(b.machine) ?? 0));
+  return html`<div class="board">${Board.LANES.map((l) => {
+    const list = lanes.get(l.key);
+    return html`<section class="b-lane" data-lane=${l.key} aria-label=${l.title}>
+      <h2 title=${l.help}><span class="b-title">${l.title}</span><span class="b-count">${list.length}</span></h2>
+      ${list.length ? html`<ul class="b-list">${repeat(list, (s) => s.id, boardCard)}</ul>` : html`<p class="b-empty">None</p>`}
+    </section>`;
+  })}</div>`;
+}
+
 function renderCounts(state) {
   const live = state.sessions.filter((s) => !s.stale && (!selected || s.machine === selected));
   $("count-all").textContent = live.length;
@@ -400,11 +450,15 @@ function renderGroups(state) {
   groups.classList.toggle("no-ports", !visible.some((s) => s.ports.length));
   // lit renders after whatever the container already holds, so the page's static placeholder has to go.
   groups.querySelector(":scope > .checking")?.remove();
-  const shown = machines.map((m) => group(state, m));
+  groups.classList.toggle("boarded", layout === "board");
+  document.querySelectorAll("#view-toggle [data-view]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.view === layout)));
+  const shown = layout === "board" ? [] : machines.map((m) => group(state, m));
   let view;
   if (!machines.length) {
     view = html`<div class="empty"><p>No machines yet. Add one to see its agent sessions here.</p><a class="btn primary" href="/add">Add machine</a></div>`;
-  } else if (shown.every((g) => g === "")) {
+  } else if (layout === "board" && (visible.length || !filtering())) {
+    view = board(machines, visible);
+  } else if (layout === "board" || shown.every((g) => g === "")) {
     view = html`<div class="empty"><p>No sessions match${filters.q ? ` "${filters.q}"` : ""}.</p><button class="btn" type="button" data-act="clear-filters">Clear filters</button></div>`;
   } else {
     view = repeat(machines, (m) => m.name, (m, i) => shown[i]);
@@ -477,7 +531,7 @@ function openRow(row) {
 }
 
 function moveFocus(step) {
-  const rows = [...document.querySelectorAll("#groups .s-row.openable")];
+  const rows = [...document.querySelectorAll("#groups .openable")];
   if (!rows.length) return;
   let i = rows.findIndex((r) => r.dataset.id === focusedId);
   i = i < 0 ? (step > 0 ? 0 : rows.length - 1) : Math.min(Math.max(i + step, 0), rows.length - 1);
@@ -504,14 +558,14 @@ $("groups").addEventListener("click", (e) => {
     return;
   }
   if (e.target.closest("a, button")) return;
-  // On a touch screen the whole card as one target swallowed taps meant for Stop and the other
-  // buttons beside Open, so there only Open opens it.
-  if (touch.matches) return;
-  openRow(e.target.closest(".s-row.openable"));
+  // On a touch screen the whole row as one target swallowed taps meant for Stop and the other
+  // buttons beside Open, so there only Open opens a row. A board card's one button is left out above.
+  if (touch.matches && !e.target.closest(".b-card")) return;
+  openRow(e.target.closest(".openable"));
 });
 
 $("groups").addEventListener("focusin", (e) => {
-  const row = e.target.closest(".s-row.openable");
+  const row = e.target.closest(".openable");
   if (row) focusedId = row.dataset.id;
 });
 
@@ -522,7 +576,7 @@ document.addEventListener("keydown", (e) => {
   if (e.key === "/") { e.preventDefault(); $("search").focus(); return; }
   if (e.key === "j" || e.key === "ArrowDown") { e.preventDefault(); moveFocus(1); }
   else if (e.key === "k" || e.key === "ArrowUp") { e.preventDefault(); moveFocus(-1); }
-  else if (e.key === "Enter" && e.target.closest(".s-row.openable")) { e.preventDefault(); openRow(e.target.closest(".s-row.openable")); }
+  else if (e.key === "Enter" && e.target.closest("#groups .openable")) { e.preventDefault(); openRow(e.target.closest("#groups .openable")); }
   else if (e.key === "n") { e.preventDefault(); openNew(); }
 });
 
@@ -531,8 +585,32 @@ $("nav-machines").addEventListener("click", (e) => {
   if (!link) return;
   e.preventDefault();
   selected = link.dataset.machine;
-  history.replaceState(null, "", selected ? `/?machine=${encodeURIComponent(selected)}` : "/");
+  syncAddress();
   if (current) render(current);
+});
+
+function syncAddress() {
+  const params = new URLSearchParams();
+  if (selected) params.set("machine", selected);
+  if (layout === "board") params.set("view", "board");
+  const query = params.toString();
+  history.replaceState(null, "", query ? `/?${query}` : "/");
+}
+
+function setLayout(next) {
+  layout = next === "board" ? "board" : "machines";
+  remember(VIEW_KEY, layout);
+  syncAddress();
+  applyFilters();
+}
+
+layout = new URLSearchParams(location.search).get("view") || remembered(VIEW_KEY) || "machines";
+if (layout !== "board") layout = "machines";
+syncAddress();
+
+$("view-toggle").addEventListener("click", (e) => {
+  const b = e.target.closest("[data-view]");
+  if (b) setLayout(b.dataset.view);
 });
 
 function applyFilters() {
@@ -552,7 +630,7 @@ $("search").addEventListener("keydown", (e) => {
   applyFilters();
 });
 
-document.querySelector(".segmented").addEventListener("click", (e) => {
+document.querySelector(".segmented:not(.view-toggle)").addEventListener("click", (e) => {
   const b = e.target.closest("[data-status]");
   if (!b) return;
   filters.status = b.dataset.status;
@@ -635,6 +713,27 @@ function followMenuTrigger() {
   if (!menuButton) return;
   if (menuButton.isConnected) placeMenu(menuButton);
   else closeMenu(false);
+}
+
+async function mergePull(s, b) {
+  const p = s.pull;
+  const ref = window.YardbellPull.ref(p);
+  const noun = window.YardbellPull.noun(p).toLowerCase();
+  const sure = await ask(
+    `Merge ${ref}?`,
+    `${p.title ? `${p.title}. ` : ""}It merges into ${p.base || "its base branch"} on ${p.forge === "gitlab" ? "GitLab" : "GitHub"}, the way Settings says, and only if nothing was pushed to the ${noun} since this page showed it. The branch is kept.`,
+    { confirm: "Merge" },
+  );
+  if (!sure) return;
+  b.disabled = true;
+  try {
+    await api("POST", `/sessions/${encodeURIComponent(s.machine)}/${encodeURIComponent(s.tmux)}/merge`, { head: p.head });
+    toast(`Merged ${ref}`, "ok");
+    Live.soon();
+  } catch (err) {
+    b.disabled = false;
+    toast(err.message);
+  }
 }
 
 async function ask(title, body, options) {
@@ -724,6 +823,22 @@ document.addEventListener("click", async (e) => {
   }
   if (act === "insights") {
     window.YardbellInsights.open({ machine, name, onSuggest: window.YardbellInsights.handOver });
+    return;
+  }
+  if (act === "review-pull") {
+    b.disabled = true;
+    try {
+      const conversation = await window.YardbellPull.review(machine, name);
+      location.href = `/dispatch?c=${encodeURIComponent(conversation)}`;
+    } catch (err) {
+      b.disabled = false;
+      toast(err.message);
+    }
+    return;
+  }
+  if (act === "merge") {
+    const s = current?.sessions.find((x) => x.id === id);
+    if (s?.pull) mergePull(s, b);
     return;
   }
   if (act === "move-machine") {

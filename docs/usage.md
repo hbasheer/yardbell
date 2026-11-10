@@ -19,6 +19,15 @@ stop leaves the list at once.
 
 - **Top bar:** search sessions by folder, branch, ticket or agent (press `/`), show All, Working or
   Idle sessions (an agent waiting for you shows **Needs you** and counts as idle), **Refresh** to check every machine right away, Add machine and New session.
+- **Error:** an idle Claude Code or Codex session whose last turn ended on an error rather than an
+  answer, such as `API Error: 529`, a usage limit (`You've hit your limit · resets 3pm`) or Codex's
+  `■ stream disconnected`, shows a red **Error** instead of Idle. Hover it for the line. It counts
+  as idle and lasts until the agent writes something after it. Pressing Esc in Codex is not an
+  error. A usage limit that names its reset time shows **Limit until 15:00** instead, read in the
+  machine's own time zone. Once that time passes, Dispatch posts a **Limit reset** card whose **Send
+  to session** types `continue`, and the phone says so (**Usage limit reset** under Phone
+  notifications). A Dispatch rule that allows typing into that session sends it on its own; any
+  other rule leaves the card for you. A reset more than six hours old gets no card.
 - **Machine header:** fold the section away, **+** starts a new session on that machine, the terminal
   button opens a plain shell there (no agent, in its own tmux session), and the **⋯** menu has
   Machine settings, Copy ssh command and Remove machine.
@@ -27,7 +36,8 @@ stop leaves the list at once.
   opens only with its **Open** button, so Stop and the other buttons are easy to hit.
 - **Pull requests:** a session whose branch has a pull request on GitHub, or a merge request on a
   GitLab host you listed, shows its number (`#12` or `!12`) and state next to the branch: CI
-  failing, changes requested, CI running, approved, CI passing, merged or closed. Hover it for the
+  failing, conflicts, changes requested, CI running, approved, CI passing, merged or closed.
+  **Conflicts** means it can no longer merge into its base branch without a rebase. Hover it for the
   title and the checks that failed, click it to open it. Yardbell asks `gh` on the session's
   machine, or GitLab's API, every two minutes or so. A branch with no pull request has no badge. When
   something stops Yardbell from asking, such as `gh` not being signed in or a GitLab host that is not
@@ -35,6 +45,35 @@ stop leaves the list at once.
   and GitLab**, where you switch each one on or off, add GitLab hosts and see which service each of
   your folders uses. See
   [`pull_requests`](configuration.md#pull_requests-optional).
+- **Reviews of pull requests:** a session with an open pull or merge request has **Review #12**
+  (or **Review !12**) among its buttons. It starts a read-only reviewer on that request in the
+  Dispatch conversation that follows the session, and opens it. Beside the badge, the newest review
+  of the branch shows as **review waiting** (for your approval), **reviewing**, **review: ready**,
+  **3 review findings** (red when one is high, amber when the worst is medium), or **reviewed an
+  older commit** once the pull request has moved past what was reviewed. Click it to open the
+  conversation. See [Reviewing your sessions' pull requests](#reviewing-your-sessions-pull-requests).
+
+**Board** (beside **Machines** in the top bar) lays the sessions of every machine side by side in
+five lanes, by what each needs next:
+
+| Lane | Holds |
+|---|---|
+| **Needs you** | An agent waiting for your answer or stopped on an error, or an idle one whose pull request failed CI, has merge conflicts or has changes requested. |
+| **Working** | The agent is working, whatever its pull request says. |
+| **In review** | An idle agent with an open pull request that is a draft, has CI running or waits for a review. |
+| **Ready to merge** | Approved, CI green (or no CI) and no known merge conflict. |
+| **Idle** | An idle agent with no open pull request, including one whose pull request was merged or closed. |
+
+Each card shows the folder, ticket, branch, the pull request badge, the machine and the agent. A card
+in **Ready to merge** has a **Merge** button, as does the session's row on **Machines**: it asks
+first, then merges on GitHub or GitLab the way **Merge with** in Settings, GitHub and GitLab says (a
+merge commit unless you pick squash or rebase). It reads the pull request again and merges only if it
+is still open, approved, green and free of conflicts, at the commit the page showed, so a push since
+is never merged unseen. The branch is kept. Dispatch can merge too, with its `merge_pull` step, which
+asks unless a rule allows it. Click a card (or tap it on a phone) to open its terminal; `j`, `k` and `Enter` work as on the list. Search, the
+All, Working and Idle switch and a machine picked in the sidebar filter the board too. The choice
+is kept in the address (`?view=board`) and in this browser, so the dashboard opens the way you left
+it. Sessions outside tmux and ended ones stay on **Machines**.
 
 Sessions started outside tmux, and sessions that ended, fold into the footer of their machine's
 section, since Yardbell can see them but cannot attach to them. Open the list and press **Move to
@@ -131,17 +170,22 @@ one, named like the first with `-2` after it.
 
 The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
 machine, then folder (a workspace), then the sessions in it, each with its state. A session with a pull request shows its number, colored by its state, and
-the full state on hover. Click a workspace
-to switch to it and a session to open it in the focused pane. Hover a session for its **⋯** menu,
-which opens it to the right of or below the focused pane, or in a new tab. Each workspace has tabs: **+** opens the New
+the full state on hover, followed by its newest review as on the dashboard. A pane's **⋯** menu has
+**Review pull request #12** for a session with an open one, which opens the review in the Dispatch
+panel. Click a workspace
+to switch to it and a session to open it in the focused pane. Each workspace has tabs: **+** opens the New
 session dialog in that folder and the new session in a tab of its own, and closing a tab with
 sessions in it asks whether to stop them or keep them running. Double-click a tab to rename it, or
-right-click it for Rename tab and Close tab. When the tabs do not fit, scroll the row with the mouse
+right-click it to rename or close it, or to move its panes into another tab. When the tabs do not fit, scroll the row with the mouse
 wheel, a trackpad or a swipe, or click the arrow button at its end for a list of every tab. The tab
 you switch to always scrolls into view, and a tab's tooltip shows its full name.
-An empty pane offers to start an
-agent there or to open one of the workspace's sessions. Panes split right or down and resize by
-dragging the border between them; **Keyboard shortcuts** in the sidebar lists the keys. On a phone
+A tab lays its panes out as an even grid: two side by side, three as a pair over a full-width
+pane, four as two by two. Moving panes in or closing one lays the grid out again. To rearrange,
+drag a pane by its title bar onto another pane and they swap places, or pick **Swap with** from
+the pane's **⋯** menu. An empty pane offers to start an
+agent there or to open one of the workspace's sessions. Panes also split right or down and resize by
+dragging the border between them; the split's shape lasts until a pane is added or removed, when
+the grid takes over again. **Keyboard shortcuts** in the sidebar lists the keys. On a phone
 the sidebar comes first and a session opens full screen.
 
 **Dispatch** sits in the Workspace too, as a panel between the sidebar and the terminals. Sessions
@@ -407,6 +451,18 @@ a conversation on Codex refuses them. Files stay with their conversation, open f
 they came with, and go when the conversation is deleted. They are not passed on to the sessions
 Dispatch starts.
 
+You can also talk instead of typing. Once **Settings, Voice** turns voice input on, a microphone
+button sits in the message box: tap to record and tap again to stop, or hold it and speak while it
+is held. What you said is typed into the box for you to check and send. The recording is
+transcribed on the machine Yardbell runs on with [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
+or by the speech-to-text API the same section names, see
+[`voice`](configuration.md#voice-optional). In the Yardbell apps the microphone just works; a
+browser only opens it on a secure page, so there dictate over `https://` or on the machine
+itself. And Dispatch can talk back: the speaker button at
+the top reads replies, errors and session changes ("hp-eng-1234 is waiting for you") aloud with
+this device's own voice. It is off by default, speaks one thing at a time, and pressing it again
+mutes it at once. The same switch is under Settings, Voice, and is saved per device.
+
 Dispatch also reads Yardbell itself, so you can ask about it in the same words: "which triggers
 run on weekdays?", "what did the review pipeline find on !87?", "why did that run stop?", "how
 much Claude usage is left?" or "which pull requests have failing CI?". It reads Settings, its
@@ -555,21 +611,50 @@ from the next message, in open conversations too. Beside the Dispatch heading, a
 runs on, or that a new one starts on, and leads to the setting.
 
 Dispatch also watches the pull requests and GitLab merge requests of your sessions. When a
-session's CI goes from passing or running to failing, or a reviewer leaves a comment, a review or
-asks for changes, a card appears in the conversation that follows that session, or in a new
+session's CI goes from passing or running to failing, it gets merge conflicts with its base branch,
+or a reviewer leaves a comment, a review or asks for changes, a card appears in the conversation that follows that session, or in a new
 conversation named after the pull request or merge request, which then follows the session. A CI
 card lists the failed checks (on GitLab, the failed jobs), each folded to its name and the line of
 its log that says what broke, with a link; open one for the last lines of the failed log when GitHub
 Actions or GitLab has them. A review card shows each comment, with its file and
-line for a comment on the code. **Send to session** types a short instruction into the session,
+line for a comment on the code. A conflict card names the base branch, and its instruction asks the
+agent to rebase onto it, resolve the conflicts and push. **Send to session** types a short instruction into the session,
 like "CI failed on test for pull request #12: error: test failed. Fix it and push.", which **What it
 sends** on the card shows before you send it. It is a step like Dispatch's own, so your rules for typing into sessions
 apply: it is sent at once, waits below for you to approve or edit it, or is refused. Each failure
-(one commit) and each comment gets one card, also after a restart, and a pull request seen for the
+(one commit), each conflict (one commit, and again if it comes back after being cleared) and each
+comment gets one card, also after a restart, and a pull request seen for the
 first time only sets what is known, so old comments never turn into cards.
 
 A pipeline run with a [Wait for CI and reviews](automation.md#wait-for-ci-and-reviews) step takes these
 for its own pull or merge request while it runs, so it gets no cards then.
+
+#### Reviewing your sessions' pull requests
+
+A review of a session that has an open pull or merge request is a review of that request. The
+reviewer is told its number, link and base branch, and compares the branch with `origin/<base>`
+from the commit they share, so a merge request into `develop` is not read against `main`. It is
+also told the request's latest pushed commit, and the review card links the request and says when
+the folder held a different commit, such as work not pushed yet, so the review is not of exactly
+what is pushed. Dispatch's own **Review branch**, **Review #12** on the dashboard and the Workspace
+menu all start the same reviewer.
+
+**Settings, GitHub and GitLab, Review my sessions' pull requests** reviews them as they change:
+
+- **Off** (the default): only when you ask.
+- **Ask me first:** when a session's pull request opens, or gets a new head commit, a review waits
+  for your approval in the conversation that follows the session, marked **Proposed by Yardbell**.
+- **Automatically:** the review starts at once.
+
+Either way it waits until every agent on that branch in that folder is idle and the folder has the
+pushed commit checked out, so the reviewer reads what was pushed rather than half-done work, and it
+happens once per head commit, also after a restart. Pull requests that were already open when you
+turned it on, and commits pushed while it was off, are not reviewed until the next push. A Dispatch
+rule for `review_session` still applies: one that refuses reviews on a machine or folder stops them
+there, and with **Automatically**, one that asks makes it wait for you. A pull request that a
+pipeline run is waiting on is left to the run. Each review uses your agent's tokens. Like any step
+waiting in a conversation, a waiting review is withdrawn when you send that conversation a new
+message, and that head is not proposed again.
 
 #### Triggers
 
@@ -612,8 +697,9 @@ Dispatch follows the sessions it starts. When one finishes, stops to wait for an
 the conversation gets a card with the last four lines of its screen (**Show all** opens the rest). A waiting agent's choices, such as
 Yes and No on a permission prompt, become buttons that answer it, and the card keeps the answer you
 picked. A finished or ended one has **Review branch**, which prepares a reviewer: a new session in
-the same folder that reviews the branch against the one it was made from, runs the tests and
-changes no files. Start it as it is, or edit its agent or instructions first. When the reviewer
+the same folder that reviews the branch against the one it was made from (or its pull request's
+base, see [Reviewing your sessions' pull requests](#reviewing-your-sessions-pull-requests)), runs the
+tests and changes no files. Start it as it is, or edit its agent or instructions first. When the reviewer
 finishes, its findings come back as a review card with a verdict (ready, or changes needed), a
 summary, and its findings under **High**, **Medium** and **Low**, each with its file and line.
 High and medium findings start ticked; low ones start folded and unticked. Tick the ones that matter

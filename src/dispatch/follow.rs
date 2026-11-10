@@ -195,6 +195,9 @@ mod tests {
                     path: String::new(),
                     worktree: false,
                     setup: None,
+                    stopped: None,
+                    review: None,
+                    resets: None,
                 })
                 .collect(),
             ended: vec![],

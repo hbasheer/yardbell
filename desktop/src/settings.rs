@@ -14,6 +14,7 @@ pub struct Switches {
     pub session_ended: bool,
     pub machine: bool,
     pub memory: bool,
+    pub pull_requests: bool,
     pub autostart: bool,
 }
 
@@ -24,6 +25,7 @@ impl Default for Switches {
             session_ended: true,
             machine: true,
             memory: true,
+            pull_requests: true,
             autostart: false,
         }
     }
@@ -82,6 +84,7 @@ mod tests {
                 session_ended: true,
                 machine: true,
                 memory: true,
+                pull_requests: true,
                 autostart: false,
             }
         );
@@ -98,6 +101,7 @@ mod tests {
             session_ended: true,
             machine: false,
             memory: true,
+            pull_requests: false,
             autostart: true,
         };
         save_switches(&dir, &custom).unwrap();

@@ -51,6 +51,12 @@ pub struct Session {
     pub ticket: String,
     pub tmux: Option<String>,
     pub activity: Activity,
+    // The error line an idle agent's last turn ended on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<String>,
+    // When the usage limit that error line names resets, in the machine's time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub resets: Option<String>,
 }
 
 impl Session {
@@ -186,6 +192,8 @@ struct Raw {
     #[serde(default)]
     root: Option<String>,
     #[serde(default)]
+    tz: Option<String>,
+    #[serde(default)]
     health: Option<Health>,
     #[serde(default)]
     accounts: Vec<Account>,
@@ -238,6 +246,22 @@ pub fn folder_label(path: &Path, root: &Path, workspace_dirs: &[PathBuf]) -> Str
     }
 }
 
+// date +%z, like +0300 or -0430.
+fn offset(tz: &str) -> Option<chrono::FixedOffset> {
+    let tz = tz.trim();
+    let (sign, digits) = match tz.split_at_checked(1)? {
+        ("+", d) => (1, d),
+        ("-", d) => (-1, d),
+        _ => return None,
+    };
+    if digits.len() != 4 || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let hours: i32 = digits[..2].parse().ok()?;
+    let minutes: i32 = digits[2..].parse().ok()?;
+    chrono::FixedOffset::east_opt(sign * (hours * 3600 + minutes * 60))
+}
+
 pub fn parse(
     json: &str,
     machine: &Machine,
@@ -248,6 +272,11 @@ pub fn parse(
     let root = raw.root.as_deref().map(Path::new).unwrap_or(root);
     let dirs: Vec<PathBuf> = raw.folders.iter().map(|f| PathBuf::from(&f.path)).collect();
     let label = |path: &str| folder_label(Path::new(path), root, &dirs);
+    let now = raw
+        .tz
+        .as_deref()
+        .and_then(offset)
+        .map(|zone| chrono::Utc::now().with_timezone(&zone));
 
     let mut snap = Snapshot {
         health: raw.health,
@@ -280,6 +309,15 @@ pub fn parse(
     }
     for c in raw.agents {
         let activity = activity(&c);
+        let stopped = match (activity, c.screen.as_deref()) {
+            (Activity::Idle, Some(screen)) => crate::detect::stopped(&c.agent, screen),
+            _ => None,
+        };
+        let resets = stopped
+            .as_deref()
+            .zip(now)
+            .and_then(|(line, now)| crate::detect::resets(line, now))
+            .map(|at| at.to_rfc3339());
         let folder = label(&c.cwd);
         let branch = snap.folders.get(&folder).cloned().unwrap_or_default();
         let runs = c
@@ -298,6 +336,8 @@ pub fn parse(
             branch,
             tmux: c.tmux,
             activity,
+            stopped,
+            resets,
         };
         if !runs.is_empty() {
             snap.runs.insert(session.id(), runs);
@@ -620,6 +660,78 @@ mod tests {
         assert_eq!(activity("claude", 40.0, "❯ \n"), Activity::Idle);
         assert_eq!(activity("aider", 40.0, prompt), Activity::Active);
         assert_eq!(activity("aider", 0.0, prompt), Activity::Idle);
+    }
+
+    #[test]
+    fn an_idle_agent_says_the_error_its_turn_ended_on() {
+        let session = |screen: &str| {
+            let json = serde_json::json!({
+                "agents": [{"agent": "claude", "pid": 1, "cwd": "/w", "cpu": 0.0, "tmux": "t", "title": "", "screen": screen}],
+                "tmux": [], "folders": [], "ports": []
+            });
+            parse(
+                &json.to_string(),
+                &machine("hp", "/w"),
+                Path::new("/w"),
+                None,
+            )
+            .unwrap()
+            .sessions
+            .remove(0)
+        };
+        let idle = session("  ⎿  API Error: 500 Internal server error\n\n❯ \n");
+        assert_eq!(idle.activity, Activity::Idle);
+        assert_eq!(
+            idle.stopped.as_deref(),
+            Some("API Error: 500 Internal server error")
+        );
+        let working = session("  ⎿  API Error: 500\n✻ Thinking… (3s · esc to interrupt)\n❯ \n");
+        assert_eq!(working.activity, Activity::Active);
+        assert_eq!(working.stopped, None, "an agent at work has not stopped");
+        assert_eq!(session("● Done.\n❯ \n").stopped, None);
+    }
+
+    #[test]
+    fn a_usage_limit_stop_says_when_it_resets_in_the_machines_zone() {
+        let json = serde_json::json!({
+            "tz": "+0300",
+            "agents": [{"agent": "claude", "pid": 1, "cwd": "/w", "cpu": 0.0, "tmux": "t", "title": "",
+                "screen": "  ⎿  You've hit your limit · resets 3pm\n\n❯ \n"}],
+            "tmux": [], "folders": [], "ports": []
+        });
+        let s = parse(
+            &json.to_string(),
+            &machine("hp", "/w"),
+            Path::new("/w"),
+            None,
+        )
+        .unwrap()
+        .sessions
+        .remove(0);
+        let at = chrono::DateTime::parse_from_rfc3339(s.resets.as_deref().unwrap()).unwrap();
+        assert_eq!(at.offset().local_minus_utc(), 3 * 3600);
+        assert_eq!(at.format("%H:%M").to_string(), "15:00");
+        let mut without = json.clone();
+        without["tz"] = serde_json::Value::Null;
+        let s = parse(
+            &without.to_string(),
+            &machine("hp", "/w"),
+            Path::new("/w"),
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            s.sessions[0].resets, None,
+            "without the machine's zone the time means nothing"
+        );
+    }
+
+    #[test]
+    fn the_zone_is_read_from_date() {
+        assert_eq!(offset("+0300").unwrap().local_minus_utc(), 10800);
+        assert_eq!(offset("-0430\n").unwrap().local_minus_utc(), -16200);
+        assert_eq!(offset("0300"), None);
+        assert_eq!(offset("+3"), None);
     }
 
     #[test]

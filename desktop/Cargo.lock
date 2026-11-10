@@ -3919,6 +3919,7 @@ dependencies = [
  "cookie",
  "cookie_store",
  "futures-core",
+ "futures-util",
  "http",
  "http-body",
  "http-body-util",
@@ -3927,6 +3928,7 @@ dependencies = [
  "hyper-util",
  "js-sys",
  "log",
+ "mime_guess",
  "percent-encoding",
  "pin-project-lite",
  "quinn",
@@ -6589,7 +6591,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell"
-version = "0.10.404"
+version = "0.10.413"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6622,7 +6624,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell-desktop"
-version = "0.10.404"
+version = "0.10.413"
 dependencies = [
  "axum",
  "gtk",

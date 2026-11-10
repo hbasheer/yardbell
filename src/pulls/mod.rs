@@ -12,7 +12,7 @@ pub use gitlab::{accesses, accesses_for, Answer, GitLab, GitLabAccess, Mr};
 pub(crate) use gitlab::{glab_error, run_glab};
 pub use remote::{folder_remotes_command, parse_folder_remotes, service_of, Remotes, Repo};
 
-use crate::config::{Config, Machine};
+use crate::config::{Config, Machine, MergeMethod, ReviewSessions};
 use crate::dispatch::Dispatch;
 use crate::insights::{Event, Insights};
 use crate::secrets::Secrets;
@@ -48,6 +48,16 @@ pub enum Ci {
     Pending,
     Passing,
     Failing,
+}
+
+// GitHub works out whether a pull request can merge after each push, and says UNKNOWN until then.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Mergeable {
+    #[default]
+    Unknown,
+    Clean,
+    Conflicting,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -105,6 +115,8 @@ pub struct Pull {
     pub asking: Vec<String>,
     pub resolved: Vec<String>,
     pub unsettled: Vec<UnsettledCheck>,
+    pub base: String,
+    pub mergeable: Mergeable,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -121,6 +133,10 @@ pub struct PullView {
     pub failed: Vec<String>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub head: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub base: String,
+    #[serde(default)]
+    pub mergeable: Mergeable,
 }
 
 impl From<&Pull> for PullView {
@@ -136,6 +152,8 @@ impl From<&Pull> for PullView {
             ci: p.ci,
             failed: p.failed.iter().map(|c| c.name.clone()).collect(),
             head: p.head.clone(),
+            base: p.base.clone(),
+            mergeable: p.mergeable,
         }
     }
 }
@@ -168,6 +186,16 @@ pub trait Forge: Send + Sync {
         path: &'a str,
         review: &'a Note,
     ) -> BoxFuture<'a, Vec<Note>>;
+    fn merge<'a>(
+        &'a self,
+        _m: &'a Machine,
+        _path: &'a str,
+        _branch: &'a str,
+        _pull: &'a Pull,
+        _method: MergeMethod,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async { Err("Yardbell cannot merge on this forge".into()) })
+    }
     fn resolved_comments<'a>(
         &'a self,
         _m: &'a Machine,
@@ -202,7 +230,7 @@ pub struct Target {
 }
 
 impl Target {
-    fn key(&self) -> Key {
+    pub fn key(&self) -> Key {
         (self.machine.clone(), self.path.clone(), self.branch.clone())
     }
 }
@@ -268,12 +296,22 @@ pub struct Seen {
     // against what it never knew is no change.
     #[serde(default)]
     pub known: bool,
+    // The commit whose conflict was told. A clean read clears it, so a conflict that comes back
+    // is told again, while GitHub saying UNKNOWN as it works it out again leaves it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub conflict: String,
+    // The head commit a review was asked for, or empty when this head is still to be reviewed.
+    // None until reviews of sessions' pull requests are on, so turning them on reviews only what
+    // is pushed after.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reviewed: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum Change {
     Failed(Vec<Check>),
     Reviewed(Vec<Note>),
+    Conflicted,
 }
 
 fn failure_of(pull: &Pull) -> String {
@@ -312,6 +350,8 @@ pub fn observe(seen: Option<&Seen>, pull: &Pull, day: &str) -> (Seen, Vec<Change
             draft: pull.draft,
             review: pull.review.clone(),
             known: true,
+            conflict: conflict_of(pull).unwrap_or_default(),
+            reviewed: None,
         };
         return (next, Vec::new());
     };
@@ -344,7 +384,56 @@ pub fn observe(seen: Option<&Seen>, pull: &Pull, day: &str) -> (Seen, Vec<Change
             changes.push(Change::Reviewed(new));
         }
     }
+    match pull.mergeable {
+        Mergeable::Clean => next.conflict.clear(),
+        Mergeable::Conflicting if seen.conflict != pull.head => {
+            next.conflict.clone_from(&pull.head);
+            if open {
+                changes.push(Change::Conflicted);
+            }
+        }
+        _ => {}
+    }
     (next, changes)
+}
+
+// A merge goes ahead only on what the board calls ready, and only on the commit the person looked
+// at: anything pushed since then has not been seen by anyone.
+pub fn merge_refusal(pull: &Pull, head: &str) -> Option<String> {
+    let it = format!("The {}", noun(pull));
+    if pull.state != "open" {
+        return Some(format!("{it} is {}", pull.state));
+    }
+    if pull.draft {
+        return Some(format!("{it} is a draft"));
+    }
+    if !head.is_empty() && pull.head != head {
+        return Some(format!(
+            "{it} has new commits since you looked, so look again before merging"
+        ));
+    }
+    match pull.ci {
+        Ci::Failing => return Some(format!("{it} is failing CI")),
+        Ci::Pending => return Some(format!("CI is still running on the {}", noun(pull))),
+        Ci::Passing | Ci::None => {}
+    }
+    if pull.review != "approved" {
+        return Some(format!("{it} is not approved"));
+    }
+    if pull.mergeable == Mergeable::Conflicting {
+        return Some(format!(
+            "{it} has merge conflicts with {}",
+            match pull.base.as_str() {
+                "" => "its base branch",
+                base => base,
+            }
+        ));
+    }
+    None
+}
+
+fn conflict_of(pull: &Pull) -> Option<String> {
+    (pull.mergeable == Mergeable::Conflicting).then(|| pull.head.clone())
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -432,8 +521,15 @@ fn kind(p: &Pull) -> &'static str {
 }
 
 pub fn noun(p: &Pull) -> String {
-    let mark = if p.forge == "gitlab" { '!' } else { '#' };
-    format!("{} {mark}{}", kind(p), p.number)
+    noun_of(&p.forge, p.number)
+}
+
+// "merge request !12" or "pull request #12".
+pub fn noun_of(forge: &str, number: u64) -> String {
+    match forge {
+        "gitlab" => format!("merge request !{number}"),
+        _ => format!("pull request #{number}"),
+    }
 }
 
 fn titled(p: &Pull) -> String {
@@ -464,6 +560,14 @@ fn now_entry(text: String, url: &str) -> Event {
 
 // What the session's Insights timeline says about a check: the pull request found, then what
 // changed since the last check that a person reviewing it would care about.
+pub(crate) fn base_of(pull: &Pull) -> &str {
+    if pull.base.is_empty() {
+        "its base branch"
+    } else {
+        &pull.base
+    }
+}
+
 pub fn timeline_events(before: Option<&Seen>, pull: &Pull, changes: &[Change]) -> Vec<Event> {
     let Some(before) = before else {
         return vec![Event {
@@ -487,6 +591,12 @@ pub fn timeline_events(before: Option<&Seen>, pull: &Pull, changes: &[Change]) -
             both(&pull.approvers)
         };
         out.push(now_entry(format!("{who} approved"), &pull.url));
+    }
+    if changes.contains(&Change::Conflicted) {
+        out.push(now_entry(
+            format!("Merge conflicts with {}", base_of(pull)),
+            &pull.url,
+        ));
     }
     for change in changes {
         let Change::Reviewed(notes) = change else {
@@ -547,6 +657,14 @@ pub fn ci_instruction(pull: &Pull, checks: &[Check]) -> String {
     )
 }
 
+pub fn conflict_instruction(pull: &Pull) -> String {
+    let base = base_of(pull);
+    format!(
+        "{} has merge conflicts with {base}. Rebase it onto {base}, resolve the conflicts and push.",
+        titled(pull)
+    )
+}
+
 pub(crate) fn said_by(n: &Note) -> String {
     let who = if n.author.is_empty() {
         "A reviewer"
@@ -597,6 +715,7 @@ fn card_key(n: &Notice) -> String {
             n.pull.url,
             notes.first().map(|n| n.id.as_str()).unwrap_or_default()
         ),
+        Change::Conflicted => format!("conflict:{}:{}", n.pull.url, n.pull.head),
     }
 }
 
@@ -604,6 +723,7 @@ pub fn card(n: &Notice, checks: &[Check], notes: &[Note]) -> Value {
     let (kind, instruction) = match &n.change {
         Change::Failed(_) => ("ci", ci_instruction(&n.pull, checks)),
         Change::Reviewed(_) => ("review", review_instruction(&n.pull, notes)),
+        Change::Conflicted => ("conflict", conflict_instruction(&n.pull)),
     };
     let more = notes.len().saturating_sub(NOTES_PER_CARD);
     let notes: Vec<Note> = notes
@@ -795,6 +915,53 @@ impl Pulls {
         self.lock().health.clone()
     }
 
+    pub fn pull(&self, key: &Key) -> Option<Pull> {
+        self.lock().entries.get(key)?.pull.clone()
+    }
+
+    // Whether this head of the pull request still needs the review a new commit asks for. A pull
+    // request known from before reviews were on counts its head as reviewed.
+    pub fn review_due(&self, url: &str, head: &str) -> bool {
+        {
+            let mut inner = self.lock();
+            let Some(seen) = inner.seen.get_mut(url) else {
+                return false;
+            };
+            if let Some(done) = &seen.reviewed {
+                return done != head;
+            }
+            seen.reviewed = Some(head.to_string());
+        }
+        self.save();
+        false
+    }
+
+    pub fn reviewed(&self, url: &str, head: &str) {
+        {
+            let mut inner = self.lock();
+            let Some(seen) = inner.seen.get_mut(url) else {
+                return;
+            };
+            seen.reviewed = Some(head.to_string());
+        }
+        self.save();
+    }
+
+    // With reviews off, nothing is due; turned on again, what was pushed meanwhile is not either.
+    pub fn forget_reviews(&self) {
+        let forgot = {
+            let mut inner = self.lock();
+            let mut forgot = false;
+            for seen in inner.seen.values_mut() {
+                forgot |= seen.reviewed.take().is_some();
+            }
+            forgot
+        };
+        if forgot {
+            self.save();
+        }
+    }
+
     // Why each branch without a badge has none, when something is wrong rather than there simply
     // being no pull request.
     pub fn whys(&self, targets: &[Target]) -> HashMap<Key, String> {
@@ -942,6 +1109,7 @@ impl Pulls {
             }))
             .await;
         let day = today();
+        let reviews_on = cfg.pull_requests.review_sessions != ReviewSessions::Off;
         let mut notices = Vec::new();
         let mut entries: Vec<(String, String, Event)> = Vec::new();
         let mut changed = false;
@@ -1027,7 +1195,10 @@ impl Pulls {
                 let first_and_partial = |p: &Pull| partial && !inner.seen.contains_key(&p.url);
                 if let Some(p) = pull.as_ref().filter(|p| !first_and_partial(p)) {
                     let before = inner.seen.get(&p.url).cloned();
-                    let (seen, changes) = observe(before.as_ref(), p, &day);
+                    let (mut seen, changes) = observe(before.as_ref(), p, &day);
+                    if before.is_none() && reviews_on {
+                        seen.reviewed = Some(String::new());
+                    }
                     for event in timeline_events(before.as_ref(), p, &changes) {
                         for session in &t.sessions {
                             entries.push((t.machine.clone(), session.clone(), event.clone()));
@@ -1093,7 +1264,73 @@ impl Pulls {
                 let all = with_comments_on_lines(self.github.as_ref(), m, &n.path, notes, gitlab);
                 card(n, &[], &all.await)
             }
+            Change::Conflicted => card(n, &[], &[]),
         }
+    }
+
+    pub async fn merge(
+        &self,
+        cfg: &Config,
+        secrets: &Result<Secrets, String>,
+        m: &Machine,
+        path: &str,
+        branch: &str,
+        head: &str,
+    ) -> Result<PullView, String> {
+        self.github.configure(&cfg.pull_requests, secrets);
+        let hosts = match cfg.pull_requests.use_gitlab {
+            true => accesses_for(cfg, secrets),
+            false => Vec::new(),
+        };
+        let target = Target {
+            machine: m.name.clone(),
+            path: path.to_string(),
+            branch: branch.to_string(),
+            sessions: Vec::new(),
+        };
+        let method = cfg.pull_requests.merge_method;
+        let pull = match self.on_gitlab(m, &target, &hosts, Instant::now()).await {
+            Some((access, repo)) => {
+                let pull = match self.gitlab.fetch(&access, &repo.project, branch).await {
+                    Answer::Pull(pull) => *pull,
+                    Answer::Partial(_) => {
+                        return Err(format!(
+                            "{} did not give the whole merge request this time, so it was not merged. Try again",
+                            access.host
+                        ))
+                    }
+                    Answer::NoPull => return Err(format!("{branch} has no open merge request")),
+                    Answer::Refused(why) | Answer::Failed(why) => return Err(why),
+                };
+                if let Some(why) = merge_refusal(&pull, head) {
+                    return Err(why);
+                }
+                self.gitlab
+                    .merge(&access, &repo.project, &pull, method == MergeMethod::Squash)
+                    .await?;
+                pull
+            }
+            None if !cfg.pull_requests.use_github => {
+                return Err("GitHub is off in Settings, under GitHub and GitLab".into())
+            }
+            None => {
+                let pull = match self.github.fetch(m, path, branch).await {
+                    Fetched::Found(pull) => *pull,
+                    Fetched::NoPull => return Err(format!("{branch} has no pull request")),
+                    Fetched::NoTool => return Err(no_gh(&m.name)),
+                    Fetched::Failed(why) => return Err(gh_failed(&why)),
+                };
+                if let Some(why) = merge_refusal(&pull, head) {
+                    return Err(why);
+                }
+                self.github.merge(m, path, branch, &pull, method).await?;
+                pull
+            }
+        };
+        if let Some(entry) = self.lock().entries.get_mut(&target.key()) {
+            entry.next = Instant::now();
+        }
+        Ok(PullView::from(&pull))
     }
 
     pub async fn round(

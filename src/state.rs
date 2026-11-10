@@ -106,6 +106,12 @@ pub struct SessionView {
     pub worktree: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub setup: Option<SetupRun>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stopped: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub review: Option<serde_json::Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resets: Option<String>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -498,6 +504,8 @@ impl State {
                     ticket: s.ticket.clone(),
                     branch: s.branch.clone(),
                     activity: s.activity,
+                    stopped: s.stopped.clone(),
+                    resets: s.resets.clone(),
                     attachable: s.attachable(),
                     tmux: s.tmux.clone(),
                     stale: !up,
@@ -517,6 +525,7 @@ impl State {
                     worktree: snap.linked.contains(&s.folder),
                     setup: inner.setups.get(&(m.name.clone(), path.clone())).cloned(),
                     path,
+                    review: None,
                 });
             }
         }
@@ -602,6 +611,8 @@ mod tests {
             ticket: "ENG-1301".into(),
             tmux: Some(tmux.into()),
             activity: Activity::Idle,
+            stopped: None,
+            resets: None,
         }
     }
 
@@ -675,6 +686,29 @@ mod tests {
             .unwrap()
             .clone();
         assert!(pro["health"].is_null());
+    }
+
+    #[test]
+    fn view_says_what_error_a_session_stopped_on() {
+        let state = State::default();
+        let stopped = Session {
+            stopped: Some("API Error: 529".into()),
+            resets: None,
+            ..session("hp", "hp-a", "slot2")
+        };
+        state.update(up("hp", vec![stopped, session("hp", "hp-b", "app")]));
+        let view = serde_json::to_value(state.view(&cfg(), &FakePorts, "localhost")).unwrap();
+        let get = |tmux: &str| {
+            view["sessions"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|s| s["tmux"] == tmux)
+                .unwrap()
+                .clone()
+        };
+        assert_eq!(get("hp-a")["stopped"], "API Error: 529");
+        assert!(get("hp-b").get("stopped").is_none());
     }
 
     #[test]

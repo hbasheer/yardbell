@@ -72,6 +72,7 @@
       <a href="#health">Health checks</a>
       <p class="nav-label">Agents</p>
       <a href="#dispatch">Dispatch</a>
+      <a href="#voice">Voice</a>
       <a href="#triggers">Triggers</a>
       <a href="#diagrams">Diagrams</a>
       <a href="#worktree-setup">Worktree setup</a>
@@ -167,12 +168,21 @@
           <label class="choice phone-wait">after <input type="number" name="wait_minutes" min="0" max="60" step="1" inputmode="numeric" required> minutes</label>
         </div>
         <label class="choice"><input type="checkbox" name="session_ended">Session ended</label>
+        <label class="choice"><input type="checkbox" name="limit_reset">Usage limit reset</label>
         <label class="choice"><input type="checkbox" name="machines">Machine down or back</label>
         <label class="choice"><input type="checkbox" name="memory">Memory at 95%</label>
         <label class="choice"><input type="checkbox" name="pipeline_waiting">Pipeline needs you</label>
         <label class="choice"><input type="checkbox" name="pipeline_finished">Pipeline finished</label>
         <label class="choice"><input type="checkbox" name="proposals">Proposals from MCP clients</label>
       </div>
+      <fieldset class="phone-switches phone-pulls">
+        <legend>Pull and merge requests of your sessions</legend>
+        <label class="choice"><input type="checkbox" name="pull_ci_failed">CI failed</label>
+        <label class="choice"><input type="checkbox" name="pull_conflicts">Merge conflicts</label>
+        <label class="choice"><input type="checkbox" name="pull_ready">Ready to merge</label>
+        <label class="choice"><input type="checkbox" name="pull_merged">Merged</label>
+        <label class="choice"><input type="checkbox" name="pull_closed">Closed without merging</label>
+      </fieldset>
       <div class="form-foot">
         <p class="help" id="phone-status" role="status"></p>
         <button class="btn primary" type="submit">Save</button>
@@ -294,6 +304,45 @@
     </details>
   </section>
 
+  <section id="voice">
+    <div class="section-head"><h2>Voice</h2></div>
+    <form class="panel" id="voice-form">
+      <label>Voice input
+        <select name="input">
+          <option value="off">Off</option>
+          <option value="local">Local Whisper (whisper.cpp on this machine)</option>
+          <option value="api">An OpenAI-compatible speech-to-text API</option>
+        </select>
+      </label>
+      <p class="help dispatch-help">A microphone button in Dispatch's message box records what you say and types it out, so you can dictate a task instead of typing it. With Local Whisper the recording never leaves this machine; with an API it is sent to that service.</p>
+      <div data-input="local" hidden>
+        <div class="grid2">
+          <label>Whisper command <input type="text" name="whisper_command" placeholder="whisper-cli" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <label>Model <input type="text" name="whisper_model" placeholder="small" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        </div>
+        <p class="help dispatch-help">Needs <code>ffmpeg</code> and <a href="https://github.com/ggml-org/whisper.cpp" target="_blank" rel="noopener">whisper.cpp</a> on this machine. The model is a name like <code>base</code> (quick), <code>small</code> or <code>medium</code> (hears more through accents), downloaded automatically on the first dictation, or the path to a ggml file of your own.</p>
+      </div>
+      <div data-input="api" hidden>
+        <div class="grid2">
+          <label>API address <input type="text" name="api_url" placeholder="https://api.openai.com/v1/audio/transcriptions" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+          <label>Model <input type="text" name="api_model" placeholder="whisper-1" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        </div>
+        <label>API key <input type="text" name="api_key" placeholder="${secret:openai}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+        <p class="help dispatch-help">Save the key once under Connections, Secrets, and name it here as <code>${secret:name}</code>. The key itself never goes into <code>yardbell.yml</code>.</p>
+      </div>
+      <label data-input="local api" hidden>Language <input type="text" name="language" placeholder="found from the recording" maxlength="8" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+      <div class="form-foot">
+        <p class="help" id="voice-status" role="status"></p>
+        <button class="btn" type="button" id="voice-check" hidden>Test</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+    <div class="panel">
+      <label class="choice"><input type="checkbox" class="switch" id="speak-enable">Read Dispatch's replies and session changes aloud</label>
+      <p class="help" id="speak-help">Spoken by this device's own voice, so nothing is sent anywhere, and saved on this device. The speaker button on the Dispatch page is the same switch and mutes it at once.</p>
+    </div>
+  </section>
+
   <section id="triggers">
     <div class="section-head"><h2>Triggers</h2><button class="btn small-link" type="button" id="trigger-add">Add trigger</button></div>
     <p class="help">A trigger starts a Dispatch conversation from one of your tasks, on a schedule or when a ticket comes your way. Its steps follow your Dispatch rules like any other conversation. Times are in <strong id="trigger-zone">this server's time zone</strong>, the time zone of the machine Yardbell runs on.</p>
@@ -390,6 +439,8 @@
         <form class="conn-settings" id="pr-form">
           <label class="conn-setting"><span><strong>Show them on sessions</strong><small>A session shows its branch's pull or merge request, with its state and CI.</small></span><input type="checkbox" class="switch" name="enabled"></label>
           <label class="conn-setting"><span><strong>Post a card in Dispatch</strong><small>When CI fails or a reviewer comments.</small></span><input type="checkbox" class="switch" name="cards"></label>
+          <label class="conn-setting"><span><strong>Review my sessions' pull requests</strong><small>When a session's pull or merge request opens or gets new commits, once the session is idle with that commit checked out. A read-only reviewer runs the tests and its findings come back in Dispatch. Each review uses your agent's tokens, and Dispatch rules for reviews still apply.</small></span><select name="review_sessions"><option value="off">Off</option><option value="ask">Ask me first</option><option value="auto">Automatically</option></select></label>
+          <label class="conn-setting"><span><strong>Merge with</strong><small>What <strong>Merge</strong> on a ready session and Dispatch's merge step use. GitLab merges as each project is set up, and can only be told to squash.</small></span><select name="merge_method"><option value="merge">A merge commit</option><option value="squash">Squash</option><option value="rebase">Rebase</option></select></label>
           <label class="conn-setting"><span><strong>Check every</strong><small>How often Yardbell asks about each branch.</small></span><span class="conn-seconds"><input type="number" name="poll_seconds" min="30" step="10" inputmode="numeric" required>seconds</span></label>
           <div class="conn-settings-foot" id="pr-save" hidden>
             <p class="help" id="pr-note" role="status"></p>
@@ -560,7 +611,7 @@
       <div class="conn-step" id="forge-gitlab" hidden>
         <label class="choice"><input type="checkbox" name="use_gitlab" form="pr-form">Show GitLab merge requests on sessions</label>
         <fieldset class="conn-via"><legend>How it connects</legend>
-          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="token" form="pr-form"><span><strong>A token for each host</strong><small>Yardbell asks GitLab's API from here. The token needs the <code>read_api</code> scope. A pipeline that opens merge requests needs <code>api</code>. Paste it on the host below, and it is saved as a secret.</small></span></label>
+          <label class="conn-via-option"><input type="radio" name="gitlab_via" value="token" form="pr-form"><span><strong>A token for each host</strong><small>Yardbell asks GitLab's API from here. The token needs the <code>read_api</code> scope. A pipeline that opens merge requests, or merging from Yardbell, needs <code>api</code>. Paste it on the host below, and it is saved as a secret.</small></span></label>
           <label class="conn-via-option"><input type="radio" name="gitlab_via" value="glab" form="pr-form"><span><strong>Local glab</strong><small>Yardbell asks <code>glab</code> on each session's machine. Each machine needs it installed and signed in with <code>glab auth login</code>.</small></span></label>
         </fieldset>
         <div class="pr-part-head"><strong>Hosts</strong><button class="btn small-link" type="button" id="pr-add-host">Add GitLab host</button></div>

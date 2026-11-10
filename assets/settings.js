@@ -78,9 +78,14 @@ function clock(stamp) {
   return new Date(stamp).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+const PHONE_SWITCHES = [
+  "agent_waiting", "session_ended", "machines", "memory", "pipeline_waiting", "pipeline_finished", "proposals",
+  "pull_ci_failed", "pull_conflicts", "pull_ready", "pull_merged", "pull_closed", "limit_reset",
+];
+
 function renderPhone(p) {
   const f = $("phone-form");
-  for (const name of ["agent_waiting", "session_ended", "machines", "memory", "pipeline_waiting", "pipeline_finished", "proposals"]) f.elements[name].checked = p[name];
+  for (const name of PHONE_SWITCHES) f.elements[name].checked = p[name];
   f.elements.wait_minutes.value = p.wait_minutes;
   const status = $("phone-status");
   status.textContent = p.app_connected
@@ -214,7 +219,7 @@ function renderDispatch() {
   loadDiagramMachines();
 }
 
-const RULE_STEPS = { any: "Any step", call_connector: "Call a connected tool", call_tool: "Call an MCP tool", run_command: "Run a command", save_connector: "Save a connection", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
+const RULE_STEPS = { any: "Any step", call_connector: "Call a connected tool", call_tool: "Call an MCP tool", run_command: "Run a command", save_connector: "Save a connection", start_session: "Start a session", stop_session: "Stop a session", send_to_session: "Type into a session", review_session: "Start a review", scan_folder: "Start a scan", remove_worktree: "Remove a worktree", integrate_branches: "Integrate branches", push_branch: "Push a branch", merge_pull: "Merge a pull request", move_session: "Move a session", change_settings: "Change settings", save_task: "Save a task", run_trigger: "Run a trigger", save_pipeline: "Save a pipeline", set_pipeline_enabled: "Turn a pipeline on or off", run_pipeline: "Run a pipeline", answer_run: "Answer a run", remember: "Change Dispatch's memory" };
 const UNPLACED = new Set(["save_connector", "call_connector", "call_tool", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 const RULE_APPROVALS = { allow: "Allow", prompt: "Ask me", deny: "Deny" };
 let rules = [];
@@ -850,6 +855,7 @@ async function load() {
   renderServers();
   renderSecrets();
   renderDispatch();
+  renderVoice();
   renderPullRequests();
   pullFoldersWanted();
   await loadConnections().catch((err) => toast(err.message));
@@ -967,7 +973,9 @@ function renderPullRequests() {
   const f = $("pr-form");
   f.elements.enabled.checked = value.enabled;
   f.elements.cards.checked = value.cards;
+  f.elements.review_sessions.value = value.review_sessions || "off";
   f.elements.poll_seconds.value = value.poll_seconds;
+  f.elements.merge_method.value = value.merge_method || "merge";
   f.elements.use_github.checked = value.use_github !== false;
   f.elements.use_gitlab.checked = value.use_gitlab !== false;
   f.elements.github_via.value = value.github_via || "gh";
@@ -1657,9 +1665,11 @@ $("pr-form").addEventListener("submit", async (e) => {
   const body = {
     enabled: f.elements.enabled.checked,
     cards: f.elements.cards.checked,
+    review_sessions: f.elements.review_sessions.value,
     use_github: f.elements.use_github.checked,
     use_gitlab: f.elements.use_gitlab.checked,
     poll_seconds: Number(f.elements.poll_seconds.value),
+    merge_method: f.elements.merge_method.value,
     github_via: f.elements.github_via.value,
     github_token: f.elements.github_token.value,
     gitlab_via: f.elements.gitlab_via.value,
@@ -1690,16 +1700,8 @@ $("pr-form").addEventListener("submit", async (e) => {
 $("phone-form").addEventListener("submit", async (e) => {
   e.preventDefault();
   const f = e.target;
-  const body = {
-    wait_minutes: Number(f.elements.wait_minutes.value.trim()),
-    agent_waiting: f.elements.agent_waiting.checked,
-    session_ended: f.elements.session_ended.checked,
-    machines: f.elements.machines.checked,
-    memory: f.elements.memory.checked,
-    pipeline_waiting: f.elements.pipeline_waiting.checked,
-    pipeline_finished: f.elements.pipeline_finished.checked,
-    proposals: f.elements.proposals.checked,
-  };
+  const body = { wait_minutes: Number(f.elements.wait_minutes.value.trim()) };
+  for (const name of PHONE_SWITCHES) body[name] = f.elements[name].checked;
   phoneBusy(true);
   try {
     await api("POST", "/api/settings/phone", body);
@@ -1776,6 +1778,94 @@ $("dispatch-form").addEventListener("submit", async (e) => {
 
 $("dispatch-form").elements.runs_on.addEventListener("change", dispatchRunsOn);
 $("dispatch-form").elements.codex_model.addEventListener("input", codexModelNote);
+
+function voiceInputMode() {
+  const f = $("voice-form");
+  const mode = f.elements.input.value;
+  f.querySelectorAll("[data-input]").forEach((el) => { el.hidden = !el.dataset.input.split(" ").includes(mode); });
+  $("voice-check").hidden = mode === "off";
+}
+
+function voiceValues() {
+  const f = $("voice-form");
+  return {
+    input: f.elements.input.value,
+    whisper_command: f.elements.whisper_command.value.trim(),
+    whisper_model: f.elements.whisper_model.value.trim(),
+    api_url: f.elements.api_url.value.trim(),
+    api_model: f.elements.api_model.value.trim(),
+    api_key: f.elements.api_key.value.trim(),
+    language: f.elements.language.value.trim(),
+  };
+}
+
+function renderVoice() {
+  const f = $("voice-form");
+  const v = data.voice || {};
+  f.elements.input.value = v.input || "off";
+  f.elements.whisper_command.value = v.whisper_command || "";
+  f.elements.whisper_model.value = v.whisper_model || "";
+  f.elements.api_url.value = v.api_url || "";
+  f.elements.api_model.value = v.api_model || "";
+  f.elements.api_key.value = v.api_key || "";
+  f.elements.language.value = v.language || "";
+  voiceInputMode();
+}
+
+$("voice-form").elements.input.addEventListener("change", voiceInputMode);
+
+$("voice-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const button = e.target.querySelector("button[type=submit]");
+  button.disabled = true;
+  try {
+    await api("POST", "/api/settings/voice", voiceValues());
+    saved(voiceValues().input === "off"
+      ? "Voice input is off, so Dispatch hides its microphone button."
+      : "Voice settings saved. The microphone button shows in Dispatch's message box.");
+    await load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
+  }
+});
+
+$("voice-check").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  const status = $("voice-status");
+  button.disabled = true;
+  status.classList.remove("ok");
+  status.textContent = "Checking…";
+  try {
+    const out = await api("POST", "/api/settings/voice/check", voiceValues());
+    status.textContent = out.message;
+    status.classList.toggle("ok", out.ok);
+  } catch (err) {
+    status.textContent = err.message;
+  } finally {
+    button.disabled = false;
+  }
+});
+
+// Speaking is this device's choice, like the theme, so it is kept in the browser, not yardbell.yml.
+const SPEAK_KEY = "yardbell.dispatch.speak";
+const speakBox = $("speak-enable");
+if ("speechSynthesis" in window) {
+  try { speakBox.checked = localStorage.getItem(SPEAK_KEY) === "1"; } catch {}
+  speakBox.addEventListener("change", () => {
+    try {
+      if (speakBox.checked) localStorage.setItem(SPEAK_KEY, "1");
+      else localStorage.removeItem(SPEAK_KEY);
+    } catch {}
+  });
+  window.addEventListener("storage", () => {
+    try { speakBox.checked = localStorage.getItem(SPEAK_KEY) === "1"; } catch {}
+  });
+} else {
+  speakBox.disabled = true;
+  $("speak-help").textContent = "This browser has no speech voices, so there is nothing to read with here.";
+}
 
 $("rule-add").addEventListener("click", () => {
   rules.push({ action: "stop_session", machine: "any", folder: "", approval: "deny" });

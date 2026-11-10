@@ -37,6 +37,7 @@ const NOTIFY_AGENT_IDLE: &str = "notify-agent-idle";
 const NOTIFY_SESSION_ENDED: &str = "notify-session-ended";
 const NOTIFY_MACHINE: &str = "notify-machine";
 const NOTIFY_MEMORY: &str = "notify-memory";
+const NOTIFY_PULLS: &str = "notify-pulls";
 const AUTOSTART: &str = "autostart";
 const ABOUT: &str = "about";
 const DISCONNECT: &str = "disconnect";
@@ -393,6 +394,7 @@ pub fn toggled(id: &str, switches: Switches) -> Option<Switches> {
         NOTIFY_SESSION_ENDED => &mut next.session_ended,
         NOTIFY_MACHINE => &mut next.machine,
         NOTIFY_MEMORY => &mut next.memory,
+        NOTIFY_PULLS => &mut next.pull_requests,
         AUTOSTART => &mut next.autostart,
         _ => return None,
     };
@@ -555,7 +557,7 @@ fn menu(
     Ok(menu)
 }
 
-pub fn notification_switches(switches: &Switches) -> [(&'static str, &'static str, bool); 4] {
+pub fn notification_switches(switches: &Switches) -> [(&'static str, &'static str, bool); 5] {
     [
         (
             NOTIFY_AGENT_IDLE,
@@ -569,6 +571,7 @@ pub fn notification_switches(switches: &Switches) -> [(&'static str, &'static st
         ),
         (NOTIFY_MACHINE, "Machine down or back", switches.machine),
         (NOTIFY_MEMORY, "Memory almost full", switches.memory),
+        (NOTIFY_PULLS, "Pull requests", switches.pull_requests),
     ]
 }
 
@@ -967,6 +970,13 @@ mod tests {
                 ..on
             })
         );
+        assert_eq!(
+            toggled(NOTIFY_PULLS, on),
+            Some(Switches {
+                pull_requests: false,
+                ..on
+            })
+        );
         let off = toggled(NOTIFY_MEMORY, on).unwrap();
         assert_eq!(toggled(NOTIFY_MEMORY, off), Some(on));
         for id in [OPEN, NEW_SESSION, DISCONNECT, QUIT, "devbox"] {
@@ -1074,6 +1084,9 @@ mod tests {
             path: String::new(),
             worktree: false,
             setup: None,
+            stopped: None,
+            review: None,
+            resets: None,
         }
     }
 

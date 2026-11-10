@@ -112,6 +112,12 @@ pub struct PhoneNotifications {
     pub pipeline_waiting: bool,
     pub pipeline_finished: bool,
     pub proposals: bool,
+    pub pull_ci_failed: bool,
+    pub pull_conflicts: bool,
+    pub pull_ready: bool,
+    pub pull_merged: bool,
+    pub pull_closed: bool,
+    pub limit_reset: bool,
 }
 
 impl Default for PhoneNotifications {
@@ -125,6 +131,12 @@ impl Default for PhoneNotifications {
             pipeline_waiting: true,
             pipeline_finished: true,
             proposals: true,
+            pull_ci_failed: true,
+            pull_conflicts: true,
+            pull_ready: true,
+            pull_merged: true,
+            pull_closed: true,
+            limit_reset: true,
         }
     }
 }
@@ -224,6 +236,47 @@ pub struct PullRequests {
     pub github_token: String,
     #[serde(skip_serializing_if = "is_token")]
     pub gitlab_via: GitlabVia,
+    #[serde(skip_serializing_if = "is_review_off")]
+    pub review_sessions: ReviewSessions,
+    #[serde(skip_serializing_if = "is_merge_commit")]
+    pub merge_method: MergeMethod,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MergeMethod {
+    #[default]
+    Merge,
+    Squash,
+    Rebase,
+}
+
+impl MergeMethod {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            MergeMethod::Merge => "merge",
+            MergeMethod::Squash => "squash",
+            MergeMethod::Rebase => "rebase",
+        }
+    }
+}
+
+fn is_merge_commit(method: &MergeMethod) -> bool {
+    *method == MergeMethod::Merge
+}
+
+// Whether a session's pull request is reviewed when it opens or gets new commits.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewSessions {
+    #[default]
+    Off,
+    Ask,
+    Auto,
+}
+
+fn is_review_off(review: &ReviewSessions) -> bool {
+    *review == ReviewSessions::Off
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -330,6 +383,8 @@ impl Default for PullRequests {
             github_via: GithubVia::Gh,
             github_token: String::new(),
             gitlab_via: GitlabVia::Token,
+            review_sessions: ReviewSessions::Off,
+            merge_method: MergeMethod::Merge,
         }
     }
 }
@@ -474,6 +529,45 @@ impl DispatchSettings {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum VoiceInput {
+    #[default]
+    Off,
+    Local,
+    Api,
+}
+
+impl VoiceInput {
+    fn is_off(&self) -> bool {
+        *self == VoiceInput::Off
+    }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct VoiceSettings {
+    #[serde(default, skip_serializing_if = "VoiceInput::is_off")]
+    pub input: VoiceInput,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub whisper_command: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub whisper_model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_url: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_model: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub api_key: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub language: String,
+}
+
+impl VoiceSettings {
+    fn is_default(&self) -> bool {
+        *self == VoiceSettings::default()
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct McpServer {
     pub name: String,
@@ -613,6 +707,8 @@ pub struct Config {
     pub mcp_servers: Vec<McpServer>,
     #[serde(default, skip_serializing_if = "DispatchSettings::is_default")]
     pub dispatch: DispatchSettings,
+    #[serde(default, skip_serializing_if = "VoiceSettings::is_default")]
+    pub voice: VoiceSettings,
     #[serde(default, skip_serializing_if = "PullRequests::is_default")]
     pub pull_requests: PullRequests,
     #[serde(default, skip_serializing_if = "Pipelines::is_default")]
@@ -760,6 +856,7 @@ impl Config {
         self.validate_mcp_servers().map_err(ConfigError::Invalid)?;
         crate::connectors::validate(&self.connectors).map_err(ConfigError::Invalid)?;
         self.validate_dispatch().map_err(ConfigError::Invalid)?;
+        self.validate_voice().map_err(ConfigError::Invalid)?;
         if !(1..=6).contains(&self.pipelines.per_machine) {
             return invalid("pipelines.per_machine must be from 1 to 6".into());
         }
@@ -809,6 +906,41 @@ impl Config {
             ));
         }
         crate::dispatch::validate_rules(&d.rules, |m| self.machine(m).is_some())
+    }
+
+    // The key stays in secrets.yml: a raw key in voice.api_key would land in yardbell.yml and
+    // every one of its backups.
+    fn validate_voice(&self) -> Result<(), String> {
+        let v = &self.voice;
+        match v.input {
+            VoiceInput::Off => Ok(()),
+            VoiceInput::Local => crate::voice::ModelStore::default()
+                .resolve(&v.whisper_model)
+                .map(|_| ()),
+            VoiceInput::Api => {
+                let key = v.api_key.trim();
+                let names =
+                    crate::secrets::references(key).map_err(|e| format!("voice.api_key: {e}"))?;
+                if names.len() != 1 || key != crate::secrets::reference(names[0]) {
+                    return Err(
+                        "voice.api_key must be a ${secret:name} reference. Save the key under Connections, Secrets, and refer to it here by name".into(),
+                    );
+                }
+                // Plain http would show the key to the network, so it is kept to this machine,
+                // where an OpenAI-compatible server such as speaches or LocalAI may run.
+                let local = ["http://127.0.0.1:", "http://localhost:", "http://[::1]:"];
+                if !v.api_url.is_empty()
+                    && !v.api_url.starts_with("https://")
+                    && !local.iter().any(|at| v.api_url.starts_with(at))
+                {
+                    return Err(format!(
+                        "voice.api_url {:?} must start with https:// (or http://127.0.0.1 for a server on this machine), or be empty for OpenAI",
+                        v.api_url
+                    ));
+                }
+                Ok(())
+            }
+        }
     }
 
     fn validate_mcp_servers(&self) -> Result<(), String> {
@@ -1358,6 +1490,9 @@ mod tests {
         assert_eq!(cfg.pull_requests.poll_seconds, 120);
         let off = load_str(&format!("{BASE}pull_requests:\n  cards: false\n")).unwrap();
         assert!(off.pull_requests.enabled && !off.pull_requests.cards);
+        assert_eq!(cfg.pull_requests.review_sessions, ReviewSessions::Off);
+        let auto = load_str(&format!("{BASE}pull_requests:\n  review_sessions: auto\n")).unwrap();
+        assert_eq!(auto.pull_requests.review_sessions, ReviewSessions::Auto);
         match load_str(&format!("{BASE}pull_requests:\n  poll_seconds: 5\n")) {
             Err(ConfigError::Invalid(got)) => {
                 assert_eq!(got, "pull_requests.poll_seconds must be at least 30")
@@ -1469,6 +1604,7 @@ mod tests {
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("cards: false"), "{text}");
         assert!(!text.contains("gitlab"), "{text}");
+        assert!(!text.contains("review_sessions"), "{text}");
     }
 
     #[test]
@@ -1636,6 +1772,52 @@ mod tests {
         }
         let long = format!("dispatch:\n  instructions: {}\n{BASE}", "a".repeat(4001));
         assert!(load_str(&long).is_err());
+    }
+
+    #[test]
+    fn voice_settings_are_checked_and_round_trip() {
+        assert_eq!(load_str(BASE).unwrap().voice, VoiceSettings::default());
+        let local = load_str(&format!(
+            "voice:\n  input: local\n  whisper_model: ~/models/ggml-base.en.bin\n{BASE}"
+        ))
+        .unwrap();
+        assert_eq!(local.voice.input, VoiceInput::Local);
+        let saved = serde_yaml::to_string(&local).unwrap();
+        assert!(saved.contains("whisper_model"), "{saved}");
+        let bare = load_str(&format!("voice:\n  input: local\n{BASE}")).unwrap();
+        assert_eq!(
+            bare.voice.input,
+            VoiceInput::Local,
+            "the model has a default"
+        );
+        assert!(load_str(&format!(
+            "voice:\n  input: local\n  whisper_model: so wrong\n{BASE}"
+        ))
+        .unwrap_err()
+        .to_string()
+        .contains("so wrong"));
+        let api = load_str(&format!(
+            "voice:\n  input: api\n  api_key: ${{secret:openai}}\n{BASE}"
+        ))
+        .unwrap();
+        assert_eq!(api.voice.input, VoiceInput::Api);
+        // A raw key never lands in yardbell.yml, which is backed up on every settings change.
+        for key in ["sk-raw-key", "Bearer ${secret:openai}", ""] {
+            let err = load_str(&format!("voice:\n  input: api\n  api_key: '{key}'\n{BASE}"))
+                .unwrap_err()
+                .to_string();
+            assert!(err.contains("${secret:"), "{key}: {err}");
+        }
+        assert!(load_str(&format!(
+            "voice:\n  input: api\n  api_key: ${{secret:x}}\n  api_url: http://stt.lan/v1\n{BASE}"
+        ))
+        .unwrap_err()
+        .to_string()
+        .contains("https://"));
+        assert!(load_str(&format!(
+            "voice:\n  input: api\n  api_key: ${{secret:x}}\n  api_url: http://127.0.0.1:9000/v1/audio/transcriptions\n{BASE}"
+        ))
+        .is_ok());
     }
 
     #[test]

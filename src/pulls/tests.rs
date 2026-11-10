@@ -186,6 +186,7 @@ fn kinds(changes: &[Change]) -> Vec<&str> {
         .map(|c| match c {
             Change::Failed(_) => "failed",
             Change::Reviewed(_) => "reviewed",
+            Change::Conflicted => "conflicted",
         })
         .collect()
 }
@@ -350,6 +351,8 @@ impl Rig {
             ticket: "ENG-1".into(),
             tmux: tmux.map(str::to_string),
             activity: Activity::Active,
+            stopped: None,
+            resets: None,
         };
         let mut snap = Snapshot {
             sessions: vec![session(Some("hp-app"), 1), session(None, 2)],
@@ -719,6 +722,8 @@ fn gitlab_rig(stub: &Stub) -> Rig {
         ticket: "ENG-2".into(),
         tmux: Some("hp-web".into()),
         activity: Activity::Active,
+        stopped: None,
+        resets: None,
     });
     snap.folders.insert("web".into(), "eng-2".into());
     snap.folder_paths.insert("web".into(), "/r/web".into());
@@ -1794,4 +1799,274 @@ fn other_github_conclusions_keep_what_they_mean_today() {
         assert_eq!(pull.ci, Ci::Failing, "{word}");
         assert!(pull.unsettled.is_empty(), "{word}");
     }
+}
+
+fn merging(mergeable: &str, sha: &str) -> Pull {
+    let mut v: Value = serde_json::from_str(&view_with("passing", sha, &[])).unwrap();
+    v["mergeable"] = json!(mergeable);
+    v["baseRefName"] = json!("main");
+    parse_view(&v.to_string()).unwrap()
+}
+
+#[test]
+fn whether_a_pull_request_can_merge_is_read_from_gh() {
+    assert!(super::github::view_command("x").contains("mergeable"));
+    assert!(super::github::view_command("x").contains("baseRefName"));
+    let p = merging("CONFLICTING", "a");
+    assert_eq!(
+        (p.mergeable, p.base.as_str()),
+        (Mergeable::Conflicting, "main")
+    );
+    assert_eq!(merging("MERGEABLE", "a").mergeable, Mergeable::Clean);
+    assert_eq!(merging("UNKNOWN", "a").mergeable, Mergeable::Unknown);
+    assert_eq!(
+        parse_view(VIEW).unwrap().mergeable,
+        Mergeable::Unknown,
+        "not asked"
+    );
+    let view = PullView::from(&p);
+    assert_eq!(
+        serde_json::to_value(&view).unwrap()["mergeable"],
+        "conflicting"
+    );
+}
+
+#[test]
+fn a_conflict_is_reported_once_per_commit_and_again_after_it_cleared() {
+    let conflicted = |changes: &[Change]| changes.contains(&Change::Conflicted);
+    let (seen, first) = observe(None, &merging("CONFLICTING", "a"), "d");
+    assert!(first.is_empty(), "the first sighting only sets the state");
+    let (seen, clean) = observe(Some(&seen), &merging("MERGEABLE", "a"), "d");
+    assert!(clean.is_empty());
+    let (seen, back) = observe(Some(&seen), &merging("CONFLICTING", "a"), "d");
+    assert!(
+        conflicted(&back),
+        "a conflict back after a clean read is news: {back:?}"
+    );
+    let (seen, again) = observe(Some(&seen), &merging("CONFLICTING", "a"), "d");
+    assert!(again.is_empty());
+    let (seen, unknown) = observe(Some(&seen), &merging("UNKNOWN", "a"), "d");
+    assert!(unknown.is_empty());
+    let (seen, recomputed) = observe(Some(&seen), &merging("CONFLICTING", "a"), "d");
+    assert!(
+        recomputed.is_empty(),
+        "GitHub working it out again is not a new conflict"
+    );
+    let (_, pushed) = observe(Some(&seen), &merging("CONFLICTING", "b"), "d");
+    assert!(
+        conflicted(&pushed),
+        "a new commit still in conflict is news"
+    );
+}
+
+#[test]
+fn a_closed_pull_request_in_conflict_says_nothing() {
+    let (seen, _) = observe(None, &merging("MERGEABLE", "a"), "d");
+    let mut closed = merging("CONFLICTING", "a");
+    closed.state = "closed".into();
+    let (_, changes) = observe(Some(&seen), &closed, "d");
+    assert!(changes.is_empty());
+}
+
+#[test]
+fn a_conflict_instruction_names_the_base_branch() {
+    let p = merging("CONFLICTING", "a");
+    assert_eq!(
+        conflict_instruction(&p),
+        "Pull request #12 has merge conflicts with main. Rebase it onto main, resolve the conflicts and push."
+    );
+    let mut nameless = p.clone();
+    nameless.base.clear();
+    assert!(conflict_instruction(&nameless).contains("onto its base branch"));
+    let n = Notice {
+        machine: "hp".into(),
+        session: "hp-app".into(),
+        path: "/r/app".into(),
+        branch: "fix".into(),
+        pull: p.clone(),
+        change: Change::Conflicted,
+    };
+    let c = card(&n, &[], &[]);
+    assert_eq!(c["kind"], "conflict");
+    assert_eq!(c["key"], "conflict:https://github.com/acme/app/pull/12:a");
+    assert_eq!(c["instruction"], conflict_instruction(&p));
+}
+
+#[test]
+fn the_timeline_says_when_a_conflict_appears() {
+    let (seen, _) = observe(None, &merging("MERGEABLE", "a"), "d");
+    let p = merging("CONFLICTING", "a");
+    let (_, changes) = observe(Some(&seen), &p, "d");
+    let events = timeline_events(Some(&seen), &p, &changes);
+    assert_eq!(texts(&events), ["Merge conflicts with main"]);
+}
+
+fn ready_view(sha: &str) -> String {
+    let mut v: Value = serde_json::from_str(&view_with("passing", sha, &[])).unwrap();
+    v["reviewDecision"] = json!("APPROVED");
+    v["mergeable"] = json!("MERGEABLE");
+    v["baseRefName"] = json!("main");
+    v.to_string()
+}
+
+#[test]
+fn only_an_approved_green_conflict_free_pull_request_at_the_seen_commit_merges() {
+    let ready = parse_view(&ready_view("abc")).unwrap();
+    assert_eq!(merge_refusal(&ready, "abc"), None);
+    assert_eq!(
+        merge_refusal(&ready, ""),
+        None,
+        "no commit given takes the current one"
+    );
+    let with = |change: &dyn Fn(&mut Pull)| {
+        let mut p = ready.clone();
+        change(&mut p);
+        merge_refusal(&p, "abc")
+    };
+    assert_eq!(
+        merge_refusal(&ready, "old").as_deref(),
+        Some("The pull request #12 has new commits since you looked, so look again before merging")
+    );
+    assert_eq!(
+        with(&|p| p.state = "merged".into()).as_deref(),
+        Some("The pull request #12 is merged")
+    );
+    assert_eq!(
+        with(&|p| p.draft = true).as_deref(),
+        Some("The pull request #12 is a draft")
+    );
+    assert_eq!(
+        with(&|p| p.ci = Ci::Failing).as_deref(),
+        Some("The pull request #12 is failing CI")
+    );
+    assert_eq!(
+        with(&|p| p.ci = Ci::Pending).as_deref(),
+        Some("CI is still running on the pull request #12")
+    );
+    assert_eq!(
+        with(&|p| p.review = "review_required".into()).as_deref(),
+        Some("The pull request #12 is not approved")
+    );
+    assert_eq!(
+        with(&|p| p.mergeable = Mergeable::Conflicting).as_deref(),
+        Some("The pull request #12 has merge conflicts with main")
+    );
+    assert_eq!(
+        with(&|p| p.ci = Ci::None),
+        None,
+        "a repository without CI can merge"
+    );
+}
+
+#[tokio::test]
+async fn merge_reads_the_pull_request_again_and_merges_at_that_commit() {
+    let rig = Rig::new("pull_requests:\n  merge_method: squash\n");
+    rig.fake.stub(BRANCH, Output::ok_with(&ready_view("abc")));
+    rig.fake.stub(
+        "gh pr merge",
+        Output::ok_with("✓ Squashed and merged pull request #12"),
+    );
+    let pulls = rig.pulls();
+    let m = rig.cfg.machine("hp").unwrap().clone();
+    let merged = pulls
+        .merge(&rig.cfg, &rig.secrets(), &m, "/r/app", "eng-1", "abc")
+        .await
+        .unwrap();
+    assert_eq!(merged.number, 12);
+    let calls: Vec<String> = rig.fake.calls().iter().map(|c| c.join(" ")).collect();
+    let merge = calls.iter().find(|c| c.contains("gh pr merge")).unwrap();
+    assert!(
+        merge.contains("gh pr merge 12 --squash --match-head-commit 'abc'"),
+        "{merge}"
+    );
+
+    let moved = Rig::new("");
+    moved.fake.stub(BRANCH, Output::ok_with(&ready_view("def")));
+    let refused = moved
+        .pulls()
+        .merge(&moved.cfg, &moved.secrets(), &m, "/r/app", "eng-1", "abc")
+        .await
+        .unwrap_err();
+    assert!(
+        refused.contains("new commits since you looked"),
+        "{refused}"
+    );
+    assert!(
+        !moved
+            .fake
+            .calls()
+            .iter()
+            .any(|c| c.join(" ").contains("gh pr merge")),
+        "nothing merged"
+    );
+}
+
+#[tokio::test]
+async fn a_merge_gh_refuses_says_why() {
+    let rig = Rig::new("");
+    rig.fake.stub(BRANCH, Output::ok_with(&ready_view("abc")));
+    rig.fake.stub(
+        "gh pr merge",
+        Output {
+            status: Some(1),
+            stderr: "X Pull request acme/app#12 is not mergeable: the base branch policy prohibits the merge.\n".into(),
+            ..Output::default()
+        },
+    );
+    let m = rig.cfg.machine("hp").unwrap().clone();
+    let why = rig
+        .pulls()
+        .merge(&rig.cfg, &rig.secrets(), &m, "/r/app", "eng-1", "")
+        .await
+        .unwrap_err();
+    assert_eq!(
+        why,
+        "gh could not merge it: X Pull request acme/app#12 is not mergeable: the base branch policy prohibits the merge."
+    );
+}
+
+#[tokio::test]
+async fn gitlab_merges_with_the_token_at_the_commit_it_was_checked_at() {
+    let s = crate::connectors::tests::stub().await;
+    s.answer(
+        "/api/v4/projects/acme%2Fapp/merge_requests/3/merge",
+        200,
+        "{}",
+    );
+    let access = GitLabAccess {
+        host: "gitlab.example".into(),
+        api: format!("{}/api/v4", s.base),
+        secret: String::new(),
+        token: Ok("glpat-shh".into()),
+        glab: false,
+        machine: None,
+    };
+    let mut mr = parse_view(&ready_view("abc")).unwrap();
+    mr.number = 3;
+    mr.forge = "gitlab".into();
+    GitLab::new()
+        .merge(&access, "acme/app", &mr, true)
+        .await
+        .unwrap();
+    let asked = s.asked.lock().unwrap().clone();
+    let (method, at, _, body) = asked.last().unwrap();
+    assert_eq!(
+        (method.as_str(), at.as_str()),
+        ("PUT", "/api/v4/projects/acme%2Fapp/merge_requests/3/merge")
+    );
+    assert_eq!(body, "sha=abc&squash=true");
+
+    s.answer(
+        "/api/v4/projects/acme%2Fapp/merge_requests/3/merge",
+        409,
+        "{}",
+    );
+    let why = GitLab::new()
+        .merge(&access, "acme/app", &mr, false)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        why,
+        "the branch has new commits since Yardbell checked it, so it was not merged"
+    );
 }

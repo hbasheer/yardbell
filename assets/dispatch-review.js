@@ -240,7 +240,7 @@ function body(e) {
   }
   if (e.review) {
     return html`<div class="step-card-body">
-      <p class="step-card-text">A new session in <code>${ctx.short(i.path)}</code> reviews this branch, runs the tests and changes no files. Its findings come back here.</p>
+      <p class="step-card-text">A new session in <code>${ctx.short(i.path)}</code> reviews ${e.review.pull ? html`${e.review.pull.forge === "gitlab" ? "merge request" : "pull request"} <a href=${e.review.pull.url} target="_blank" rel="noopener">${pullRef(e.review.pull)}</a> against <code>${e.review.pull.base || "its base"}</code>` : "this branch"}, runs the tests and changes no files. Its findings come back here.</p>
       ${e.already && e.status === "pending" ? html`<p class="step-card-text review-commit warn" role="status"><strong>${e.already.text}</strong> Nothing has changed since, so a new review would read the same code.${e.already.conversation && e.already.conversation !== ctx.conversation() ? html` <a href=${`/dispatch?c=${encodeURIComponent(e.already.conversation)}`}>Open that conversation</a>` : nothing}</p>` : nothing}
       ${readOnlyNote(i)}
       <details class="step-card-more"><summary>Instructions for the reviewer</summary><p class="step-card-text step-card-mono">${i.prompt}</p></details>
@@ -572,7 +572,7 @@ function worktreeOutcome(tool, text) {
   }
 }
 
-const RULE_STEPS = { draw_diagram: "draw diagrams", save_connector: "save connections", call_connector: "call connected tools", start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
+const RULE_STEPS = { draw_diagram: "draw diagrams", save_connector: "save connections", call_connector: "call connected tools", start_session: "start sessions", stop_session: "stop sessions", send_to_session: "type into sessions", review_session: "start reviews", scan_folder: "start scans", remove_worktree: "remove worktrees", integrate_branches: "integrate branches", push_branch: "push branches", merge_pull: "merge pull requests", move_session: "move sessions", remember: "change Dispatch's memory", change_settings: "change settings", save_task: "save tasks", run_trigger: "run triggers", save_pipeline: "save pipelines", set_pipeline_enabled: "turn pipelines on or off", run_pipeline: "run pipelines", answer_run: "answer runs" };
 const UNPLACED = new Set(["save_connector", "call_connector", "remember", "change_settings", "save_task", "run_trigger", "save_pipeline", "set_pipeline_enabled", "run_pipeline", "answer_run"]);
 
 export function ruleText(r) {
@@ -598,6 +598,7 @@ function trail(e, state) {
   if (e.by === "pipeline") parts.push(`Ran as part of the pipeline run started at ${clock(e.run_started || e.at)}`);
   else if (e.status === "auto") parts.push(`Ran without asking ${clock(e.at)}`);
   else if (e.by === "client") parts.push(`Proposed by ${e.from} ${clock(e.at)}`);
+  else if (e.by === "yardbell") parts.push(`Proposed by Yardbell when ${e.review?.pull ? pullRef(e.review.pull) : "the pull request"} got new commits ${clock(e.at)}`);
   else parts.push(`${mine ? "You asked for this" : "Proposed by Dispatch"} ${clock(e.at)}`);
   if (e.rule) parts.push(`Your rule: ${ruleText(e.rule)}`);
   if (e.status === "approved") parts.push(`${mine ? mineWords(e).done : "Approved"} ${clock(e.decided)}`);
@@ -994,7 +995,7 @@ function shotUrl(index, file) {
   return `/dispatch/conversations/${encodeURIComponent(ctx.conversation())}/reviews/${index}/evidence/${encodeURIComponent(file)}`;
 }
 
-function viewer() {
+export function viewer() {
   let dialog = document.getElementById("shot-view");
   if (!dialog) {
     dialog = document.createElement("dialog");
@@ -1182,7 +1183,21 @@ function commitLine(e, index) {
   const seen = commits.get(index);
   const stale = ["moved", "uncommitted"].includes(seen?.now?.standing);
   const during = { moved: "The branch moved while this review ran, so it may have read either commit.", uncommitted: "Files changed while this review ran, so it may not have read them all as they are here." }[e.read_changed];
-  return html`<p class="step-card-text review-commit ${stale ? "warn" : ""}">Read <code title=${read.head}>${read.head.slice(0, 7)}</code>${read.changes ? " with uncommitted changes" : ""}.${during ? html` ${during}` : nothing}${commitStanding(read, seen)}</p>`;
+  return html`<p class="step-card-text review-commit ${stale ? "warn" : ""}">Read <code title=${read.head}>${read.head.slice(0, 7)}</code>${read.changes ? " with uncommitted changes" : ""}.${during ? html` ${during}` : nothing}${commitStanding(read, seen)}</p>
+    ${pullLine(e.of)}`;
+}
+
+function pullRef(p) {
+  return `${p.forge === "gitlab" ? "!" : "#"}${p.number}`;
+}
+
+// The review read the folder, which can hold commits the pull request does not have yet, or lack
+// ones pushed from somewhere else.
+function pullLine(of) {
+  const p = of?.pull;
+  const read = of?.pin?.head;
+  if (!p?.head || !read || read === p.head) return nothing;
+  return html`<p class="step-card-text review-commit warn">${pullRef(p)} was at <code title=${p.head}>${p.head.slice(0, 7)}</code>, a different commit, so this is not a review of exactly what is pushed.</p>`;
 }
 
 export function reviewCard(e, index) {
@@ -1207,7 +1222,7 @@ export function reviewCard(e, index) {
     <header class="step-card-head">
       <span class="step-card-icon">${ICONS.review}</span>
       <div class="step-card-title">
-        <strong>Review of ${of.branch ? html`<code>${of.branch}</code>` : of.name}</strong>
+        <strong>Review of ${of.pull ? html`<a href=${of.pull.url} target="_blank" rel="noopener">${pullRef(of.pull)}</a> · ` : nothing}${of.branch ? html`<code>${of.branch}</code>` : of.name}</strong>
         <span class="step-card-where" title=${of.path ? ctx.short(of.path) : nothing}>by <a href=${ctx.termUrl(e.machine, e.name)} target="_blank" rel="noopener">${e.name}</a> on ${e.machine}${of.path ? html` · <code>${ctx.folderOf(of.path)}</code>` : nothing}</span>
       </div>
       <span class="badge ${ready ? "done" : "blocked"}">${ready ? "Ready" : "Changes needed"}</span>

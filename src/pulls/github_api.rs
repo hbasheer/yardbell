@@ -2,8 +2,8 @@ use super::github::{
     actions_url, excerpt, parse_resolved, parse_review_comments, parse_view, review_comments_query,
     RESOLVED_QUERY,
 };
-use super::{Check, Fetched, Forge, Note, Remotes};
-use crate::config::{GithubVia, Machine, PullRequests};
+use super::{Check, Fetched, Forge, Note, Pull, Remotes};
+use crate::config::{GithubVia, Machine, MergeMethod, PullRequests};
 use crate::secrets::Secrets;
 use futures::future::BoxFuture;
 use reqwest::StatusCode;
@@ -16,7 +16,7 @@ const BASE: &str = "https://api.github.com";
 const HOST: &str = "github.com";
 const TIMEOUT: Duration = Duration::from_secs(20);
 const USER_AGENT: &str = "yardbell";
-const QUERY: &str = "query($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { pullRequests(headRefName: $branch, first: 5, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { number url title state isDraft reviewDecision headRefOid createdAt author { login } comments(last: 50) { nodes { id author { login } body url viewerDidAuthor isMinimized } } reviews(last: 50) { nodes { id author { login } body state } } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state targetUrl } } } } } } } } } } }";
+pub(crate) const QUERY: &str = "query($owner: String!, $name: String!, $branch: String!) { repository(owner: $owner, name: $name) { pullRequests(headRefName: $branch, first: 5, orderBy: { field: UPDATED_AT, direction: DESC }) { nodes { number url title state isDraft reviewDecision headRefOid createdAt mergeable baseRefName author { login } comments(last: 50) { nodes { id author { login } body url viewerDidAuthor isMinimized } } reviews(last: 50) { nodes { id author { login } body state } } commits(last: 1) { nodes { commit { statusCheckRollup { contexts(first: 100) { nodes { __typename ... on CheckRun { name status conclusion detailsUrl checkSuite { workflowRun { workflow { name } } } } ... on StatusContext { context state targetUrl } } } } } } } } } } }";
 
 fn nodes(value: &Value) -> Value {
     value["nodes"].clone()
@@ -223,6 +223,48 @@ impl GitHubApi {
 }
 
 impl Forge for GitHubApi {
+    // The sha makes GitHub refuse the merge when the branch moved on since it was checked.
+    fn merge<'a>(
+        &'a self,
+        m: &'a Machine,
+        path: &'a str,
+        branch: &'a str,
+        pull: &'a Pull,
+        method: MergeMethod,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        Box::pin(async move {
+            let (owner, name) = self.repo_of(m, path, branch).await?;
+            let token = self.token()?;
+            let res = self
+                .http
+                .put(format!(
+                    "{}/repos/{owner}/{name}/pulls/{}/merge",
+                    self.base, pull.number
+                ))
+                .bearer_auth(&token)
+                .json(&json!({ "merge_method": method.as_str(), "sha": pull.head }))
+                .send()
+                .await
+                .map_err(|e| format!("GitHub did not answer: {}", e.without_url()))?;
+            let status = res.status();
+            if status.is_success() {
+                return Ok(());
+            }
+            let said: Value = res.json().await.unwrap_or_default();
+            let said = said["message"].as_str().unwrap_or_default();
+            Err(match status {
+                StatusCode::CONFLICT => {
+                    "the branch has new commits since Yardbell checked it, so it was not merged"
+                        .to_string()
+                }
+                StatusCode::METHOD_NOT_ALLOWED if !said.is_empty() => {
+                    format!("GitHub will not merge it: {said}")
+                }
+                s => Self::refused(s),
+            })
+        })
+    }
+
     fn fetch<'a>(
         &'a self,
         m: &'a Machine,
@@ -366,6 +408,17 @@ impl Forge for GitHubEither {
         branch: &'a str,
     ) -> BoxFuture<'a, Fetched> {
         self.current().fetch(m, path, branch)
+    }
+
+    fn merge<'a>(
+        &'a self,
+        m: &'a Machine,
+        path: &'a str,
+        branch: &'a str,
+        pull: &'a Pull,
+        method: MergeMethod,
+    ) -> BoxFuture<'a, Result<(), String>> {
+        self.current().merge(m, path, branch, pull, method)
     }
 
     fn failure_log<'a>(

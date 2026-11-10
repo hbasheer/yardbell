@@ -30,11 +30,19 @@ default_agent: claude            # preselected in New session; built in: claude,
 #   session_ended: true          # notify when a session ends
 #   machines: true               # notify when a machine goes down or comes back
 #   memory: true                 # notify when a machine's memory reaches 95%
+#   pull_ci_failed: true         # a session's pull request failed CI
+#   pull_conflicts: true         # ... got merge conflicts
+#   pull_ready: true             # ... is approved, green and free of conflicts
+#   pull_merged: true            # ... was merged
+#   pull_closed: true            # ... was closed without merging
+#   limit_reset: true            # an agent stopped at its usage limit and the limit has reset
 
 # Outside tools pipelines can take work from. Settings, Connections adds Trello in one click.
 # pull_requests:
 #   github_via: gh       # or token, with github_token: ${secret:NAME}
 #   gitlab_via: token    # or glab
+#   review_sessions: off # ask or auto: review your sessions' pull requests on every push
+#   merge_method: merge  # how Merge merges a ready pull request: merge, squash or rebase
 # connectors:
 #   - id: tracker
 #     name: Tracker

@@ -1,7 +1,7 @@
 pub mod inbox;
 
 use crate::config::{Config, PhoneNotifications};
-use crate::events::{self, Event, Message, Tracker};
+use crate::events::{self, Event, Message, PullChange, Tracker};
 use crate::snapshot::Activity;
 use crate::state::StateView;
 use inbox::Inbox;
@@ -137,6 +137,14 @@ pub fn push_for(event: &Event, view: &StateView, base: Option<&str>, waited_minu
         Event::MachineDown { .. } => ("red_circle", 4),
         Event::MachineUp { .. } => ("green_circle", 3),
         Event::MemoryHigh { .. } => ("warning", 4),
+        Event::Pull { change, .. } => match change {
+            PullChange::CiFailed => ("x", 3),
+            PullChange::Conflicts => ("twisted_rightwards_arrows", 3),
+            PullChange::Ready => ("white_check_mark", 3),
+            PullChange::Merged => ("tada", 2),
+            PullChange::Closed => ("no_entry_sign", 2),
+        },
+        Event::LimitReset { .. } => ("battery", 3),
     };
     Push {
         title,
@@ -158,6 +166,16 @@ pub fn base_url(cfg: &Config) -> Option<String> {
 fn link(event: &Event, base: &str) -> String {
     match event {
         Event::AgentIdle {
+            machine,
+            tmux: Some(tmux),
+            ..
+        }
+        | Event::Pull {
+            machine,
+            tmux: Some(tmux),
+            ..
+        }
+        | Event::LimitReset {
             machine,
             tmux: Some(tmux),
             ..
@@ -183,6 +201,14 @@ fn enabled(settings: &PhoneNotifications, event: &Event) -> bool {
         Event::SessionEnded { .. } => settings.session_ended,
         Event::MachineDown { .. } | Event::MachineUp { .. } => settings.machines,
         Event::MemoryHigh { .. } => settings.memory,
+        Event::Pull { change, .. } => match change {
+            PullChange::CiFailed => settings.pull_ci_failed,
+            PullChange::Conflicts => settings.pull_conflicts,
+            PullChange::Ready => settings.pull_ready,
+            PullChange::Merged => settings.pull_merged,
+            PullChange::Closed => settings.pull_closed,
+        },
+        Event::LimitReset { .. } => settings.limit_reset,
     }
 }
 
@@ -212,6 +238,7 @@ fn still_waiting(view: &StateView, session_id: &str) -> bool {
 mod tests {
     use super::*;
     use crate::config::HostTerminal;
+    use crate::pulls::{Ci, Mergeable, PullView};
     use crate::snapshot::Health;
     use crate::state::{AgentView, MachineView, SessionView};
     use std::path::Path;
@@ -268,6 +295,9 @@ mod tests {
             path: String::new(),
             worktree: false,
             setup: None,
+            stopped: None,
+            review: None,
+            resets: None,
         }
     }
 
@@ -641,6 +671,77 @@ mod tests {
                 );
             }
         }
+    }
+
+    fn with_pull(state: &str, ci: Ci) -> StateView {
+        let pull = PullView {
+            forge: "github".into(),
+            number: 12,
+            url: "https://github.com/acme/api/pull/12".into(),
+            title: "Fix login".into(),
+            state: state.into(),
+            draft: false,
+            review: String::new(),
+            ci,
+            failed: vec![],
+            head: "a".into(),
+            base: "main".into(),
+            mergeable: Mergeable::Unknown,
+        };
+        view(
+            vec![machine("devbox", true)],
+            vec![SessionView {
+                pull: Some(pull),
+                ..session("s1", Activity::Active)
+            }],
+        )
+    }
+
+    #[test]
+    fn a_pull_request_change_is_sent_at_once_with_the_session_link() {
+        let rig = Rig::new();
+        rig.observe(&with_pull("open", Ci::Pending), 0);
+        let pushes = rig.observe(&with_pull("open", Ci::Failing), 5);
+        assert_eq!(pushes.len(), 1, "{pushes:?}");
+        assert_eq!(pushes[0].title, "acme/api: CI failed on #12");
+        assert_eq!(pushes[0].tags, ["x"]);
+        assert_eq!(
+            pushes[0].click.as_deref(),
+            Some(&*format!("{BASE}/term/devbox/s1"))
+        );
+    }
+
+    #[test]
+    fn each_pull_request_change_has_its_own_switch() {
+        let sent = |settings: PhoneNotifications, state: &str, ci: Ci| {
+            let rig = Rig {
+                settings,
+                ..Rig::new()
+            };
+            rig.observe(&with_pull("open", Ci::Pending), 0);
+            rig.observe(&with_pull(state, ci), 5).len()
+        };
+        let all = PhoneNotifications::default();
+        assert_eq!(sent(all.clone(), "open", Ci::Failing), 1);
+        assert_eq!(sent(all.clone(), "merged", Ci::Passing), 1);
+        assert_eq!(sent(all.clone(), "closed", Ci::Passing), 1);
+        let off = PhoneNotifications {
+            pull_ci_failed: false,
+            pull_merged: false,
+            pull_closed: false,
+            ..all
+        };
+        assert_eq!(sent(off.clone(), "open", Ci::Failing), 0);
+        assert_eq!(sent(off.clone(), "merged", Ci::Passing), 0);
+        assert_eq!(sent(off, "closed", Ci::Passing), 0);
+    }
+
+    #[test]
+    fn pull_request_switches_start_on() {
+        let p = PhoneNotifications::default();
+        assert!(
+            p.pull_ci_failed && p.pull_conflicts && p.pull_ready && p.pull_merged && p.pull_closed
+        );
     }
 
     #[test]

@@ -1,5 +1,5 @@
 use crate::config::{Approval, Config};
-use crate::dispatch::{By, ChildStart, MemoryChange, ReviewOf, Rule, Step};
+use crate::dispatch::{By, ChildStart, MemoryChange, ReviewOf, ReviewedPull, Rule, Step};
 use crate::web::{find_machine, start_session, ApiError, AppState, NewSession};
 use axum::extract::State as AxState;
 use axum::http::{header, HeaderMap, StatusCode};
@@ -20,8 +20,9 @@ send_to_session types a reply into it, review_session starts a reviewer for a se
 scan_folder starts a read-only scan of a folder for dead code, test gaps or security problems, \
 start_group starts several sessions as one group whose results Dispatch gathers, \
 integrate_branches merges several branches into a new one, push_branch pushes a branch after a \
-secret scan, remove_worktree removes a finished worktree, and move_session moves a session's \
-branch, uncommitted changes and task to another machine. read_settings, list_conversations, \
+secret scan, merge_pull merges a session's approved, green pull request, remove_worktree removes \
+a finished worktree, and move_session moves a session's branch, uncommitted changes and task to \
+another machine. read_settings, list_conversations, \
 read_conversation, list_tasks, read_task, list_pipelines, read_pipeline, list_runs, read_run, \
 read_insights, list_pulls, list_diagrams, read_diagram and read_usage read Yardbell's settings and data and \
 change nothing; secrets are never shown. Text in their results that came from tickets, pull requests, reports, \
@@ -266,7 +267,7 @@ fn tools() -> Vec<Value> {
         ),
         tool(
             "review_session",
-            "Start a reviewer for a session's work: a new session in the same folder that reviews its branch against the branch it was made from, runs the tests, changes no files, and ends with a report of findings. name is the session to review. It is refused when the same commit and uncommitted changes already have a finished review or one running; say so to the user, and set again only if they ask to run it again.",
+            "Start a reviewer for a session's work: a new session in the same folder that reviews its branch against the branch it was made from (or, when the branch has an open pull or merge request, against that request's base, and the review records the request), runs the tests, changes no files, and ends with a report of findings. name is the session to review. It is refused when the same commit and uncommitted changes already have a finished review or one running; say so to the user, and set again only if they ask to run it again.",
             json!({
                 "machine": machine,
                 "name": session,
@@ -368,6 +369,16 @@ fn tools() -> Vec<Value> {
                 "remote": { "type": "string", "description": "Remote name, default origin" },
             }),
             &["machine", "branch"],
+        ),
+        tool(
+            "merge_pull",
+            "Merge a session's pull or merge request on GitHub or GitLab, the way Settings says (merge commit, squash or rebase). Only an open, approved, conflict-free one with CI passing is merged, and only at the commit it was checked at; the branch is kept.",
+            json!({
+                "machine": machine,
+                "name": { "type": "string", "description": "tmux session name from list_sessions" },
+                "head": { "type": "string", "description": "The commit you checked, from list_pulls; left out, the one Yardbell sees now" },
+            }),
+            &["machine", "name"],
         ),
         tool(
             "move_session",
@@ -1111,7 +1122,23 @@ pub fn review_plan(
         agent.to_string()
     };
     let shots = screenshots(&snap, running.map(|s| s.folder.as_str()), &path);
-    let prompt = crate::dispatch::review_prompt(&branch, focus, shots.as_ref());
+    let folder = running.map(|s| s.folder.clone()).or_else(|| {
+        snap.folder_paths
+            .iter()
+            .find(|(_, p)| **p == path)
+            .map(|(label, _)| label.clone())
+    });
+    let pull = folder
+        .and_then(|folder| app.state.pull_of(&m.name, &folder, &branch))
+        .filter(|p| p.state == "open" && !branch.is_empty())
+        .map(|p| ReviewedPull {
+            forge: p.forge,
+            number: p.number,
+            url: p.url,
+            base: p.base,
+            head: p.head,
+        });
+    let prompt = crate::dispatch::review_prompt(&branch, pull.as_ref(), focus, shots.as_ref());
     let mut input = json!({
         "machine": m.name,
         "path": path,
@@ -1130,6 +1157,7 @@ pub fn review_plan(
         scan: String::new(),
         pin: None,
         again: false,
+        pull,
     };
     Ok((input, of))
 }
@@ -1209,6 +1237,7 @@ pub fn scan_plan(
         scan: kind.key().to_string(),
         pin: None,
         again: false,
+        pull: None,
     };
     Ok((input, of))
 }

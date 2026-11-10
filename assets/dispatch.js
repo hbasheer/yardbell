@@ -6,8 +6,9 @@ import * as groups from "/dispatch-group.js";
 import { openHistory, proposedPrompt } from "/dispatch-tasks.js";
 import { repeat } from "/vendor/lit-html/directives/repeat.js";
 import { composer } from "/composer.js";
-import { toBase64 } from "/attachments.js";
+import { sizeText, toBase64 } from "/attachments.js";
 import { markdown } from "/markdown.js";
+import { dictation, speaker, spoken } from "/voice.js";
 
 const $ = (id) => document.getElementById(id);
 const Nav = window.YardbellNav;
@@ -370,6 +371,7 @@ function backendNote() {
 function renderRunsOn() {
   const chip = $("runs-on");
   chip.hidden = !runsOn;
+  $("mic").hidden = !runsOn?.voice_input;
   if (!runsOn) return;
   const { label, model } = agentOf(backend);
   chip.textContent = `${label} · ${model}`;
@@ -393,16 +395,85 @@ async function loadRunsOn() {
 function sentFiles(list) {
   return html`<div class="msg-files">${list.map((a) => {
     const href = a.url || `/dispatch/conversations/${encodeURIComponent(current)}/attachments/${encodeURIComponent(a.file)}`;
-    return html`<a class="msg-file ${a.kind}" href=${href} target="_blank" rel="noopener" title=${a.name}>${a.kind === "image"
+    const open = (ev) => {
+      ev.preventDefault();
+      openFile(a, href);
+    };
+    return html`<a class="msg-file ${a.kind}" href=${href} title=${a.name} @click=${open}>${a.kind === "image"
       ? html`<img src=${href} alt="" loading="lazy">`
       : html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3"/></svg>`}<span class="msg-file-name">${a.name}</span></a>`;
   })}</div>`;
 }
 
+// The desktop app loads a new-tab link in place of the whole page, with no way back, so a file
+// opens over the conversation instead.
+function openFile(file, href) {
+  const dialog = steps.viewer();
+  const zoom = (ev) => ev.currentTarget.closest(".shot-view-body").classList.toggle("actual");
+  const body = {
+    image: () => html`<img src=${href} alt=${file.name} title="Click to switch between fitting the window and the actual size" @click=${zoom}>`,
+    pdf: () => html`<iframe class="file-view-frame" src=${href} title=${file.name}></iframe>`,
+    text: () => html`<pre class="file-view-text">Loading…</pre>`,
+  }[file.kind];
+  render(html`<div class="shot-view-head">
+      <strong>${file.name}</strong>
+      <span class="muted">${file.size ? sizeText(file.size) : ""}</span>
+      <button class="btn" type="button" @click=${() => dialog.close()}>Close</button>
+    </div>
+    <div class="shot-view-body">${body ? body() : nothing}</div>`, dialog);
+  dialog.querySelector(".shot-view-body").classList.remove("actual");
+  dialog.showModal();
+  if (file.kind !== "text") return;
+  const pre = dialog.querySelector(".file-view-text");
+  fetch(href)
+    .then((r) => (r.ok ? r.text() : Promise.reject(new Error(`could not open ${file.name}`))))
+    .then((text) => { pre.textContent = text; })
+    .catch((e) => { pre.textContent = e.message; });
+}
+
+const voice = speaker();
+const SPOKEN_STATES = { ended: "has ended", "needs you": "is waiting for you", working: "is working", idle: "has gone idle" };
+const spokenStates = new Map();
+
+function voiceOut(e) {
+  if (!voice.on()) return;
+  if (e.role === "assistant") voice.speak(spoken(e.text));
+  else if (e.role === "error") voice.speak(`Dispatch hit an error. ${e.text}`);
+  else if (e.role === "session" && e.state === "blocked") voice.speak(`Session ${e.name} on ${e.machine} is waiting for an answer.`);
+}
+
+function paintSpeakToggle() {
+  const button = $("speak-toggle");
+  button.hidden = !voice.able;
+  const on = voice.on();
+  button.setAttribute("aria-pressed", String(on));
+  button.classList.toggle("on", on);
+  button.setAttribute("aria-label", on ? "Stop reading aloud" : "Read replies aloud");
+  button.title = on
+    ? "Replies and session changes are read aloud. Press to mute at once."
+    : "Read replies and session changes aloud. Off until you turn it on.";
+}
+
+$("speak-toggle").addEventListener("click", () => {
+  voice.set(!voice.on());
+  paintSpeakToggle();
+  if (voice.on()) voice.speak("Dispatch reads replies aloud.");
+});
+
+// The same switch sits in Settings, which may be open in another tab.
+window.addEventListener("storage", () => {
+  voice.sync();
+  paintSpeakToggle();
+});
+paintSpeakToggle();
+
+// Streamed events count as shown, so the catch-up after a turn never reads them out again.
 function show(event) {
   events.push(event);
+  shownEvents = Math.max(shownEvents, events.length);
   draw();
   scrollDown();
+  voiceOut(event);
 }
 
 async function pick(e, index, key, label) {
@@ -481,6 +552,7 @@ async function open(id) {
   loadRunsOn();
   answers = new Map();
   screens.clear();
+  spokenStates.clear();
   steps.reset();
   groups.reset();
   setBusy(false);
@@ -530,6 +602,7 @@ async function watch(id) {
     }
     if (convo.updated !== shownUpdated) {
       const grew = convo.events.length > shownEvents;
+      if (grew) convo.events.slice(shownEvents).forEach(voiceOut);
       events = convo.events.slice();
       shownEvents = convo.events.length;
       shownUpdated = convo.updated;
@@ -604,6 +677,7 @@ async function catchUp(showNew = true) {
   if (!convo || current !== id || busy) return;
   const grew = convo.events.length > shownEvents;
   if (convo.updated !== shownUpdated || grew) {
+    if (grew) convo.events.slice(shownEvents).forEach(voiceOut);
     events = convo.events.slice();
     draw();
     if (showNew && grew) scrollDown();
@@ -614,10 +688,28 @@ async function catchUp(showNew = true) {
   renderTracked();
 }
 
-function trackedItem(t, state) {
+function sessionWord(t, state) {
   const s = state?.sessions.find((x) => x.machine === t.machine && x.tmux === t.name && !x.stale);
-  const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : "idle";
-  const tone = !s ? "" : s.activity === "blocked" ? "warn" : s.activity === "active" ? "ok" : "";
+  const word = !s ? "ended" : s.activity === "blocked" ? "needs you" : s.activity === "active" ? "working" : s.stopped ? "stopped on an error" : "idle";
+  return { s, word };
+}
+
+// A tracked session's first word is only remembered, so opening a conversation says nothing.
+function speakTransitions(state) {
+  for (const t of tracked) {
+    const { word } = sessionWord(t, state);
+    const key = `${t.machine}/${t.name}`;
+    const before = spokenStates.get(key);
+    spokenStates.set(key, word);
+    if (before && before !== word && voice.on()) {
+      voice.speak(`Session ${t.name} on ${t.machine} ${SPOKEN_STATES[word] || word}.`);
+    }
+  }
+}
+
+function trackedItem(t, state) {
+  const { s, word } = sessionWord(t, state);
+  const tone = !s ? "" : s.activity === "blocked" ? "warn" : s.activity === "active" ? "ok" : s.stopped ? "bad" : "";
   return html`<span class="dispatch-session"><span class="dot ${tone}"></span>${s
     ? html`<a href=${termUrl(t.machine, t.name)} target="_blank" rel="noopener">${t.name}</a>`
     : t.name}<span class="muted">${t.machine} · ${word}</span></span>`;
@@ -633,6 +725,7 @@ async function renderTracked() {
   box.hidden = !tracked.length;
   if (!tracked.length) { render(nothing, box); return; }
   const state = await loadState();
+  speakTransitions(state);
   if (events.some((e) => e.role === "group")) draw();
   render(html`<span class="dispatch-sessions-label">Sessions</span>${repeat(tracked, (t) => `${t.machine}/${t.name}`, (t) => trackedItem(t, state))}`, box);
 }
@@ -891,6 +984,8 @@ const compose = composer(form, {
   scroller,
   scrollDown,
 });
+
+dictation({ button: $("mic"), input: form.text, toast });
 
 $("dispatch-stop").addEventListener("click", () => {
   if (!current) return;

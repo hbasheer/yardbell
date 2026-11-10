@@ -90,7 +90,7 @@ started_by_agent() {
   return 1
 }
 
-printf '{"root":%s,"agents":[' "$(esc "$root")"
+printf '{"root":%s,"tz":%s,"agents":[' "$(esc "$root")" "$(esc "$(date +%z)")"
 first=1
 agent_kb=0
 cwds=""

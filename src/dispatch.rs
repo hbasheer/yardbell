@@ -8,6 +8,7 @@ mod mcp_config;
 mod memory;
 mod prompt;
 mod pull;
+pub use pull::Place as PullPlace;
 mod read_only;
 mod review;
 pub(crate) mod rules;
@@ -31,9 +32,10 @@ pub use memory::{Memory, MemoryChange};
 pub(crate) use review::{bullet, clip, is_marker, unframed, value_of};
 pub use review::{
     changed_file as review_file, changed_files as review_files, evidence_folder, file_view,
-    fix_request, found_by, picked as review_picked, pin_standing, places as finding_files,
-    prompt as review_prompt, read_pin, scan_prompt, valid_path as valid_review_path,
-    Anchor as ReviewAnchor, Pin as ReviewPin, ReviewOf, ScanKind, Screenshots,
+    fix_request, found_by, mark_for as review_mark_for, picked as review_picked, pin_standing,
+    places as finding_files, prompt as review_prompt, read_pin, scan_prompt,
+    valid_path as valid_review_path, Anchor as ReviewAnchor, Mark as ReviewMark, Pin as ReviewPin,
+    ReviewOf, ReviewedPull, ScanKind, Screenshots,
 };
 pub use rules::{
     decide as decide_step, decide_always_wait, decide_memory, folder_matches, valid_folder_pattern,
@@ -87,6 +89,11 @@ pub struct Dispatch {
 }
 
 impl Dispatch {
+    // Voice transcription runs its local commands through the same runner, so tests fake it.
+    pub fn runner(&self) -> Arc<dyn Runner> {
+        self.runner.clone()
+    }
+
     pub fn new(runner: Arc<dyn Runner>, dir: PathBuf) -> Dispatch {
         let chats = Mutex::new(load(&dir));
         let usage = |runs_on| {
@@ -410,6 +417,27 @@ impl Dispatch {
         };
         self.shared.save(id);
         Ok(out)
+    }
+
+    // The newest review of each branch, from every conversation. alive says whether a reviewer
+    // session is still there.
+    pub fn review_marks(&self, alive: &dyn Fn(&str, &str) -> bool) -> Vec<ReviewMark> {
+        let chats = self.shared.lock();
+        review::marks(
+            chats
+                .values()
+                .map(|c| (c.stored.id.as_str(), c.stored.events.as_slice())),
+            alive,
+        )
+    }
+
+    pub fn is_reviewer(&self, machine: &str, name: &str) -> bool {
+        self.shared.lock().values().any(|c| {
+            c.stored
+                .sessions
+                .iter()
+                .any(|t| t.review.is_some() && t.machine == machine && t.name == name)
+        })
     }
 
     pub fn earlier_review(&self, machine: &str, pin: &ReviewPin) -> Option<Value> {
@@ -798,6 +826,9 @@ mod tests {
                     path: String::new(),
                     worktree: false,
                     setup: None,
+                    stopped: None,
+                    review: None,
+                    resets: None,
                 })
                 .collect(),
             ended: vec![],
@@ -1095,12 +1126,13 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             scan: String::new(),
             pin: None,
             again: false,
+            pull: None,
         };
         let step = dispatch
             .propose(
                 &id,
                 "start_session",
-                json!({ "machine": "hp", "path": "/r/app", "prompt": review_prompt("eng-1", "", None) }),
+                json!({ "machine": "hp", "path": "/r/app", "prompt": review_prompt("eng-1", None, "", None) }),
                 By::You,
                 Some(of.clone()),
                 None,
@@ -1179,6 +1211,7 @@ echo '{{"type":"result","is_error":false,"result":"ok"}}'"#,
             scan: "security".into(),
             pin: None,
             again: false,
+            pull: None,
         };
         let input = json!({ "machine": "hp", "path": "/r/app", "prompt": scan_prompt(ScanKind::Security, "") });
         let step = dispatch

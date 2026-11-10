@@ -372,6 +372,8 @@ async fn insights_for_a_session_and_a_machine() {
         ticket: "-".into(),
         tmux: Some("hp-app".into()),
         activity: crate::snapshot::Activity::Active,
+        stopped: None,
+        resets: None,
     };
     let now = chrono::Local::now();
     r.app.insights.observe(
@@ -432,6 +434,8 @@ async fn pulls_from_the_cards() {
                 ci: crate::pulls::Ci::Failing,
                 failed: vec!["rspec".into()],
                 head: String::new(),
+                base: String::new(),
+                mergeable: crate::pulls::Mergeable::Unknown,
             },
         )]
         .into(),
@@ -529,6 +533,8 @@ async fn a_machine_wide_insights_read_is_a_summary() {
         ticket: "-".into(),
         tmux: Some("hp-app".into()),
         activity: crate::snapshot::Activity::Active,
+        stopped: None,
+        resets: None,
     };
     let now = chrono::Local::now();
     r.app.insights.observe(

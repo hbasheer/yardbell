@@ -2,6 +2,7 @@ use super::follow::Tracked;
 use super::store::{new_id, now, title_of, Conversation, Stored};
 use super::{missing, Dispatch, Refusal};
 use serde_json::{json, Value};
+use std::collections::HashMap;
 
 fn text<'a>(v: &'a Value, key: &str) -> &'a str {
     v[key].as_str().unwrap_or_default()
@@ -9,6 +10,71 @@ fn text<'a>(v: &'a Value, key: &str) -> &'a str {
 
 fn is_pull(e: &Value) -> bool {
     e["role"] == "pull"
+}
+
+pub struct Place<'a> {
+    pub machine: &'a str,
+    pub session: &'a str,
+    pub path: &'a str,
+    pub title: &'a str,
+    pub url: &'a str,
+}
+
+fn conversation_in(chats: &mut HashMap<String, Conversation>, at: &Place) -> String {
+    let newest = |found: Vec<&Conversation>| {
+        found
+            .into_iter()
+            .max_by(|a, b| a.stored.updated.cmp(&b.stored.updated))
+            .map(|c| c.stored.id.clone())
+    };
+    let follows = newest(
+        chats
+            .values()
+            .filter(|c| {
+                c.stored
+                    .sessions
+                    .iter()
+                    .any(|t| t.machine == at.machine && t.name == at.session)
+            })
+            .collect(),
+    );
+    let same_pull = || {
+        newest(
+            chats
+                .values()
+                .filter(|c| {
+                    !at.url.is_empty()
+                        && c.stored
+                            .events
+                            .iter()
+                            .any(|e| is_pull(e) && e["pull"]["url"] == at.url)
+                })
+                .collect(),
+        )
+    };
+    if let Some(id) = follows.or_else(same_pull) {
+        return id;
+    }
+    let id = new_id();
+    let stamp = now();
+    chats.insert(
+        id.clone(),
+        Conversation::new(Stored {
+            id: id.clone(),
+            title: title_of(at.title),
+            created: stamp.clone(),
+            updated: stamp,
+            sessions: vec![Tracked {
+                machine: at.machine.to_string(),
+                name: at.session.to_string(),
+                path: at.path.to_string(),
+                last: String::new(),
+                review: None,
+            }],
+            ..Stored::default()
+        }),
+    );
+    id
 }
 
 impl Dispatch {
@@ -22,8 +88,8 @@ impl Dispatch {
         path: &str,
         title: &str,
         card: Value,
-    ) -> Option<String> {
-        let id = {
+    ) -> Option<(String, usize)> {
+        let (id, index) = {
             let mut chats = self.shared.lock();
             let posted = chats
                 .values()
@@ -32,69 +98,46 @@ impl Dispatch {
             if posted {
                 return None;
             }
-            let newest = |found: Vec<&Conversation>| {
-                found
-                    .into_iter()
-                    .max_by(|a, b| a.stored.updated.cmp(&b.stored.updated))
-                    .map(|c| c.stored.id.clone())
+            let at = Place {
+                machine,
+                session,
+                path,
+                title,
+                url: text(&card["pull"], "url"),
             };
-            let follows = newest(
-                chats
-                    .values()
-                    .filter(|c| {
-                        c.stored
-                            .sessions
-                            .iter()
-                            .any(|t| t.machine == machine && t.name == session)
-                    })
-                    .collect(),
-            );
-            let same_pull = || {
-                newest(
-                    chats
-                        .values()
-                        .filter(|c| {
-                            c.stored
-                                .events
-                                .iter()
-                                .any(|e| is_pull(e) && e["pull"]["url"] == card["pull"]["url"])
-                        })
-                        .collect(),
-                )
-            };
-            let id = match follows.or_else(same_pull) {
-                Some(id) => id,
-                None => {
-                    let id = new_id();
-                    let stamp = now();
-                    chats.insert(
-                        id.clone(),
-                        Conversation::new(Stored {
-                            id: id.clone(),
-                            title: title_of(title),
-                            created: stamp.clone(),
-                            updated: stamp,
-                            sessions: vec![Tracked {
-                                machine: machine.to_string(),
-                                name: session.to_string(),
-                                path: path.to_string(),
-                                last: String::new(),
-                                review: None,
-                            }],
-                            ..Stored::default()
-                        }),
-                    );
-                    id
-                }
-            };
+            let id = conversation_in(&mut chats, &at);
             let c = chats.get_mut(&id).expect("conversation exists");
             c.stored.events.push(card.clone());
             c.stored.updated = now();
-            id
+            (id, c.stored.events.len() - 1)
         };
         self.shared.save(&id);
         self.shared.send_live(&id, &card);
-        Some(id)
+        Some((id, index))
+    }
+
+    // A usage limit card nobody has sent yet stands for the stop, so the same stop is not posted
+    // again when the reset time it names rolls over to the next day.
+    pub fn limit_waiting(&self, machine: &str, session: &str) -> bool {
+        self.shared
+            .lock()
+            .values()
+            .flat_map(|c| &c.stored.events)
+            .any(|e| {
+                is_pull(e)
+                    && e["kind"] == "limit"
+                    && e["machine"] == machine
+                    && e["name"] == session
+                    && !e["sent"].is_object()
+            })
+    }
+
+    // Where something about a session's pull request goes: the conversation that follows the
+    // session, or else the one with cards for the same pull request, or else a new one.
+    pub fn conversation_for(&self, at: &Place) -> String {
+        let id = conversation_in(&mut self.shared.lock(), at);
+        self.shared.save(&id);
+        id
     }
 
     // Claims the card for one send, so a second click or a second device cannot type it twice. A
@@ -155,6 +198,15 @@ pub fn untold(card: &mut Value) -> Option<String> {
         return None;
     }
     card["told"] = json!(true);
+    if text(card, "kind") == "limit" {
+        return Some(format!(
+            "{} on {} stopped at its usage limit ({}), and the limit has reset. Yardbell offers to send: {}",
+            text(card, "name"),
+            text(card, "machine"),
+            text(card, "error"),
+            text(card, "instruction")
+        ));
+    }
     let pull = &card["pull"];
     let (kind, mark) = if text(pull, "forge") == "gitlab" {
         ("Merge request", '!')
@@ -183,6 +235,14 @@ pub fn untold(card: &mut Value) -> Option<String> {
         "ci" => format!(
             "{subject} failed CI on {}. Yardbell offers to send: {}",
             names("checks", "name").join(", "),
+            text(card, "instruction")
+        ),
+        "conflict" => format!(
+            "{subject} has merge conflicts with {}. Yardbell offers to send: {}",
+            match text(pull, "base") {
+                "" => "its base branch",
+                base => base,
+            },
             text(card, "instruction")
         ),
         _ => format!(
@@ -225,7 +285,9 @@ mod tests {
             &Ok(json!({ "machine": "hp", "name": "hp-app", "path": "/r/app" })),
         );
         assert_eq!(
-            dispatch.post_pull("hp", "hp-app", "/r/app", "t", card("ci:1")),
+            dispatch
+                .post_pull("hp", "hp-app", "/r/app", "t", card("ci:1"))
+                .map(|(id, _)| id),
             Some(id.clone())
         );
         assert_eq!(
@@ -253,7 +315,8 @@ mod tests {
                 "Pull request #7: Fix login",
                 card("ci:1"),
             )
-            .unwrap();
+            .unwrap()
+            .0;
         let convo = dispatch.get(&id).unwrap();
         assert_eq!(convo["title"], "Pull request #7: Fix login");
         assert_eq!(convo["sessions"][0]["name"], "hp-app");
@@ -265,7 +328,9 @@ mod tests {
             "the same card after a restart"
         );
         assert_eq!(
-            reopened.post_pull("hp", "hp-other", "/r/app", "t", card("ci:2")),
+            reopened
+                .post_pull("hp", "hp-other", "/r/app", "t", card("ci:2"))
+                .map(|(id, _)| id),
             Some(id),
             "a card for the same pull request joins its conversation"
         );
@@ -277,7 +342,8 @@ mod tests {
         let dispatch = fake_claude(dir.path(), "true");
         let id = dispatch
             .post_pull("hp", "hp-app", "/r/app", "t", card("ci:1"))
-            .unwrap();
+            .unwrap()
+            .0;
         dispatch.pull_claim(&id, 0).unwrap();
         assert!(dispatch.pull_claim(&id, 0).is_err());
         let step = dispatch
@@ -323,6 +389,18 @@ mod tests {
         let told = super::untold(&mut c).unwrap();
         assert!(
             told.starts_with("Merge request !7 (Fix login) of hp-app on hp failed CI on test."),
+            "{told}"
+        );
+    }
+
+    #[test]
+    fn dispatch_hears_about_a_conflict_as_one() {
+        let mut c = card("conflict:1:a");
+        c["kind"] = json!("conflict");
+        c["instruction"] = json!("Pull request #7 has merge conflicts with main. Rebase it onto main, resolve the conflicts and push.");
+        let told = super::untold(&mut c).unwrap();
+        assert!(
+            told.starts_with("Pull request #7 (Fix login) of hp-app on hp has merge conflicts with its base branch. Yardbell offers to send: Pull request #7 has merge"),
             "{told}"
         );
     }

@@ -23,6 +23,7 @@ PASSCODE = "yardbell-browser-tests"
 PASSCODE_HASH = "$argon2id$v=19$m=19456,t=2,p=1$W9HtFU6zAJJHfaLZxyoLZw$CowUQvJ7lk5RORBJ4iV9u9uJi2N9R2CA1dxq3fupAOg"
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 MACHINE = "hp"
+FAKE_DICTATION = "Fix the flaky checkout test, please."
 SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
 REVIEW_CHAT = "browserreview001"
@@ -31,6 +32,7 @@ SCAN_CHAT = "browserscan00001"
 SHOT_FILE = "shotbrowsertest1.png"
 PULL_CHAT = "browsertestpull0"
 GITLAB_CHAT = "browsergitlab001"
+LIMIT_CHAT = "browserlimit0001"
 GROUP_CHAT = "browsergroup0001"
 RESULTS_CHAT = "browserresults01"
 MEMORY_CHAT = "browsermemory001"
@@ -61,6 +63,22 @@ FAKE_PR = {
     ],
     "comments": [],
     "reviews": [],
+}
+MERGE_SESSION = "hp-merge-test"
+MERGE_BRANCH = "ready-to-merge"
+READY_PR = {
+    **FAKE_PR,
+    "number": 34,
+    "url": "https://github.com/acme/demo-app/pull/34",
+    "title": "Add the merge button",
+    "reviewDecision": "APPROVED",
+    "headRefOid": "def456",
+    "mergeable": "MERGEABLE",
+    "baseRefName": "main",
+    "statusCheckRollup": [
+        {"__typename": "CheckRun", "name": "test", "workflowName": "CI", "status": "COMPLETED", "conclusion": "SUCCESS",
+         "detailsUrl": "https://github.com/acme/demo-app/actions/runs/333/job/444"},
+    ],
 }
 PAGES = ["/", "/workspace", "/dispatch", "/settings", "/add"]
 TRIGGER = "Morning summary"
@@ -627,12 +645,28 @@ class Yardbell:
             json.dump(inbox_proposals(), f)
         self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
         threading.Thread(target=self.linear.serve_forever, daemon=True).start()
-        # gh on the server's PATH answers for every branch with one failing pull request.
+        # gh on the server's PATH answers for every branch with one failing pull request, except
+        # one branch whose pull request is ready to merge; a merge is written down, not done.
         fake_bin = os.path.join(tmp, "bin")
         os.makedirs(fake_bin)
+        self.merges = os.path.join(tmp, "gh-merges.log")
         with open(os.path.join(fake_bin, "gh"), "w") as f:
-            f.write(f"#!/bin/sh\nif [ \"$1 $2\" = \"pr view\" ]; then\ncat <<'EOF'\n{json.dumps(FAKE_PR)}\nEOF\nexit 0\nfi\nexit 1\n")
+            f.write(
+                "#!/bin/sh\n"
+                f"if [ \"$1 $2 $3\" = \"pr view {MERGE_BRANCH}\" ]; then\ncat <<'EOF'\n{json.dumps(READY_PR)}\nEOF\nexit 0\nfi\n"
+                f"if [ \"$1 $2\" = \"pr view\" ]; then\ncat <<'EOF'\n{json.dumps(FAKE_PR)}\nEOF\nexit 0\nfi\n"
+                f"if [ \"$1 $2\" = \"pr merge\" ]; then\necho \"$*\" >> {self.merges}\nexit 0\nfi\n"
+                "exit 1\n"
+            )
         os.chmod(os.path.join(fake_bin, "gh"), 0o755)
+        # Voice input shells out to ffmpeg and whisper-cli; the fakes skip the conversion and
+        # answer with a fixed transcription, so no real model or ffmpeg is needed.
+        with open(os.path.join(fake_bin, "ffmpeg"), "w") as f:
+            f.write("#!/bin/sh\nexit 0\n")
+        os.chmod(os.path.join(fake_bin, "ffmpeg"), 0o755)
+        with open(os.path.join(fake_bin, "whisper-cli"), "w") as f:
+            f.write(f'#!/bin/sh\necho {json.dumps(FAKE_DICTATION)}\n')
+        os.chmod(os.path.join(fake_bin, "whisper-cli"), 0o755)
         self.fake_claude = os.path.join(fake_bin, "claude")
         with open(self.fake_claude, "w") as f:
             f.write(FAKE_CLAUDE)
@@ -763,6 +797,12 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "instruction": "echo merge''-sent",
             "at": "2026-01-01T10:00:00+00:00",
         }])
+        limit = conversation(LIMIT_CHAT, "Usage limit: demo-app", [{
+            "role": "pull", "kind": "limit", "key": "limit:browser",
+            "machine": MACHINE, "name": PULL_SESSION, "path": os.path.join(self.root, "demo-app"), "branch": "main",
+            "folder": "demo-app", "error": "You've hit your limit · resets 3pm", "resets": "2026-01-01T15:00:00+00:00",
+            "instruction": "continue", "at": "2026-01-01T15:00:30+00:00",
+        }])
         with open(os.path.join(self.state, "dispatch", "memory.md"), "w") as f:
             f.write(f"# Dispatch memory\n\n- {MEMORY_OLD}\n- Branches are named after the ticket\n")
         insight = conversation(INSIGHTS_CHAT, "Fix the login", [
@@ -795,7 +835,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
              "review": {"machine": MACHINE, "name": "hp-demo-app", "path": repo, "branch": "fix-login"},
              "already": {"text": "Commit ab12cd3 already has a finished review, which said ready, by hp-demo-app-2.", "conversation": REVIEW_CHAT}},
         ])
-        for chat in (short, long, review, review_again, pull, merge_request, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
+        for chat in (short, long, review, review_again, pull, merge_request, limit, scan, group_chat(self.root), results_chat(self.root), memory_chat(), insight,
                      settings_chat(SETTINGS_CHAT, "setstep1", 7), settings_chat(SETTINGS_EDIT_CHAT, "setstep2", 9), task_chat(),
                      review_card_chat(), run_steps_chat(),
                      proposed_pipeline(PROPOSAL_CHAT, (("propstp1", "Built in the builder"),
@@ -970,6 +1010,158 @@ class Suite:
                 )
         finally:
             b.viewport(1280, 800)
+
+    # Four shell sessions, each in its own tab, with the saved layout wiped so earlier tests
+    # cannot shape it. Returns their keys.
+    def grid_tab(self):
+        b = self.b
+        folder = os.path.join(self.y.root, "demo-app")
+        keys = [f"{MACHINE}/hp-grid-{i}" for i in range(1, 5)]
+        for key in keys:
+            self.y.tmux("new", "-d", "-s", key.split("/", 1)[1], "-c", folder, self.y.shell)
+        b.goto(self.url("/workspace"))
+        self.api("POST", "/refresh")
+        b.wait(
+            f"typeof leaves === 'function' && {json.dumps(keys)}.every((k) => (state?.sessions || []).some((s) => s.machine + '/' + s.tmux === k))",
+            "the workspace to see the grid sessions", timeout=15,
+        )
+        b.js("(() => { saved.tabs = []; saved.hidden = []; saved.tab = 0; render(); })()")
+        b.wait(
+            f"{json.dumps(keys)}.every((k) => saved.tabs.some((t) => leaves(t.root).some((l) => l.key === k)))",
+            "a tab per grid session",
+        )
+        return keys
+
+    # Later tests count the sessions in demo-app and revisit the Workspace, so the grid sessions
+    # cannot outlive their test, in tmux or in the saved layout.
+    def drop_grid_tab(self, keys):
+        if self.b.js("location.pathname === '/workspace' && typeof detach === 'function'"):
+            self.b.js(f"""(() => {{
+              for (const k of {json.dumps(keys)}) {{
+                saved.hidden.push(k);
+                detach(saved, k);
+              }}
+              save();
+              render();
+            }})()""")
+        self.b.goto(self.url("/"))
+        for key in keys:
+            self.y.tmux("kill-session", "-t", f"={key.split('/', 1)[1]}")
+        self.api("POST", "/refresh")
+        self.b.wait(
+            f"fetch('/state', {{headers: {{Accept: 'application/json'}}}}).then((r) => r.json()).then((s) => !s.sessions.some((x) => {json.dumps(keys)}.includes(x.machine + '/' + x.tmux)))",
+            "the grid sessions to be gone",
+        )
+
+    def merge_grid_tabs(self, keys, total=None):
+        self.b.js(f"""(() => {{
+          const at = (k) => saved.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === k));
+          for (const k of {json.dumps(keys[1:])}) mergeTab(at(k), at({json.dumps(keys[0])}));
+        }})()""")
+        self.b.wait(f"leaves(tab().root).length === {total or len(keys)}", "the merged tab to show every pane")
+
+    def pane_boxes(self):
+        return self.b.js("""(() => {
+          const area = document.getElementById('panes').getBoundingClientRect();
+          return [...document.querySelectorAll('.ws-pane:not([hidden])')].map((el) => {
+            const r = el.getBoundingClientRect();
+            return {key: el.querySelector('iframe')?.dataset.key || null,
+                    x: (r.left - area.left) / area.width, y: (r.top - area.top) / area.height,
+                    w: r.width / area.width, h: r.height / area.height};
+          });
+        })()""")
+
+    def pane_point(self, key, selector=".ws-pane-title"):
+        p = self.b.wait(
+            f"""(() => {{
+              const f = document.querySelector('iframe[data-key="{key}"]');
+              const el = f && f.closest('.ws-pane').querySelector({json.dumps(selector)});
+              if (!el) return null;
+              const r = el.getBoundingClientRect();
+              return r.width ? {{x: r.left + r.width / 2, y: r.top + r.height / 2}} : null;
+            }})()""",
+            f"the pane for {key}",
+        )
+        return (p["x"], p["y"])
+
+    def test_workspace_panes_balance_into_a_grid(self):
+        b = self.b
+        keys = self.grid_tab()
+        try:
+            self.balance_into_a_grid(keys)
+        finally:
+            self.drop_grid_tab(keys)
+
+    def balance_into_a_grid(self, keys):
+        b = self.b
+        # The first merge goes through the tab's right-click menu; the rest call it directly.
+        b.js(f"""(() => {{
+          const at = (k) => saved.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === k));
+          const t = document.querySelector(`#tabs [data-tab="${{at({json.dumps(keys[1])})}}"]`);
+          const r = t.getBoundingClientRect();
+          t.dispatchEvent(new MouseEvent("contextmenu", {{bubbles: true, cancelable: true, clientX: r.left + 8, clientY: r.bottom - 4}}));
+        }})()""")
+        b.wait("document.getElementById('ws-menu') && !document.getElementById('ws-menu').hidden", "the tab menu")
+        moved = b.js(f"""(() => {{
+          const at = (k) => saved.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === k));
+          const name = saved.tabs[at({json.dumps(keys[0])})].name;
+          const hit = [...document.querySelectorAll('#ws-menu [role=menuitem]')].find((m) => m.textContent.trim() === 'Move into ' + name);
+          if (hit) hit.click();
+          return Boolean(hit);
+        }})()""")
+        if not moved:
+            raise Failure("the tab menu has no Move into item")
+        b.wait("leaves(tab().root).length === 2", "two panes after the merge")
+        self.merge_grid_tabs([keys[0], *keys[2:]], total=4)
+        boxes = {p["key"]: p for p in self.pane_boxes()}
+        if len(boxes) != 4:
+            raise Failure(f"four visible panes expected: {sorted(boxes)}")
+        want = dict(zip(keys, ((0, 0), (1, 0), (0, 1), (1, 1))))
+        for key, p in boxes.items():
+            if abs(p["w"] - 0.5) > 0.02 or abs(p["h"] - 0.5) > 0.02:
+                raise Failure(f"a 2x2 grid should give {key} half the area: {p}")
+            if (round(p["x"] * 2), round(p["y"] * 2)) != want[key]:
+                raise Failure(f"{key} should sit at {want[key]} of the 2x2 grid: {p}")
+        pane = b.js(f"leaves(tab().root).find((l) => l.key === {json.dumps(keys[3])}).pane")
+        b.click(f'.ws-pane[data-pane="{pane}"] [data-act="close"]')
+        b.wait("leaves(tab().root).length === 3", "three panes after closing one")
+        boxes = {p["key"]: p for p in self.pane_boxes()}
+        for key, (x, w) in ((keys[0], (0, 0.5)), (keys[1], (0.5, 0.5))):
+            p = boxes[key]
+            if abs(p["x"] - x) > 0.02 or abs(p["w"] - w) > 0.02 or round(p["y"] * 2) != 0:
+                raise Failure(f"{key} should keep half of the top row: {p}")
+        p = boxes[keys[2]]
+        if abs(p["w"] - 1) > 0.02 or abs(p["h"] - 0.5) > 0.02 or round(p["y"] * 2) != 1:
+            raise Failure(f"{keys[2]} should take the whole bottom row: {p}")
+
+    def test_workspace_panes_move_by_drag_and_swap_menu(self):
+        b = self.b
+        keys = self.grid_tab()
+        try:
+            self.move_by_drag_and_swap_menu(keys)
+        finally:
+            self.drop_grid_tab(keys)
+
+    def move_by_drag_and_swap_menu(self, keys):
+        b = self.b
+        self.merge_grid_tabs(keys)
+        b.drag(self.pane_point(keys[0]), self.pane_point(keys[3]))
+        order = b.js("leaves(tab().root).map((l) => l.key)")
+        if order != [keys[3], keys[1], keys[2], keys[0]]:
+            raise Failure(f"dragging pane 1 onto pane 4 should swap their places: {order}")
+        pane = b.js(f"leaves(tab().root).find((l) => l.key === {json.dumps(keys[0])}).pane")
+        b.click(f'.ws-pane[data-pane="{pane}"] [data-act="more"]')
+        b.wait("document.getElementById('ws-menu') && !document.getElementById('ws-menu').hidden", "the pane menu")
+        swapped = b.js("""(() => {
+          const hit = [...document.querySelectorAll('#ws-menu [role=menuitem]')].find((m) => m.textContent.includes('Swap with 1'));
+          if (hit) hit.click();
+          return Boolean(hit);
+        })()""")
+        if not swapped:
+            raise Failure("the pane menu has no Swap with item")
+        order = b.js("leaves(tab().root).map((l) => l.key)")
+        if order != keys:
+            raise Failure(f"Swap with 1 should put the panes back in reading order: {order}")
 
     def menu(self, path):
         self.b.goto(self.url(path))
@@ -1253,6 +1445,17 @@ class Suite:
             text = b.js(f"fetch('/dispatch/conversations/{id}/attachments/1-notes.log').then((r) => r.text())")
             if text != "hello":
                 raise Failure(f"the saved text file reads {text!r}")
+            page = b.js("location.href")
+            viewer = "document.getElementById('shot-view')"
+            b.click("#dispatch-log .msg.user .msg-file.image")
+            b.wait(f"{viewer}?.open && (() => {{ const i = {viewer}.querySelector('img'); return i && i.complete && i.naturalWidth === 1; }})()", "the image in the viewer")
+            b.click("#shot-view .shot-view-head button")
+            b.wait(f"!{viewer}.open", "the viewer closed by its Close button")
+            b.click("#dispatch-log .msg.user .msg-file.text")
+            b.wait(f"{viewer}.open && {viewer}.querySelector('pre')?.textContent === 'hello'", "the text file in the viewer")
+            b.js(f"{viewer}.close()")
+            if b.js("location.href") != page or b.js("document.querySelector('#dispatch-log .msg.user .msg-file[target]')"):
+                raise Failure("opening a file left the conversation or would open a new window")
         finally:
             self.api("POST", "/api/settings/dispatch", before)
 
@@ -1479,6 +1682,94 @@ class Suite:
         finally:
             b.viewport(1280, 800)
 
+    def test_settings_voice_input_and_dispatch_dictation(self):
+        b = self.b
+        b.goto(self.url("/settings#voice"))
+        b.wait("document.querySelector('#voice-form select[name=input]')?.value === 'off'", "voice input off by default")
+        b.wait("document.getElementById('mic') === null", "no microphone on the Settings page")
+        self.set_field("#voice-form select[name=input]", "local")
+        b.wait("!document.querySelector('#voice-form [data-input=local]').hidden", "the local Whisper fields")
+        self.set_field("#voice-form input[name=whisper_model]", self.y.config)
+        b.click("#voice-check")
+        b.wait("document.getElementById('voice-status').classList.contains('ok')", "the Test to find ffmpeg, whisper-cli and the model")
+        b.click("#voice-form button[type=submit]")
+        b.wait("!document.getElementById('undo-bar').hidden", "the voice settings to save")
+        with open(self.y.config) as f:
+            config = f.read()
+        if "input: local" not in config:
+            raise Failure(f"yardbell.yml does not hold the voice input:\n{config}")
+        try:
+            b.goto(self.url("/dispatch"))
+            b.wait("!document.getElementById('mic').hidden", "the microphone button in the composer")
+            b.click("#mic")
+            b.wait("document.getElementById('mic').classList.contains('recording')", "recording to start on the fake microphone")
+            b.pump(0.5)
+            b.click("#mic")
+            b.wait(
+                f"document.querySelector('#dispatch-form textarea').value.includes({json.dumps(FAKE_DICTATION)})",
+                "the dictation to land in the message box",
+            )
+            self.set_field("#dispatch-form textarea", "")
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+
+    def test_dictation_falls_back_without_mediarecorder(self):
+        # WebKitGTK's MediaRecorder accepts a mime type and then refuses to start, so the
+        # desktop app records through the Web Audio fallback. Taking MediaRecorder away
+        # entirely walks the same path.
+        b = self.b
+        b.goto(self.url("/dispatch"))
+        b.js("window.__clock = new AudioContext(); window.__clock.resume().catch(() => {}); 0")
+        b.pump(0.5)
+        able = b.js("window.__clock.state === 'running'")
+        b.js("window.__clock.close().catch(() => {}); delete window.__clock; 0")
+        if not able:
+            # Without an audio server, as on a CI runner, Web Audio has no clock
+            # and nothing can capture; the speak test skips the same way.
+            return
+        self.api(
+            "POST",
+            "/api/settings/voice",
+            {"input": "local", "whisper_model": self.y.config},
+        )
+        try:
+            b.goto(self.url("/dispatch"))
+            b.wait("!document.getElementById('mic').hidden", "the microphone button in the composer")
+            b.js("window.MediaRecorder = undefined")
+            b.click("#mic")
+            b.wait("document.getElementById('mic').classList.contains('recording')", "the fallback recorder to start")
+            b.pump(1.0)
+            b.click("#mic")
+            b.wait(
+                f"document.querySelector('#dispatch-form textarea').value.includes({json.dumps(FAKE_DICTATION)})",
+                "the fallback dictation to land in the message box",
+            )
+            self.set_field("#dispatch-form textarea", "")
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+
+    def test_dispatch_speak_toggle_mutes_at_once(self):
+        b = self.b
+        b.goto(self.url("/dispatch"))
+        b.wait("document.getElementById('dispatch-send')", "the Dispatch page")
+        able = b.js("'speechSynthesis' in window")
+        if not able:
+            if not b.js("document.getElementById('speak-toggle').hidden"):
+                raise Failure("the speak toggle shows although the browser cannot speak")
+            return
+        b.wait("!document.getElementById('speak-toggle').hidden", "the speak toggle")
+        if b.js("document.getElementById('speak-toggle').getAttribute('aria-pressed')") != "false":
+            raise Failure("speaking is not off by default")
+        b.click("#speak-toggle")
+        b.wait("document.getElementById('speak-toggle').getAttribute('aria-pressed') === 'true'", "speaking turned on")
+        if b.js("localStorage.getItem('yardbell.dispatch.speak')") != "1":
+            raise Failure("the choice is not kept on this device")
+        b.goto(self.url("/settings#voice"))
+        b.wait("document.getElementById('speak-enable').checked", "the same switch on in Settings")
+        b.click("#speak-enable")
+        b.goto(self.url("/dispatch"))
+        b.wait("document.getElementById('speak-toggle').getAttribute('aria-pressed') === 'false'", "Settings turned it off")
+
     def pull_session(self):
         r = self.y.tmux("has-session", "-t", f"={PULL_SESSION}")
         if r.returncode:
@@ -1507,8 +1798,20 @@ class Suite:
         title = b.js(f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]').closest('.s-row').querySelector('.pr-badge').title")
         if title != "Pull request #12: Fix the login redirect. CI failing on CI / test. Review required.":
             raise Failure(f"the badge title says {title!r}")
+        row = f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]').closest('.s-row')"
+        review = b.js(f"{row}.querySelector('[data-act=review-pull]')?.textContent.trim()")
+        if review != "Review #12":
+            raise Failure(f"the row offers {review!r} instead of Review #12")
+        # The newest seeded review of fix-login is a step still waiting for approval.
+        mark = b.wait(f"{row}.querySelector('.review-mark')?.textContent", "the review mark beside the badge")
+        if mark != "review waiting":
+            raise Failure(f"the review mark says {mark!r}")
+        href = b.js(f"{row}.querySelector('.review-mark').getAttribute('href')")
+        if not href.startswith("/dispatch?c="):
+            raise Failure(f"the review mark links to {href!r}")
         b.goto(self.url("/workspace"))
         b.wait("document.querySelector('#tree .ws-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace sidebar")
+        b.wait("document.querySelector('#tree .ws-review')?.textContent === 'review waiting'", "the review mark in the Workspace sidebar")
 
     def test_pull_request_card_sends_to_the_session(self):
         b = self.b
@@ -1568,6 +1871,125 @@ class Suite:
                 raise Failure(f"the card does not show {expected!r}:\n{text}")
         if "#12" in text or "pull request" in text.lower():
             raise Failure(f"the merge request card still says pull request:\n{text}")
+
+    def test_a_usage_limit_card_offers_to_resume(self):
+        b = self.b
+        b.goto(self.url(f"/dispatch?c={LIMIT_CHAT}"))
+        b.wait("document.querySelector('#dispatch-log .pull-card .badge')?.textContent === 'Limit reset'", "the limit reset card")
+        text = b.js("document.querySelector('#dispatch-log .pull-card').innerText")
+        for expected in ("demo-app", "You've hit your limit · resets 3pm", "so it can go on", "Send to session"):
+            if expected not in text:
+                raise Failure(f"the card does not show {expected!r}:\n{text}")
+        if "#" in text.split("\n")[0]:
+            raise Failure(f"the limit card names a pull request:\n{text}")
+        b.click("#dispatch-log .pull-card .pull-sends summary")
+        if "continue" not in b.js("document.querySelector('#dispatch-log .pull-card .pull-sends').innerText"):
+            raise Failure("the card does not say it sends continue")
+
+    def test_merge_on_the_board_merges_a_ready_pull_request(self):
+        b = self.b
+        worktree = os.path.join(os.path.dirname(self.y.root), "merge-wt")
+        if not os.path.exists(worktree):
+            git("worktree", "add", "-q", "-b", MERGE_BRANCH, worktree, cwd=os.path.join(self.y.root, "demo-app"))
+        r = self.y.tmux("new", "-d", "-s", MERGE_SESSION, "-c", worktree, self.y.shell)
+        if r.returncode:
+            raise Failure(f"tmux new failed: {r.stderr}")
+        try:
+            self.api("POST", "/refresh")
+            b.js("localStorage.removeItem('yardbell.dashboard.view')")
+            b.goto(self.url("/?view=board"))
+            b.wait(
+                f"(async () => (await (await fetch('/state')).json()).sessions.find((s) => s.tmux === {json.dumps(MERGE_SESSION)})?.pull?.review === 'approved')()",
+                "the ready pull request in /state",
+                timeout=45,
+            )
+            button = f"document.querySelector('.b-lane[data-lane=ready] .b-card[data-name={json.dumps(MERGE_SESSION)}] [data-act=merge]')"
+            b.wait(button, "the Merge button on the Ready to merge card")
+            if b.js(f"{button}.textContent.trim()") != "Merge #34":
+                raise Failure(f"the button says {b.js(f'{button}.textContent')!r}")
+            if b.js("!!document.querySelector('.b-lane[data-lane=needs] [data-act=merge]')"):
+                raise Failure("a session that is not ready offers Merge")
+            b.click(f".b-lane[data-lane=ready] .b-card[data-name={json.dumps(MERGE_SESSION)}] [data-act=merge]")
+            b.wait("document.querySelector('dialog.confirm[open]')?.textContent.includes('Merge #34?')", "the question before merging")
+            if os.path.exists(self.y.merges):
+                raise Failure("it merged before it was confirmed")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait("document.getElementById('toast').textContent === 'Merged #34'", "the merged toast")
+            with open(self.y.merges) as f:
+                said = f.read().strip()
+            if said != "pr merge 34 --merge --match-head-commit def456":
+                raise Failure(f"gh was asked to {said!r}")
+            b.goto(self.url("/?view=machines"))
+            b.wait(f"document.querySelector('.s-row [data-name={json.dumps(MERGE_SESSION)}]')?.closest('.s-row').querySelector('[data-act=merge]')", "Merge on the session's row too")
+        finally:
+            self.y.tmux("kill-session", "-t", f"={MERGE_SESSION}")
+            b.js("localStorage.removeItem('yardbell.dashboard.view')")
+
+    def test_board_lays_sessions_into_lanes(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait("window.YardbellBoard", "the board helpers")
+        lanes = b.js(
+            """(() => {
+              const B = window.YardbellBoard;
+              const pr = (more) => ({forge: 'github', number: 1, state: 'open', ci: 'passing', review: '', draft: false, mergeable: 'clean', ...more});
+              const s = (activity, pull) => ({activity, pull});
+              return [
+                s('blocked', pr({ci: 'failing'})),
+                s('active', pr({ci: 'failing'})),
+                s('idle', pr({ci: 'failing'})),
+                s('idle', pr({mergeable: 'conflicting', review: 'approved'})),
+                s('idle', pr({review: 'changes_requested'})),
+                s('idle', pr({review: 'approved'})),
+                s('idle', pr({review: 'approved', ci: 'none', mergeable: 'unknown'})),
+                s('idle', pr({review: 'approved', draft: true})),
+                s('idle', pr({ci: 'pending'})),
+                s('idle', pr({})),
+                s('idle', pr({state: 'merged'})),
+                s('idle', undefined),
+                {activity: 'idle', stopped: 'API Error: 529', pull: pr({review: 'approved'})},
+              ].map(B.lane);
+            })()"""
+        )
+        want = ["needs", "working", "needs", "needs", "needs", "ready", "ready", "review", "review", "review", "idle", "idle", "needs"]
+        if lanes != want:
+            raise Failure(f"the lanes are {lanes}, not {want}")
+        self.pull_session()
+        b.js("localStorage.removeItem('yardbell.dashboard.view')")
+        b.goto(self.url("/"))
+        b.wait(
+            f"(async () => (await (await fetch('/state')).json()).sessions.find((s) => s.tmux === {json.dumps(PULL_SESSION)})?.pull?.ci === 'failing')()",
+            "the failing pull request in /state",
+            timeout=45,
+        )
+        b.click("[data-view=board]")
+        card = f"document.querySelector('.b-lane[data-lane=needs] .b-card[data-name={json.dumps(PULL_SESSION)}]')"
+        b.wait(card, "the session with failing CI under Needs you")
+        text = b.js(f"{card}.innerText")
+        for expected in ("demo-app", "CI failing", "#12"):
+            if expected not in text:
+                raise Failure(f"the card does not show {expected!r}:\n{text}")
+        titles = b.js("[...document.querySelectorAll('.b-lane h2 .b-title')].map((t) => t.textContent)")
+        if titles != ["Needs you", "Working", "In review", "Ready to merge", "Idle"]:
+            raise Failure(f"the lanes are titled {titles}")
+        if "view=board" not in b.js("location.search"):
+            raise Failure("the address does not keep the board")
+        b.goto(self.url("/"))
+        b.wait(card, "the board again after a reload")
+        b.js("document.getElementById('search').value = 'no-such-session'; document.getElementById('search').dispatchEvent(new Event('input'))")
+        b.wait("document.querySelector('#groups .empty')?.innerText.includes('No sessions match')", "the empty board while nothing matches")
+        b.viewport(380, 800)
+        try:
+            b.goto(self.url("/?view=board"))
+            b.wait(card, "the board at phone width")
+            wide = b.js("document.documentElement.scrollWidth > document.documentElement.clientWidth")
+            if wide:
+                raise Failure("the board scrolls sideways at phone width")
+        finally:
+            b.viewport(1280, 800)
+        b.click("[data-view=machines]")
+        b.wait(f"document.querySelector('.s-row [data-name={json.dumps(PULL_SESSION)}]')", "the machine sections again")
+        b.js("localStorage.removeItem('yardbell.dashboard.view')")
 
     def test_settings_saves_dispatch_rules(self):
         b = self.b

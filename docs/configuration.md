@@ -183,7 +183,8 @@ machine lists which ones it finds.
 ### `phone_notifications` (optional)
 
 Which notifications the Yardbell app for Android shows: an agent waiting for you, a session ended,
-a machine down or back, or a machine's memory at 95%. The app gets them over its own connection
+a machine down or back, a machine's memory at 95%, pipelines, proposals, and what happens to your
+sessions' pull and merge requests. The app gets them over its own connection
 to the server, so there is nothing to set up. The **Phone notifications** section of the Settings
 page edits these switches.
 
@@ -197,6 +198,12 @@ phone_notifications:
   pipeline_waiting: true
   pipeline_finished: true
   proposals: true
+  pull_ci_failed: true
+  pull_conflicts: true
+  pull_ready: true
+  pull_merged: true
+  pull_closed: true
+  limit_reset: true
 ```
 
 Every key is optional. The values above are the defaults. Older configs may still have `server`,
@@ -212,6 +219,12 @@ Every key is optional. The values above are the defaults. Older configs may stil
 | `pipeline_waiting` | `true` | Notify when a pipeline run waits for you. |
 | `pipeline_finished` | `true` | Notify with the first line of a pipeline run's report. |
 | `proposals` | `true` | Notify when a proposal waits in the Proposals inbox. |
+| `pull_ci_failed` | `true` | Notify when CI fails on a session's pull or merge request, once per commit. |
+| `pull_conflicts` | `true` | Notify when a session's pull or merge request gets merge conflicts with its base branch. |
+| `pull_ready` | `true` | Notify when it is approved, green and free of conflicts. |
+| `pull_merged` | `true` | Notify when it is merged. |
+| `pull_closed` | `true` | Notify when it is closed without merging. |
+| `limit_reset` | `true` | Notify when an agent that stopped at its usage limit can go on, because the reset time it printed has passed. |
 
 ### `health_checks` (optional)
 
@@ -402,7 +415,7 @@ and `deny`.
 
 | Key | Required | Meaning |
 |---|---|---|
-| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `move_session`, `remember`, `run_command` (a pipeline's [Run a command](automation.md#run-a-command) step, which only a `deny` stops), or `any` (the default). |
+| `action` | no | `start_session`, `stop_session`, `send_to_session`, `review_session`, `scan_folder`, `remove_worktree`, `integrate_branches`, `push_branch`, `merge_pull`, `move_session`, `remember`, `run_command` (a pipeline's [Run a command](automation.md#run-a-command) step, which only a `deny` stops), or `any` (the default). |
 | `machine` | no | A machine name, or `any` (the default). |
 | `folder` | no | A folder pattern. Empty matches every folder. |
 | `approval` | yes | `allow`, `prompt` or `deny`. |
@@ -436,6 +449,40 @@ Dispatch gets an error that names the rule and tells you about it. A step that a
 run says which rule on its card. Yardbell refuses to load rules with an unknown action or machine,
 a folder starting with `~`, a rule that names nothing (set `approval` instead) or two rules for the
 same steps, and says which rule is wrong.
+
+### `voice` (optional)
+
+Voice input for Dispatch: a microphone button in its message box records what you say and types it
+out. The **Voice** section of the Settings page edits it, and its **Test** button checks the pieces
+without saving.
+
+```yaml
+voice:
+  input: local                    # off (the default), local or api
+  whisper_command: whisper-cli    # the whisper.cpp binary; empty means whisper-cli on PATH
+  whisper_model: small            # a model name, or a path to a ggml file; empty means small
+  api_url: https://api.openai.com/v1/audio/transcriptions  # with input: api; empty means OpenAI
+  api_model: whisper-1            # empty means whisper-1
+  api_key: ${secret:openai}       # with input: api; must be a ${secret:name} reference
+  language: en                    # optional hint; empty lets the engine find it
+```
+
+`local` transcribes on the machine Yardbell runs on, with
+[whisper.cpp](https://github.com/ggml-org/whisper.cpp) and `ffmpeg`, so the recording never leaves
+it. `whisper_model` is a Whisper model name such as `tiny`, `base.en`, `small` or `large-v3-turbo`:
+the server downloads it once into `~/.local/share/yardbell/models` on the first dictation and keeps
+it there, across upgrades. A path to a `ggml-*.bin` file you manage yourself also works, and such a
+file is never downloaded. Empty means `small`, which hears most languages well. `api` sends the recording to an OpenAI-compatible transcription endpoint; `api_key` must be a
+`${secret:name}` reference into [secrets](#secrets), never the key itself, and `api_url` must use
+https, or http only to `127.0.0.1` for a server such as speaches or LocalAI on the same machine.
+Browsers only open the microphone on a secure page, so in a browser dictation works on `https://`
+or on the machine the browser calls `localhost`. The desktop and Android apps take care of this
+themselves: they load a remote server's pages through a local relay, so the microphone works there
+wherever the server is.
+
+Speaking is separate: the speaker toggle on the Dispatch page (also under Settings, Voice) reads
+replies and session changes aloud with the device's own voices, is off by default, and is saved
+per device in the browser, so nothing about it is in `yardbell.yml`.
 
 ### `worktree_setup` (optional)
 
@@ -501,6 +548,8 @@ pull_requests:
   cards: true          # false: badges only, no cards in Dispatch
   use_github: true     # false: gh is never asked for badges and cards
   use_gitlab: true     # false: GitLab hosts are kept but never asked for badges and cards
+  review_sessions: off # ask or auto: review a session's pull request when it opens or gets new commits
+  merge_method: merge  # how Merge merges: merge, squash or rebase
   gitlab:              # optional
     - host: git.example.com               # the host as the remote URL names it
       token: '${secret:gitlab}'           # a personal access token with read_api
@@ -514,7 +563,17 @@ most once every `poll_seconds`, separately from the machine check every `poll_se
 level, and the branches of one machine are asked one after another. What has already been posted
 is kept in `pulls.json` in the state folder, so a restart never posts a card twice.
 
-A GitLab token needs only the `read_api` scope: Yardbell never writes to GitLab. Make one in GitLab
+`review_sessions` starts a read-only reviewer on a session's pull or merge request when it opens or
+gets a new head commit, once the session's agents are idle and its folder has that commit checked
+out: `ask` proposes it in Dispatch for you to approve, `auto` starts it. Each head is reviewed once,
+remembered in `pulls.json`. Requests already open when it is turned on wait for their next push.
+Dispatch rules for `review_session` still apply. See
+[Reviewing your sessions' pull requests](usage.md#reviewing-your-sessions-pull-requests).
+
+A GitLab token needs only the `read_api` scope to show badges and cards. Merging from Yardbell
+(**Merge** on a ready session, or Dispatch's `merge_pull`) needs the `api` scope, and so does a
+pipeline that opens merge requests. GitLab merges as each project is set up, with a merge commit or a
+fast-forward, so `merge_method` only tells it whether to squash. Make one in GitLab
 from your avatar, **Edit profile**, **Access tokens**, and save it under **Secrets** in Settings.
 `url` is for an instance whose web address differs from the host in your remote, such as another
 port. The token is sent only to that address, in a header, and never goes over ssh, into
