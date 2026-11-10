@@ -64,6 +64,8 @@ five lanes, by what each needs next:
 | **Ready to merge** | Approved, CI green (or no CI) and no known merge conflict. |
 | **Idle** | An idle agent with no open pull request, including one whose pull request was merged or closed. |
 
+![The Board, with sessions in lanes from Needs you to Ready to merge](screenshots/board.png)
+
 Each card shows the folder, ticket, branch, the pull request badge, the machine and the agent. A card
 in **Ready to merge** has a **Merge** button, as does the session's row on **Machines**: it asks
 first, then merges on GitHub or GitLab the way **Merge with** in Settings, GitHub and GitLab says (a

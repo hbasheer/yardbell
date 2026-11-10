@@ -797,11 +797,11 @@ waits, and clicking one opens it.
 On the run you can **Send answer** (the step runs again with it, the waiting agent gets it typed in,
 or Plan gets your answers), **Retry step**, **Continue on pass** or **Continue on fail** (follow that
 line as if the step had ended so), or **Drop** (stops its sessions and leaves the worktree and
-branch). **Stop session** stops one session and makes its step wait, and **Delete this run** stops
-the run first if it is still going, then removes it.
+branch). **Stop session** stops one session and makes its step wait. Once a run is done or dropped,
+**Delete this run** removes its record and leaves its worktree, branch and pull request.
 
-When a run ends or is dropped, every session stops and [teardown](#teardown) runs. Deleting a whole
-pipeline stops its runs' sessions but runs no teardown, so stop a run first if its containers should go.
+When a run ends or is dropped, every session stops and [teardown](#teardown) runs. A pipeline can be
+deleted only once none of its runs is still going, so drop those first.
 
 ### Set one up
 

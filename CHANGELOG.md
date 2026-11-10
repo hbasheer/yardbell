@@ -14,6 +14,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 - **Delete finished runs.** **Delete finished runs** clears a pipeline's done and dropped runs at once. A run still
   queued, running or waiting has to be dropped before it can be deleted, and a pipeline with such runs cannot be
   deleted. Deleting removes only the record, and the question names any worktree or open session that stays.
+- Fixed: on a phone, a session with a pull request lost **Insights**, **Move** and **Stop** off the
+  edge of its row. The buttons now wrap onto a second line.
+- Fixed: a **Limit until** badge no longer runs under the buttons beside it on the dashboard, or
+  squeezes the machine name on a Board card.
 
 ## [0.10.413] - 2026-11-09
 
