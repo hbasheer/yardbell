@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-12
+
 - **Review and commit changes from the Workspace.** The right panel has a third tab, **Changes**, with the
   folder's changed files under Staged, Changes and Untracked and a count on its icon. A file opens as a diff
   tab, unified or split, with colours, both line numbers and unchanged runs folded. Hover a line and click
