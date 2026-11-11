@@ -5,65 +5,21 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <meta name="color-scheme" content="light dark">
 <title>Dispatch · Yardbell</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/400.css" integrity="sha384-EfdL97hcnol8T4/i0jMEua2ounMTPBCKaU1QluVPWTv7V8xcTTfxSL1VWdjjpdRl" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/500.css" integrity="sha384-JJ19IMHzOJ2sAC2xNzhH4cnXNAY9idh1hFgmr9ePDd3e68jl+XEPiMVKTwYyGBcc" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/600.css" integrity="sha384-NWCWDXFWH0ixL3DXbRVGmMD8PbUKTQZA1n9RtBQEkxKQdln+Ui814nUpfzeU0ws+" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/400.css" integrity="sha384-kTJy0lu/NAzlcHdqtuJe5q6vDA1M8gHcMp6/umVo4Nqoa7La36UBhvWtM112y0i4" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/500.css" integrity="sha384-Ddvk1ngA7kUJqPAsRbHuZhooNDKcluU0BTRmYku5LWezQzInPKkiH6/z8GGyw5Ow" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist@5.2.6/index.css" integrity="sha384-p+EgvS3+MmUG4ztXXPqzFtb7IwR4h5ljta/AfLhM0vj1rtoFd3fsPDFTy2+m+W5U" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist-mono@5.2.6/index.css" integrity="sha384-+vQW7zp7HknV1Hb+78y01bvnE+c/tci1UJL3SVVr3mh96Ff2muGpGQP/rI6QWmH7" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
-<script src="/side.js"></script>
 <script src="/live.js"></script>
 <script src="/pull.js"></script>
 <script>if (window.top !== window.self) document.documentElement.classList.add("embedded");</script>
 </head>
 <body data-page="dispatch">
-<div class="app">
-  <aside class="side">
-    <div class="side-head">
-      <a class="wordmark" href="/">Yardbell</a>
-      <span class="side-summary" id="nav-summary" aria-live="polite"></span>
-    </div>
-    <nav class="machine-nav" aria-label="Machines">
-      <p class="nav-label">Machines</p>
-      <ul id="nav-machines" class="nav-list"></ul>
-      <a class="nav-add" href="/add"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Add machine</a>
-    </nav>
-    <div class="side-foot">
-      <p class="vpn" id="nav-vpn"></p>
-      <a class="side-link" href="/">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard
-      </a>
-      <a class="side-link" href="/workspace">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10M8 8h5.5"/></svg>Workspace
-      </a>
-      <a class="side-link" href="/pipeline">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="12.5" cy="8" r="1.5"/><path d="M5 8h1.5M9.5 8H11"/></svg>Pipelines
-      </a>
-      <a class="side-link" href="/diagrams">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="2" width="5" height="3.5" rx="1"/><rect x="1.5" y="10.5" width="5" height="3.5" rx="1"/><rect x="9.5" y="10.5" width="5" height="3.5" rx="1"/><path d="M8 5.5V8M4 10.5V8h8v2.5"/></svg>Diagrams
-      </a>
-      <a class="side-link" href="/dispatch" aria-current="page">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z"/></svg>Dispatch
-      </a>
-      <a class="side-link" href="/proposals">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 9.5 4 3.5h8l1.5 6v3h-11z"/><path d="M2.5 9.5h3.5l.5 1.5h3l.5-1.5h3.5"/></svg>Proposals<span class="side-count" id="nav-proposals-count" hidden></span>
-      </a>
-      <a class="side-link" href="/settings">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:2.3"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings
-      </a>
-      <button class="side-link theme-toggle" type="button" data-theme-toggle></button>
-      <button class="side-link" id="logout" type="button">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 3H3.5v10h3M10 5l3 3-3 3M13 8H6.5"/></svg>Log out
-      </button>
-    </div>
-  </aside>
 
-  <main class="main dispatch-main">
-    <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard</a>
-    <header class="main-head"><h1>Dispatch</h1><h2 class="chat-title" id="chat-title"></h2><a class="runs-on" id="runs-on" href="/settings#dispatch" hidden></a><button class="btn quiet icon-btn speak-toggle" type="button" id="speak-toggle" aria-pressed="false" aria-label="Read replies aloud" hidden>
+
+  <main class="main shell-main dispatch-main" id="main">
+    <header class="main-head"><h1>Dispatch</h1><h2 class="chat-title" id="chat-title"></h2><button class="btn quiet icon-btn speak-toggle" type="button" id="speak-toggle" aria-pressed="false" aria-label="Read replies aloud" hidden>
       <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6h2.2L8 3.5v9L4.7 10H2.5z"/><path class="speak-waves" d="M10.5 6a3 3 0 0 1 0 4M12.5 4.5a5.5 5.5 0 0 1 0 7"/><path class="speak-cross" d="M10.5 6.5l3 3M13.5 6.5l-3 3"/></svg>
-    </button><a class="btn quiet small-link" href="/settings#dispatch">Settings</a><button class="btn quiet icon-btn embed-only" type="button" id="hide-panel" aria-label="Hide Dispatch" title="Hide Dispatch"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M6 3v10M10.5 6.5 9 8l1.5 1.5"/></svg></button></header>
+    </button><a class="btn quiet small-link" href="/settings#dispatch">Settings</a></header>
     <div class="dispatch-tabs" id="dispatch-tabs">
       <div class="segmented" role="tablist" aria-label="Dispatch">
         <button type="button" role="tab" data-tab="chat" aria-selected="true" aria-controls="dispatch-chat">Chat</button>
@@ -93,7 +49,6 @@
           <button class="link-btn task-restore" type="button" id="task-restore" hidden>Restore default tasks</button>
         </details>
       </aside>
-      <div class="dispatch-resize" id="dispatch-resize" role="separator" aria-orientation="vertical" aria-label="Resize conversations" aria-controls="dispatch-side" tabindex="0" title="Drag to resize. Double-click to reset."></div>
       <div class="dispatch-chat" id="dispatch-chat">
         <div class="dispatch-sessions" id="dispatch-sessions" hidden></div>
         <div class="dispatch-log" id="dispatch-log" aria-live="polite"></div>
@@ -101,33 +56,43 @@
         <form class="dispatch-compose" id="dispatch-form">
           <div class="compose-box">
             <div class="compose-menu" id="compose-menu" role="listbox" hidden></div>
+            <div class="compose-plus-menu" id="compose-plus-menu" role="menu" aria-label="Attach and more" hidden>
+              <button class="compose-plus-item" type="button" role="menuitem" id="attach-file" title="Attach images, PDFs or text files. Dropping or pasting them works too.">
+                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 7.5l-5.2 5.2a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4a2.1 2.1 0 0 1 3 3L6.3 11.2a1 1 0 0 1-1.5-1.5L9.7 4.8"/></svg><span class="compose-plus-label">Attach files</span><span class="compose-plus-hint">Images, PDFs, text</span>
+              </button>
+              <button class="compose-plus-item" type="button" role="menuitem" id="save-as-task" title="Keep this message as a task">
+                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h8v11L8 10.6 4 13.5z"/></svg><span class="compose-plus-label">Save as task</span>
+              </button>
+              <div class="compose-plus-sep" role="separator"></div>
+              <button class="compose-plus-item" type="button" role="menuitem" id="send-key">
+                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="4" width="13" height="8.5" rx="1.5"/><path d="M4 7h.01M6.5 7h.01M9 7h.01M11.5 7h.01M5 10h6"/></svg><span class="compose-plus-label">Enter to send, Shift+Enter for a new line</span>
+              </button>
+            </div>
+            <div class="dictation-pill" id="dictation-pill" role="group" aria-label="Dictation" hidden></div>
             <div class="compose-files" id="compose-files" hidden></div>
-            <textarea name="text" rows="2" aria-label="Message Dispatch" aria-describedby="send-key" aria-autocomplete="list" aria-controls="compose-menu" placeholder="Fix the flaky checkout test in acme/web on branch eng-1234"></textarea>
+            <div class="compose-editor is-empty" id="dispatch-input" contenteditable="true" role="textbox" aria-multiline="true" aria-label="Message Dispatch" aria-autocomplete="list" aria-controls="compose-menu" aria-expanded="false" spellcheck="true" data-placeholder="Ask anything, @ to name a machine, session or folder, / for tasks"></div>
+            <input type="file" id="attach-input" multiple hidden>
             <div class="dispatch-actions">
               <div class="compose-tools">
-                <button class="compose-tool icon-only" type="button" id="attach-file" aria-label="Attach files" title="Attach images, PDFs or text files. Dropping or pasting them works too.">
-                  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M13 7.5l-5.2 5.2a3.2 3.2 0 0 1-4.5-4.5l5.4-5.4a2.1 2.1 0 0 1 3 3L6.3 11.2a1 1 0 0 1-1.5-1.5L9.7 4.8"/></svg>
+                <button class="compose-tool icon-only" type="button" id="compose-plus" aria-haspopup="menu" aria-expanded="false" aria-controls="compose-plus-menu" aria-label="Attach and more" title="Attach files, save as a task, choose the send key">
+                  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
                 </button>
-                <input type="file" id="attach-input" multiple hidden>
-                <button class="compose-tool icon-only mic" type="button" id="mic" aria-pressed="false" aria-label="Dictate" hidden>
-                  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.5" width="4" height="7.5" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5"/></svg>
-                </button>
-                <button class="compose-tool" type="button" id="insert-task" title="Insert a saved task. Typing / does the same.">
-                  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M9.5 5.5l-3 5"/></svg>Tasks
+                <button class="compose-tool icon-only" type="button" id="insert-task" aria-label="Insert a saved task" title="Insert a saved task. Typing / does the same.">
+                  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M9.5 5.5l-3 5"/></svg>
                 </button>
                 <button class="compose-tool icon-only" type="button" id="insert-name" aria-label="Insert a machine, session or folder" title="Insert a machine, session or folder. Typing @ does the same.">
                   <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:2.2"><circle cx="12" cy="12" r="4"/><path d="M16 8v5a3 3 0 0 0 6 0v-1a10 10 0 1 0-4 8"/></svg>
                 </button>
-                <button class="compose-tool" type="button" id="insert-scan" title="Scan a folder for dead code, test gaps or security problems">
-                  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3M2.5 8h11"/></svg>Scan
-                </button>
-                <button class="compose-tool" type="button" id="save-as-task" title="Keep this message as a task">
-                  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 2.5h8v11L8 10.6 4 13.5z"/></svg><span class="compose-tool-label">Save as task</span>
+                <button class="compose-tool icon-only" type="button" id="insert-scan" aria-label="Scan a folder" title="Scan a folder for dead code, test gaps or security problems">
+                  <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 5.5v-3h3M10.5 2.5h3v3M13.5 10.5v3h-3M5.5 13.5h-3v-3M2.5 8h11"/></svg>
                 </button>
               </div>
-              <button class="compose-hint" type="button" id="send-key">Enter to send, Shift+Enter for a new line</button>
-              <button class="compose-stop" type="button" id="dispatch-stop" hidden title="Stop Dispatch's reply. Sessions it started keep running.">
-                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg>Stop
+              <a class="runs-on" id="runs-on" href="/settings#dispatch" hidden><span class="runs-on-label"></span><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 6.5L8 10l3.5-3.5"/></svg></a>
+              <button class="compose-tool icon-only mic" type="button" id="mic" aria-pressed="false" aria-label="Dictate" hidden>
+                <svg class="icon mic-on" viewBox="0 0 16 16" aria-hidden="true"><rect x="6" y="1.5" width="4" height="7.5" rx="2"/><path d="M3.5 7.5a4.5 4.5 0 0 0 9 0M8 12v2.5"/></svg><svg class="icon mic-off" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.75" y="4.75" width="6.5" height="6.5" rx="1"/></svg>
+              </button>
+              <button class="compose-stop" type="button" id="dispatch-stop" hidden aria-label="Stop" title="Stop Dispatch's reply. Sessions it started keep running.">
+                <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="4.5" y="4.5" width="7" height="7" rx="1"/></svg>
               </button>
               <button class="compose-send" type="submit" id="dispatch-send" aria-label="Send" title="Send" disabled>
                 <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 13V3M3.5 7.5 8 3l4.5 4.5"/></svg>
@@ -138,9 +103,12 @@
       </div>
     </div>
   </main>
-</div>
 <div id="toast" role="status"></div>
-<script src="/nav.js"></script>
+<script src="/machines.js"></script>
+<script src="/shell.js"></script>
+<script src="/strip.js"></script>
+<script src="/usage.js"></script>
+<script src="/palette.js"></script>
 <script src="/insights.js"></script>
 <script type="module" src="/dispatch.js"></script>
 </body>

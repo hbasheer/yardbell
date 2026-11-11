@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const Nav = window.YardbellNav;
+const Nav = window.YardbellShell;
 let data = null;
 
 const LABELS = { nordvpn: "NordVPN Meshnet", tailscale: "Tailscale", headscale: "Headscale", netbird: "NetBird", zerotier: "ZeroTier", none: "None" };
@@ -54,18 +54,18 @@ function prefixHelp(m) {
 
 function machineForm(m) {
   const prefixes = [1, 2, 3, 4, 5, 6].map((p) => `<option${m.port_prefix === p ? " selected" : ""}>${p}</option>`).join("");
-  return `<form class="panel machine-form" id="machine-${esc(m.name)}" data-name="${esc(m.name)}">
-    <div class="machine-form-head">
-      <strong>${esc(m.name)}</strong>${m.local ? `<span class="note">this machine</span>` : ""}
-      <span class="spacer"></span>
+  const row = (label, control) => `<label class="set-row"><span class="set-text"><span class="set-label">${label}</span></span>${control}</label>`;
+  return `<form class="set-form machine-form" id="machine-${esc(m.name)}" data-name="${esc(m.name)}">
+    <div class="set-group-head machine-form-head">
+      <h3 class="set-group-title">${esc(m.name)}${m.local ? ` <span class="note">this machine</span>` : ""}</h3>
       ${m.local ? "" : `<button class="btn quiet danger" type="button" data-remove="${esc(m.name)}">Remove</button>`}
     </div>
-    <div class="grid3">
-      <label>SSH host <input type="text" name="ssh" value="${esc(m.ssh || "")}" placeholder="${esc(m.name)}" autocapitalize="off" ${m.local ? "disabled" : ""}></label>
-      <label>Mesh address <input type="text" name="mesh_ip" value="${esc(m.mesh_ip || "")}" placeholder="100.x.x.x" autocapitalize="off"></label>
-      <label>Port prefix ${m.local ? `<input type="text" value="host ports" disabled>` : `<select name="port_prefix">${prefixes}</select>`}</label>
-      <label class="span2">Project folder <input type="text" name="root" value="${esc(m.root)}" autocapitalize="off" required></label>
-      <label>VPN <select name="mesh">${providerOptions(m.mesh || "", true)}</select></label>
+    <div class="panel set-card">
+      ${row("SSH host", `<input type="text" name="ssh" value="${esc(m.ssh || "")}" placeholder="${esc(m.name)}" autocapitalize="off" ${m.local ? "disabled" : ""}>`)}
+      ${row("Mesh address", `<input type="text" name="mesh_ip" value="${esc(m.mesh_ip || "")}" placeholder="100.x.x.x" autocapitalize="off">`)}
+      ${row("Port prefix", m.local ? `<input type="text" value="host ports" disabled>` : `<select name="port_prefix">${prefixes}</select>`)}
+      ${row("Project folder", `<input type="text" name="root" value="${esc(m.root)}" autocapitalize="off" required>`)}
+      ${row("VPN", `<select name="mesh">${providerOptions(m.mesh || "", true)}</select>`)}
     </div>
     <div class="form-foot">
       <p class="help">${m.local ? "Yardbell runs here. Its mesh address is where your phone reaches Yardbell. Apps on this machine keep their own port numbers." : prefixHelp(m)}</p>
@@ -856,6 +856,7 @@ async function load() {
   renderSecrets();
   renderDispatch();
   renderVoice();
+  renderKeepAwake(data.keep_awake);
   renderPullRequests();
   pullFoldersWanted();
   await loadConnections().catch((err) => toast(err.message));
@@ -959,6 +960,25 @@ document.querySelectorAll('input[name="theme"]').forEach((input) => {
 document.querySelectorAll('input[name="term-theme"]').forEach((input) => {
   input.checked = input.value === window.YardbellTheme.terminalChosen();
   input.addEventListener("change", () => window.YardbellTheme.setTerminal(input.value));
+});
+
+function renderKeepAwake(status) {
+  if (!status) return;
+  document.querySelectorAll('input[name="keep-awake"]').forEach((input) => { input.checked = input.value === status.mode; });
+  const base = "Stops the computer Yardbell runs on from sleeping, so sessions keep going and stay reachable from your phone.";
+  const now = status.error ? ` ${status.error.charAt(0).toUpperCase()}${status.error.slice(1)}.` : status.holding ? ` Holding it awake now with ${status.tool}.` : status.tool ? "" : " Neither systemd-inhibit nor caffeinate was found here.";
+  $("awake-desc").textContent = base + now;
+}
+
+document.querySelectorAll('input[name="keep-awake"]').forEach((input) => {
+  input.addEventListener("change", async () => {
+    try {
+      renderKeepAwake(await api("POST", "/api/settings/keep-awake", { mode: input.value }));
+    } catch (err) {
+      toast(err.message);
+      renderKeepAwake(data?.keep_awake);
+    }
+  });
 });
 
 let gitlabHosts = [];
@@ -1779,11 +1799,46 @@ $("dispatch-form").addEventListener("submit", async (e) => {
 $("dispatch-form").elements.runs_on.addEventListener("change", dispatchRunsOn);
 $("dispatch-form").elements.codex_model.addEventListener("input", codexModelNote);
 
+const QUALITY = ["Poor", "Fair", "Good", "Very good", "Excellent"];
+const MIC_KEY = "yardbell.voice.mic";
+const MODE_HELP = {
+  auto: "Tap Ctrl+Shift+Space or the microphone to start and stop, or hold it while you talk.",
+  hold: "Talk while you hold Ctrl+Shift+Space or the microphone.",
+  toggle: "Press Ctrl+Shift+Space or the microphone to start, and again to stop.",
+};
+let voiceModels = null;
+let voicePoll = 0;
+let setupWanted = null;
+let setupWaits = 0;
+
+function size(bytes) {
+  return bytes >= 1e9 ? `${(bytes / 1e9).toFixed(1)} GB` : `${Math.round(bytes / 1e6)} MB`;
+}
+
+function quality(q) {
+  const dots = [1, 2, 3, 4, 5].map((n) => `<span class="voice-dot${n <= q ? " on" : ""}"></span>`).join("");
+  return `<span class="voice-quality"><span class="voice-dots" aria-hidden="true">${dots}</span><span>${QUALITY[q - 1] || ""}</span></span>`;
+}
+
+function downloading(m) {
+  const d = m.download;
+  const total = d?.total || m.bytes;
+  const percent = total ? Math.floor((d.done * 100) / total) : 0;
+  return `Downloading, ${Math.round(d.done / 1e6)} of ${Math.round(total / 1e6)} MB (${percent}%)`;
+}
+
 function voiceInputMode() {
   const f = $("voice-form");
   const mode = f.elements.input.value;
   f.querySelectorAll("[data-input]").forEach((el) => { el.hidden = !el.dataset.input.split(" ").includes(mode); });
   $("voice-check").hidden = mode === "off";
+  $("voice-use-api").closest(".voice-cloud-row").hidden = mode === "api";
+  renderVoiceState();
+}
+
+function voiceModeHelp() {
+  const mode = $("voice-form").elements.mode.value || "auto";
+  $("voice-mode-desc").textContent = MODE_HELP[mode];
 }
 
 function voiceValues() {
@@ -1796,6 +1851,9 @@ function voiceValues() {
     api_model: f.elements.api_model.value.trim(),
     api_key: f.elements.api_key.value.trim(),
     language: f.elements.language.value.trim(),
+    vocabulary: f.elements.vocabulary.value.trim(),
+    remove_fillers: f.elements.remove_fillers.checked,
+    mode: f.elements.mode.value || "auto",
   };
 }
 
@@ -1808,11 +1866,202 @@ function renderVoice() {
   f.elements.api_url.value = v.api_url || "";
   f.elements.api_model.value = v.api_model || "";
   f.elements.api_key.value = v.api_key || "";
-  f.elements.language.value = v.language || "";
+  const language = f.elements.language;
+  const code = v.language || "";
+  if (![...language.options].some((o) => o.value === code)) language.add(new Option(code, code));
+  language.value = code;
+  f.elements.vocabulary.value = v.vocabulary || "";
+  f.elements.remove_fillers.checked = Boolean(v.remove_fillers);
+  f.elements.mode.value = v.mode || "auto";
+  voiceModeHelp();
   voiceInputMode();
+  loadVoiceModels();
 }
 
+function activeModel() {
+  return voiceModels?.models.find((m) => m.name === voiceModels.active) || null;
+}
+
+function renderVoiceState() {
+  const el = $("voice-state");
+  const input = $("voice-form").elements.input.value;
+  const saved = data?.voice?.input || "off";
+  if (input !== saved) {
+    el.textContent = "Save to switch.";
+    return;
+  }
+  if (input === "off") {
+    el.textContent = "Off. Dispatch's microphone button offers to set it up.";
+    return;
+  }
+  if (input === "api") {
+    el.textContent = "Recordings are sent to the cloud API below. Press Ctrl+Shift+Space in Dispatch's message box.";
+    return;
+  }
+  if (!voiceModels) {
+    el.textContent = "";
+    return;
+  }
+  const missing = voiceModels.whisper ? "" : " whisper.cpp was not found on this machine, so Set up says how to get it.";
+  const active = activeModel();
+  if (voiceModels.custom) {
+    el.textContent = voiceModels.custom.found
+      ? `Ready with your own model file. Press Ctrl+Shift+Space in Dispatch's message box.${missing}`
+      : `There is no model file at ${voiceModels.custom.path}. Download a speech model below, or fix the path under Advanced.`;
+  } else if (active?.download?.running) {
+    el.textContent = `Works once ${active.label} finishes downloading.`;
+  } else if (active?.downloaded) {
+    el.textContent = `Ready with ${active.label}. Press Ctrl+Shift+Space in Dispatch's message box.${missing}`;
+  } else {
+    el.textContent = `Download a speech model below to start. It runs on this machine, so your audio stays here.${missing}`;
+  }
+}
+
+function modelRow(m) {
+  const input = data?.voice?.input || "off";
+  const active = input === "local" && voiceModels.active === m.name;
+  const d = m.download;
+  const running = Boolean(d?.running);
+  const recommended = m.name === voiceModels.recommended && !voiceReady();
+  let sub = esc(m.note);
+  if (running) sub = esc(downloading(m));
+  else if (d?.error) sub = `<span class="voice-error">${esc(d.error)}</span>`;
+  else if (!m.downloaded && m.partial) sub = `Partly downloaded (${Math.round(m.partial / 1e6)} MB). Download carries on from there.`;
+  let action;
+  if (running) action = `<button class="btn voice-act" type="button" data-voice-act="cancel">Cancel</button>`;
+  else if (active && m.downloaded) action = `<span class="voice-in-use"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>In use</span>`;
+  else if (m.downloaded) action = `<button class="btn voice-act" type="button" data-voice-act="use">Use</button>`;
+  else action = `<button class="btn voice-act${recommended ? " primary" : ""}" type="button" data-voice-act="download"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 10l5 5 5-5M5 21h14"/></svg>Download</button>`;
+  const remove = m.downloaded && !running && !active
+    ? `<button class="btn quiet icon-btn voice-delete" type="button" data-voice-act="delete" aria-label="Delete ${esc(m.label)}" title="Delete ${esc(m.label)} (${size(m.bytes)})"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2M19 6l-1 14H6L5 6M10 11v6M14 11v6"/></svg></button>`
+    : "";
+  return `<div class="voice-model" role="listitem" data-model="${esc(m.name)}"${active ? ` data-current="true"` : ""}>
+    <div class="voice-model-name"><span class="voice-model-label">${esc(m.label)}</span>${recommended ? `<span class="voice-badge">Recommended</span>` : ""}<span class="voice-model-sub"><span class="voice-narrow">${size(m.bytes)}, ${QUALITY[m.quality - 1] || ""}. </span>${sub}</span></div>
+    <div class="voice-wide">${quality(m.quality)}</div>
+    <div class="voice-wide voice-size">${size(m.bytes)}</div>
+    <div class="voice-model-remove">${remove}</div>
+    <div class="voice-model-act">${action}</div>
+  </div>`;
+}
+
+function voiceReady() {
+  const input = data?.voice?.input || "off";
+  if (input === "api") return true;
+  if (input !== "local" || !voiceModels) return false;
+  if (voiceModels.custom) return voiceModels.custom.found;
+  return Boolean(activeModel()?.downloaded);
+}
+
+function renderSetupCard() {
+  const card = $("voice-setup-card");
+  const rec = voiceModels?.models.find((m) => m.name === voiceModels.recommended);
+  card.hidden = !rec || voiceReady();
+  if (card.hidden) return;
+  $("voice-setup-model").innerHTML = `<span class="voice-setup-label">${esc(rec.label)}</span><span class="voice-size">${size(rec.bytes)}</span>${quality(rec.quality)}`;
+  const button = $("voice-setup-btn");
+  const note = $("voice-setup-note");
+  const d = rec.download;
+  button.disabled = Boolean(d?.running) || Boolean(setupWanted);
+  note.classList.toggle("voice-error", Boolean(d?.error && !d.running));
+  if (d?.running) note.textContent = downloading(rec);
+  else if (d?.error) note.textContent = d.error;
+  else if (setupWanted) note.textContent = "Switching dictation to the new model…";
+  else if (rec.downloaded) note.textContent = "Already downloaded. Set up switches dictation to it.";
+  else note.textContent = `Downloads ${size(rec.bytes)} once. The browser asks for the microphone the first time you dictate.`;
+}
+
+function renderVoiceModels() {
+  if (!voiceModels) return;
+  $("voice-models-dir").textContent = voiceModels.dir;
+  const head = `<div class="voice-model-head" aria-hidden="true"><span>Model</span><span class="voice-wide">Quality</span><span class="voice-wide voice-size">Size</span><span></span><span></span></div>`;
+  $("voice-models").innerHTML = head + voiceModels.models.map(modelRow).join("");
+  renderSetupCard();
+  renderVoiceState();
+}
+
+async function loadVoiceModels() {
+  clearTimeout(voicePoll);
+  try {
+    voiceModels = await api("GET", "/api/settings/voice/models");
+  } catch (err) {
+    toast(err.message);
+    return;
+  }
+  const busy = voiceModels.models.some((m) => m.download?.running);
+  if (setupWanted && !busy) {
+    const done = voiceModels.input === "local" && voiceModels.active === setupWanted;
+    const failed = voiceModels.models.find((m) => m.name === setupWanted)?.download?.error;
+    if (done) {
+      const label = voiceModels.models.find((m) => m.name === setupWanted)?.label || setupWanted;
+      setupWanted = null;
+      saved(`Dictation is set up with ${label}. The microphone button in Dispatch's message box is ready.`);
+      await load();
+      return;
+    }
+    if (failed || ++setupWaits > 10) setupWanted = null;
+  }
+  renderVoiceModels();
+  if (busy || setupWanted) voicePoll = setTimeout(loadVoiceModels, 600);
+}
+
+async function voiceAction(button, url, body) {
+  button.disabled = true;
+  try {
+    return await api("POST", url, body);
+  } catch (err) {
+    toast(err.message);
+    return null;
+  } finally {
+    button.disabled = false;
+  }
+}
+
+$("voice-models").addEventListener("click", async (e) => {
+  const button = e.target.closest("[data-voice-act]");
+  if (!button) return;
+  const name = button.closest("[data-model]").dataset.model;
+  const act = button.dataset.voiceAct;
+  const base = `/api/settings/voice/models/${encodeURIComponent(name)}`;
+  if (act === "use") {
+    if (await voiceAction(button, `${base}/use`, {})) {
+      saved("Dictation uses the new model from the next recording.");
+      await load();
+    }
+    return;
+  }
+  await voiceAction(button, `${base}/${act}`, {});
+  loadVoiceModels();
+});
+
+$("voice-setup-btn").addEventListener("click", async (e) => {
+  const button = e.currentTarget;
+  const model = voiceModels?.recommended;
+  if (!model) return;
+  const note = $("voice-setup-note");
+  button.disabled = true;
+  try {
+    const out = await api("POST", "/api/settings/voice/setup", { model });
+    setupWanted = model;
+    setupWaits = 0;
+    if (out.ready) setupWaits = 10;
+  } catch (err) {
+    note.textContent = err.message;
+    note.classList.add("voice-error");
+    button.disabled = false;
+    return;
+  }
+  loadVoiceModels();
+});
+
+$("voice-use-api").addEventListener("click", () => {
+  const f = $("voice-form");
+  f.elements.input.value = "api";
+  voiceInputMode();
+  f.elements.api_url.focus();
+});
+
 $("voice-form").elements.input.addEventListener("change", voiceInputMode);
+$("voice-mode").addEventListener("change", voiceModeHelp);
 
 $("voice-form").addEventListener("submit", async (e) => {
   e.preventDefault();
@@ -1821,7 +2070,7 @@ $("voice-form").addEventListener("submit", async (e) => {
   try {
     await api("POST", "/api/settings/voice", voiceValues());
     saved(voiceValues().input === "off"
-      ? "Voice input is off, so Dispatch hides its microphone button."
+      ? "Voice input is off, so Dispatch's microphone button offers to set it up."
       : "Voice settings saved. The microphone button shows in Dispatch's message box.");
     await load();
   } catch (err) {
@@ -1847,6 +2096,49 @@ $("voice-check").addEventListener("click", async (e) => {
     button.disabled = false;
   }
 });
+
+// The microphone belongs to the device, like the theme, so it is kept in the browser.
+async function fillMics() {
+  const select = $("voice-mic");
+  const names = $("voice-mic-names");
+  if (!navigator.mediaDevices?.enumerateDevices) {
+    select.disabled = true;
+    $("voice-mic-desc").textContent = "This browser only lists microphones on a secure page, so dictation uses the system default here.";
+    return;
+  }
+  let chosen = "";
+  try { chosen = localStorage.getItem(MIC_KEY) || ""; } catch {}
+  const all = await navigator.mediaDevices.enumerateDevices().catch(() => []);
+  const inputs = all.filter((d) => d.kind === "audioinput");
+  const listed = inputs.filter((d) => d.deviceId && !["default", "communications"].includes(d.deviceId));
+  const options = [new Option("System default", "")];
+  listed.forEach((d, i) => options.push(new Option(d.label || `Microphone ${i + 1}`, d.deviceId)));
+  if (chosen && !listed.some((d) => d.deviceId === chosen)) options.push(new Option("The chosen microphone (not connected)", chosen));
+  select.replaceChildren(...options);
+  select.value = chosen;
+  names.hidden = !inputs.some((d) => !d.label || !d.deviceId);
+}
+
+$("voice-mic").addEventListener("change", (e) => {
+  try {
+    if (e.target.value) localStorage.setItem(MIC_KEY, e.target.value);
+    else localStorage.removeItem(MIC_KEY);
+  } catch {}
+});
+
+$("voice-mic-names").addEventListener("click", async () => {
+  try {
+    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    for (const track of stream.getTracks()) track.stop();
+  } catch (err) {
+    toast(err?.name === "NotAllowedError" ? "The microphone is blocked. Allow it for this site in the browser to see its name." : `The microphone did not start: ${err?.message || err}`);
+    return;
+  }
+  fillMics();
+});
+
+fillMics();
+navigator.mediaDevices?.addEventListener?.("devicechange", fillMics);
 
 // Speaking is this device's choice, like the theme, so it is kept in the browser, not yardbell.yml.
 const SPEAK_KEY = "yardbell.dispatch.speak";
@@ -2519,9 +2811,74 @@ $("about-retry").addEventListener("click", checkUpdates);
 
 load()
   .then(() => {
-    if (location.hash) document.getElementById(location.hash.slice(1))?.scrollIntoView({ block: "start" });
+    const target = location.hash && document.getElementById(location.hash.slice(1));
+    if (target && target.tagName !== "SECTION") target.scrollIntoView({ block: "start" });
   })
   .catch((err) => toast(err.message));
+
+function backTarget() {
+  try {
+    const from = new URL(document.referrer);
+    if (from.origin === location.origin && !["/settings", "/login"].includes(from.pathname)) return from.pathname + from.search + from.hash;
+  } catch {}
+  return "/workspace";
+}
+
+function placeNav() {
+  const nav = document.querySelector(".settings-nav");
+  const column = window.YardbellShell?.column;
+  if (!nav || !column) return;
+  const back = document.createElement("a");
+  back.className = "settings-back";
+  back.href = backTarget();
+  document.querySelector(".settings-close").href = back.href;
+  back.innerHTML = `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="m12 19-7-7 7-7M19 12H5"/></svg><span>Back to app</span>`;
+  const mod = /Mac|iPhone|iPad/.test(navigator.platform) ? "⌘" : "Ctrl";
+  const search = document.createElement("div");
+  search.className = "settings-search";
+  search.innerHTML = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="7" cy="7" r="4.5"/><path d="m10.5 10.5 3 3"/></svg><input type="search" id="settings-search" placeholder="Search settings" aria-label="Search settings" aria-keyshortcuts="${mod === "⌘" ? "Meta+F" : "Control+F"}" autocomplete="off" spellcheck="false"><span class="settings-keys" aria-hidden="true"><kbd>${mod}</kbd><kbd>F</kbd></span>`;
+  column.append(back, search, nav);
+  // The column is hidden on a phone, so the section list moves above the page there.
+  const phone = window.matchMedia("(max-width: 760px)");
+  const place = () => {
+    if (phone.matches) document.querySelector(".settings-layout").prepend(nav);
+    else column.append(nav);
+  };
+  phone.addEventListener("change", place);
+  place();
+  const input = search.querySelector("input");
+  input.addEventListener("input", () => filterNav(nav, input.value));
+  input.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") return;
+    const first = [...nav.querySelectorAll("a")].find((a) => !a.hidden);
+    if (first) location.hash = first.hash;
+  });
+  document.addEventListener("keydown", (e) => {
+    if (e.key.toLowerCase() !== "f" || !(e.metaKey || e.ctrlKey) || e.altKey || e.shiftKey || phone.matches) return;
+    e.preventDefault();
+    input.focus();
+    input.select();
+  });
+}
+
+function filterNav(nav, query) {
+  const q = query.trim().toLowerCase();
+  let label = null;
+  let shown = 0;
+  const close = () => { if (label) label.hidden = q && !shown; };
+  for (const el of nav.children) {
+    if (el.classList.contains("nav-label")) {
+      close();
+      label = el;
+      shown = 0;
+      continue;
+    }
+    const text = `${el.textContent} ${document.getElementById(el.hash.slice(1))?.textContent || ""}`.toLowerCase();
+    el.hidden = Boolean(q) && !text.includes(q);
+    if (!el.hidden) shown++;
+  }
+  close();
+}
 
 // One section at a time, picked in the section list, so each part of Settings stands on its own.
 function showSection() {
@@ -2536,6 +2893,7 @@ function showSection() {
     if (a.hash === `#${pick.id}`) a.setAttribute("aria-current", "page");
     else a.removeAttribute("aria-current");
   });
+  $("settings-crumb").textContent = document.querySelector(".settings-nav [aria-current]")?.textContent.trim() || "";
   document.querySelector(".settings-nav [aria-current]")?.scrollIntoView({ block: "nearest", inline: "nearest" });
 }
 
@@ -2543,9 +2901,10 @@ window.addEventListener("hashchange", () => {
   showSection();
   const target = document.getElementById(location.hash.slice(1));
   if (target && target.tagName !== "SECTION") { target.scrollIntoView({ block: "start" }); return; }
-  document.querySelector(".main")?.scrollTo({ top: 0 });
+  document.getElementById("main")?.scrollTo({ top: 0 });
   window.scrollTo({ top: 0 });
 });
+placeNav();
 showSection();
 loadAbout().catch((err) => toast(err.message));
 
@@ -2631,3 +2990,7 @@ $("diagram-machines").addEventListener("click", async (e) => {
   }
   await loadDiagramMachines();
 });
+
+const refreshShell = () => window.YardbellShell.loadState().catch(() => {});
+refreshShell();
+window.YardbellLive.follow(refreshShell, 10000);

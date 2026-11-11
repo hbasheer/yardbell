@@ -1,20 +1,11 @@
+import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
+
 const SPEAK_KEY = "yardbell.dispatch.speak";
 const HOLD_MS = 600;
 const MAX_SECONDS = 300;
 const UTTERANCE_CHARS = 200;
 const SPOKEN_CHARS = 500;
 const MIMES = ["audio/webm;codecs=opus", "audio/webm", "audio/ogg;codecs=opus", "audio/mp4"];
-
-function insertAt(input, text) {
-  const at = input.selectionStart ?? input.value.length;
-  const end = input.selectionEnd ?? at;
-  const before = input.value.slice(0, at);
-  const after = input.value.slice(end);
-  const lead = before && !/\s$/.test(before) ? " " : "";
-  const trail = after && !/^\s/.test(after) ? " " : "";
-  input.setRangeText(lead + text + trail, at, end, "end");
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-}
 
 function micProblem(err) {
   if (err?.name === "NotAllowedError" || err?.name === "SecurityError") {
@@ -24,7 +15,6 @@ function micProblem(err) {
   return `The microphone did not start: ${err?.message || err}`;
 }
 
-// A tap toggles recording; holding the button records only while it is held, like push-to-talk.
 // Captures mono PCM through Web Audio and packs it into a 16 kHz WAV blob.
 // WebKitGTK's MediaRecorder reports a supported type and then fails on start,
 // so engines where MediaRecorder never records fall back to this.
@@ -34,22 +24,28 @@ function wavCapture(stream) {
   const grab = ctx.createScriptProcessor(4096, 1, 1);
   const mute = ctx.createGain();
   mute.gain.value = 0;
-  const parts = [];
+  let parts = [];
   grab.onaudioprocess = (e) => parts.push(new Float32Array(e.inputBuffer.getChannelData(0)));
   if (ctx.state !== "running") ctx.resume().catch(() => {});
   source.connect(grab);
   grab.connect(mute);
   mute.connect(ctx.destination);
+  const take = () => {
+    const blob = wavBlob(parts, ctx.sampleRate);
+    parts = [];
+    return blob;
+  };
   return {
+    cut: take,
     finish() {
       grab.onaudioprocess = null;
       source.disconnect();
       grab.disconnect();
       mute.disconnect();
-      const rate = ctx.sampleRate;
+      const blob = take();
       ctx.close();
       for (const track of stream.getTracks()) track.stop();
-      return wavBlob(parts, rate);
+      return blob;
     },
   };
 }
@@ -98,17 +94,152 @@ function wavBlob(parts, rate) {
   return new Blob([data], { type: "audio/wav" });
 }
 
-export function dictation({ button, input, toast }) {
-  let recorder = null;
+const SILENCE_MS = 3000;
+const PAUSE_MS = 600;
+const CHUNK_MS = 20000;
+const MIC_KEY = "yardbell.voice.mic";
+const SHORTCUT = "Ctrl+Shift+Space";
+// Dot sizes and how far each moves with the voice.
+const GRAPES = [
+  [0.64, 0.45, 1], [0.76, 0.75, -1], [0.9, 1, 1], [1, 1.25, -1], [0.86, 0.9, 1],
+  [0.72, 1.1, -1], [0.82, 0.7, 1], [0.68, 0.55, -1], [0.58, 0.35, 1],
+];
+
+const X_ICON = html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>`;
+const CHECK_ICON = html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>`;
+const SPIN_ICON = html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 2a6 6 0 1 1-6 6"/></svg>`;
+const ALERT_ICON = html`<svg class="icon dict-alert" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.5"/><path d="M8 4.8v3.8M8 11h.01"/></svg>`;
+
+function clock(seconds) {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+// The loudness of the microphone, read on every frame, with whether it sounds like speech. The
+// floor follows the room, so a fan or a steady hum stops counting as speech after a while.
+function levelMeter(stream, onFrame) {
+  let ctx;
+  try {
+    ctx = new (window.AudioContext || window.webkitAudioContext)();
+  } catch {
+    return null;
+  }
+  const source = ctx.createMediaStreamSource(stream);
+  const analyser = ctx.createAnalyser();
+  analyser.fftSize = 1024;
+  source.connect(analyser);
+  if (ctx.state !== "running") ctx.resume().catch(() => {});
+  const samples = new Float32Array(analyser.fftSize);
+  let floor = 0.008;
+  let smooth = 0;
+  let frame = 0;
+  const tick = () => {
+    frame = requestAnimationFrame(tick);
+    analyser.getFloatTimeDomainData(samples);
+    let sum = 0;
+    for (const x of samples) sum += x * x;
+    const rms = Math.sqrt(sum / samples.length);
+    const speaking = rms > Math.max(0.02, floor * 3);
+    floor = speaking ? floor + (rms - floor) * 0.002 : floor * 0.9 + rms * 0.1;
+    smooth = smooth * 0.6 + Math.min(1, Math.max(0, (rms - floor) / 0.12)) * 0.4;
+    onFrame(smooth, speaking, performance.now());
+  };
+  frame = requestAnimationFrame(tick);
+  return {
+    stop() {
+      cancelAnimationFrame(frame);
+      source.disconnect();
+      ctx.close().catch(() => {});
+    },
+  };
+}
+
+function chosenMic() {
+  try { return localStorage.getItem(MIC_KEY) || ""; } catch { return ""; }
+}
+
+async function openMic(toast) {
+  const id = chosenMic();
+  if (!id) return navigator.mediaDevices.getUserMedia({ audio: true });
+  try {
+    return await navigator.mediaDevices.getUserMedia({ audio: { deviceId: { exact: id } } });
+  } catch (err) {
+    if (!["OverconstrainedError", "NotFoundError", "NotReadableError"].includes(err?.name)) throw err;
+    toast("The microphone chosen in Settings is not connected, so the system default is used.");
+    return navigator.mediaDevices.getUserMedia({ audio: true });
+  }
+}
+
+// The recording is cut at each pause in speech (and every 20 seconds at most), and each piece is
+// transcribed while the next is still being spoken, so words appear as you talk. Pieces go to the
+// server one at a time and land in the order they were said. Cancel drops what has not landed yet
+// and keeps the words already typed in.
+export function dictation({ button, pill, insert, toast, mode = () => "auto" }) {
+  let stream = null;
+  let segment = null;
   let wav = null;
-  let chunks = [];
-  let busy = false;
+  let meter = null;
+  let phase = "idle";
+  let startedAt = 0;
+  let seconds = 0;
+  let ticker = 0;
+  let timer = 0;
+  let segmentAt = 0;
+  let heardAt = 0;
+  let segmentHeard = false;
+  let queue = [];
+  let closing = 0;
+  let sending = false;
+  let wrote = false;
+  let queued = false;
+  let aborter = null;
   let downAt = 0;
   let stopOnUp = false;
-  let timer = 0;
+  let keyAt = 0;
+  let keyStop = false;
+  let starting = false;
+  let releasedEarly = false;
+
+  const live = () => Boolean(segment || wav);
+
+  function level(value) {
+    pill.querySelectorAll(".dict-grape").forEach((dot, i) => {
+      const [base, response, lift] = GRAPES[i];
+      dot.style.transform = `translateY(${value * lift * 2}px) scale(${base + value * response})`;
+    });
+  }
+
+  function view() {
+    if (phase === "failed") {
+      return html`<span class="visually-hidden" role="status" aria-live="polite">Could not transcribe. The recording is kept.</span>
+        <button type="button" class="dict-btn" aria-label="Discard recording" title="Discard recording" @click=${discard}>${X_ICON}</button>
+        ${ALERT_ICON}
+        <span class="dict-status">Couldn't transcribe. Recording kept.</span>
+        <button type="button" class="dict-retry" @click=${retry}>Retry</button>`;
+    }
+    const waiting = phase === "transcribing";
+    const status = waiting ? "Transcribing…" : "Listening…";
+    return html`<span class="visually-hidden" role="status" aria-live="polite">${status}</span>
+      <button type="button" class="dict-btn" aria-label="Cancel" title="Cancel (Esc)" @click=${cancel}>${X_ICON}</button>
+      <span class="dict-grapes ${waiting ? "resting" : ""}" aria-hidden="true">${GRAPES.map(() => html`<span class="dict-grape"></span>`)}</span>
+      <span class="dict-status" aria-hidden="true">${status}</span>
+      <span class="dict-time" aria-hidden="true">${clock(seconds)}</span>
+      ${waiting
+        ? html`<span class="dict-wait" aria-hidden="true">${SPIN_ICON}</span>`
+        : html`<button type="button" class="dict-btn finish" aria-label="Finish" title=${`Finish and type it in (${SHORTCUT})`} @click=${() => stop(true)}>${CHECK_ICON}</button>`}`;
+  }
+
+  function hint() {
+    const how = {
+      auto: "Tap to start and stop, or hold to talk.",
+      hold: "Hold to talk.",
+      toggle: "Press to start, and again to stop.",
+    }[mode()] || "";
+    return `Dictate (${SHORTCUT}). ${how} Words appear at each pause, and it stops by itself after a few seconds of quiet.`;
+  }
 
   function paint() {
-    const recording = Boolean(recorder || wav);
+    const recording = live();
+    const busy = phase === "transcribing";
     button.classList.toggle("recording", recording);
     button.classList.toggle("busy", busy);
     button.disabled = busy;
@@ -117,109 +248,244 @@ export function dictation({ button, input, toast }) {
     button.title = busy
       ? "Transcribing…"
       : recording
-        ? "Stop recording and type what was said (Esc discards it)"
-        : "Dictate: tap to record, tap again to stop. Holding the button records while held.";
+        ? `Stop recording and type what was said (${SHORTCUT}). Esc cancels what has not been typed yet.`
+        : hint();
+    pill.hidden = phase === "idle";
+    pill.classList.toggle("failed", phase === "failed");
+    render(phase === "idle" ? nothing : view(), pill);
+  }
+
+  function setPhase(next) {
+    const fresh = next !== phase;
+    phase = next;
+    paint();
+    if (fresh && phase === "recording") level(0);
+  }
+
+  function record(from) {
+    const mime = MIMES.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    const rec = new MediaRecorder(from, mime ? { mimeType: mime, audioBitsPerSecond: 48000 } : undefined);
+    const parts = [];
+    rec.ondataavailable = (e) => {
+      if (e.data?.size) parts.push(e.data);
+    };
+    rec.start();
+    return { rec, parts };
+  }
+
+  function onFrame(value, speaking, now) {
+    level(value);
+    if (!live()) return;
+    if (speaking) {
+      heardAt = now;
+      segmentHeard = true;
+    }
+    if ((segmentHeard && now - heardAt > PAUSE_MS) || now - segmentAt > CHUNK_MS) cut(false);
+    if (heardAt && now - heardAt > SILENCE_MS) {
+      heardAt = 0;
+      stop(true);
+    }
   }
 
   async function start() {
-    if (recorder || wav || busy) return;
+    if (live() || starting || phase === "transcribing") return;
     if (!navigator.mediaDevices?.getUserMedia) {
       toast("The browser only allows the microphone on a secure page. Open Yardbell over https, or on the machine it runs on.");
       return;
     }
-    let stream;
+    starting = true;
+    releasedEarly = false;
     try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      stream = await openMic(toast);
     } catch (err) {
       toast(micProblem(err));
       return;
+    } finally {
+      starting = false;
     }
-    const mime = MIMES.find((m) => window.MediaRecorder && MediaRecorder.isTypeSupported(m));
+    queue = [];
+    wrote = false;
+    queued = false;
     try {
-      recorder = new MediaRecorder(stream, mime ? { mimeType: mime, audioBitsPerSecond: 48000 } : undefined);
+      segment = record(stream);
+      const first = segment;
+      setTimeout(() => {
+        if (segment === first && first.rec.state !== "recording") {
+          segment = null;
+          wav = wavCapture(stream);
+        }
+      }, 250);
     } catch {
+      segment = null;
       wav = wavCapture(stream);
-    }
-    if (recorder) {
-      chunks = [];
-      recorder.ondataavailable = (e) => {
-        if (e.data?.size) chunks.push(e.data);
-      };
-      try {
-        recorder.start();
-        const r = recorder;
-        setTimeout(() => {
-          if (recorder === r && r.state !== "recording") {
-            recorder = null;
-            wav = wavCapture(r.stream);
-          }
-        }, 250);
-      } catch {
-        recorder = null;
-        wav = wavCapture(stream);
-      }
     }
     timer = setTimeout(() => {
       toast(`Recording stops after ${MAX_SECONDS / 60} minutes.`);
       stop(true);
     }, MAX_SECONDS * 1000);
-    paint();
+    startedAt = performance.now();
+    segmentAt = startedAt;
+    heardAt = 0;
+    segmentHeard = false;
+    seconds = 0;
+    meter = levelMeter(stream, onFrame);
+    ticker = setInterval(() => {
+      const now = Math.floor((performance.now() - startedAt) / 1000);
+      if (now === seconds) return;
+      seconds = now;
+      paint();
+    }, 250);
+    setPhase("recording");
+    if (releasedEarly) stop(true);
   }
 
-  function stop(send) {
+  // Closes the piece being recorded. A piece the meter heard no speech in is dropped rather than
+  // sent to be guessed at, unless it is the whole recording: a quiet microphone can fool the meter.
+  function cut(last, send = true) {
+    const keep = send && (segmentHeard || !meter || (last && !queued));
+    if (keep) queued = true;
+    segmentHeard = false;
+    segmentAt = performance.now();
     if (wav) {
-      const blob = wav.finish();
-      wav = null;
-      clearTimeout(timer);
-      paint();
-      if (send && blob.size > 44) transcribe(blob);
+      const blob = last ? wav.finish() : wav.cut();
+      if (last) wav = null;
+      if (keep && blob.size > 44) enqueue(blob);
       return;
     }
-    const r = recorder;
-    if (!r) return;
-    recorder = null;
-    clearTimeout(timer);
-    r.onstop = () => {
-      for (const track of r.stream.getTracks()) track.stop();
-      const blob = new Blob(chunks, { type: r.mimeType || "audio/webm" });
-      chunks = [];
-      if (send && blob.size) transcribe(blob);
+    const done = segment;
+    if (!done) return;
+    segment = null;
+    if (!last) {
+      try {
+        segment = record(stream);
+      } catch {
+        wav = wavCapture(stream);
+      }
+    }
+    closing++;
+    done.rec.onstop = () => {
+      closing--;
+      if (last) for (const track of done.rec.stream.getTracks()) track.stop();
+      const blob = new Blob(done.parts, { type: done.rec.mimeType || "audio/webm" });
+      if (keep && blob.size) enqueue(blob);
+      settle();
     };
     try {
-      r.stop();
+      done.rec.stop();
     } catch {
-      for (const track of r.stream.getTracks()) track.stop();
+      closing--;
+      if (last) for (const track of done.rec.stream.getTracks()) track.stop();
     }
-    paint();
   }
 
-  async function transcribe(blob) {
-    busy = true;
-    paint();
+  function enqueue(blob) {
+    queue.push(blob);
+    pump();
+  }
+
+  async function pump() {
+    if (sending || !queue.length || phase === "failed") return;
+    sending = true;
+    aborter = new AbortController();
+    const mine = aborter;
     try {
       const res = await fetch("/dispatch/transcribe", {
         method: "POST",
-        headers: { "Content-Type": blob.type || "audio/webm" },
-        body: blob,
+        headers: { "Content-Type": queue[0].type || "audio/webm" },
+        body: queue[0],
+        signal: mine.signal,
       });
       if (res.status === 401) { location.href = "/login"; return; }
       const out = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(out.error || `Request failed (${res.status})`);
-      if (!out.text) {
-        toast("No words were heard. Try again a little closer to the microphone.");
-        return;
+      if (mine !== aborter) return;
+      queue.shift();
+      if (out.text) {
+        wrote = true;
+        insert(out.text);
       }
-      insertAt(input, out.text);
     } catch (err) {
-      toast(err.message);
+      if (mine !== aborter) return;
+      if (err.name !== "AbortError") {
+        toast(err.message);
+        if (live()) finishRecording(true);
+        setPhase("failed");
+      }
     } finally {
-      busy = false;
-      paint();
-      input.focus();
+      if (mine === aborter) {
+        aborter = null;
+        sending = false;
+      }
+    }
+    pump();
+    settle();
+  }
+
+  function settle() {
+    if (live() || closing || sending || queue.length || phase === "idle" || phase === "failed") return;
+    setPhase("idle");
+    if (!wrote) toast("No words were heard. Try again a little closer to the microphone.");
+  }
+
+  function finishRecording(send) {
+    clearInterval(ticker);
+    ticker = 0;
+    clearTimeout(timer);
+    cut(true, send);
+    meter?.stop();
+    meter = null;
+  }
+
+  function stop(send) {
+    if (!live()) return;
+    finishRecording(send);
+    if (send) {
+      setPhase("transcribing");
+      settle();
+    } else {
+      setPhase("idle");
     }
   }
 
-  const live = () => Boolean(recorder || wav);
+  function cancel() {
+    if (live()) finishRecording(false);
+    queue = [];
+    if (aborter) {
+      const a = aborter;
+      aborter = null;
+      sending = false;
+      a.abort();
+    }
+    setPhase("idle");
+  }
+
+  function discard() {
+    queue = [];
+    setPhase("idle");
+  }
+
+  function retry() {
+    if (!queue.length) {
+      setPhase("idle");
+      return;
+    }
+    setPhase("transcribing");
+    pump();
+  }
+
+  // Up from a press: a second tap always stops; Hold stops on any release, Auto only after a
+  // hold, and Toggle never.
+  function released(stopping, since) {
+    const how = mode();
+    if (starting && how !== "toggle" && (how === "hold" || Date.now() - since >= HOLD_MS)) {
+      releasedEarly = true;
+      return;
+    }
+    if (!live()) return;
+    if (stopping || how === "hold" || (how === "auto" && Date.now() - since >= HOLD_MS)) stop(true);
+  }
+
+  pill.addEventListener("mousedown", (e) => e.preventDefault());
   button.addEventListener("pointerdown", (e) => {
     if (e.button) return;
     e.preventDefault();
@@ -228,8 +494,7 @@ export function dictation({ button, input, toast }) {
     else start();
   });
   const up = () => {
-    const held = Date.now() - downAt >= HOLD_MS;
-    if (live() && (stopOnUp || held)) stop(true);
+    released(stopOnUp, downAt);
     stopOnUp = false;
   };
   button.addEventListener("pointerup", up);
@@ -240,13 +505,29 @@ export function dictation({ button, input, toast }) {
     if (live()) stop(true);
     else start();
   });
+  const shortcut = (e) => e.code === "Space" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey;
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && live()) {
+    if (e.key === "Escape" && (live() || phase !== "idle")) {
       e.preventDefault();
-      stop(false);
+      cancel();
+      return;
     }
+    if (!shortcut(e) || button.hidden) return;
+    e.preventDefault();
+    if (e.repeat) return;
+    keyAt = Date.now();
+    keyStop = live();
+    if (!keyStop) start();
   });
-  window.addEventListener("pagehide", () => stop(false));
+  document.addEventListener("keyup", (e) => {
+    if (!keyAt || !["Space", "ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"].includes(e.code)) return;
+    const since = keyAt;
+    keyAt = 0;
+    released(keyStop, since);
+  });
+  window.addEventListener("pagehide", () => {
+    if (live()) cancel();
+  });
   paint();
 }
 

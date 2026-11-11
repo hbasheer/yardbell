@@ -1,4 +1,4 @@
-import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
+import { html, nothing, render, svg } from "/vendor/lit-html/lit-html.js";
 import { admit, sizeText } from "/attachments.js";
 
 const SEND_KEY = "yardbell.dispatch.send";
@@ -11,6 +11,28 @@ const MOD = /Mac|iPhone|iPad/.test(navigator.userAgent) ? "⌘" : "Ctrl";
 const GROUPS = ["Machines", "Sessions", "Folders"];
 // "/" and "@" open a menu only at the start of a word, so a path or an email address never does.
 const TRIGGER = /(?:^|\s)(?:\/([^\s/]*)|@([^\s@]*))$/;
+// Each pill stands in the editor's text as one object replacement character, so offsets into the
+// text and caret positions in the editor count a pill as one place.
+const OBJ = "￼";
+const STRAY = /[￼​]/g;
+const PASTE_CHARS = 800;
+const PASTE_LINES = 15;
+const UNDO_SIZE = 200;
+const TYPING_MS = 1000;
+const BLOCKS = new Set(["DIV", "P", "LI", "PRE", "BLOCKQUOTE", "H1", "H2", "H3", "H4", "H5", "H6"]);
+const CODE = /```[\s\S]*?```|`[^`\n]+`/g;
+
+const ICONS = {
+  Machines: '<path d="M2.5 3.5h11v4h-11zM2.5 8.5h11v4h-11zM5 5.5h.01M5 10.5h.01"/>',
+  Sessions: '<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M4.5 6.5l2 1.5-2 1.5M8.5 10h3"/>',
+  Folders: '<path d="M1.5 4a1 1 0 0 1 1-1h3.6l1.4 1.5h5.9a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/>',
+  Tasks: '<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M9.5 5.5l-3 5"/>',
+  paste: '<path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3M6 8h4M6 10.5h4"/>',
+};
+
+function iconMarkup(name) {
+  return `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true">${ICONS[name] || ICONS.paste}</svg>`;
+}
 
 function read(key, fallback) {
   try {
@@ -75,16 +97,48 @@ function nameList(state) {
   ];
 }
 
+const objects = (text) => text.split(OBJ).length - 1;
+const clean = (text) => text.replace(STRAY, "");
+
+function serialize(value, pills) {
+  let k = 0;
+  return value.replace(/￼/g, () => {
+    const pill = pills[k++];
+    if (!pill) return "";
+    return pill.kind === "paste" ? pill.text : pill.insert;
+  });
+}
+
+function pastedLabel(text) {
+  const lines = text.split("\n").length;
+  return `Pasted text · ${lines} ${lines === 1 ? "line" : "lines"}`;
+}
+
+// A trailing break the browser keeps only so the last empty line has height.
+function tailBreak(root) {
+  let node = root.lastChild;
+  while (node) {
+    if (node.nodeType === Node.TEXT_NODE && !node.data) node = node.previousSibling;
+    else if (node.nodeType === Node.ELEMENT_NODE && node.tagName !== "BR" && !node.dataset.pill && node.lastChild) node = node.lastChild;
+    else break;
+  }
+  return node?.nodeName === "BR" ? node : null;
+}
+
 export function composer(form, hooks) {
-  const input = form.text;
+  const input = document.getElementById("dispatch-input");
   const box = input.closest(".compose-box");
   const menuBox = document.getElementById("compose-menu");
   const sendButton = document.getElementById("dispatch-send");
   const hint = document.getElementById("send-key");
+  const hintLabel = hint.querySelector(".compose-plus-label") || hint;
   const filesBox = document.getElementById("compose-files");
   const picker = document.getElementById("attach-input");
   const dropZone = document.getElementById("dispatch-chat");
+  const plus = document.getElementById("compose-plus");
+  const plusMenu = document.getElementById("compose-plus-menu");
   const touch = window.matchMedia("(hover: none) and (pointer: coarse)");
+  const known = new WeakMap();
   let mode = read(SEND_KEY, null) || (touch.matches ? "mod" : "enter");
   let key = "new";
   let menu = null;
@@ -97,6 +151,177 @@ export function composer(form, hooks) {
   let frame = 0;
   let attached = [];
   let adding = Promise.resolve();
+  let value = "";
+  let pills = [];
+  let composing = false;
+  let lastCaret = null;
+  let undo = [];
+  let undoAt = -1;
+  let lastKind = "";
+  let lastAt = 0;
+  let lastSent = null;
+  let dragging = null;
+
+  function pillNode(pill) {
+    const el = document.createElement("span");
+    el.className = `compose-pill ${pill.kind}`;
+    el.contentEditable = "false";
+    el.dataset.pill = pill.kind;
+    el.title = pill.kind === "paste" ? "Pasted text. Click to put it back as text." : pill.title || pill.insert || "";
+    el.innerHTML = iconMarkup(pill.kind === "paste" ? "paste" : pill.group);
+    const label = document.createElement("span");
+    label.className = "compose-pill-label";
+    label.textContent = pill.label;
+    el.append(label);
+    known.set(el, pill);
+    return el;
+  }
+
+  function pieces(parent, text, next) {
+    const parts = text.split(OBJ);
+    parts.forEach((part, i) => {
+      if (i) {
+        const pill = next();
+        if (pill) parent.append(pillNode(pill));
+      }
+      if (part) parent.append(document.createTextNode(part));
+    });
+  }
+
+  function marked(className, text, tick, next) {
+    const span = document.createElement("span");
+    span.className = className;
+    const mark = (t) => {
+      const m = document.createElement("span");
+      m.className = "compose-tick";
+      m.textContent = t;
+      span.append(m);
+    };
+    mark(tick);
+    pieces(span, text.slice(tick.length, text.length - tick.length), next);
+    mark(tick);
+    return span;
+  }
+
+  // Backticks stay in the text and in what is sent; only their look changes as they are typed.
+  function paint(text, list) {
+    const out = document.createDocumentFragment();
+    let k = 0;
+    const next = () => list[k++];
+    let at = 0;
+    for (const m of text.matchAll(CODE)) {
+      if (m.index > at) pieces(out, text.slice(at, m.index), next);
+      const fence = m[0].startsWith("```");
+      out.append(marked(fence ? "compose-fence" : "compose-code", m[0], fence ? "```" : "`", next));
+      at = m.index + m[0].length;
+    }
+    if (at < text.length) pieces(out, text.slice(at), next);
+    if (text.endsWith("\n")) {
+      const br = document.createElement("br");
+      br.dataset.tail = "";
+      out.append(br);
+    }
+    return out;
+  }
+
+  function scan(point) {
+    let text = "";
+    const list = [];
+    let caret = null;
+    const tail = tailBreak(input);
+    const mark = (extra = 0) => {
+      if (caret === null) caret = text.length + extra;
+    };
+    const walk = (node) => {
+      const kids = node.childNodes;
+      for (let i = 0; i < kids.length; i++) {
+        if (point && point.node === node && point.offset === i) mark();
+        const child = kids[i];
+        if (child.nodeType === Node.TEXT_NODE) {
+          if (point && point.node === child) mark(clean(child.data.slice(0, point.offset)).length);
+          text += clean(child.data);
+        } else if (child.nodeType !== Node.ELEMENT_NODE) {
+          continue;
+        } else if (child.dataset.pill) {
+          text += OBJ;
+          const label = child.textContent.trim();
+          list.push(known.get(child) || { kind: "name", label, insert: label });
+          if (point && child.contains(point.node)) mark();
+        } else if (child.tagName === "BR") {
+          if (child !== tail && child.dataset.tail === undefined) text += "\n";
+        } else {
+          if (BLOCKS.has(child.tagName) && text && !text.endsWith("\n")) text += "\n";
+          walk(child);
+        }
+      }
+      if (point && point.node === node && point.offset === kids.length) mark();
+    };
+    walk(input);
+    return { text, list, caret };
+  }
+
+  function place(offset) {
+    if (document.activeElement !== input) return;
+    const range = document.createRange();
+    let acc = 0;
+    let done = false;
+    const walk = (node) => {
+      for (let i = 0; i < node.childNodes.length && !done; i++) {
+        const child = node.childNodes[i];
+        if (child.nodeType === Node.TEXT_NODE) {
+          if (offset <= acc + child.data.length) {
+            range.setStart(child, offset - acc);
+            done = true;
+          } else {
+            acc += child.data.length;
+          }
+        } else if (child.nodeType !== Node.ELEMENT_NODE) {
+          continue;
+        } else if (child.dataset.pill || child.tagName === "BR") {
+          if (offset <= acc || child.dataset.tail !== undefined) {
+            range.setStart(node, i);
+            done = true;
+          } else {
+            acc += 1;
+          }
+        } else {
+          walk(child);
+        }
+      }
+    };
+    walk(input);
+    if (!done) range.setStart(input, input.childNodes.length);
+    range.collapse(true);
+    const sel = getSelection();
+    sel.removeAllRanges();
+    sel.addRange(range);
+  }
+
+  function inside() {
+    const sel = getSelection();
+    return sel.rangeCount > 0 && input.contains(sel.anchorNode) && input.contains(sel.focusNode);
+  }
+
+  function selection() {
+    if (!inside()) {
+      const at = Math.min(lastCaret ?? value.length, value.length);
+      return { start: at, end: at };
+    }
+    const range = getSelection().getRangeAt(0);
+    const start = scan({ node: range.startContainer, offset: range.startOffset }).caret ?? value.length;
+    const end = range.collapsed ? start : scan({ node: range.endContainer, offset: range.endOffset }).caret ?? start;
+    return { start: Math.min(start, end), end: Math.max(start, end) };
+  }
+
+  function repaint(caret) {
+    const fresh = paint(value, pills);
+    const probe = document.createElement("div");
+    probe.append(fresh.cloneNode(true));
+    if (probe.innerHTML !== input.innerHTML) {
+      input.replaceChildren(fresh);
+      if (caret !== null && caret !== undefined) place(caret);
+    }
+  }
 
   function atBottom() {
     const s = hooks.scroller();
@@ -105,9 +330,8 @@ export function composer(form, hooks) {
 
   function fit() {
     const pinned = atBottom();
-    input.style.height = "auto";
-    input.style.height = `${input.scrollHeight}px`;
-    sendButton.disabled = !input.value.trim() && !attached.length;
+    input.classList.toggle("is-empty", !value);
+    sendButton.disabled = !serialize(value, pills).trim() && !attached.length;
     if (pinned) hooks.scrollDown();
   }
 
@@ -122,14 +346,102 @@ export function composer(form, hooks) {
 
   function saveDraft() {
     const all = drafts();
-    if (input.value.trim()) all[key] = input.value;
+    if (serialize(value, pills).trim()) all[key] = pills.length ? { value, pills } : value;
     else delete all[key];
     saveDrafts(all);
   }
 
+  function snapshot() {
+    return { value, pills: pills.slice(), caret: selection().end };
+  }
+
+  function remember(kind) {
+    const top = undo[undoAt];
+    if (top && top.value === value && top.pills.length === pills.length && top.pills.every((p, i) => p === pills[i])) return;
+    const now = Date.now();
+    if ((kind === "type" || kind === "delete") && kind === lastKind && now - lastAt < TYPING_MS && undoAt > 0) {
+      undo[undoAt] = snapshot();
+    } else {
+      undo = undo.slice(0, undoAt + 1);
+      undo.push(snapshot());
+      if (undo.length > UNDO_SIZE) undo.shift();
+      undoAt = undo.length - 1;
+    }
+    lastKind = kind;
+    lastAt = now;
+  }
+
+  function resetUndo() {
+    undo = [snapshot()];
+    undoAt = 0;
+    lastKind = "";
+  }
+
+  function changed() {
+    fit();
+    saveDraft();
+    onCaret();
+  }
+
+  function setDoc(text, list, caret = text.length) {
+    value = text;
+    pills = list;
+    repaint(caret);
+    lastCaret = caret;
+  }
+
+  function setPlain(text) {
+    setDoc(clean(String(text ?? "")).replace(/\r\n?/g, "\n"), []);
+  }
+
+  function setDraft(draft) {
+    if (draft && typeof draft === "object" && typeof draft.value === "string" && Array.isArray(draft.pills)
+      && objects(draft.value) === draft.pills.length) setDoc(draft.value.replace(/​/g, ""), draft.pills.slice());
+    else setPlain(typeof draft === "string" ? draft : "");
+  }
+
+  function edit(start, end, text, add = [], caret = start + text.length) {
+    const before = objects(value.slice(0, start));
+    const gone = objects(value.slice(start, end));
+    pills.splice(before, gone, ...add);
+    value = value.slice(0, start) + text + value.slice(end);
+    repaint(caret);
+    lastCaret = caret;
+    recall = null;
+    remember("edit");
+    changed();
+  }
+
+  function typed(type, data) {
+    const range = inside() ? getSelection().getRangeAt(0) : null;
+    const read = scan(range && { node: range.endContainer, offset: range.endOffset });
+    value = read.text;
+    pills = read.list;
+    repaint(read.caret);
+    if (read.caret !== null) lastCaret = read.caret;
+    recall = null;
+    const kind = type === "insertText" && data && !/\s/.test(data) ? "type" : type?.startsWith("delete") ? "delete" : "edit";
+    remember(kind);
+    changed();
+  }
+
+  function restoreFrom(state) {
+    setDoc(state.value, state.pills.slice(), state.caret);
+    recall = null;
+    lastKind = "";
+    changed();
+  }
+
+  function stepUndo(by) {
+    const at = undoAt + by;
+    if (at < 0 || at >= undo.length) return;
+    undoAt = at;
+    restoreFrom(undo[at]);
+  }
+
   function showMode() {
     const enter = mode === "enter";
-    hint.textContent = enter ? "Enter to send, Shift+Enter for a new line" : `${MOD}+Enter to send, Enter for a new line`;
+    hintLabel.textContent = enter ? "Enter to send, Shift+Enter for a new line" : `${MOD}+Enter to send, Enter for a new line`;
     hint.title = enter ? `Send with ${MOD}+Enter instead, so Enter starts a new line` : "Send with Enter instead";
     input.enterKeyHint = enter ? "send" : "enter";
     sendButton.title = `Send (${enter ? "Enter" : `${MOD}+Enter`})`;
@@ -140,11 +452,13 @@ export function composer(form, hooks) {
     return Array.isArray(list) ? list.filter((t) => typeof t === "string" && t.trim()) : [];
   }
 
+  const removeIcon = html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg>`;
+
   function drawFiles() {
     filesBox.hidden = !attached.length;
-    render(attached.map((a, i) => html`<span class="compose-file" title=${a.file.name}>${a.url
+    render(attached.map((a, i) => html`<span class="compose-file ${a.url ? "image" : "doc"}" title=${`${a.file.name} · ${sizeText(a.file.size)}`}>${a.url
       ? html`<img src=${a.url} alt="">`
-      : html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3"/></svg>`}<span class="compose-file-name">${a.file.name}</span><span class="compose-file-size">${sizeText(a.file.size)}</span><button class="compose-file-remove" type="button" aria-label=${`Remove ${a.file.name}`} @click=${() => removeFile(i)}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button></span>`), filesBox);
+      : html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 1.5h5l3 3v10H4zM9 1.5v3h3"/></svg><span class="compose-file-name">${a.file.name}</span><span class="compose-file-size">${sizeText(a.file.size)}</span>`}<button class="compose-file-remove" type="button" aria-label=${`Remove ${a.file.name}`} @mousedown=${(e) => e.preventDefault()} @click=${() => removeFile(i)}>${removeIcon}</button></span>`), filesBox);
     fit();
   }
 
@@ -182,20 +496,22 @@ export function composer(form, hooks) {
   }
 
   function submit() {
-    const text = input.value.trim();
+    const text = serialize(value, pills).trim();
     const files = attached.map(({ file, kind }) => ({ file, kind }));
     if ((!text && !files.length) || !hooks.send(text, files)) return;
     if (text) write(HISTORY_KEY, [text, ...kept().filter((t) => t !== text)].slice(0, HISTORY_SIZE));
-    input.value = "";
+    lastSent = { text, value, pills: pills.slice() };
+    setDoc("", []);
     clearFiles();
     recall = null;
     hide();
     saveDraft();
+    resetUndo();
     fit();
   }
 
   function browsing() {
-    return Boolean(recall) && input.value === (recall.index < 0 ? "" : recall.list[recall.index]);
+    return Boolean(recall) && !pills.length && value === (recall.index < 0 ? "" : recall.list[recall.index]);
   }
 
   // -1 is the empty box the browsing started from; 0 is the newest message.
@@ -203,8 +519,7 @@ export function composer(form, hooks) {
     if (!recall) recall = { list: [...new Set([...hooks.sent().slice().reverse(), ...kept()])], index: -1 };
     if (index < -1 || index >= recall.list.length) return;
     recall.index = index;
-    input.value = index < 0 ? "" : recall.list[index];
-    input.setSelectionRange(input.value.length, input.value.length);
+    setPlain(index < 0 ? "" : recall.list[index]);
     fit();
     saveDraft();
   }
@@ -230,7 +545,7 @@ export function composer(form, hooks) {
   function fill() {
     const query = menu.query.toLowerCase();
     const found = menu.kind === "task"
-      ? hooks.tasks().map((t) => ({ label: t.name, detail: t.text, insert: t.text, rank: rank(query, t.name, t.text) }))
+      ? hooks.tasks().map((t) => ({ group: "Tasks", label: t.name, detail: t.text, insert: t.text, rank: rank(query, t.name, t.text) }))
       : (names || []).map((n) => ({ ...n, rank: rank(query, n.label, n.insert, ...n.also) }));
     menu.items = found
       .filter((item) => item.rank !== null)
@@ -240,14 +555,15 @@ export function composer(form, hooks) {
   }
 
   function trigger() {
-    if (input.selectionStart !== input.selectionEnd) return null;
-    const at = input.selectionStart;
-    const next = input.value.charAt(at);
+    if (document.activeElement !== input || !inside() || composing) return null;
+    const { start, end } = selection();
+    if (start !== end) return null;
+    const next = value.charAt(start);
     if (next && !/\s/.test(next)) return null;
-    const m = input.value.slice(0, at).match(TRIGGER);
+    const m = value.slice(0, start).match(TRIGGER);
     if (!m) return null;
     const query = m[1] ?? m[2];
-    return { kind: m[1] !== undefined ? "task" : "name", query, start: at - query.length - 1, end: at };
+    return { kind: m[1] !== undefined ? "task" : "name", query, start: start - query.length - 1, end: start };
   }
 
   function onCaret() {
@@ -273,25 +589,30 @@ export function composer(form, hooks) {
   function closeMenu(dismiss) {
     if (!menu) return;
     const char = menu.kind === "task" ? "/" : "@";
-    if (menu.button && input.value.slice(menu.start, menu.end) === char) {
-      input.setRangeText("", menu.start, menu.end, "end");
-      fit();
-      saveDraft();
+    const was = menu;
+    menu = null;
+    draw();
+    if (was.button && value.slice(was.start, was.end) === char) {
+      edit(was.start, was.end, "");
     } else if (dismiss) {
-      dismissed = menu.start;
+      dismissed = was.start;
     }
-    hide();
   }
 
   function pick(i) {
     const item = menu?.items[i];
     if (!item) return;
-    const space = /^\s/.test(input.value.slice(menu.end)) ? "" : " ";
-    input.setRangeText(item.insert + space, menu.start, menu.end, "end");
+    const { start, end, kind } = menu;
+    const space = /^\s/.test(value.slice(end)) ? "" : " ";
     dismissed = -1;
-    hide();
-    fit();
-    saveDraft();
+    menu = null;
+    draw();
+    if (kind === "task") {
+      edit(start, end, item.insert + space);
+      return;
+    }
+    const pill = { kind: "name", group: item.group, label: item.label, insert: item.insert, title: item.detail };
+    edit(start, end, OBJ + space, [pill]);
   }
 
   function point(i) {
@@ -307,17 +628,12 @@ export function composer(form, hooks) {
       return;
     }
     input.focus();
-    const at = input.selectionStart;
-    const lead = /(^|\s)$/.test(input.value.slice(0, at)) ? "" : " ";
-    const trail = /^(\s|$)/.test(input.value.slice(input.selectionEnd)) ? "" : " ";
-    input.setRangeText(lead + char + trail, at, input.selectionEnd, "end");
-    const caret = at + lead.length + 1;
-    input.setSelectionRange(caret, caret);
+    const { start: at, end } = selection();
+    const lead = /(^|\s)$/.test(value.slice(0, at)) ? "" : " ";
+    const trail = /^(\s|$)/.test(value.slice(end)) ? "" : " ";
     dismissed = -1;
-    onCaret();
+    edit(at, end, lead + char + trail, [], at + lead.length + 1);
     if (menu) menu.button = true;
-    fit();
-    saveDraft();
   }
 
   function menuKey(e) {
@@ -357,10 +673,19 @@ export function composer(form, hooks) {
     else if (bottom > menuBox.scrollTop + menuBox.clientHeight) menuBox.scrollTop = bottom - menuBox.clientHeight;
   }
 
+  const OPTION_ICONS = {
+    Machines: svg`<path d="M2.5 3.5h11v4h-11zM2.5 8.5h11v4h-11zM5 5.5h.01M5 10.5h.01"/>`,
+    Sessions: svg`<rect x="1.5" y="2.5" width="13" height="11" rx="2"/><path d="M4.5 6.5l2 1.5-2 1.5M8.5 10h3"/>`,
+    Folders: svg`<path d="M1.5 4a1 1 0 0 1 1-1h3.6l1.4 1.5h5.9a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1h-11a1 1 0 0 1-1-1z"/>`,
+    Tasks: svg`<rect x="2.5" y="2.5" width="11" height="11" rx="2.5"/><path d="M9.5 5.5l-3 5"/>`,
+  };
+  const optionIcon = (group) => html`<svg class="icon compose-option-icon" viewBox="0 0 16 16" aria-hidden="true">${OPTION_ICONS[group]}</svg>`;
+
   function option(item, i) {
     const active = i === menu.active;
     return html`<div class="compose-option ${active ? "active" : ""}" role="option" id="compose-option-${i}" aria-selected=${active ? "true" : "false"}
       @mousedown=${(e) => e.preventDefault()} @mousemove=${() => point(i)} @click=${() => pick(i)}>
+      ${optionIcon(item.group)}
       <span class="compose-option-label">${item.label}</span>
       <span class="compose-option-detail">${item.detail}</span>
     </div>`;
@@ -387,16 +712,32 @@ export function composer(form, hooks) {
   function draw() {
     const open = Boolean(menu) && (menu.items.length > 0 || !menu.query || (menu.kind === "name" && !names));
     menuBox.hidden = !open;
+    input.setAttribute("aria-expanded", String(open));
     if (open && menu.items.length) input.setAttribute("aria-activedescendant", `compose-option-${menu.active}`);
     else input.removeAttribute("aria-activedescendant");
     if (!open) {
       render(nothing, menuBox);
       return;
     }
+    closePlus();
     menuBox.setAttribute("aria-label", menu.kind === "task" ? "Tasks" : "Machines, sessions and folders");
     menuBox.style.maxHeight = `${room()}px`;
     render(menuView(), menuBox);
     reveal();
+  }
+
+  function openPlus() {
+    hide();
+    plusMenu.hidden = false;
+    plus.setAttribute("aria-expanded", "true");
+    plusMenu.querySelector("[role=menuitem]:not([hidden])")?.focus();
+  }
+
+  function closePlus(back) {
+    if (plusMenu.hidden) return;
+    plusMenu.hidden = true;
+    plus.setAttribute("aria-expanded", "false");
+    if (back) input.focus();
   }
 
   // iOS keeps the page as tall as the screen when the keyboard opens and only shrinks the visual
@@ -420,19 +761,64 @@ export function composer(form, hooks) {
     if (!frame) frame = requestAnimationFrame(fitViewport);
   }
 
+  function insertText(text) {
+    const { start, end } = selection();
+    if (text.length > PASTE_CHARS || text.split("\n").length > PASTE_LINES) {
+      const space = /^\s/.test(value.slice(end)) ? "" : " ";
+      edit(start, end, OBJ + space, [{ kind: "paste", label: pastedLabel(text), text }]);
+      return;
+    }
+    edit(start, end, text);
+  }
+
+  function expand(el) {
+    const parent = el.parentNode;
+    const at = scan({ node: parent, offset: [...parent.childNodes].indexOf(el) }).caret;
+    const pill = known.get(el);
+    if (at === null || !pill || pill.kind !== "paste") return;
+    input.focus();
+    edit(at, at + 1, pill.text, [], at + pill.text.length);
+  }
+
+  function clip(e, cut) {
+    const { start, end } = selection();
+    if (start === end || !e.clipboardData) return;
+    e.preventDefault();
+    e.clipboardData.setData("text/plain", serialize(value.slice(start, end), pills.slice(objects(value.slice(0, start)))));
+    if (cut) edit(start, end, "");
+  }
+
   input.addEventListener("keydown", (e) => {
     if (e.isComposing || e.keyCode === 229) return;
     if (menu && menuKey(e)) return;
     const mod = e.metaKey || e.ctrlKey;
-    if (e.key === "Enter") {
-      if (mod || (mode === "enter" && !e.shiftKey && !e.altKey)) {
-        e.preventDefault();
-        submit();
-      }
+    const k = e.key.toLowerCase();
+    if (mod && !e.altKey && (k === "z" || k === "y")) {
+      e.preventDefault();
+      stepUndo(k === "y" || e.shiftKey ? 1 : -1);
       return;
     }
+    if (mod && !e.altKey && !e.shiftKey && ["b", "i", "u"].includes(k)) {
+      e.preventDefault();
+      return;
+    }
+    if (e.key === "Enter") {
+      e.preventDefault();
+      if (mod || (mode === "enter" && !e.shiftKey && !e.altKey)) submit();
+      else insertText("\n");
+      return;
+    }
+    if ((e.key === "Backspace" || e.key === "Delete") && !mod && !e.altKey) {
+      const { start, end } = selection();
+      const at = e.key === "Backspace" ? start - 1 : start;
+      if (start === end && value.charAt(at) === OBJ) {
+        e.preventDefault();
+        edit(at, at + 1, "");
+        return;
+      }
+    }
     if (mod || e.altKey || e.shiftKey) return;
-    if (e.key === "ArrowUp" && (browsing() || !input.value)) {
+    if (e.key === "ArrowUp" && (browsing() || !value)) {
       e.preventDefault();
       if (!browsing()) recall = null;
       recallAt(recall ? recall.index + 1 : 0);
@@ -445,18 +831,96 @@ export function composer(form, hooks) {
     }
   });
 
-  input.addEventListener("input", () => {
-    recall = null;
-    fit();
-    saveDraft();
-    onCaret();
+  input.addEventListener("beforeinput", (e) => {
+    const type = e.inputType || "";
+    if (type.startsWith("format")) {
+      e.preventDefault();
+    } else if (type === "historyUndo" || type === "historyRedo") {
+      e.preventDefault();
+      stepUndo(type === "historyUndo" ? -1 : 1);
+    } else if ((type === "insertParagraph" || type === "insertLineBreak") && !e.isComposing) {
+      e.preventDefault();
+      if (type === "insertParagraph" && mode === "enter") submit();
+      else insertText("\n");
+    }
   });
-  input.addEventListener("click", onCaret);
+
+  input.addEventListener("input", (e) => {
+    if (e.isComposing || composing) return;
+    typed(e.inputType, e.data);
+  });
+  input.addEventListener("compositionstart", () => {
+    composing = true;
+    hide();
+  });
+  input.addEventListener("compositionend", (e) => {
+    composing = false;
+    typed("insertText", e.data);
+  });
+  input.addEventListener("click", (e) => {
+    const pill = e.target.closest?.(".compose-pill.paste");
+    if (pill) expand(pill);
+    else onCaret();
+  });
+  input.addEventListener("focus", () => {
+    if (!inside()) place(Math.min(lastCaret ?? value.length, value.length));
+  });
+  input.addEventListener("copy", (e) => clip(e, false));
+  input.addEventListener("cut", (e) => clip(e, true));
   input.addEventListener("paste", (e) => {
-    const files = e.clipboardData?.files;
-    if (!files?.length) return;
-    if (!e.clipboardData.types.includes("text/plain")) e.preventDefault();
-    attach(files);
+    const data = e.clipboardData;
+    if (!data) return;
+    e.preventDefault();
+    const files = data.files;
+    if (files?.length) attach(files);
+    if (!data.types.includes("text/plain")) return;
+    const text = clean(data.getData("text/plain").replace(/\r\n?/g, "\n"));
+    if (text) insertText(text);
+  });
+  function dropPoint(e) {
+    let range = null;
+    const pos = document.caretPositionFromPoint?.(e.clientX, e.clientY);
+    if (pos) {
+      range = document.createRange();
+      range.setStart(pos.offsetNode, pos.offset);
+    } else {
+      range = document.caretRangeFromPoint?.(e.clientX, e.clientY) || null;
+    }
+    if (!range || !input.contains(range.startContainer)) return null;
+    return scan({ node: range.startContainer, offset: range.startOffset }).caret;
+  }
+
+  // Text dragged in, or moved within the box, goes in as plain text so pills keep what they stand for.
+  input.addEventListener("dragstart", () => {
+    dragging = selection();
+  });
+  input.addEventListener("dragend", () => {
+    dragging = null;
+  });
+  input.addEventListener("drop", (e) => {
+    if (e.dataTransfer?.types.includes("Files")) return;
+    e.preventDefault();
+    const at = dropPoint(e);
+    const moved = dragging;
+    dragging = null;
+    input.focus();
+    if (moved && moved.start !== moved.end) {
+      if (at === null || (at >= moved.start && at <= moved.end)) return;
+      const text = value.slice(moved.start, moved.end);
+      const list = pills.slice(objects(value.slice(0, moved.start)), objects(value.slice(0, moved.end)));
+      edit(moved.start, moved.end, "");
+      const to = at > moved.end ? at - text.length : at;
+      edit(to, to, text, list);
+      return;
+    }
+    const text = clean((e.dataTransfer?.getData("text/plain") || "").replace(/\r\n?/g, "\n"));
+    if (!text) return;
+    if (at !== null) place(at);
+    insertText(text);
+  });
+  document.addEventListener("selectionchange", () => {
+    if (!inside()) return;
+    lastCaret = selection().end;
   });
   const carriesFiles = (e) => e.dataTransfer?.types.includes("Files");
   for (const type of ["dragenter", "dragover"]) {
@@ -496,6 +960,27 @@ export function composer(form, hooks) {
     button.addEventListener("click", () => start(char));
   }
 
+  plus.addEventListener("mousedown", (e) => e.preventDefault());
+  plus.addEventListener("click", () => (plusMenu.hidden ? openPlus() : closePlus(true)));
+  plusMenu.addEventListener("click", (e) => {
+    if (e.target.closest("[role=menuitem]")) closePlus(false);
+  });
+  plusMenu.addEventListener("keydown", (e) => {
+    const items = [...plusMenu.querySelectorAll("[role=menuitem]:not([hidden])")];
+    const at = items.indexOf(document.activeElement);
+    if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      closePlus(true);
+    } else if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      items[(at + (e.key === "ArrowDown" ? 1 : items.length - 1)) % items.length]?.focus();
+    }
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (!plusMenu.hidden && !plusMenu.contains(e.target) && !plus.contains(e.target)) closePlus(false);
+  });
+
   hint.addEventListener("click", () => {
     mode = mode === "enter" ? "mod" : "enter";
     write(SEND_KEY, mode);
@@ -503,11 +988,22 @@ export function composer(form, hooks) {
     input.focus();
   });
 
+  Object.defineProperty(input, "value", {
+    configurable: true,
+    get: () => serialize(value, pills),
+    set: (text) => {
+      setPlain(text);
+      fit();
+      saveDraft();
+    },
+  });
+
   window.visualViewport?.addEventListener("resize", queueViewport);
   window.visualViewport?.addEventListener("scroll", queueViewport);
   showMode();
   fitViewport();
   fit();
+  resetUndo();
 
   return {
     show(id) {
@@ -516,8 +1012,9 @@ export function composer(form, hooks) {
       recall = null;
       dismissed = -1;
       hide();
-      const text = drafts()[key] || "";
-      if (input.value !== text) input.value = text;
+      setDraft(drafts()[key]);
+      lastCaret = null;
+      resetUndo();
       fit();
     },
     adopt(id) {
@@ -528,7 +1025,9 @@ export function composer(form, hooks) {
       saveDraft();
     },
     restore(text, files) {
-      input.value = text;
+      if (lastSent && lastSent.text === text) setDoc(lastSent.value, lastSent.pills.slice());
+      else setPlain(text);
+      resetUndo();
       saveDraft();
       fit();
       attach(files.map((f) => f.file));
@@ -537,6 +1036,24 @@ export function composer(form, hooks) {
       const all = drafts();
       for (const k of Object.keys(all)) if (k !== "new" && !ids.includes(k)) delete all[k];
       saveDrafts(all);
+    },
+    fill(text) {
+      setPlain(text);
+      input.focus();
+      place(value.length);
+      remember("edit");
+      changed();
+    },
+    insert(text) {
+      const said = clean(String(text ?? "")).trim();
+      if (!said) return;
+      input.focus();
+      const { start, end } = selection();
+      const before = value.slice(0, start);
+      const after = value.slice(end);
+      const lead = before && !/\s$/.test(before) ? " " : "";
+      const trail = after && !/^\s/.test(after) ? " " : "";
+      edit(start, end, lead + said + trail);
     },
   };
 }

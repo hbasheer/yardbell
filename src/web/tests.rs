@@ -11,8 +11,10 @@ use http_body_util::BodyExt;
 use std::path::Path;
 use tower::ServiceExt;
 
+mod changes;
 mod connectors;
 mod diagrams;
+mod files;
 mod health;
 mod insights;
 mod mcp_auth;
@@ -165,6 +167,9 @@ fn rig() -> Rig {
             fake.clone(),
             dir.path().join("dispatch"),
         )),
+        usage: Arc::new(crate::usage::Usage::new(crate::usage::tests::config(
+            &dir.path().join("agents"),
+        ))),
         triggers: Arc::new(crate::triggers::Triggers::new(
             Arc::new(crate::triggers::Live::new(fake.clone())),
             dir.path().join("triggers.json"),
@@ -187,6 +192,7 @@ fn rig() -> Rig {
             crate::pulls::Remotes::new(fake.clone(), Ssh::new(dir.path().join("state5"))),
             dir.path().join("pulls.json"),
         )),
+        awake: Arc::new(crate::awake::Awake::new(Box::new(crate::awake::Pretend))),
         refresh: {
             let refreshes = refreshes.clone();
             Arc::new(move |machine: Option<String>| {
@@ -297,13 +303,28 @@ async fn shared_nav_script_is_served_to_logged_in_pages() {
         "text/javascript; charset=utf-8"
     );
     assert!(body.contains("YardbellNav"));
-    for page in ["dashboard.html", "settings.html", "add.html"] {
+}
+
+#[tokio::test]
+async fn shared_machine_maths_load_before_nav() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/machines.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellMachines"));
+    for page in ["dispatch.html", "settings.html"] {
         let html = String::from_utf8(Assets::get(page).unwrap().data.into_owned()).unwrap();
-        assert!(
-            html.contains(r#"<script src="/nav.js"></script>"#),
-            "{page}"
-        );
-        assert!(html.contains(r#"id="nav-machines""#), "{page}");
+        let machines = html.find(r#"<script src="/machines.js"></script>"#);
+        let shell = html.find(r#"<script src="/shell.js"></script>"#);
+        assert!(machines.is_some() && machines < shell, "{page}");
     }
 }
 
@@ -323,10 +344,10 @@ async fn pages_that_show_the_state_load_the_live_script_first() {
     );
     assert!(body.contains("YardbellLive"));
     for (page, user) in [
-        ("dashboard.html", "/nav.js"),
-        ("dispatch.html", "/nav.js"),
-        ("settings.html", "/nav.js"),
-        ("add.html", "/nav.js"),
+        ("dashboard.html", "/shell.js"),
+        ("dispatch.html", "/shell.js"),
+        ("settings.html", "/shell.js"),
+        ("add.html", "/add.js"),
         ("workspace.html", "/workspace.js"),
     ] {
         let html = String::from_utf8(Assets::get(page).unwrap().data.into_owned()).unwrap();
@@ -336,6 +357,231 @@ async fn pages_that_show_the_state_load_the_live_script_first() {
         let later = html.find(&format!(r#"<script src="{user}"></script>"#));
         assert!(later.is_some_and(|at| live < at), "{page}");
     }
+    let html = String::from_utf8(Assets::get("workspace.html").unwrap().data.into_owned()).unwrap();
+    let at = |script: &str| {
+        html.find(&format!(r#"<script src="{script}"></script>"#))
+            .unwrap_or_else(|| panic!("workspace.html does not load {script}"))
+    };
+    let order = [
+        "/live.js",
+        "/machines.js",
+        "/shell.js",
+        "/strip.js",
+        "/palette.js",
+        "/tree.js",
+        "/workspace.js",
+    ]
+    .map(at);
+    assert!(order.windows(2).all(|w| w[0] < w[1]), "{order:?}");
+    assert!(!html.contains(r#"<script src="/side.js"></script>"#));
+}
+
+#[tokio::test]
+async fn the_shell_script_is_served() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/shell.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellShell"));
+}
+
+#[test]
+fn moved_pages_load_the_shell_instead_of_nav() {
+    let html =
+        |page: &str| String::from_utf8(Assets::get(page).unwrap().data.into_owned()).unwrap();
+    for page in [
+        "add.html",
+        "diagrams.html",
+        "proposals.html",
+        "dashboard.html",
+        "pipeline.html",
+        "settings.html",
+        "dispatch.html",
+    ] {
+        let html = html(page);
+        let at = |script: &str| {
+            html.find(&format!(r#"<script src="{script}"></script>"#))
+                .unwrap_or_else(|| panic!("{page} does not load {script}"))
+        };
+        let order = [
+            "/live.js",
+            "/machines.js",
+            "/shell.js",
+            "/strip.js",
+            "/usage.js",
+            "/palette.js",
+        ]
+        .map(at);
+        assert!(order.windows(2).all(|w| w[0] < w[1]), "{page}: {order:?}");
+        assert!(
+            html.contains(r#"id="main""#) && html.contains("shell-main"),
+            "{page}"
+        );
+        for gone in ["/nav.js", "/side.js"] {
+            assert!(
+                !html.contains(&format!(r#"src="{gone}""#)),
+                "{page} loads {gone}"
+            );
+        }
+        assert!(!html.contains(r#"class="side""#), "{page}");
+    }
+    assert!(html("add.html").contains(r#"data-column="none""#));
+    let dashboard = html("dashboard.html");
+    let at = |script: &str| {
+        dashboard
+            .find(&format!(r#"<script src="{script}"></script>"#))
+            .unwrap_or_else(|| panic!("dashboard.html does not load {script}"))
+    };
+    assert!(at("/pull.js") < at("/tree.js") && at("/palette.js") < at("/tree.js"));
+}
+
+#[tokio::test]
+async fn the_strip_script_is_served() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/strip.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellStrip"));
+}
+
+#[tokio::test]
+async fn the_usage_script_is_served() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/usage.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellUsage"));
+    let html = String::from_utf8(Assets::get("workspace.html").unwrap().data.into_owned()).unwrap();
+    let at = |script: &str| html.find(&format!(r#"<script src="{script}"></script>"#));
+    assert!(at("/strip.js") < at("/usage.js") && at("/usage.js").is_some());
+}
+
+#[tokio::test]
+async fn the_stats_script_is_served_and_loaded_by_settings() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/stats.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellStats"));
+    let html = String::from_utf8(Assets::get("settings.html").unwrap().data.into_owned()).unwrap();
+    assert!(html.contains(r#"<script src="/stats.js"></script>"#));
+    assert!(html.contains(r#"<section id="stats-usage">"#));
+    assert!(html.contains(r##"<a href="#stats-usage">"##));
+}
+
+#[tokio::test]
+async fn usage_lists_the_agents_and_stats_read_the_transcripts() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let get = |path: &str| {
+        Request::get(path)
+            .header(header::COOKIE, c.clone())
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, get("/dispatch/usage")).await;
+    assert_eq!(status, StatusCode::OK);
+    let card: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(
+        card["providers"],
+        json!([]),
+        "no agent is set up in the rig"
+    );
+
+    let projects = r._dir.path().join("agents/claude/projects/-work-app");
+    std::fs::create_dir_all(&projects).unwrap();
+    let at = chrono::Local::now().to_rfc3339();
+    std::fs::write(
+        projects.join("s1.jsonl"),
+        format!(
+            "{}\n",
+            json!({"type": "assistant", "sessionId": "s1", "cwd": "/work/app", "timestamp": at,
+                   "requestId": "r1", "message": {"id": "m1", "model": "claude-opus-5-5",
+                   "usage": {"input_tokens": 3, "output_tokens": 4}}})
+        ),
+    )
+    .unwrap();
+    let (status, _, body) = send(&r.app, get("/api/usage/stats?provider=claude&days=7")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let report: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(report["totals"]["tokens"], 7);
+    assert_eq!(report["daily"].as_array().unwrap().len(), 7);
+    assert_eq!(report["sessions"][0]["project"], "app");
+    let (status, _, _) = send(&r.app, get("/api/usage/stats?provider=other")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+
+    let req = Request::post("/dispatch/usage/refresh")
+        .header(header::COOKIE, c.clone())
+        .body(Body::empty())
+        .unwrap();
+    let (status, _, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn the_palette_script_is_served() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/palette.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellPalette"));
+}
+
+#[tokio::test]
+async fn the_tree_script_is_served() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::get("/tree.js")
+        .header(header::COOKIE, c)
+        .body(Body::empty())
+        .unwrap();
+    let (status, headers, body) = send(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        headers[header::CONTENT_TYPE],
+        "text/javascript; charset=utf-8"
+    );
+    assert!(body.contains("YardbellTree"));
 }
 
 fn resolve_import(from: &str, spec: &str) -> String {
@@ -577,7 +823,7 @@ async fn workspace_is_served_and_linked_from_every_sidebar() {
     let c = cookie(&r.app).await;
     for (path, needle) in [
         ("/workspace", r#"<script src="/workspace.js"></script>"#),
-        ("/workspace.js", "ws-picking"),
+        ("/workspace.js", "ws-session"),
     ] {
         let req = Request::get(path)
             .header(header::COOKIE, c.clone())
@@ -586,15 +832,6 @@ async fn workspace_is_served_and_linked_from_every_sidebar() {
         let (status, _, body) = send(&r.app, req).await;
         assert_eq!(status, StatusCode::OK, "{path}");
         assert!(body.contains(needle), "{path}");
-    }
-    for page in [
-        "dashboard.html",
-        "dispatch.html",
-        "settings.html",
-        "add.html",
-    ] {
-        let html = String::from_utf8(Assets::get(page).unwrap().data.into_owned()).unwrap();
-        assert!(html.contains(r#"href="/workspace""#), "{page}");
     }
 }
 
@@ -3085,6 +3322,7 @@ async fn dispatch_says_which_agent_and_model_it_runs_on() {
                 "codex": { "label": "Codex", "model": "" },
             },
             "voice_input": false,
+            "voice_mode": "auto",
         }),
         "nothing set keeps Claude Code on its own default model"
     );
@@ -3113,6 +3351,7 @@ async fn dispatch_says_which_agent_and_model_it_runs_on() {
                 "codex": { "label": "Codex CLI", "model": "gpt-6.1-sol" },
             },
             "voice_input": false,
+            "voice_mode": "auto",
         }),
         "the label is the one sessions show for the agent"
     );
@@ -5302,4 +5541,113 @@ async fn a_busy_session_is_not_reviewed_until_it_is_idle() {
     });
     w.round(&r).await;
     assert_eq!(yardbell_steps(&r).len(), 1);
+}
+
+#[tokio::test]
+async fn voice_models_are_listed_and_only_known_names_are_taken() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _, body) = send(
+        &r.app,
+        Request::get("/api/settings/voice/models")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(list["recommended"], "base.en");
+    assert_eq!(list["input"], "off");
+    let names: Vec<&str> = list["models"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        names,
+        [
+            "tiny.en",
+            "base.en",
+            "small.en",
+            "medium.en",
+            "small",
+            "large-v3-turbo"
+        ]
+    );
+    for path in [
+        "/api/settings/voice/models/large-v2/download",
+        "/api/settings/voice/models/..%2F..%2Fetc%2Fpasswd/download",
+        "/api/settings/voice/models/x.bin/delete",
+        "/api/settings/voice/models/huge/use",
+    ] {
+        let (status, _, body) = post_json(&r.app, &c, path, "{}").await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{path}: {body}");
+        assert!(
+            body.contains("not one of the speech models"),
+            "{path}: {body}"
+        );
+    }
+    let (status, _, body) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/voice/setup",
+        r#"{"model":"https://example.com/ggml-evil.bin"}"#,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(body.contains("not one of the speech models"), "{body}");
+}
+
+#[tokio::test]
+async fn keep_awake_is_saved_applied_and_shown_in_the_state() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _, body) =
+        post_json(&r.app, &c, "/api/settings/keep-awake", r#"{"mode":"on"}"#).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let reply: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(reply["mode"], "on");
+    assert_eq!(reply["holding"], true);
+    assert_eq!(r.app.config().unwrap().keep_awake, crate::awake::Mode::On);
+    assert!(std::fs::read_to_string(&r.app.cfg_path)
+        .unwrap()
+        .contains("keep_awake: on"));
+    let (_, _, body) = send(
+        &r.app,
+        Request::get("/state")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let state: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(state["keep_awake"]["holding"], true);
+    assert_eq!(state["keep_awake"]["tool"], "systemd-inhibit");
+    let (status, _, _) = post_json(
+        &r.app,
+        &c,
+        "/api/settings/keep-awake",
+        r#"{"mode":"always"}"#,
+    )
+    .await;
+    assert!(status.is_client_error());
+    let (status, _, body) =
+        post_json(&r.app, &c, "/api/settings/keep-awake", r#"{"mode":"off"}"#).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert!(!std::fs::read_to_string(&r.app.cfg_path)
+        .unwrap()
+        .contains("keep_awake"));
+    let (_, _, body) = send(
+        &r.app,
+        Request::get("/api/settings")
+            .header(header::COOKIE, &c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    let shown: serde_json::Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(shown["keep_awake"]["mode"], "off");
+    assert_eq!(shown["keep_awake"]["holding"], false);
 }

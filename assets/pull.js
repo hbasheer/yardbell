@@ -82,5 +82,35 @@
     return Boolean(s?.tmux && s.pull?.state === "open" && !s.stale);
   }
 
-  window.YardbellPull = { status, describe, details, ref, noun, review, reviewable, reviewMark };
+  // GitHub can take a moment to say whether a pull request merges cleanly, so only a known conflict
+  // keeps an approved, green one out of Ready to merge.
+  function ready(p) {
+    return !p.draft && p.review === "approved" && (p.ci === "passing" || p.ci === "none") && p.mergeable !== "conflicting";
+  }
+
+  function mergeText(p) {
+    return {
+      title: `Merge ${ref(p)}?`,
+      body: `${p.title ? `${p.title}. ` : ""}It merges into ${p.base || "its base branch"} on ${p.forge === "gitlab" ? "GitLab" : "GitHub"}, the way Settings says, and only if nothing was pushed to the ${noun(p).toLowerCase()} since this page showed it. The branch is kept.`,
+    };
+  }
+
+  async function merge(s) {
+    const res = await fetch(`/sessions/${encodeURIComponent(s.machine)}/${encodeURIComponent(s.tmux)}/merge`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ head: s.pull.head }),
+    });
+    if (res.status === 401) {
+      location.href = "/login";
+      throw new Error("logged out");
+    }
+    if (!res.ok) {
+      const data = await res.json().catch(() => ({}));
+      throw new Error(data.error || `Request failed (${res.status})`);
+    }
+    return ref(s.pull);
+  }
+
+  window.YardbellPull = { status, describe, details, ref, noun, review, reviewable, reviewMark, ready, mergeText, merge };
 })();

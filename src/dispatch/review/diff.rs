@@ -7,14 +7,14 @@ pub const MAX_FILES: usize = 500;
 pub const MAX_UNTRACKED: usize = 100;
 pub const PAGE_LINES: usize = 400;
 const LIST_BYTES: usize = 1_000_000;
-const DIFF_BYTES: usize = 2_000_000;
+pub(crate) const DIFF_BYTES: usize = 2_000_000;
 const LINE_CHARS: usize = 2000;
 const AROUND: usize = 40;
 const TIMEOUT: Duration = Duration::from_secs(20);
 const TRACKED: &str = "@@YB-TRACKED@@\n";
 const UNTRACKED: &str = "\n@@YB-UNTRACKED@@\n";
-const GIT: &str = "git -c core.quotepath=off";
-const DIFF: &str = "diff --no-color --no-ext-diff --no-textconv";
+pub(crate) const GIT: &str = "git -c core.quotepath=off";
+pub(crate) const DIFF: &str = "diff --no-color --no-ext-diff --no-textconv";
 
 // Where the diff of a review starts: the base the reviewer named or Yardbell found, the commit
 // the branch shares with it, and the branch's commit when the review finished.

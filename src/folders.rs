@@ -161,9 +161,29 @@ impl Folders {
         script: &str,
         timeout: Duration,
     ) -> Result<String, String> {
+        self.run(m, script, None, timeout).await
+    }
+
+    pub(crate) async fn exec_input(
+        &self,
+        m: &Machine,
+        script: &str,
+        input: String,
+        timeout: Duration,
+    ) -> Result<String, String> {
+        self.run(m, script, Some(input), timeout).await
+    }
+
+    async fn run(
+        &self,
+        m: &Machine,
+        script: &str,
+        input: Option<String>,
+        timeout: Duration,
+    ) -> Result<String, String> {
         let out = self
             .runner
-            .run(self.ssh.command(m, script), None, timeout)
+            .run(self.ssh.command(m, script), input, timeout)
             .await;
         if out.timed_out {
             return Err(format!("{} did not answer in time", m.name));

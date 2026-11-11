@@ -37,6 +37,10 @@ pub use review::{
     valid_path as valid_review_path, Anchor as ReviewAnchor, Mark as ReviewMark, Pin as ReviewPin,
     ReviewOf, ReviewedPull, ScanKind, Screenshots,
 };
+pub(crate) use review::{
+    parse_diff as parse_git_diff, Line as DiffLine, DIFF as GIT_DIFF, DIFF_BYTES as GIT_DIFF_BYTES,
+    GIT,
+};
 pub use rules::{
     decide as decide_step, decide_always_wait, decide_memory, folder_matches, valid_folder_pattern,
     validate as validate_rules, Rule, Step, Verdict,
@@ -46,6 +50,7 @@ pub use store::valid_id;
 pub use store::write_private;
 pub use tasks::{History as TaskHistory, SavedTask, Version as TaskVersion, MAX_VERSIONS};
 pub use turn::{Message, Opening};
+pub use usage::ClaudeAccount;
 
 use crate::config::RunsOn;
 use crate::shell::Runner;

@@ -1,5 +1,5 @@
 const $ = (id) => document.getElementById(id);
-const Nav = window.YardbellNav;
+const Shell = window.YardbellShell;
 const form = $("form");
 const CHECK = '<svg class="icon" viewBox="0 0 16 16" aria-label="done"><path d="M3.5 8.5 6.5 11.5 12.5 4.5"/></svg>';
 const CROSS = '<svg class="icon" viewBox="0 0 16 16" aria-label="failed"><path d="M4.5 4.5 11.5 11.5M11.5 4.5 4.5 11.5"/></svg>';
@@ -170,7 +170,8 @@ async function loadPeers() {
 }
 
 async function loadMachines() {
-  const state = await call("GET", "/state");
+  const state = await Shell.loadState();
+  if (!state) return;
   $("known").innerHTML = state.machines.map((m) => `<li class="row">
     <div class="row-main"><div class="row-title"><span class="dot ${m.up ? "ok" : "bad"}"></span><span class="folder">${esc(m.name)}</span>
     <span class="note">${m.local ? "this machine" : esc(m.up ? "connected" : m.reason || "not reachable")}</span></div></div>
@@ -181,7 +182,7 @@ $("known").addEventListener("click", async (e) => {
   const b = e.target.closest("[data-remove]");
   if (!b) return;
   const name = b.dataset.remove;
-  if (!(await Nav.confirm(`Remove ${name} from Yardbell?`, "Its tunnels close. ~/.ssh/config is not changed.", { confirm: "Remove", danger: true }))) return;
+  if (!(await Shell.confirm(`Remove ${name} from Yardbell?`, "Its tunnels close. ~/.ssh/config is not changed.", { confirm: "Remove", danger: true }))) return;
   try {
     const res = await call("POST", `/machines/${encodeURIComponent(name)}/remove`);
     toast(res.message);
@@ -192,4 +193,5 @@ $("known").addEventListener("click", async (e) => {
 });
 
 loadPeers();
-loadMachines();
+loadMachines().catch(() => {});
+window.YardbellLive.follow(loadMachines, 10000);

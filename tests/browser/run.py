@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import urllib.parse
 import traceback
 import urllib.request
 import threading
@@ -491,6 +492,21 @@ class FakeLinear(BaseHTTPRequestHandler):
         pass
 
 
+# Stands in for Hugging Face: no model is ever there, so Set up's download fails at once and the
+# suite never fetches a real model.
+class FakeModels(BaseHTTPRequestHandler):
+    asked = []
+
+    def do_GET(self):
+        FakeModels.asked.append(self.path)
+        self.send_response(404)
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+
+    def log_message(self, *args):
+        pass
+
+
 def ago_stamp(minutes):
     return time.strftime("%Y-%m-%dT%H:%M:%S+00:00", time.gmtime(time.time() - minutes * 60))
 
@@ -618,6 +634,7 @@ class Yardbell:
         self.state = os.path.join(tmp, "state")
         self.tmux_dir = os.path.join(tmp, "tmux")
         home = os.path.join(tmp, "home")
+        self.home = home
         for d in (self.root, self.state, self.tmux_dir, home):
             os.makedirs(d)
         os.chmod(self.tmux_dir, 0o700)
@@ -645,10 +662,14 @@ class Yardbell:
             json.dump(inbox_proposals(), f)
         self.linear = ThreadingHTTPServer(("127.0.0.1", 0), FakeLinear)
         threading.Thread(target=self.linear.serve_forever, daemon=True).start()
+        self.model_host = ThreadingHTTPServer(("127.0.0.1", 0), FakeModels)
+        threading.Thread(target=self.model_host.serve_forever, daemon=True).start()
+        self.models = os.path.join(home, ".local", "share", "yardbell", "models")
         # gh on the server's PATH answers for every branch with one failing pull request, except
         # one branch whose pull request is ready to merge; a merge is written down, not done.
         fake_bin = os.path.join(tmp, "bin")
         os.makedirs(fake_bin)
+        self.fake_bin = fake_bin
         self.merges = os.path.join(tmp, "gh-merges.log")
         with open(os.path.join(fake_bin, "gh"), "w") as f:
             f.write(
@@ -675,6 +696,17 @@ class Yardbell:
         with open(self.fake_codex, "w") as f:
             f.write(FAKE_CODEX)
         os.chmod(self.fake_codex, 0o755)
+        # Keep computer awake holds systemd-inhibit; the fake writes down how it was called and its
+        # pid, then holds the command it was given, as the real one does.
+        self.inhibits = os.path.join(tmp, "inhibit.log")
+        with open(os.path.join(fake_bin, "systemd-inhibit"), "w") as f:
+            f.write(
+                "#!/bin/sh\n"
+                f"echo \"$$ $*\" >> {self.inhibits}\n"
+                "while [ \"${1#--}\" != \"$1\" ]; do shift; done\n"
+                "exec \"$@\"\n"
+            )
+        os.chmod(os.path.join(fake_bin, "systemd-inhibit"), 0o755)
         self.port = free_port()
         self.base = f"http://127.0.0.1:{self.port}"
         self.config = os.path.join(tmp, "yardbell.yml")
@@ -710,6 +742,7 @@ cookie_key: {base64.b64encode(os.urandom(64)).decode()}
             "YARDBELL_STATE": self.state,
             "CLAUDE_CONFIG_DIR": os.path.join(home, ".claude"),
             "YARDBELL_LINEAR_URL": f"http://127.0.0.1:{self.linear.server_address[1]}/graphql",
+            "YARDBELL_MODELS_URL": f"http://127.0.0.1:{self.model_host.server_address[1]}",
         }
         for agent, fake in (("claude", self.fake_claude), ("codex", self.fake_codex)):
             out = subprocess.run(["bash", "-lic", f"command -v {agent}"], env=self.env, capture_output=True, text=True)
@@ -906,8 +939,8 @@ class Suite:
     def test_dashboard_shows_the_machine(self):
         self.b.goto(self.url("/"))
         self.b.wait(
-            f"[...document.querySelectorAll('#nav-machines li')].some((li) => li.textContent.includes({json.dumps(MACHINE)}))",
-            "the machine in the sidebar",
+            f"document.querySelector('#col-body .tree-machine [data-pick={json.dumps(MACHINE)}]')?.textContent.includes({json.dumps(MACHINE)})",
+            "the machine in the column",
         )
         self.b.wait(
             f"document.querySelector('section.mgroup:not(.down) h2#mg-{MACHINE}')?.textContent === {json.dumps(MACHINE)}",
@@ -925,7 +958,7 @@ class Suite:
         for want in ("1 thing looks stuck", "is still waiting for you", "Root cause needs you", "5 h"):
             if want not in said:
                 raise Failure(f"the banner does not say {want!r}: {said}")
-        b.wait("document.getElementById('nav-problems-count')?.textContent === '1'", "the count in the sidebar")
+        b.wait("document.querySelector('#rail [data-count=dashboard]')?.textContent === '1'", "the count on the rail")
 
     def test_start_a_shell_session(self):
         b = self.b
@@ -980,6 +1013,112 @@ class Suite:
         b.key("Enter")
         b.wait("screenText().split('\\n').some((l) => l.trim() === 'back3')", "the shell to still answer")
 
+    def test_tree_groups_worktrees_under_their_repo(self):
+        b = self.b
+        b.goto(self.url("/workspace"))
+        b.wait("typeof YardbellTree === 'object'", "the tree script")
+        got = b.js("""(() => {
+          const s = (tmux, folder) => ({ machine: 'hp', tmux, folder, attachable: true });
+          const state = {
+            machines: [{ name: 'hp', up: true }, { name: 'box', up: false, reason: 'ssh: timed out' }],
+            folders: [],
+            sessions: [
+              s('a', '/home/u/code/app'),
+              s('b', '/home/u/code/app-worktrees/eng-1-a'),
+              s('c', '/home/u/notes'),
+            ],
+          };
+          const tree = YardbellTree.build(state, { stateOf: () => 'idle' });
+          const hp = tree.find((m) => m.name === 'hp');
+          const box = tree.find((m) => m.name === 'box');
+          return {
+            repos: hp.repos.map((r) => r.label),
+            worktrees: hp.repos[0].worktrees.map((w) => w.label),
+            boxUp: box.up, boxRepos: box.repos.length,
+            reason: box.reason,
+            wt: YardbellTree.repoOf('/r/app-worktrees/x'),
+            plain: YardbellTree.repoOf('/r/app'),
+          };
+        })()""")
+        want = {
+            "repos": ["~/code/app", "~/notes"],
+            "worktrees": ["~/code/app", "~/code/app-worktrees/eng-1-a"],
+            "boxUp": False, "boxRepos": 0, "reason": "ssh: timed out",
+            "wt": "/r/app", "plain": "/r/app",
+        }
+        if got != want:
+            raise Failure(f"the tree built {got}, wanted {want}")
+        rows = b.js("""(() => {
+          const hour = 3600 * 1000;
+          const s = (tmux, extra) => ({ machine: 'hp', tmux, folder: '/home/u/code/app', attachable: true, agent: 'claude', ...extra });
+          const state = {
+            machines: [{ name: 'hp', up: true }],
+            folders: [],
+            agents: [{ name: 'claude', label: 'Claude Code' }],
+            sessions: [
+              s('a', { ticket: 'ENG-142' }),
+              s('b', { ticket: '-', resets: new Date(Date.now() + hour).toISOString() }),
+              s('c', { agent: 'aider', resets: new Date(Date.now() - hour).toISOString() }),
+              s('d', { activity: 'blocked' }),
+            ],
+          };
+          const facts = (phone) => {
+            const el = document.createElement('div');
+            YardbellTree.render(el, state, { stateOf: (x) => x.activity || 'idle', phone });
+            return [...el.querySelectorAll('.tree-session')].map((r) => ({
+              name: r.querySelector('.tree-name').textContent,
+              end: [...r.querySelectorAll('.tree-fact, .tree-age, .tree-pr')].map((f) => f.className.split(' ')[0] + ':' + f.textContent),
+            }));
+          };
+          return { phone: facts(true), desk: facts(false) };
+        })()""")
+        names = [r["name"] for r in rows["phone"]]
+        if names != ["ENG-142 · Claude Code", "Claude Code", "aider", "Claude Code"] or names != [r["name"] for r in rows["desk"]]:
+            raise Failure(f"session rows should read the agent with the ticket in front: {rows}")
+        ends = [r["end"] for r in rows["phone"]]
+        if ends[0] != ["tree-age:"] or len(ends[1]) != 1 or not ends[1][0].startswith("tree-fact:limit ") or ends[2] != ["tree-age:"] or ends[3] != ["tree-fact:needs you"]:
+            raise Failure(f"the phone's one fact is wrong, a past reset must not show as a limit: {ends}")
+        if any(f.startswith("tree-fact") for r in rows["desk"] for f in r["end"]):
+            raise Failure(f"the desktop rows grew a phone fact: {rows['desk']}")
+
+    def test_tree_marks_changes_until_looked_at(self):
+        b = self.b
+        keys = [f"{MACHINE}/hp-demo-api-{i}" for i in (1, 2)]
+        row = lambda key: f"document.querySelector('#col-body [data-key={json.dumps(key)}]')"
+        bold = lambda key: f"{row(key)} && getComputedStyle({row(key)}).fontWeight >= 600"
+        for key in keys:
+            r = self.y.tmux("new", "-d", "-s", key.split("/", 1)[1], "-c", os.path.join(self.y.root, "demo-api"), self.y.shell)
+            if r.returncode:
+                raise Failure(f"tmux new failed: {r.stderr}")
+        try:
+            self.api("POST", "/refresh")
+            b.goto(self.url("/workspace"))
+            b.js("localStorage.removeItem('yardbell.tree.seen')")
+            b.goto(self.url("/workspace"))
+            for key in keys:
+                b.wait(row(key), "the session in the tree", timeout=15)
+            b.wait("localStorage.getItem('yardbell.tree.seen') !== null", "the seen map")
+            if any(b.js(bold(key)) for key in keys):
+                raise Failure("a session that was there on first load is bold")
+            ages = b.js("[...document.querySelectorAll('#col-body .tree-session .tree-age')].map((e) => e.textContent)")
+            if any(ages):
+                raise Failure(f"a freshly loaded session shows an age: {ages}")
+            b.js(f"localStorage.setItem('yardbell.tree.seen', JSON.stringify({{{json.dumps(keys[0])}: 'working', {json.dumps(keys[1])}: 'working'}}))")
+            shown = b.js("[...visibleKeys()]")
+            hidden = [k for k in keys if k not in shown]
+            if not shown or not hidden:
+                raise Failure(f"expected one visible and one hidden session, got {shown}")
+            watched, away = shown[0], hidden[0]
+            b.wait(bold(away), "the row of a session out of sight to turn bold", timeout=15)
+            b.wait(f"!({bold(watched)})", "the row of a session in view to stay plain", timeout=15)
+            b.click(f"#col-body [data-key={json.dumps(away)}]")
+            b.wait(f"!({bold(away)})", "the row to stop being bold once opened")
+            same = b.js(f"JSON.parse(localStorage.getItem('yardbell.tree.seen'))[{json.dumps(away)}] === {row(away)}.dataset.state")
+            if not same:
+                raise Failure("the stored state is not the row's state")
+        finally:
+            self.drop_grid_tab(keys)
+
     def test_workspace_tabs_scroll(self):
         b = self.b
         folder = os.path.join(self.y.root, "demo-api")
@@ -991,7 +1130,7 @@ class Suite:
         try:
             b.goto(self.url("/workspace"))
             self.api("POST", "/refresh")
-            b.click("#tree [data-space$='demo-api']")
+            b.click("#col-body [data-folder$='demo-api']")
             count = b.wait("document.querySelectorAll('#tabs .ws-tab').length >= 8 && document.querySelectorAll('#tabs .ws-tab').length", "eight tabs", timeout=15)
             b.wait("(() => { const s = document.getElementById('tabs'); return s.scrollWidth > s.clientWidth; })()", "the tab row to overflow")
             b.wait("!document.getElementById('tab-list').hidden", "the All tabs button")
@@ -1123,7 +1262,7 @@ class Suite:
             if (round(p["x"] * 2), round(p["y"] * 2)) != want[key]:
                 raise Failure(f"{key} should sit at {want[key]} of the 2x2 grid: {p}")
         pane = b.js(f"leaves(tab().root).find((l) => l.key === {json.dumps(keys[3])}).pane")
-        b.click(f'.ws-pane[data-pane="{pane}"] [data-act="close"]')
+        self.pane_menu_pick(f'.ws-pane[data-pane="{pane}"]', "Close")
         b.wait("leaves(tab().root).length === 3", "three panes after closing one")
         boxes = {p["key"]: p for p in self.pane_boxes()}
         for key, (x, w) in ((keys[0], (0, 0.5)), (keys[1], (0.5, 0.5))):
@@ -1167,71 +1306,2459 @@ class Suite:
         self.b.goto(self.url(path))
         self.b.wait("document.querySelector('[data-theme-toggle] .theme-word')", f"the menu on {path}")
         return self.b.js(
-            """[...document.querySelectorAll('.side-foot .side-link, .ws-nav .side-link')]
-                 .map((el) => el.matches('[data-theme-toggle]') ? 'theme'
-                   : [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join('').trim())"""
+            """document.getElementById('rail')
+                 ? [...document.querySelectorAll('#rail .rail-link')].map((el) => el.matches('[data-theme-toggle]') ? 'theme' : el.title)
+                 : [...document.querySelectorAll('.side-foot .side-link')]
+                     .map((el) => el.matches('[data-theme-toggle]') ? 'theme'
+                       : [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join('').trim())"""
         )
+
+    def test_workspace_uses_the_shell(self):
+        b = self.b
+        b.goto(self.url("/workspace"))
+        b.wait("document.querySelector('#col-body .tree')", "the tree in the shell's column")
+        rail = b.js("""(() => ({
+          pages: [...document.querySelectorAll('#rail a.rail-link')].map((a) => a.title),
+          current: document.querySelector('#rail [aria-current=page]')?.title,
+          side: document.querySelector('.ws-side') !== null,
+        }))()""")
+        want = ["Dashboard", "Workspace", "Pipelines", "Diagrams", "Dispatch", "Proposals", "Settings"]
+        if rail["pages"] != want:
+            raise Failure(f"the rail reads {rail['pages']}")
+        if rail["current"] != "Workspace":
+            raise Failure(f"the rail marks {rail['current']!r} as the current page")
+        if rail["side"]:
+            raise Failure("the old Workspace sidebar is still on the page")
+        if b.js("document.getElementById('ws-dispatch') || document.getElementById('dispatch-toggle')"):
+            raise Failure("the old Dispatch panel is still on the page")
+        b.click(".col-nav [data-page=dispatch]")
+        b.wait("document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')", "the rail's Dispatch to open a Dispatch pane")
+        if b.js("location.pathname") != "/workspace":
+            raise Failure("the rail's Dispatch left the Workspace")
+        self.pane_menu_pick(".ws-pane:has(iframe[data-dispatch])", "Close")
+        b.wait("!document.querySelector('iframe[data-dispatch]')", "the Dispatch pane to close")
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#tabbar .tab')", "the phone tabs")
+            b.pump(0.4)
+            seen = b.js("""(() => {
+              const bar = document.getElementById('tabbar');
+              return {
+                shown: bar.getClientRects().length > 0,
+                labels: [...bar.querySelectorAll('.tab')].map((t) => t.querySelector('.tab-label').textContent),
+                bottom: Math.round(bar.getBoundingClientRect().bottom), height: innerHeight,
+                sideways: document.documentElement.scrollWidth > innerWidth,
+              };
+            })()""")
+            if not seen["shown"]:
+                raise Failure("the phone tabs are hidden")
+            if seen["labels"] != ["Sessions", "Board", "Pipelines", "Dispatch", "More"]:
+                raise Failure(f"the phone tabs read {seen['labels']}")
+            if abs(seen["bottom"] - seen["height"]) > 1:
+                raise Failure(f"the phone tabs are not along the bottom: {seen}")
+            if seen["sideways"]:
+                raise Failure("the Workspace scrolls sideways on a phone")
+            key = f"{MACHINE}/hp-shell-phone"
+            self.y.tmux("new", "-d", "-s", key.split("/", 1)[1], "-c", os.path.join(self.y.root, "demo-app"), self.y.shell)
+            try:
+                self.api("POST", "/refresh")
+                b.wait(f"document.querySelector('#col-body .tree-session[data-key={json.dumps(key)}]')", "the session in the column", timeout=15)
+                b.click(f"#col-body .tree-session[data-key={json.dumps(key)}]")
+                b.wait("document.body.classList.contains('ws-session')", "the session to open")
+                b.pump(0.3)
+                open_ = b.js("""(() => {
+                  const pane = [...document.querySelectorAll('.ws-pane')].find((p) => !p.hidden);
+                  const strip = document.getElementById('pr-strip');
+                  const last = strip.hidden ? pane : strip;
+                  return { bar: document.getElementById('tabbar').getClientRects().length, paneEnd: Math.round(last.getBoundingClientRect().bottom), height: innerHeight };
+                })()""")
+                if open_["bar"]:
+                    raise Failure("the phone tabs stay up over an open session")
+                if abs(open_["paneEnd"] - open_["height"]) > 1:
+                    raise Failure(f"the open session does not reach the bottom of the screen: {open_}")
+                b.click("#back")
+                b.wait("document.body.classList.contains('ws-list') && document.getElementById('tabbar').getClientRects().length > 0", "the phone tabs back with the column")
+            finally:
+                self.drop_grid_tab([key])
+        finally:
+            b.viewport(1280, 800)
+
+    # The saved layout and the old panel's flag, read and written from the dashboard so the
+    # Workspace page cannot save over them in between.
+    LAYOUT = ("workspace.v5", "workspace.v4", "yardbell.dispatch")
+
+    # Leaving a page while it, or its Dispatch frame, is still opening /state/live logs a failed
+    # connection, and Firefox then holds back the next page's socket.
+    def settle(self):
+        try:
+            self.b.wait("""(() => {
+              const up = (w) => !w.YardbellLive || w.YardbellLive.connected();
+              const f = document.querySelector('iframe[data-dispatch]');
+              return document.readyState === 'complete' && up(window)
+                && (!f || (f.contentDocument?.readyState === 'complete' && up(f.contentWindow)));
+            })()""", "the page to finish connecting")
+        except Failure:
+            return
+        self.b.pump(0.3)
+
+    def storage(self, keys):
+        self.settle()
+        self.b.goto(self.url("/"))
+        self.settle()
+        return self.b.js(f"Object.fromEntries({json.dumps(list(keys))}.map((k) => [k, localStorage.getItem(k)]))")
+
+    def put_storage(self, values):
+        self.settle()
+        self.b.goto(self.url("/"))
+        self.b.js(f"""(() => {{
+          for (const [k, v] of Object.entries({json.dumps(values)})) {{
+            if (v === null) localStorage.removeItem(k);
+            else localStorage.setItem(k, v);
+          }}
+        }})()""")
+        self.settle()
+
+    def test_shell_column_collapses_and_remembers(self):
+        b = self.b
+        before = self.storage(["yardbell.side"])
+        b.viewport(1280, 800, 1)
+        try:
+            self.put_storage({"yardbell.side": None})
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#col-toggle')", "the column toggle")
+            b.click("#col-toggle")
+            b.pump(0.3)
+            if not b.js("document.activeElement === document.getElementById('col-toggle')"):
+                raise Failure("the toggle lost focus when it moved into the rail")
+            seen = b.js("""(() => ({
+              col: getComputedStyle(document.getElementById('col')).display,
+              rail: document.getElementById('rail').getBoundingClientRect().right,
+              main: document.getElementById('main').getBoundingClientRect().left,
+              stored: localStorage.getItem('yardbell.side'),
+            }))()""")
+            if seen["col"] != "none":
+                raise Failure("the column is still shown after collapsing")
+            if abs(seen["rail"] - seen["main"]) > 1:
+                raise Failure(f"the main area starts at {seen['main']}, not at the rail's edge {seen['rail']}")
+            if seen["stored"] != "rail":
+                raise Failure(f"collapsing stored {seen['stored']!r}")
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#col-toggle')", "the column toggle after a reload")
+            if b.js("getComputedStyle(document.getElementById('col')).display") != "none":
+                raise Failure("the column came back after a reload")
+            b.goto(self.url("/"))
+            if not b.js("document.documentElement.classList.contains('side-rail')"):
+                raise Failure("the dashboard's sidebar is not collapsed after collapsing the Workspace's")
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#col-toggle')", "the column toggle again")
+            b.click("#col-toggle")
+            b.pump(0.3)
+            if not b.js("document.activeElement === document.getElementById('col-toggle')"):
+                raise Failure("the toggle lost focus when it moved back into the column")
+            seen = b.js("""(() => ({
+              col: getComputedStyle(document.getElementById('col')).display,
+              stored: localStorage.getItem('yardbell.side'),
+            }))()""")
+            if seen["col"] == "none" or seen["stored"] is not None:
+                raise Failure(f"expanding left the column {seen['col']} with {seen['stored']!r} stored")
+        finally:
+            self.put_storage(before)
+
+    def test_stored_collapse_leaves_the_phone_sessions_list_alone(self):
+        b = self.b
+        before = self.storage(["yardbell.side"])
+        b.viewport(390, 844, 3)
+        try:
+            self.put_storage({"yardbell.side": "rail"})
+            b.goto(self.url("/workspace"))
+            b.wait("state !== null && document.body.classList.contains('ws-list')", "the Sessions list on a phone", timeout=15)
+            seen = b.js("""(() => ({
+              col: getComputedStyle(document.getElementById('col')).display,
+              width: document.getElementById('col').getBoundingClientRect().width,
+              rows: document.querySelectorAll('#col-body [data-key]').length,
+              toggle: getComputedStyle(document.getElementById('col-toggle')).display,
+            }))()""")
+            if seen["col"] == "none" or seen["width"] < 300:
+                raise Failure(f"a stored collapse hid the phone's sessions list: {seen}")
+            if seen["toggle"] != "none":
+                raise Failure("the collapse toggle shows on a phone")
+        finally:
+            self.put_storage(before)
+            b.viewport(1280, 800)
+
+    def test_every_moved_page_uses_the_shell(self):
+        b = self.b
+        b.viewport(1280, 800, 1)
+        try:
+            workspace = self.menu("/workspace")
+            for path in ("/add", "/diagrams", "/proposals", "/pipeline"):
+                rail = self.menu(path)
+                if rail != workspace:
+                    raise Failure(f"the rail on {path} reads {rail}, not the Workspace's {workspace}")
+                b.pump(0.4)
+                seen = b.js("""(() => ({
+                  side: document.querySelector('.side') !== null,
+                  bar: Boolean(document.getElementById('strip') || document.querySelector('.strip')),
+                  col: document.getElementById('col') !== null,
+                  toggle: Boolean(document.getElementById('col-toggle')?.getClientRects().length),
+                  sideways: document.documentElement.scrollWidth > innerWidth,
+                  tall: document.documentElement.scrollHeight > innerHeight + 1,
+                }))()""")
+                if seen["side"]:
+                    raise Failure(f"{path} still has the old sidebar")
+                if seen["bar"]:
+                    raise Failure(f"{path} still has a bottom bar")
+                if path == "/add" and (seen["col"] or seen["toggle"]):
+                    raise Failure(f"/add draws a column or its toggle: {seen}")
+                if path != "/add" and not seen["col"]:
+                    raise Failure(f"{path} has no column")
+                if seen["sideways"] or seen["tall"]:
+                    raise Failure(f"{path} scrolls the whole page instead of its main area: {seen}")
+                b.click("#col-search")
+                b.wait("document.getElementById('palette')?.open", f"the search button on {path} to open the palette")
+                b.key("Escape")
+                b.wait("!document.getElementById('palette').open", f"Esc to close the palette on {path}")
+
+            b.goto(self.url("/diagrams"))
+            row = f"#col-body a.col-row[href='#dg-machine-{MACHINE}']"
+            b.wait(f"document.querySelector(\"{row} .dot\") && document.getElementById('dg-machine-{MACHINE}')", "the machine's row and section")
+            b.click(row)
+            b.wait(f"document.querySelector(\"{row}\").getAttribute('aria-current') === 'true'", "the machine's row marked current")
+            names = b.js("[...document.querySelectorAll('#col-body .col-row .col-row-name')].map((n) => n.textContent)")
+            machines = [m["name"] for m in self.api("GET", "/state")["machines"]]
+            if sorted(names) != sorted(machines):
+                raise Failure(f"the Diagrams column lists {names}, not the machines {machines}")
+
+            proposals = self.api("GET", "/api/proposals")["proposals"]
+            waiting = len([p for p in proposals if p["status"] == "pending"])
+            b.goto(self.url("/proposals"))
+            b.wait("document.querySelectorAll('#col-body .col-row').length === 2 && document.querySelector('.pr-section')", "the Proposals column")
+            rows = b.js("[...document.querySelectorAll('#col-body .col-row')].map((r) => [r.querySelector('.col-row-name').textContent, r.querySelector('.col-row-meta').textContent])")
+            if rows != [["Waiting", str(waiting)], ["Decided", str(len(proposals) - waiting)]]:
+                raise Failure(f"the Proposals column reads {rows}")
+            if b.js("[...document.querySelectorAll('#main h1')].some((h) => h.getClientRects().length && h.textContent.trim() === 'Proposals')"):
+                raise Failure("the Proposals page repeats the column's title")
+
+            b.viewport(390, 844, 3)
+            for path in ("/add", "/diagrams", "/proposals", "/pipeline"):
+                b.goto(self.url(path))
+                b.wait("document.querySelector('#tabbar .tab')", f"the phone tabs on {path}")
+                b.pump(0.4)
+                seen = b.js("""(() => ({
+                  shown: document.getElementById('tabbar').getClientRects().length > 0,
+                  sideways: document.documentElement.scrollWidth > innerWidth,
+                  tall: document.documentElement.scrollHeight > innerHeight + 1,
+                }))()""")
+                if not seen["shown"] or seen["sideways"] or seen["tall"]:
+                    raise Failure(f"{path} on a phone: {seen}")
+        finally:
+            b.viewport(1280, 800)
+        self.check_errors("the moved pages")
+
+    def test_shell_confirm_replaces_nav_confirm(self):
+        b = self.b
+        b.goto(self.url("/diagrams"))
+        b.wait("window.YardbellShell?.confirm", "the shell on Diagrams")
+        if b.js("Boolean(window.YardbellNav)"):
+            raise Failure("Diagrams still loads nav.js")
+        b.js("window.__answer = undefined; YardbellShell.confirm('T', 'B', { confirm: 'Go' }).then((yes) => { window.__answer = yes; }); null")
+        b.wait("document.querySelector('dialog.confirm[open]')", "the confirm dialog")
+        seen = b.js("""(() => {
+          const d = document.querySelector('dialog.confirm[open]');
+          return {
+            title: d.querySelector('h2').textContent, body: d.querySelector('p').textContent,
+            yes: d.querySelector('[data-answer=yes]').textContent.trim(), no: d.querySelector('[data-answer=no]').textContent.trim(),
+            focused: document.activeElement === d.querySelector('[data-answer=no]'),
+          };
+        })()""")
+        if seen != {"title": "T", "body": "B", "yes": "Go", "no": "Cancel", "focused": True}:
+            raise Failure(f"the confirm dialog reads {seen}")
+        b.click("dialog.confirm[open] [data-answer=no]")
+        b.wait("window.__answer === false && !document.querySelector('dialog.confirm')", "Cancel to answer no")
+        b.goto(self.url("/settings"))
+        b.wait("window.YardbellShell?.confirm && document.getElementById('rail')", "Settings on the shell")
+        if b.js("Boolean(window.YardbellNav)"):
+            raise Failure("Settings still loads nav.js")
+        self.check_errors("the shell's confirm")
+
+    def test_dashboard_column_filters_by_machine(self):
+        b = self.b
+        key = f"{MACHINE}/hp-dash-col"
+        all_row = "#col-body a.col-row[data-all]"
+        pick = f"#col-body [data-pick={json.dumps(MACHINE)}]"
+        before = self.storage(self.LAYOUT + ("yardbell.tree.seen",))
+        self.y.tmux("new", "-d", "-s", key.split("/", 1)[1], "-c", os.path.join(self.y.root, "demo-app"), self.y.shell)
+        try:
+            self.api("POST", "/refresh")
+            self.put_storage({"yardbell.tree.seen": json.dumps({key: "done"})})
+            b.goto(self.url("/"))
+            b.wait(f"document.querySelector('#col-body .tree') && document.querySelector({json.dumps(pick)})", "the tree in the Dashboard's column")
+            if b.js("Boolean(window.YardbellNav) || document.querySelector('.side') !== null"):
+                raise Failure("the Dashboard still draws the old sidebar")
+            state = """(() => ({
+              all: document.querySelector('#col-body a.col-row[data-all]').getAttribute('aria-current'),
+              pick: document.querySelector('#col-body [data-pick="hp"]').getAttribute('aria-current'),
+              machine: new URLSearchParams(location.search).get('machine'),
+              title: document.getElementById('title').textContent,
+            }))()"""
+            seen = b.js(state)
+            if seen != {"all": "true", "pick": None, "machine": None, "title": "Sessions"}:
+                raise Failure(f"with no filter the column reads {seen}")
+            b.click(pick)
+            b.wait(f"new URLSearchParams(location.search).get('machine') === {json.dumps(MACHINE)}", "the machine name to set the filter")
+            b.wait(f"document.querySelector({json.dumps(pick)}).getAttribute('aria-current') === 'true'", "the machine marked current")
+            seen = b.js(state)
+            if seen != {"all": None, "pick": "true", "machine": MACHINE, "title": MACHINE}:
+                raise Failure(f"filtered to {MACHINE} the column reads {seen}")
+            if b.js(f"document.querySelector('#col-body [data-fold={json.dumps(MACHINE)}]')?.getAttribute('aria-expanded')") != "true":
+                raise Failure("picking the machine folded it")
+            b.click(all_row)
+            b.wait("!new URLSearchParams(location.search).has('machine')", "All machines to clear the filter")
+            seen = b.js(state)
+            if seen != {"all": "true", "pick": None, "machine": None, "title": "Sessions"}:
+                raise Failure(f"after All machines the column reads {seen}")
+
+            row = f"#col-body .tree-session[data-key={json.dumps(key)}]"
+            b.wait(f"document.querySelector({json.dumps(row)})?.dataset.state === 'idle'", "the idle session in the Dashboard's column", timeout=15)
+            if b.js(f"document.querySelector({json.dumps(row)}).classList.contains('unseen')"):
+                raise Failure("an idle session the Workspace last saw as done is bold on the Dashboard")
+            folder = b.js(f"(() => {{ let el = document.querySelector({json.dumps(row)}); while (el && !el.matches('.tree-folder')) el = el.previousElementSibling; return el?.dataset.folder; }})()")
+            b.click(f"#col-body .tree-folder[data-machine={json.dumps(MACHINE)}][data-folder={json.dumps(folder)}]")
+            b.wait(f"location.pathname === '/workspace' && typeof project === 'function' && state !== null && project() === {json.dumps(MACHINE + chr(9) + folder)}",
+                   "a folder row to open its folder in the Workspace", timeout=15)
+            self.settle()
+            b.goto(self.url("/"))
+            b.wait(f"document.querySelector({json.dumps(row)})", "the session row again")
+            b.click(row)
+            b.wait(f"location.pathname === '/workspace' && state !== null && focusedLeaf()?.key === {json.dumps(key)} && document.querySelector('.ws-pane:not([hidden]) iframe[data-key={json.dumps(key)}]')",
+                   "a session row to focus its pane in the Workspace", timeout=15)
+        finally:
+            self.drop_grid_tab([key])
+            self.put_storage(before)
+        self.check_errors("the Dashboard's column")
+
+    def test_dashboard_phone_chips_filter_by_machine(self):
+        b = self.b
+        chip = f".dash-chips [data-chip={json.dumps(MACHINE)}]"
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/"))
+            b.wait(f"document.querySelector({json.dumps(chip)})", "the machine chips on a phone")
+            b.pump(0.3)
+            seen = b.js("""(() => {
+              const row = document.querySelector('.dash-chips');
+              const chips = [...row.querySelectorAll('.dash-chip')];
+              return {
+                shown: row.getClientRects().length > 0,
+                labels: chips.map((c) => c.textContent.trim()),
+                pressed: chips.filter((c) => c.getAttribute('aria-pressed') === 'true').map((c) => c.textContent.trim()),
+                short: chips.filter((c) => c.getBoundingClientRect().height < 44).length,
+                lines: new Set(chips.map((c) => Math.round(c.getBoundingClientRect().top))).size,
+                add: row.querySelector('a.dash-chip:last-child')?.getAttribute('href'),
+                beforeGroups: Boolean(row.compareDocumentPosition(document.getElementById('groups')) & Node.DOCUMENT_POSITION_FOLLOWING),
+                sideways: document.documentElement.scrollWidth > innerWidth,
+              };
+            })()""")
+            want_labels = ["All machines"] + [m["name"] for m in self.api("GET", "/state")["machines"]] + ["Add machine"]
+            if not seen["shown"] or sorted(seen["labels"]) != sorted(want_labels) or seen["labels"][0] != "All machines":
+                raise Failure(f"the phone's chips read {seen}")
+            if seen["pressed"] != ["All machines"] or seen["short"] or seen["lines"] != 1 or seen["add"] != "/add" or not seen["beforeGroups"] or seen["sideways"]:
+                raise Failure(f"the phone's chip row is wrong: {seen}")
+            b.click(chip)
+            b.wait(f"new URLSearchParams(location.search).get('machine') === {json.dumps(MACHINE)} && document.querySelector({json.dumps(chip)}).getAttribute('aria-pressed') === 'true'",
+                   "the machine chip to set the filter")
+            if b.js("document.querySelector('.dash-chips [data-chip=\"\"]').getAttribute('aria-pressed')") != "false":
+                raise Failure("All machines stays pressed while filtered")
+            b.click(".dash-chips [data-chip='']")
+            b.wait("!new URLSearchParams(location.search).has('machine')", "All machines to clear the filter")
+            b.viewport(1280, 800)
+            b.pump(0.3)
+            if b.js("document.querySelector('.dash-chips').getClientRects().length"):
+                raise Failure("the chip row shows on the desktop, where the column filters")
+        finally:
+            b.viewport(1280, 800)
+        self.check_errors("the Dashboard's phone chips")
+
+    def test_desktop_close_key_skips_the_workspace(self):
+        b = self.b
+        stub = """() => {
+          window.__emitted = [];
+          window.__TAURI__ = {
+            event: { emit: (name, value) => { window.__emitted.push([name, value]); return Promise.resolve(); }, listen: () => Promise.resolve(() => {}) },
+            app: {},
+          };
+        }"""
+        press = """((key) => {
+          const mac = /Mac/.test(navigator.platform);
+          window.__emitted.length = 0;
+          document.dispatchEvent(new KeyboardEvent('keydown', { key, ctrlKey: !mac, metaKey: mac, bubbles: true, cancelable: true }));
+          return window.__emitted.filter((e) => e[0] === 'shortcut').map((e) => e[1]);
+        })"""
+        script = b.call("script.addPreloadScript", functionDeclaration=stub)["script"]
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait("window.YardbellShell?.column && window.__TAURI__", "the Workspace in the desktop app")
+            if b.js(f"{press}('w')"):
+                raise Failure(f"Ctrl-W on the Workspace sent {b.js('window.__emitted')}")
+            if b.js(f"{press}('q')") != ["quit"]:
+                raise Failure(f"Ctrl-Q on the Workspace sent {b.js('window.__emitted')}")
+            b.goto(self.url("/diagrams"))
+            b.wait("window.YardbellShell?.column && window.__TAURI__", "Diagrams in the desktop app")
+            if b.js(f"{press}('w')") != ["close"]:
+                raise Failure(f"Ctrl-W on Diagrams sent {b.js('window.__emitted')}")
+        finally:
+            b.call("script.removePreloadScript", script=script)
+            b.goto(self.url("/diagrams"))
+
+    def test_phone_more_menu_search_opens_the_palette(self):
+        b = self.b
+        b.viewport(390, 844, 3)
+        try:
+            for path in ("/", "/workspace"):
+                b.goto(self.url(path))
+                b.wait("document.querySelector('#tabbar #tab-more') && window.YardbellPalette", f"the phone tabs on {path}")
+                b.click("#tab-more")
+                b.wait("!document.getElementById('tab-menu').hidden", f"the More menu on {path}")
+                first = b.js("document.querySelector('#tab-menu [role=menuitem]')?.querySelector('.menu-label')?.textContent")
+                if first != "Search":
+                    raise Failure(f"the More menu on {path} starts with {first!r}, not Search")
+                b.click("#tab-menu [data-search]")
+                b.wait("document.getElementById('palette')?.open && document.getElementById('tab-menu').hidden", f"Search in More to open the palette on {path}")
+                b.click("#palette .palette-close")
+                b.wait("!document.getElementById('palette').open", f"the palette to close on {path}")
+        finally:
+            b.viewport(1280, 800)
+        self.check_errors("Search in the phone's More menu")
+
+    def test_collapsed_column_keeps_the_palette_button_in_the_rail(self):
+        b = self.b
+        before = self.storage(["yardbell.side"])
+        b.viewport(1280, 800, 1)
+        try:
+            self.put_storage({"yardbell.side": None})
+            b.goto(self.url("/diagrams"))
+            b.wait("document.querySelector('#col-search-row #col-search')", "the search button in the column head")
+            b.click("#col-toggle")
+            b.wait("document.querySelector('#rail #col-search') && document.querySelector('#rail #col-toggle')", "the search button in the rail beside the toggle")
+            order = b.js("[...document.getElementById('rail').children].slice(0, 2).map((el) => el.id)")
+            if order != ["col-toggle", "col-search"]:
+                raise Failure(f"the rail starts with {order}")
+            b.click("#rail #col-search")
+            b.wait("document.getElementById('palette')?.open", "the rail's search button to open the palette")
+            b.key("Escape")
+            b.wait("!document.getElementById('palette').open", "Esc to close the palette")
+            b.goto(self.url("/diagrams"))
+            b.wait("document.querySelector('#rail #col-search')", "the search button in the rail after a reload")
+            b.js("document.getElementById('col-search').focus()")
+            b.click("#col-toggle")
+            b.wait("document.querySelector('#col-search-row #col-search')", "the search button back in the column head")
+            last = b.js("document.getElementById('col-search-row').lastElementChild.id")
+            if last != "col-search":
+                raise Failure(f"the search row ends with {last!r}, not the search button")
+        finally:
+            self.put_storage(before)
+        self.check_errors("the collapsed column's search button")
+
+    def test_rail_dispatch_icon_toggles_the_pane(self):
+        b = self.b
+        before = self.storage(self.LAYOUT)
+        b.viewport(1280, 800, 1)
+        try:
+            self.put_storage({"workspace.v5": None, "yardbell.dispatch": "closed"})
+            b.goto(self.url("/workspace"))
+            b.wait("typeof leaves === 'function' && state !== null", "the Workspace to load")
+            icon = "document.querySelector('.col-nav [data-page=dispatch]')"
+            b.click(".col-nav [data-page=dispatch]")
+            b.wait("document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')", "the Dispatch pane")
+            if b.js("document.querySelectorAll('iframe[data-dispatch]').length") != 1:
+                raise Failure("the icon made more than one Dispatch pane")
+            if b.js(f"{icon}.getAttribute('aria-pressed')") != "true":
+                raise Failure("the Dispatch icon is not pressed while its pane shows")
+            b.click(".col-nav [data-page=dispatch]")
+            b.wait("!document.querySelector('iframe[data-dispatch]')", "the Dispatch pane to close")
+            if b.js(f"{icon}.getAttribute('aria-pressed')") != "false":
+                raise Failure("the Dispatch icon is still pressed after closing the pane")
+        finally:
+            self.put_storage(before)
+
+    def test_dispatch_opens_as_a_pane_and_survives_a_reload(self):
+        b = self.b
+        before = self.storage(self.LAYOUT)
+        try:
+            self.put_storage({"workspace.v5": None, "yardbell.dispatch": "closed"})
+            b.goto(self.url("/workspace"))
+            b.wait("typeof leaves === 'function' && state !== null", "the Workspace to load")
+            b.click(".col-nav [data-page=dispatch]")
+            b.wait("document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')", "the Dispatch pane")
+            self.settle()
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')", "the Dispatch pane after a reload")
+            if b.js("location.pathname") != "/workspace":
+                raise Failure("the reload left the Workspace")
+        finally:
+            self.put_storage(before)
+
+    # The request names a session Yardbell has never seen, so Dispatch shows the insights error
+    # and never sends a message, which would run claude.
+    def test_dispatch_pane_takes_requests_and_keeps_its_conversation(self):
+        b = self.b
+        frame = "document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')"
+        loaded = f"{frame}?.contentDocument?.readyState === 'complete' && {frame}.contentWindow.location.pathname === '/dispatch'"
+        told = f"{frame}?.contentDocument?.getElementById('toast')?.textContent.includes('seen no session yb-nowhere')"
+        before = self.storage(self.LAYOUT)
+        try:
+            self.put_storage({"workspace.v5": None, "yardbell.dispatch": "closed"})
+            b.goto(self.url("/workspace"))
+            b.wait("typeof leaves === 'function' && state !== null", "the Workspace to load")
+            b.js("openDispatch()")
+            b.wait(loaded, "Dispatch to load in its pane")
+            b.js("askDispatch({ machine: 'hp', name: 'yb-nowhere' })")
+            b.wait(told, "the request to reach the open Dispatch pane")
+            b.js("closePane(findDispatch().leaf.pane)")
+            b.wait("!document.querySelector('iframe[data-dispatch]')", "the Dispatch pane to close")
+            b.js("askDispatch({ machine: 'hp', name: 'yb-nowhere' })")
+            b.wait(told, "the request to reach a Dispatch pane opened for it")
+            b.js(f"openDispatch({json.dumps(SHORT_CHAT)})")
+            b.wait(f"{frame}.contentWindow.location.search === '?c={SHORT_CHAT}'", "the pane to show the conversation")
+            b.wait("document.querySelector('.ws-pane:has(iframe[data-dispatch]) .ws-pane-title')?.textContent === 'Fix the login redirect'",
+                   "the conversation's title on the pane")
+            self.settle()
+            b.goto(self.url("/workspace"))
+            b.wait(f"{frame}?.getAttribute('src') === '/dispatch?c={SHORT_CHAT}'", "the same conversation after a reload")
+            b.wait(loaded, "Dispatch to load again")
+            b.wait(f"{frame}.contentDocument.querySelector('#dispatch-log .msg.user')", "the conversation inside Dispatch")
+            b.js(f"{frame}.contentDocument.getElementById('new-chat').click()")
+            b.wait("findDispatch()?.leaf.conversation === '' && JSON.parse(localStorage.getItem('workspace.v5')).tabs.some((t) => leaves(t.root).some((l) => l.kind === 'dispatch' && l.conversation === ''))",
+                   "a new chat in Dispatch to be stored on the pane")
+        finally:
+            self.put_storage(before)
+
+    def test_v4_layout_moves_to_v5(self):
+        b = self.b
+        name = "hp-demo-api-1"
+        key = f"{MACHINE}/{name}"
+        made = self.y.tmux("has-session", "-t", f"={name}").returncode != 0
+        if made:
+            self.y.tmux("new", "-d", "-s", name, "-c", os.path.join(self.y.root, "demo-api"), self.y.shell)
+        v4 = json.dumps({"folder": "", "tabs": [{"id": "t1", "name": name, "root": {"pane": "p1", "key": key}}],
+                         "tab": 0, "focus": "p1", "hidden": []})
+        seen = """(() => ({
+          panes: document.querySelectorAll('.ws-pane:not([hidden])').length,
+          dispatch: Boolean(document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')),
+          empty: Boolean(document.querySelector('.ws-pane:not([hidden]) .ws-pane-empty')),
+          v5: (() => { try { return JSON.parse(localStorage.getItem('workspace.v5')).tabs.length; } catch { return 0; } })(),
+          v4: localStorage.getItem('workspace.v4'),
+          running: sessions().filter((s) => !s.stale).length,
+        }))()"""
+        before = self.storage(self.LAYOUT)
+        try:
+            self.api("POST", "/refresh")
+            for flag, panes, dispatch in ((None, 2, True), ("closed", 1, False)):
+                self.put_storage({"workspace.v5": None, "workspace.v4": v4, "yardbell.dispatch": flag})
+                b.goto(self.url("/workspace"))
+                b.wait(f"typeof leaves === 'function' && state !== null && leaves(tab().root).some((l) => l.key === {json.dumps(key)})",
+                       f"the v4 tab with {name}", timeout=15)
+                b.pump(0.5)
+                got = b.js(seen)
+                if got["panes"] != panes or got["dispatch"] != dispatch:
+                    raise Failure(f"with yardbell.dispatch {flag!r}, wanted {panes} panes and Dispatch {dispatch}: {got}")
+                if not got["v5"]:
+                    raise Failure(f"the converted layout was not saved as workspace.v5: {got}")
+                if got["v4"] != v4:
+                    raise Failure(f"workspace.v4 changed: {got['v4']!r}")
+            if made:
+                self.y.tmux("kill-session", "-t", f"={name}")
+                self.api("POST", "/refresh")
+            self.put_storage({"workspace.v5": None, "workspace.v4": "{not json", "yardbell.dispatch": None})
+            b.errors = []
+            b.goto(self.url("/workspace"))
+            b.wait("typeof leaves === 'function' && state !== null && localStorage.getItem('workspace.v5') !== null", "the page to load on bad v4")
+            b.pump(0.5)
+            got = b.js(seen)
+            if got["panes"] != 1 or got["dispatch"]:
+                raise Failure(f"a v4 layout that does not parse should give one pane and no Dispatch: {got}")
+            if not got["running"] and not got["empty"]:
+                raise Failure(f"with nothing running, the one pane should be empty: {got}")
+            self.check_errors("a v4 layout that does not parse")
+        finally:
+            if made:
+                self.settle()
+                self.drop_grid_tab([key])
+            self.put_storage(before)
+
+    def test_a_dispatch_only_tab_is_not_taken_by_a_new_session(self):
+        b = self.b
+        name = "hp-demo-api-2"
+        key = f"{MACHINE}/{name}"
+        self.y.tmux("kill-session", "-t", f"={name}")
+        v5 = json.dumps({"folder": "", "tabs": [{"id": "t1", "name": "Dispatch", "root": {"pane": "d1", "kind": "dispatch", "conversation": ""}}],
+                         "tab": 0, "focus": "d1", "hidden": []})
+        before = self.storage(self.LAYOUT)
+        try:
+            self.api("POST", "/refresh")
+            self.put_storage({"workspace.v5": v5, "yardbell.dispatch": "closed"})
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('.ws-pane[data-pane=d1] iframe[data-dispatch]')", "the Dispatch-only tab")
+            r = self.y.tmux("new", "-d", "-s", name, "-c", os.path.join(self.y.root, "demo-api"), self.y.shell)
+            if r.returncode:
+                raise Failure(f"tmux new failed: {r.stderr}")
+            self.api("POST", "/refresh")
+            b.wait(f"saved.tabs.some((t) => leaves(t.root).some((l) => l.key === {json.dumps(key)}))", f"a tab for {name}", timeout=15)
+            first = b.js("""(() => ({
+              leaves: leaves(saved.tabs[0].root).map((l) => ({kind: l.kind || null, key: l.key || null})),
+              frame: Boolean(document.querySelector('.ws-pane[data-pane=d1] iframe[data-dispatch]')),
+            }))()""")
+            if first["leaves"] != [{"kind": "dispatch", "key": None}] or not first["frame"]:
+                raise Failure(f"the first tab should still hold only Dispatch: {first}")
+        finally:
+            self.settle()
+            self.drop_grid_tab([key])
+            self.put_storage(before)
+
+    def pane_menu_pick(self, pane, label):
+        b = self.b
+        b.click(f"{pane} [data-act=more]")
+        b.wait("document.getElementById('ws-menu') && !document.getElementById('ws-menu').hidden", "the pane menu")
+        picked = b.js(f"""(() => {{
+          const hit = [...document.querySelectorAll('#ws-menu [role=menuitem]')].find((m) => m.textContent.trim() === {json.dumps(label)});
+          if (hit) hit.click();
+          return Boolean(hit);
+        }})()""")
+        if not picked:
+            raise Failure(f"the pane menu has no {label} item")
+
+    def menu_items(self):
+        return self.b.js("[...document.querySelectorAll('#ws-menu [role=menuitem]')].map((m) => m.textContent.trim())")
+
+    def test_pane_header_is_one_quiet_line(self):
+        b = self.b
+        name = "hp-demo-api-1"
+        key = f"{MACHINE}/{name}"
+        made = self.y.tmux("has-session", "-t", f"={name}").returncode != 0
+        if made:
+            self.y.tmux("new", "-d", "-s", name, "-c", os.path.join(self.y.root, "demo-api"), self.y.shell)
+        before = self.storage(self.LAYOUT)
+        try:
+            self.api("POST", "/refresh")
+            b.goto(self.url("/workspace"))
+            b.wait(f"typeof sessionFor === 'function' && sessionFor({json.dumps(key)})", f"{name} in the Workspace", timeout=15)
+            b.js(f"open({json.dumps(key)})")
+            pane = b.wait(f"leaves(tab().root).length === 1 && leaves(tab().root)[0].key === {json.dumps(key)} && leaves(tab().root)[0].pane",
+                          f"{name} alone in its tab")
+            sel = f'.ws-pane[data-pane="{pane}"]'
+            seen = b.js(f"""(() => {{
+              const pane = document.querySelector({json.dumps(sel)});
+              const head = pane.querySelector('.ws-pane-head');
+              return {{
+                buttons: [...head.querySelectorAll('button')].map((x) => x.dataset.act + (x.hidden ? ' hidden' : '')).sort(),
+                links: head.querySelectorAll('a').length,
+                views: head.querySelector('.ws-views')?.hidden,
+                dot: Boolean(head.querySelector(':scope > .ws-state')),
+                title: head.querySelector('strong.ws-pane-title')?.textContent,
+                sub: head.querySelector('span.ws-pane-sub')?.textContent,
+                pr: Boolean(head.querySelector('span.ws-pane-pr')),
+                radius: getComputedStyle(pane).borderTopLeftRadius,
+                frame: getComputedStyle(pane, '::after').content,
+              }};
+            }})()""")
+            if seen["buttons"] != ["main hidden", "more"]:
+                raise Failure(f"the header's buttons are {seen['buttons']}, not ⋯ and a hidden main action")
+            if seen["links"]:
+                raise Failure("the header still carries a link")
+            if seen["views"] is not True:
+                raise Failure(f"the view switch should be there and hidden: {seen}")
+            if not seen["dot"] or not seen["title"] or not seen["pr"]:
+                raise Failure(f"the header misses its dot, title or pull request slot: {seen}")
+            if not re.fullmatch(r".+ · (idle|working|done|blocked|stopped on an error)( \d+[mh])?", seen["sub"] or ""):
+                raise Failure(f"the header's second part reads {seen['sub']!r}")
+            if seen["radius"] != "0px" or seen["frame"] not in ("none", "normal"):
+                raise Failure(f"the pane still has a rounded frame: {seen}")
+            b.click(f"{sel} [data-act=more]")
+            b.wait("document.getElementById('ws-menu') && !document.getElementById('ws-menu').hidden", "the pane menu")
+            items = self.menu_items()
+            if items[:4] != ["Copy text", "Open in its own tab", "Split right", "Split down"] or items[-1] != "Close":
+                raise Failure(f"the pane menu reads {items}")
+            if "Move to its own tab" in items:
+                raise Failure(f"a pane alone in its tab offers Move to its own tab: {items}")
+            b.key("Escape")
+            b.wait("document.getElementById('ws-menu').hidden", "the menu to close")
+            b.js(f"focusPane({json.dumps(pane)})")
+            b.key("\\", "Alt")
+            b.wait("leaves(tab().root).length === 2", "Alt+\\ to split the pane")
+            split = b.js(f"""(() => {{
+              const probe = document.createElement('div');
+              probe.style.background = 'var(--selected)';
+              document.body.append(probe);
+              const selected = getComputedStyle(probe).backgroundColor;
+              probe.remove();
+              const [a, b] = leaves(tab().root).map((l) => document.querySelector(`.ws-pane[data-pane="${{l.pane}}"]`));
+              const ra = a.getBoundingClientRect();
+              const rb = b.getBoundingClientRect();
+              const head = (el) => getComputedStyle(el.querySelector('.ws-pane-head')).backgroundColor;
+              return {{
+                focusedNew: space().focus === leaves(tab().root)[1].pane,
+                newHead: head(b) === selected, oldHead: head(a) === selected,
+                seam: Math.abs(ra.right - rb.left) < 1,
+                line: [getComputedStyle(a).borderRightWidth, getComputedStyle(b).borderLeftWidth, getComputedStyle(b).borderRightWidth],
+              }};
+            }})()""")
+            if not split["focusedNew"] or not split["newHead"] or split["oldHead"]:
+                raise Failure(f"only the focused pane's header should be grey: {split}")
+            if not split["seam"] or split["line"] != ["1px", "0px", "0px"]:
+                raise Failure(f"two panes side by side should share one 1px line: {split}")
+            grey = """(() => {
+              const probe = document.createElement('div');
+              probe.style.background = 'var(--selected)';
+              document.body.append(probe);
+              const selected = getComputedStyle(probe).backgroundColor;
+              probe.remove();
+              const shown = [...document.querySelectorAll('.ws-pane:not([hidden])')];
+              return shown.map((el) => getComputedStyle(el.querySelector('.ws-pane-head')).backgroundColor === selected);
+            })()"""
+            b.viewport(390, 844, 3)
+            try:
+                b.wait("phone.matches && document.querySelectorAll('.ws-pane:not([hidden])').length === 1", "one pane on a phone")
+                b.pump(0.3)
+                if b.js(grey) != [False]:
+                    raise Failure("the one pane on a phone has a grey focused header")
+            finally:
+                b.viewport(1280, 800)
+            b.wait("!phone.matches && document.querySelectorAll('.ws-pane:not([hidden])').length === 2", "both panes back on a wide screen")
+            b.pump(0.3)
+            if b.js(grey) != [False, True]:
+                raise Failure(f"back on a wide screen only the focused pane's header should be grey: {b.js(grey)}")
+            b.click(f"{sel} [data-act=more]")
+            b.wait("document.getElementById('ws-menu') && !document.getElementById('ws-menu').hidden", "the pane menu in a split")
+            if "Move to its own tab" not in self.menu_items():
+                raise Failure(f"a pane beside another lacks Move to its own tab: {self.menu_items()}")
+            b.key("Escape")
+        finally:
+            self.settle()
+            if made:
+                self.drop_grid_tab([key])
+            self.put_storage(before)
+
+    def test_pane_header_offers_merge_when_ready(self):
+        b = self.b
+        key = f"{MACHINE}/{MERGE_SESSION}"
+        worktree = os.path.join(os.path.dirname(self.y.root), "merge-wt")
+        if not os.path.exists(worktree):
+            git("worktree", "add", "-q", "-b", MERGE_BRANCH, worktree, cwd=os.path.join(self.y.root, "demo-app"))
+        r = self.y.tmux("new", "-d", "-s", MERGE_SESSION, "-c", worktree, self.y.shell)
+        if r.returncode:
+            raise Failure(f"tmux new failed: {r.stderr}")
+        main = f'.ws-pane:has(iframe[data-key="{key}"]) [data-act=main]'
+        before = self.storage(self.LAYOUT)
+        try:
+            self.api("POST", "/refresh")
+            b.goto(self.url("/workspace"))
+            b.wait(f"typeof sessionFor === 'function' && sessionFor({json.dumps(key)})?.pull?.review === 'approved'",
+                   "the ready pull request in the Workspace", timeout=45)
+            b.js(f"open({json.dumps(key)})")
+            b.wait(f"document.querySelector({json.dumps(main)})?.textContent.trim() === 'Merge #34' && !document.querySelector({json.dumps(main)}).hidden",
+                   "Merge #34 as the pane's main action")
+            pr = b.js(f"document.querySelector('.ws-pane:has(iframe[data-key=\"{key}\"]) .ws-pane-pr')?.textContent")
+            if pr != "#34 approved":
+                raise Failure(f"the pull request mark reads {pr!r}")
+            b.click(main)
+            b.wait("document.getElementById('merge-confirm')?.open", "the question before merging")
+            want = b.js(f"YardbellPull.mergeText(sessionFor({json.dumps(key)}).pull)")
+            said = b.js("(() => { const d = document.getElementById('merge-confirm'); return { title: d.querySelector('h2').textContent, body: d.querySelector('p').textContent }; })()")
+            if said != want or said["title"] != "Merge #34?" or "Add the merge button." not in said["body"]:
+                raise Failure(f"the question reads {said}, not the dashboard's {want}")
+            b.click("#merge-confirm [value=cancel]")
+            b.wait("!document.getElementById('merge-confirm').open", "the question to close")
+            b.pump(0.5)
+            if os.path.exists(self.y.merges):
+                raise Failure("Cancel merged the pull request")
+            b.viewport(390, 844, 3)
+            try:
+                b.wait("document.body.classList.contains('ws-session') && !document.getElementById('pr-strip').hidden",
+                       "the pull request strip under the session on a phone")
+                strip = b.js("""(() => {
+                  const el = document.getElementById('pr-strip');
+                  return {
+                    ref: el.querySelector('.ws-pr-ref').textContent,
+                    merge: el.querySelector('[data-pr=merge]').getClientRects().length > 0,
+                    review: el.querySelector('[data-pr=review]').getClientRects().length > 0,
+                    below: Math.round(el.getBoundingClientRect().top) >= Math.round(document.querySelector('.ws-pane:not([hidden])').getBoundingClientRect().bottom),
+                  };
+                })()""")
+                if strip != {"ref": "#34 approved", "merge": True, "review": False, "below": True}:
+                    raise Failure(f"the phone's pull request strip reads {strip}")
+                b.click("#pr-strip [data-pr=merge]")
+                b.wait("document.getElementById('merge-confirm')?.open", "the same question before merging on a phone")
+                b.click("#merge-confirm [value=cancel]")
+                b.wait("!document.getElementById('merge-confirm').open", "the question to close on a phone")
+            finally:
+                b.viewport(1280, 800)
+        finally:
+            self.settle()
+            self.drop_grid_tab([key])
+            self.put_storage(before)
+
+    # The seeded review of fix-login, the branch hp-pull-test sits on, waits for approval.
+    def test_pane_header_opens_a_waiting_review(self):
+        b = self.b
+        made = self.y.tmux("has-session", "-t", f"={PULL_SESSION}").returncode != 0
+        self.pull_session()
+        key = f"{MACHINE}/{PULL_SESSION}"
+        main = f'.ws-pane:has(iframe[data-key="{key}"]) [data-act=main]'
+        before = self.storage(self.LAYOUT)
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait(f"typeof sessionFor === 'function' && sessionFor({json.dumps(key)})?.review?.state === 'asking'",
+                   "the waiting review in the Workspace", timeout=45)
+            b.js(f"open({json.dumps(key)})")
+            b.wait(f"document.querySelector({json.dumps(main)})?.textContent.trim() === 'Open review' && !document.querySelector({json.dumps(main)}).hidden",
+                   "Open review as the pane's main action")
+            conversation = b.js(f"sessionFor({json.dumps(key)}).review.conversation")
+            b.click(main)
+            b.wait(f"findDispatch()?.leaf.conversation === {json.dumps(conversation)} && document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')",
+                   "the review's conversation in a Dispatch pane")
+        finally:
+            self.settle()
+            if made:
+                self.drop_grid_tab([key])
+            self.put_storage(before)
+
+    def test_dispatch_pane_takes_clicks_and_new_titles(self):
+        b = self.b
+        frame = "document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')"
+        loaded = f"{frame}?.contentDocument?.readyState === 'complete' && {frame}.contentWindow.location.pathname === '/dispatch'"
+        before = self.storage(self.LAYOUT)
+        try:
+            self.put_storage({"workspace.v5": None, "yardbell.dispatch": "closed"})
+            b.goto(self.url("/workspace"))
+            b.wait("typeof leaves === 'function' && state !== null", "the Workspace to load")
+            b.js("openDispatch()")
+            b.wait(loaded, "Dispatch to load in its pane")
+            b.js("split('row')")
+            b.wait("isEmpty(focusedLeaf()) && leaves(tab().root).some(isDispatch)", "the new pane beside Dispatch to take the focus")
+            b.click("iframe[data-dispatch]")
+            b.wait("isDispatch(focusedLeaf())", "a click inside Dispatch to focus its pane")
+            b.js("focusPane(leaves(tab().root).find(isEmpty).pane)")
+            b.js("focusPane(findDispatch().leaf.pane)")
+            b.wait(f"{frame}.contentDocument.activeElement === {frame}.contentDocument.querySelector('#dispatch-input')",
+                   "focusing the Dispatch pane to put the cursor in its composer")
+            b.js(f"dispatchTitles.clear(); openDispatch({json.dumps(SHORT_CHAT)})")
+            b.wait("document.querySelector('.ws-pane:has(iframe[data-dispatch]) .ws-pane-title')?.textContent === 'Fix the login redirect'",
+                   "the title of a conversation the pane had not seen")
+        finally:
+            self.settle()
+            self.put_storage(before)
+
+    def test_workspace_deep_links(self):
+        b = self.b
+        name = "hp-demo-api-1"
+        key = f"{MACHINE}/{name}"
+        made = self.y.tmux("has-session", "-t", f"={name}").returncode != 0
+        if made:
+            self.y.tmux("new", "-d", "-s", name, "-c", os.path.join(self.y.root, "demo-api"), self.y.shell)
+        before = self.storage(self.LAYOUT)
+        try:
+            self.api("POST", "/refresh")
+            b.goto(self.url("/workspace?open=" + urllib.parse.quote(key, safe="")))
+            b.wait(f"state !== null && document.querySelector('.ws-pane:not([hidden]) iframe[data-key=\"{key}\"]') && location.search === ''",
+                   "the deep link to open the session", timeout=15)
+            focused = b.js("focusedLeaf().key")
+            if focused != key:
+                raise Failure(f"the focused pane holds {focused!r}")
+            b.goto(self.url("/workspace?open=" + urllib.parse.quote(f"{MACHINE}/no-such-session", safe="")))
+            b.wait("state !== null && location.search === '' && document.querySelector('.ws-pane-empty')?.textContent.includes('That session has ended.')",
+                   "the note for a session that has ended", timeout=15)
+            self.put_storage({"workspace.v5": None})
+            self.y.tmux("kill-session", "-t", f"={name}")
+            self.api("POST", "/refresh")
+            b.goto(self.url("/workspace"))
+            b.wait(f"state !== null && !sessions().some((s) => keyOf(s) === {json.dumps(key)})", "the session to be gone")
+            label = b.js(f"state.folders.find((f) => f.machine === {json.dumps(MACHINE)} && f.label.endsWith('demo-api')).label")
+            b.goto(self.url("/workspace?folder=" + urllib.parse.quote(f"{MACHINE}/{label}", safe="")))
+            b.wait(f"state !== null && location.search === '' && project() === {json.dumps(MACHINE + chr(9) + label)}",
+                   "the deep link to select the folder", timeout=15)
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.y.tmux("kill-session", "-t", f"={name}")
+            self.api("POST", "/refresh")
+
+    def test_workspace_falls_back_on_a_layout_of_the_wrong_type(self):
+        b = self.b
+        good = {"tabs": [{"id": "t1", "name": "Agents", "root": {"pane": "p1", "key": None}}], "tab": 0, "focus": "p1", "hidden": []}
+        before = self.storage(self.LAYOUT)
+        try:
+            for wrong in ({"tab": "x"}, {"hidden": {}}):
+                self.put_storage({"workspace.v5": json.dumps({**good, **wrong}), "yardbell.dispatch": "closed"})
+                b.errors = []
+                b.goto(self.url("/workspace"))
+                b.wait("typeof leaves === 'function' && state !== null && document.querySelector('.ws-pane:not([hidden])')",
+                       f"the Workspace to load with {wrong}")
+                b.pump(0.5)
+                self.check_errors(f"a stored layout with {wrong}")
+                if b.js(f"parseLayout({json.dumps(json.dumps({**good, **wrong}))})") is not None:
+                    raise Failure(f"parseLayout took a layout with {wrong}")
+            if not b.js(f"parseLayout({json.dumps(json.dumps(good))})"):
+                raise Failure("parseLayout refused a good layout")
+        finally:
+            self.put_storage(before)
+
+    USAGE_FIXTURE = """(() => {
+          const soon = Math.floor(Date.now() / 1000);
+          const win = (name, label, short, used, hours, extra = {}) => ({ name, label, short, used, resets_at: soon + hours * 3600, status: "allowed", ...extra });
+          return { windows: [], codex: null, runs_on: "claude", providers: [
+            { id: "claude", name: "Claude", plan: "Max 20x", status: "ok", source: "account", seen: new Date().toISOString(),
+              windows: [win("seven_day", "Weekly limit", "wk", 0.16, 120), win("seven_day_fable", "Weekly Fable", "Fable wk", 0.3, 120, { model: "Fable" })] },
+            { id: "codex", name: "Codex", plan: "Team", status: "ok", source: "account", seen: new Date().toISOString(), credits: "12.5 credits left",
+              error: "ChatGPT answered 429 Too Many Requests",
+              windows: [win("session", "5-hour limit", "5h", 0.75, 4), win("weekly", "Weekly limit", "wk", 0.01, 160)] },
+            { id: "gemini", name: "Gemini", plan: null, status: "error", message: "Google answered 403 Forbidden", windows: [] },
+          ] };
+        })()"""
+
+    def mock_usage(self, body_js=None):
+        return self.b.js(f"""(() => {{
+          const body = {body_js or self.USAGE_FIXTURE};
+          const real = window.__realFetch || window.fetch;
+          window.__realFetch = real;
+          window.fetch = (url, init) => String(url).startsWith("/dispatch/usage") ? Promise.resolve(new Response(JSON.stringify(body), {{ status: 200 }})) : real(url, init);
+          return window.YardbellUsage.load();
+        }})()""")
+
+    def test_usage_card_and_sheet_list_every_window(self):
+        b = self.b
+        b.goto(self.url("/workspace"))
+        b.wait("window.YardbellUsage && document.getElementById('usage-card')", "the usage card")
+        self.mock_usage()
+        b.wait("!document.getElementById('usage-card').hidden && document.querySelectorAll('#usage-card .usage-row').length === 2", "a row per agent with figures")
+        card = b.js("""(() => {
+          const card = document.getElementById('usage-card');
+          const rows = [...card.querySelectorAll('.usage-row')];
+          return {
+            inColumn: card.parentElement.id === 'col' && card.nextElementSibling?.classList.contains('col-foot'),
+            rows: rows.map((r) => [...r.querySelector('.usage-row-line').children].map((c) => c.textContent.trim()).filter(Boolean).join(' ')),
+            tones: rows.map((r) => r.querySelector('.usage-meter').className.split(' ').pop()),
+            lit: rows.map((r) => r.querySelectorAll('.usage-meter i.on').length),
+            cells: rows.map((r) => r.querySelectorAll('.usage-meter i').length),
+            resets: rows.map((r) => r.querySelector('.usage-row-reset').textContent),
+          };
+        })()""")
+        if not card["inColumn"]:
+            raise Failure("the usage card should sit just above the sidebar's foot")
+        if card["rows"] != ["Claude Fable wk 30%", "Codex 5h 75%"]:
+            raise Failure(f"each row should show the tightest existing window, with five_hour missing: {card['rows']}")
+        if card["tones"] != ["ok", "warn"] or card["lit"] != [3, 8] or card["cells"] != [10, 10]:
+            raise Failure(f"the meters read {card}")
+        if not all(card["resets"]):
+            raise Failure(f"every row should say when it resets: {card['resets']}")
+        if b.js("document.getElementById('strip') || document.getElementById('usage-pop')"):
+            raise Failure("the status bar still shows usage")
+        b.click("#usage-card")
+        b.wait("!document.getElementById('usage-sheet').hidden && document.activeElement?.matches('#usage-sheet [data-usage-close]')", "the sheet with focus in it")
+        sheet = b.js("""(() => {
+          const sheet = document.getElementById('usage-sheet');
+          const col = document.getElementById('col').getBoundingClientRect();
+          const box = sheet.getBoundingClientRect();
+          return {
+            left: Math.round(box.left), edge: Math.round(col.right), width: Math.round(box.width), height: Math.round(box.height), tall: innerHeight,
+            sections: [...sheet.querySelectorAll('.usage-sect:not(.usage-machines)')].map((s) => ({
+              head: [...s.querySelector('.usage-sect-head').children].map((c) => c.textContent.trim()).filter(Boolean).join(' '),
+              wins: [...s.querySelectorAll('.usage-win-label')].map((w) => w.textContent),
+              resets: [...s.querySelectorAll('.usage-win-reset')].filter((r) => r.textContent.startsWith('Resets in')).length,
+              meters: s.querySelectorAll('.usage-meter').length,
+              text: s.textContent.replace(/\\s+/g, ' ').trim(),
+            })),
+            link: sheet.querySelector('.usage-sheet-link')?.getAttribute('href'),
+          };
+        })()""")
+        if sheet["left"] != sheet["edge"] or not 340 <= sheet["width"] <= 380 or sheet["height"] != sheet["tall"]:
+            raise Failure(f"the sheet should slide out full height from the sidebar's edge: {sheet}")
+        names = [s["head"] for s in sheet["sections"]]
+        if len(names) != 3 or not names[0].startswith("Claude Max 20x") or not names[1].startswith("Codex Team"):
+            raise Failure(f"the sheet's sections read {names}")
+        if sheet["sections"][0]["wins"] != ["Weekly limit", "Weekly Fable"] or sheet["sections"][1]["wins"] != ["5-hour limit", "Weekly limit"]:
+            raise Failure(f"every window should be listed: {sheet['sections']}")
+        if [s["resets"] for s in sheet["sections"]] != [2, 2, 0] or [s["meters"] for s in sheet["sections"]] != [2, 2, 0]:
+            raise Failure(f"every window should have a meter and its reset: {sheet['sections']}")
+        codex, gemini = sheet["sections"][1]["text"], sheet["sections"][2]["text"]
+        if "12.5 credits left" not in codex or "429 Too Many Requests" not in codex or "403 Forbidden" not in gemini:
+            raise Failure(f"credits and errors should show: {codex!r} {gemini!r}")
+        if sheet["link"] != "/settings#stats-usage":
+            raise Failure(f"the Stats & Usage link goes to {sheet['link']}")
+        b.key("Escape")
+        b.wait("document.getElementById('usage-sheet').hidden && document.activeElement?.id === 'usage-card'", "Escape to close the sheet and return focus")
+        b.click("#usage-card")
+        b.wait("!document.getElementById('usage-sheet').hidden", "the sheet again")
+        b.js("document.querySelector('.usage-scrim').click()")
+        b.wait("document.getElementById('usage-sheet').hidden", "a click outside to close the sheet")
+        self.mock_usage("{ windows: [], codex: null, providers: [{ id: 'codex', name: 'Codex', status: 'signed_out', message: 'Not signed in', windows: [] }] }")
+        b.wait("document.getElementById('usage-card').hidden", "the card hidden when no agent has figures")
+        self.check_errors("the usage card and sheet")
+
+    def test_usage_rail_button_and_phone_more_row(self):
+        b = self.b
+        b.goto(self.url("/workspace"))
+        b.wait("window.YardbellUsage && window.YardbellShell", "the shell")
+        try:
+            b.js("window.YardbellShell.collapse(true)")
+            self.mock_usage()
+            b.wait("!document.getElementById('rail-usage').hidden && getComputedStyle(document.getElementById('rail')).display !== 'none'", "the usage ring in the folded rail")
+            ring = b.js("""(() => {
+              const fill = document.querySelector('#rail-usage .usage-ring-fill');
+              return { label: document.getElementById('rail-usage').getAttribute('aria-label'), tone: document.querySelector('#rail-usage .usage-ring').classList.contains('warn'),
+                       dash: parseFloat(fill.getAttribute('stroke-dasharray')) };
+            })()""")
+            if "Codex 5h 75%" not in ring["label"] or not ring["tone"] or not 30 < ring["dash"] < 31:
+                raise Failure(f"the rail ring should show the tightest 75%: {ring}")
+            b.click("#rail-usage")
+            b.wait("!document.getElementById('usage-sheet').hidden", "the sheet from the rail")
+            left = b.js("Math.round(document.getElementById('usage-sheet').getBoundingClientRect().left) === Math.round(document.getElementById('rail').getBoundingClientRect().right)")
+            if not left:
+                raise Failure("the sheet should open from the rail's edge")
+            b.key("Escape")
+            b.wait("document.getElementById('usage-sheet').hidden && document.activeElement?.id === 'rail-usage'", "focus back on the rail button")
+        finally:
+            b.js("window.YardbellShell.collapse(false)")
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/"))
+            b.wait("window.YardbellUsage && document.getElementById('tab-more')", "the tab bar on a phone")
+            self.mock_usage()
+            b.click("#tab-more")
+            b.wait("!document.getElementById('tab-menu').hidden", "the More menu")
+            row = b.js("document.querySelector('#tab-menu [data-usage-open]')?.textContent.trim()")
+            if row != "Usage":
+                raise Failure(f"the More menu's usage row reads {row!r}")
+            b.click("#tab-menu [data-usage-open]")
+            b.wait("!document.getElementById('usage-sheet').hidden && document.getElementById('tab-menu').hidden", "the sheet from More")
+            phone = b.js("""(() => {
+              const box = document.getElementById('usage-sheet').getBoundingClientRect();
+              return { left: Math.round(box.left), width: Math.round(box.width), sideways: document.documentElement.scrollWidth > innerWidth,
+                       close: Math.round(document.querySelector('#usage-sheet [data-usage-close]').getBoundingClientRect().height) };
+            })()""")
+            if phone["left"] != 0 or phone["width"] != 390 or phone["sideways"] or phone["close"] < 40:
+                raise Failure(f"the sheet should fill the phone's width: {phone}")
+            b.key("Escape")
+            b.wait("document.getElementById('usage-sheet').hidden", "Escape to close it on a phone")
+        finally:
+            b.viewport(1280, 800)
+
+    def write_usage_transcripts(self):
+        home = self.y.env["HOME"]
+        now = time.time()
+        stamp = lambda hours: time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now - hours * 3600))
+        folder = os.path.join(home, ".claude", "projects", "-work-stats-demo")
+        os.makedirs(folder, exist_ok=True)
+        def reply(n, hours, usage):
+            return {"type": "assistant", "sessionId": "stats-session-1", "cwd": "/work/stats-demo", "timestamp": stamp(hours),
+                    "requestId": f"req-{n}", "uuid": f"stats-{n}",
+                    "message": {"id": f"msg-stats-{n}", "model": "claude-statsfixture-1", "role": "assistant", "usage": usage,
+                                "content": [{"type": "text", "text": "done"}]}}
+        lines = [reply(1, 50, {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 20000, "cache_creation_input_tokens": 0}),
+                 reply(1, 50, {"input_tokens": 1000, "output_tokens": 500, "cache_read_input_tokens": 20000, "cache_creation_input_tokens": 0}),
+                 reply(2, 2, {"input_tokens": 2000, "output_tokens": 1500, "cache_read_input_tokens": 0, "cache_creation_input_tokens": 0})]
+        with open(os.path.join(folder, "stats-session-1.jsonl"), "w") as f:
+            f.write("".join(json.dumps(line) + "\n" for line in lines))
+        day = os.path.join(home, ".codex", "sessions", "2026", "11", "12")
+        os.makedirs(day, exist_ok=True)
+        usage = {"input_tokens": 4000, "cached_input_tokens": 1000, "output_tokens": 600, "reasoning_output_tokens": 0, "total_tokens": 4600}
+        with open(os.path.join(day, "rollout-2026-11-12T00-00-00-0199stat-0000-0000-0000-000000000001.jsonl"), "w") as f:
+            for line in (
+                {"timestamp": stamp(3), "type": "session_meta", "payload": {"id": "0199stat-0000-0000-0000-000000000001", "cwd": "/work/stats-api"}},
+                {"timestamp": stamp(3), "type": "turn_context", "payload": {"turn_id": "t1", "model": "gpt-statsfixture"}},
+                {"timestamp": stamp(3), "type": "event_msg", "payload": {"type": "token_count", "info": {"total_token_usage": usage, "last_token_usage": usage}}},
+            ):
+                f.write(json.dumps(line) + "\n")
+
+    def test_settings_stats_usage_cards_chart_and_tables(self):
+        b = self.b
+        self.write_usage_transcripts()
+        b.goto(self.url("/settings"))
+        b.wait("document.querySelector('#col-body .settings-nav a[href=\"#stats-usage\"]')", "Stats & Usage in the section list")
+        b.js("localStorage.removeItem('yardbell.stats.tab'); localStorage.removeItem('yardbell.stats.days')")
+        b.click('#col-body .settings-nav a[href="#stats-usage"]')
+        try:
+            b.wait("!document.getElementById('stats-usage').hidden && document.querySelector('#stats-body .stats-cards') && document.querySelector('#stats-body .stats-models')",
+                   "the Overview with cards", timeout=20)
+            seen = b.js("""(() => ({
+              crumb: document.getElementById('settings-crumb').textContent,
+              cards: [...document.querySelectorAll('#stats-body .stats-card-label')].map((c) => c.textContent),
+              days: document.querySelectorAll('#stats-body .stats-day').length,
+              bars: document.querySelectorAll('#stats-body .stats-day :is(.stats-io, .stats-cache)').length,
+              models: [...document.querySelectorAll('#stats-body .stats-models tbody tr')].map((r) => r.textContent.replace(/\\s+/g, ' ').trim()),
+              sessions: [...document.querySelectorAll('#stats-body .stats-sessions tbody tr')].map((r) => r.textContent.replace(/\\s+/g, ' ').trim()),
+            }))()""")
+            if seen["crumb"] != "Stats & Usage" or seen["cards"] != ["Total tokens", "Input and output", "Sessions", "Active days"]:
+                raise Failure(f"the section reads {seen}")
+            if seen["days"] != 30 or seen["bars"] < 2:
+                raise Failure(f"the chart should have 30 days with bars on the used ones: {seen}")
+            claude = next((m for m in seen["models"] if m.startswith("claude-statsfixture-1")), "")
+            codex = next((m for m in seen["models"] if m.startswith("gpt-statsfixture")), "")
+            if "Claude" not in claude or "25.0k" not in claude or "Codex" not in codex or "4.6k" not in codex:
+                raise Failure(f"the models read {seen['models']}")
+            if not any(s.startswith("stats-demo") and "claude-statsfixture-1" in s for s in seen["sessions"]) or not any(s.startswith("stats-api") for s in seen["sessions"]):
+                raise Failure(f"the sessions read {seen['sessions']}")
+            b.click('#stats-usage [data-stats-tab="codex"]')
+            b.wait("document.querySelector('[data-stats-tab=\"codex\"]').getAttribute('aria-selected') === 'true' && ![...document.querySelectorAll('#stats-body .stats-models tbody tr')].some((r) => r.textContent.includes('claude-'))",
+                   "only Codex in its tab")
+            if b.js("document.querySelector('#stats-body .stats-agent')"):
+                raise Failure("one agent's tab should not label rows with the agent")
+            b.click('#stats-usage [data-stats-days="7"]')
+            b.wait("document.querySelectorAll('#stats-body .stats-day').length === 7", "a 7-day chart")
+            self.check_errors("Stats & Usage")
+            b.viewport(390, 844, 3)
+            try:
+                b.goto(self.url("/settings#stats-usage"))
+                b.wait("document.querySelector('#stats-body .stats-cards')", "Stats & Usage on a phone", timeout=20)
+                phone = b.js("""(() => ({
+                  sideways: document.documentElement.scrollWidth > innerWidth,
+                  tab: Math.round(document.querySelector('[data-stats-tab]').getBoundingClientRect().height),
+                }))()""")
+                if phone["sideways"] or phone["tab"] < 36:
+                    raise Failure(f"Stats & Usage on a phone: {phone}")
+            finally:
+                b.viewport(1280, 800)
+        finally:
+            b.js("localStorage.removeItem('yardbell.stats.days'); localStorage.removeItem('yardbell.stats.tab')")
+
+    def drop_live(self, up):
+        self.b.js(f"""(() => {{
+          window.__liveConnected = window.__liveConnected || window.YardbellLive.connected;
+          window.YardbellLive.connected = {'window.__liveConnected' if up else '() => false'};
+          dispatchEvent(new CustomEvent('yardbell-live', {{ detail: {{ open: {'true' if up else 'false'} }} }}));
+        }})()""")
+
+    def test_sidebar_foot_has_the_status_and_no_page_has_a_bottom_bar(self):
+        b = self.b
+        b.goto(self.url("/workspace"))
+        b.wait("document.querySelector('#col .col-foot #status-group #status-live.up')", "the connection dot in the sidebar's foot")
+        self.mock_usage("""{ windows: [{ label: "5 hour", used: 0.42, resets_at: Math.floor(Date.now() / 1000) + 7200, status: "allowed" }],
+          codex: { seen: new Date().toISOString(), windows: [{ label: "5 hour", used: 0.42, resets_at: 4102444800, status: "allowed" }] }, runs_on: "codex" }""")
+        b.wait("document.querySelector('#usage-card')?.textContent.includes('Codex') && document.querySelector('#usage-card').textContent.includes('42%')",
+               "an older server's figures in the usage card")
+        seen = b.js("""(() => {
+          const foot = document.querySelector('#col .col-foot');
+          const group = document.getElementById('status-group');
+          return {
+            bar: Boolean(document.getElementById('strip') || document.querySelector('.strip')),
+            rows: getComputedStyle(document.getElementById('shell')).gridTemplateRows.split(' ').length,
+            mainBottom: Math.round(document.getElementById('main').getBoundingClientRect().bottom),
+            tall: innerHeight,
+            footText: foot.textContent,
+            right: Math.round(group.getBoundingClientRect().right) > Math.round(foot.getBoundingClientRect().right) - 20,
+            live: document.getElementById('status-live').title,
+            ports: document.getElementById('status-ports'),
+          };
+        })()""")
+        if seen["bar"] or seen["rows"] != 1 or seen["mainBottom"] != seen["tall"]:
+            raise Failure(f"the page should have no bottom bar and fill the window: {seen}")
+        if "%" in seen["footText"] or "hp" in seen["footText"]:
+            raise Failure(f"the foot should not repeat machine memory: {seen['footText']!r}")
+        if not seen["right"] or seen["live"] != "Live" or seen["ports"]:
+            raise Failure(f"the foot's status reads {seen}")
+        self.drop_live(False)
+        b.wait("document.getElementById('status-live').classList.contains('down') && document.getElementById('status-live').title === 'Reconnecting'", "the dot to say Reconnecting")
+        if not b.js("document.getElementById('conn-banner').hidden"):
+            raise Failure("the banner should wait 3 seconds before it shows")
+        b.wait("!document.getElementById('conn-banner').hidden", "the reconnecting banner after the delay", timeout=6)
+        banner = b.js("""(() => {
+          const box = document.getElementById('conn-banner').getBoundingClientRect();
+          const main = document.getElementById('main').getBoundingClientRect();
+          return { text: document.getElementById('conn-banner').textContent, inside: box.left >= main.left && box.right <= main.right && box.top < main.top + 60 };
+        })()""")
+        if banner["text"] != "Reconnecting to Yardbell…" or not banner["inside"]:
+            raise Failure(f"the banner reads {banner}")
+        self.drop_live(True)
+        b.wait("document.getElementById('conn-banner').hidden && document.getElementById('status-live').classList.contains('up')", "the banner gone when live again")
+        for path in ("/", "/dispatch", "/pipeline", "/settings", "/add", "/diagrams", "/proposals"):
+            b.goto(self.url(path))
+            b.wait("document.getElementById('shell') && document.getElementById('status-group')", f"the shell on {path}")
+            if b.js("Boolean(document.getElementById('strip') || document.querySelector('.strip'))"):
+                raise Failure(f"{path} still renders a bottom bar")
+        visible = b.js("document.getElementById('status-group').checkVisibility() || document.getElementById('usage-card').checkVisibility()")
+        b.goto(self.url("/settings"))
+        b.wait("document.querySelector('#col-body .settings-back')", "Settings")
+        if b.js("document.getElementById('status-group').checkVisibility() || document.getElementById('usage-card').checkVisibility()"):
+            raise Failure("Settings' column should show no status or usage")
+        if not visible:
+            raise Failure("the status should show on a page with the sidebar")
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait("document.getElementById('tab-more')", "the tab bar on a phone")
+            if b.js("document.getElementById('status-group').checkVisibility()"):
+                raise Failure("the foot's status should not show on a phone")
+        finally:
+            b.viewport(1280, 800)
+        self.check_errors("the sidebar foot")
+
+    def test_rail_stacks_the_status_and_machine_trouble_shows_in_the_card(self):
+        b = self.b
+        b.goto(self.url("/workspace"))
+        b.wait("window.YardbellShell?.lastState && document.getElementById('status-live')", "the shell with its state")
+        try:
+            b.js("window.YardbellShell.collapse(true)")
+            self.mock_usage()
+            b.wait("document.querySelector('#rail #status-group.in-rail #status-live') && !document.getElementById('rail-usage').hidden", "the status in the rail")
+            order = b.js("""[...document.getElementById('rail').children].filter((el) => el.checkVisibility())
+              .map((el) => el.id || (el.hasAttribute('data-theme-toggle') ? 'theme' : el.className)).slice(-4)""")
+            if order != ["rail-usage", "status-group", "theme", "logout"]:
+                raise Failure(f"the rail's bottom group reads {order}")
+            b.js(f"""(() => {{
+              const s = structuredClone(window.YardbellShell.lastState);
+              s.machines = [{{ name: {json.dumps(MACHINE)}, up: true, health: {{ mem_total_kb: 100, mem_used_kb: 30 }} }}, {{ name: 'pro', up: false, health: null }},
+                            {{ name: 'mini', up: true, health: {{ mem_total_kb: 100, mem_used_kb: 93 }} }}];
+              const update = window.YardbellStrip.update;
+              window.YardbellStrip.update = () => update(s);
+              window.YardbellStrip.update();
+            }})()""")
+            b.js("window.YardbellShell.collapse(false)")
+            b.wait("document.querySelectorAll('#usage-card .usage-trouble').length === 2", "a warning line for each machine in trouble")
+            trouble = b.js("[...document.querySelectorAll('#usage-card .usage-trouble')].map((t) => [t.dataset.machine, t.classList.contains('bad'), t.textContent.trim()])")
+            if trouble != [["pro", True, "pro: offline"], ["mini", False, "mini: memory at 93%"]]:
+                raise Failure(f"the card's machine lines read {trouble}")
+            b.click("#usage-card")
+            b.wait("document.querySelectorAll('#usage-sheet .usage-machines .usage-win').length === 3", "the Machines section in the sheet")
+            rows = b.js("""[...document.querySelectorAll('#usage-sheet .usage-machines .usage-win')].map((r) => [r.dataset.machine,
+              r.querySelector('.usage-win-pct').textContent, r.querySelector('.usage-meter').classList.contains('warn') ? 'warn' : r.querySelector('.usage-meter').classList.contains('bad') ? 'bad' : 'ok'])""")
+            if rows != [["pro", "offline", "bad"], ["mini", "93%", "warn"], [MACHINE, "30%", "ok"]]:
+                raise Failure(f"the sheet's machines read {rows}")
+            b.key("Escape")
+        finally:
+            b.js("window.YardbellShell.collapse(false)")
+            b.goto(self.url("/workspace"))
+
+    def test_phone_more_has_keep_awake_and_ports(self):
+        b = self.b
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/"))
+            b.wait("window.YardbellShell?.lastState && document.getElementById('tab-more')", "the tab bar on a phone")
+            b.js(f"""(() => {{
+              const s = structuredClone(window.YardbellShell.lastState);
+              s.sessions = [{{ machine: {json.dumps(MACHINE)}, ports: [{{ service: 'rails', remote: 3000, local: 13000, status: 'tunnel up', url: 'http://127.0.0.1:13000' }}] }}];
+              const update = window.YardbellStrip.update;
+              window.YardbellStrip.update = () => update(s);
+              window.YardbellStrip.update();
+            }})()""")
+            b.click("#tab-more")
+            b.wait("!document.getElementById('tab-menu').hidden", "the More menu")
+            rows = b.js("""[...document.querySelectorAll('#tab-menu [data-status-open]')].map((r) => [r.dataset.statusOpen,
+              r.querySelector('.menu-label').textContent, r.querySelector('.menu-note').textContent])""")
+            if [r[:2] for r in rows] != [["awake", "Keep computer awake"], ["ports", "Live ports"]] or rows[1][2] != "1" or " · " not in rows[0][2]:
+                raise Failure(f"the More menu's status rows read {rows}")
+            b.click("#tab-menu [data-status-open=ports]")
+            b.wait("!document.getElementById('ports-pop').hidden && document.getElementById('tab-menu').hidden", "the ports popover from More")
+            box = b.js("(() => { const r = document.getElementById('ports-pop').getBoundingClientRect(); return { left: r.left, right: r.right, bottom: r.bottom, tall: innerHeight, wide: innerWidth }; })()")
+            if box["left"] < 0 or box["right"] > box["wide"] or box["bottom"] > box["tall"]:
+                raise Failure(f"the ports popover leaves the screen: {box}")
+            b.key("Escape")
+            b.wait("document.getElementById('ports-pop').hidden", "Escape to close it")
+            b.click("#tab-more")
+            b.click("#tab-menu [data-status-open=awake]")
+            b.wait("!document.getElementById('awake-pop').hidden", "the Keep computer awake popover from More")
+            b.key("Escape")
+        finally:
+            b.viewport(1280, 800)
+
+    def open_new_session(self, path):
+        self.b.wait("window.YardbellShell.lastState", "the state on the page")
+        self.b.js(f"""(() => {{
+          window.__started = null;
+          const s = window.YardbellShell.lastState;
+          window.YardbellNewSession.open({{ machines: [{json.dumps(MACHINE)}], machine: {json.dumps(MACHINE)}, agents: s.agents,
+            defaultAgent: s.default_agent, path: {json.dumps(path)}, onStart: (body) => {{ window.__started = body; }}, onError: () => {{}} }});
+        }})()""")
+        self.b.wait("document.getElementById('new-dialog')?.open", "the New session dialog")
+
+    def test_newsession_dialog_layout(self):
+        b = self.b
+        b.goto(self.url("/workspace"))
+        self.open_new_session(os.path.join(self.y.root, "demo-app"))
+        b.wait("!document.getElementById('branch-step').hidden && document.getElementById('nd-project-name').textContent.endsWith('demo-app')",
+               "demo-app as the project, with Create from")
+        seen = b.js("""(() => ({
+          title: document.getElementById('new-title').textContent,
+          labels: [...document.querySelectorAll('#new-dialog .nd-label')].map((l) => l.textContent.trim()),
+          tabs: [...document.querySelectorAll('#new-dialog .nd-tab')].map((t) => t.textContent.trim()),
+          checked: document.querySelector('#new-form input[name=mode]:checked').value,
+          start: document.getElementById('start-btn').textContent.replace(/\\s+/g, ' ').trim(),
+          advanced: document.getElementById('nd-advanced').open,
+          resume: Boolean(document.querySelector('#nd-advanced input[name=resume]')),
+          machine: document.getElementById('new-machine').value,
+        }))()""")
+        if seen["title"] != "New session":
+            raise Failure(f"the dialog is titled {seen['title']!r}")
+        if seen["labels"] != ["Project", "Run on", "Create from [Optional]", "Agent [Optional]"]:
+            raise Failure(f"the fields read {seen['labels']}")
+        if seen["tabs"] != ["Current", "Branch", "Name"] or seen["checked"] != "stay":
+            raise Failure(f"the Create from tabs read {seen['tabs']} with {seen['checked']} picked")
+        if not seen["start"].startswith("Start session"):
+            raise Failure(f"the start button reads {seen['start']!r}")
+        if seen["advanced"] or not seen["resume"]:
+            raise Failure(f"Advanced should start closed and hold the resume switch: {seen}")
+        if seen["machine"] != MACHINE:
+            raise Failure(f"Run on reads {seen['machine']!r}")
+        b.click("#nd-project")
+        b.wait("document.getElementById('nd-browser').hidden && document.getElementById('nd-project').getAttribute('aria-expanded') === 'false'",
+               "Project to fold the folder browser away")
+        b.click("#nd-project")
+        b.wait("!document.getElementById('nd-browser').hidden", "Project to show the folder browser again")
+        b.click("#new-form .nd-tab:has(input[value=new])")
+        b.wait("!document.getElementById('new-body').hidden && document.getElementById('stay-body').hidden && document.getElementById('start-btn').disabled",
+               "the Name tab to ask for a branch name")
+        b.click("#new-branch")
+        b.type("eng-1-try")
+        b.wait("!document.getElementById('start-btn').disabled", "a valid name to enable Start session")
+        b.key("Enter", "Control")
+        started = b.wait("window.__started", "Ctrl+Enter to start the session")
+        if started.get("branch") != "eng-1-try" or not started.get("new_branch") or not started.get("path", "").endswith("demo-app"):
+            raise Failure(f"Ctrl+Enter started {started}")
+        if b.js("document.getElementById('new-dialog').open"):
+            raise Failure("the dialog stayed open after starting")
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            self.open_new_session(os.path.join(self.y.root, "demo-app"))
+            b.wait("!document.getElementById('branch-step').hidden", "Create from on a phone")
+            fit = b.js("""(() => {
+              const d = document.getElementById('new-dialog').getBoundingClientRect();
+              const body = document.querySelector('#new-dialog .nd-body');
+              return { width: Math.round(d.width), page: document.documentElement.scrollWidth, sideways: body.scrollWidth > body.clientWidth };
+            })()""")
+            if fit["width"] != 390 or fit["page"] > 390 or fit["sideways"]:
+                raise Failure(f"the dialog does not fit a phone: {fit}")
+            b.key("Escape")
+        finally:
+            b.viewport(1280, 800)
+        self.check_errors("the New session dialog")
+
+    def test_workspace_add_project_keeps_the_folder(self):
+        b = self.b
+        lab = os.path.join(self.y.root, "lab")
+        os.makedirs(os.path.join(lab, "kept-proj"), exist_ok=True)
+        before = self.storage(["yardbell.ws.kept"])
+        try:
+            self.put_storage({"yardbell.ws.kept": None})
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#col-body .tree') && window.YardbellShell.lastState", "the tree")
+            b.click("#side-add-project")
+            b.wait("document.getElementById('add-project')?.open", "the Add a project dialog")
+            ways = b.js("document.getElementById('ap-choices').textContent.replace(/\\s+/g, ' ')")
+            if "Browse folder" not in ways or "Clone" in ways:
+                raise Failure(f"the dialog offers {ways!r}")
+            b.click("#ap-browse")
+            b.click("#ap-list [data-ap-path$='/lab']")
+            b.click("#ap-list [data-ap-path$='/lab/kept-proj']")
+            b.wait("document.getElementById('ap-where').textContent.includes('kept-proj') && !document.getElementById('ap-add').disabled",
+                   "kept-proj ready to add")
+            b.click("#ap-add")
+            b.wait("!document.getElementById('add-project').open && (localStorage.getItem('yardbell.ws.kept') || '').includes('/lab/kept-proj')",
+                   "the folder kept in this browser")
+            kept = b.js("JSON.parse(localStorage.getItem('yardbell.ws.kept'))")
+            if len(kept) != 1 or kept[0]["machine"] != MACHINE or not kept[0]["path"].endswith("/lab/kept-proj"):
+                raise Failure(f"the browser keeps {kept}")
+            folder = kept[0]["folder"]
+            row = f"#col-body .tree-card.current .tree-folder[data-folder={json.dumps(folder)}]"
+            b.wait(f"document.querySelector({json.dumps(row)}) && project() === {json.dumps(MACHINE + chr(9) + folder)}",
+                   f"the kept folder {folder} in the tree, selected")
+            self.settle()
+            b.goto(self.url("/workspace"))
+            b.wait(f"document.querySelector({json.dumps(f'#col-body .tree-folder[data-folder={json.dumps(folder)}]')})", "the kept folder after a reload")
+            self.check_errors("adding a project")
+        finally:
+            self.put_storage(before)
+            shutil.rmtree(lab, ignore_errors=True)
+
+    def test_sidebar_foot_ports_popover(self):
+        b = self.b
+        b.goto(self.url("/workspace"))
+        b.wait("window.YardbellShell.lastState && document.getElementById('status-group')", "the status in the sidebar's foot")
+        b.js(f"""(() => {{
+          const s = structuredClone(window.YardbellShell.lastState);
+          const rails = {{ service: 'rails', remote: 3000, local: 13000, status: 'tunnel up', url: 'http://127.0.0.1:13000' }};
+          const mail = {{ service: 'mailpit', remote: 8025, local: null, status: 'not forwardable', url: null }};
+          s.sessions = [
+            {{ machine: {json.dumps(MACHINE)}, ports: [rails, mail] }},
+            {{ machine: {json.dumps(MACHINE)}, ports: [rails] }},
+            {{ machine: 'pro', ports: [{{ service: 'vite', remote: 5173, local: 25173, status: 'tunnel up', url: 'http://127.0.0.1:25173' }}] }},
+          ];
+          const update = window.YardbellStrip.update;
+          window.YardbellStrip.update = () => update(s);
+          window.YardbellStrip.update();
+        }})()""")
+        b.wait("document.querySelector('#status-ports .status-count')?.textContent === '3'", "three live ports in the foot")
+        b.click("#status-ports")
+        b.wait("!document.getElementById('ports-pop').hidden", "the ports popover")
+        seen = b.js("""(() => {
+          const pop = document.getElementById('ports-pop');
+          return {
+            title: pop.querySelector('.strip-pop-title').textContent.replace(/\\s+/g, ' ').trim(),
+            machines: [...pop.querySelectorAll('.ports-machine span:first-of-type')].map((s) => s.textContent),
+            links: [...pop.querySelectorAll('a.ports-row')].map((a) => [a.querySelector('.ports-num').textContent, a.getAttribute('href'), a.target]),
+            idle: [...pop.querySelectorAll('div.ports-row')].map((d) => d.textContent.replace(/\\s+/g, ' ').trim()),
+            expanded: document.getElementById('status-ports').getAttribute('aria-expanded'),
+            inFoot: Boolean(document.querySelector('#col .col-foot #status-ports')),
+            above: (() => {
+              const p = pop.getBoundingClientRect();
+              const btn = document.getElementById('status-ports').getBoundingClientRect();
+              return p.bottom <= btn.top && p.left >= 0 && p.right <= innerWidth && p.top >= 0;
+            })(),
+          };
+        })()""")
+        if not seen["inFoot"] or not seen["above"]:
+            raise Failure(f"the ports popover should open above its button in the foot, inside the window: {seen}")
+        if seen["title"] != "Live ports (3)":
+            raise Failure(f"the popover is titled {seen['title']!r}")
+        if seen["machines"] != [MACHINE, "pro"]:
+            raise Failure(f"the ports are grouped as {seen['machines']}")
+        if seen["links"] != [["13000", "http://127.0.0.1:13000", "_blank"], ["25173", "http://127.0.0.1:25173", "_blank"]]:
+            raise Failure(f"the forwarded ports link to {seen['links']}")
+        if len(seen["idle"]) != 1 or "8025" not in seen["idle"][0] or "not forwardable" not in seen["idle"][0]:
+            raise Failure(f"the port that is not forwarded reads {seen['idle']}")
+        if seen["expanded"] != "true":
+            raise Failure("the ports button does not say its popover is open")
+        b.key("Escape")
+        b.wait("document.getElementById('ports-pop').hidden && document.activeElement?.id === 'status-ports'", "Escape to close the popover")
+        self.check_errors("the ports popover")
+
+    def inhibitor_pids(self):
+        try:
+            with open(self.y.inhibits) as f:
+                return [int(line.split()[0]) for line in f if line.strip()]
+        except FileNotFoundError:
+            return []
+
+    def test_keep_awake_popover_and_setting(self):
+        b = self.b
+        self.api("POST", "/api/settings/keep-awake", {"mode": "off"})
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#status-awake[data-mode=off]')", "Off in the foot")
+            b.click("#status-awake")
+            b.wait("!document.getElementById('awake-pop').hidden", "the Keep computer awake popover")
+            seen = b.js("""(() => {
+              const pop = document.getElementById('awake-pop');
+              return {
+                options: [...pop.querySelectorAll('.awake-label')].map((l) => l.textContent),
+                checked: pop.querySelector('[aria-checked=true]')?.dataset.awake,
+                note: pop.querySelector('.strip-pop-note').textContent,
+              };
+            })()""")
+            if seen["options"] != ["On", "While agents work", "Off"] or seen["checked"] != "off" or seen["note"] != "Off · Inactive":
+                raise Failure(f"the popover reads {seen}")
+            b.click("#awake-pop [data-awake=agent]")
+            note = b.wait("(document.querySelector('#awake-pop .strip-pop-note')?.textContent || '').startsWith('Agent · ')"
+                          " && document.querySelector('#awake-pop .strip-pop-note').textContent", "While agents work in the popover")
+            # The machine is this computer, so an agent working outside the suite counts too.
+            working = b.js("(async () => (await (await fetch('/state')).json()).keep_awake.working)()")
+            if note != ("Agent · Active" if working else "Agent · Inactive"):
+                raise Failure(f"While agents work reads {note!r} with an agent {'working' if working else 'idle'}")
+            if not working and self.inhibitor_pids():
+                raise Failure("While agents work took the inhibitor with no agent working")
+            b.click("#awake-pop [data-awake=on]")
+            b.wait("document.querySelector('#awake-pop .strip-pop-note')?.textContent === 'On · Active'"
+                   " && document.querySelector('#status-awake.holding')", "On to hold the computer awake")
+            pids = self.inhibitor_pids()
+            if len(pids) != 1:
+                raise Failure(f"systemd-inhibit was started {len(pids)} times")
+            with open(self.y.inhibits) as f:
+                if "--what=idle:sleep" not in f.read():
+                    raise Failure("systemd-inhibit was not asked to hold idle and sleep")
+            os.kill(pids[0], 0)
+            with open(self.y.config) as f:
+                if "keep_awake: on" not in f.read():
+                    raise Failure("On was not saved in yardbell.yml")
+            b.goto(self.url("/settings#power"))
+            b.wait("document.querySelector('#power input[value=on]')?.checked"
+                   " && document.getElementById('awake-desc').textContent.includes('Holding it awake now with systemd-inhibit')",
+                   "On in Settings, holding")
+            b.click("#power .set-seg label:has(input[value=off])")
+            deadline = time.time() + 10
+            while True:
+                try:
+                    os.kill(pids[0], 0)
+                except ProcessLookupError:
+                    break
+                if time.time() > deadline:
+                    raise Failure("the inhibitor is still running after Off")
+                b.pump(0.2)
+            with open(self.y.config) as f:
+                if "keep_awake" in f.read():
+                    raise Failure("Off left keep_awake in yardbell.yml")
+            self.check_errors("keep computer awake")
+        finally:
+            self.api("POST", "/api/settings/keep-awake", {"mode": "off"})
+
+    def test_setup_script_card_until_configured_or_dismissed(self):
+        b = self.b
+        setups = self.api("GET", "/api/settings/worktree-setup")["setups"]
+        before = self.storage(["yardbell.setup-card.dismissed"])
+        try:
+            self.api("POST", "/api/settings/worktree-setup", {"setups": []})
+            self.put_storage({"yardbell.setup-card.dismissed": None})
+            b.goto(self.url("/workspace"))
+            b.wait("!document.getElementById('setup-card').hidden", "the setup script card")
+            seen = b.js("""(() => {
+              const card = document.getElementById('setup-card');
+              const r = card.getBoundingClientRect();
+              const column = document.getElementById('col').getBoundingClientRect();
+              return { title: card.querySelector('.setup-card-title').textContent, href: card.querySelector('.setup-card-go').getAttribute('href'),
+                inside: r.left >= column.left && r.right <= column.right, low: r.bottom > column.bottom - 120 };
+            })()""")
+            if seen["title"] != "Add a setup script" or seen["href"] != "/settings#worktree-setup":
+                raise Failure(f"the card reads {seen}")
+            if not seen["inside"] or not seen["low"]:
+                raise Failure(f"the card is not at the bottom of the sidebar: {seen}")
+            b.click("#setup-card-x")
+            b.wait("document.getElementById('setup-card').hidden && localStorage.getItem('yardbell.setup-card.dismissed') === '1'",
+                   "Dismiss to hide the card and remember it")
+            b.goto(self.url("/workspace"))
+            b.wait("setupConfigured === false", "the setup check")
+            if not b.js("document.getElementById('setup-card').hidden"):
+                raise Failure("a dismissed card came back after a reload")
+            self.put_storage({"yardbell.setup-card.dismissed": None})
+            self.api("POST", "/api/settings/worktree-setup", {"setups": [{"folder": "demo-app", "command": "true"}]})
+            b.goto(self.url("/workspace"))
+            b.wait("setupConfigured === true", "the setup check to find the command")
+            if not b.js("document.getElementById('setup-card').hidden"):
+                raise Failure("the card shows although a setup command is configured")
+            self.check_errors("the setup script card")
+        finally:
+            self.api("POST", "/api/settings/worktree-setup", {"setups": setups})
+            self.put_storage(before)
+
+    def palette_sessions(self, names):
+        made = []
+        for name in names:
+            if self.y.tmux("has-session", "-t", f"={name}").returncode == 0:
+                continue
+            r = self.y.tmux("new", "-d", "-s", name, "-c", os.path.join(self.y.root, "demo-api"), self.y.shell)
+            if r.returncode:
+                raise Failure(f"tmux new failed: {r.stderr}")
+            made.append(name)
+        self.api("POST", "/refresh")
+        return made
+
+    def drop_palette_sessions(self, made):
+        for name in made:
+            self.y.tmux("kill-session", "-t", f"={name}")
+        if made:
+            self.api("POST", "/refresh")
+
+    def workspace_with(self, keys):
+        self.put_storage({"workspace.v5": None, "yardbell.dispatch": "closed"})
+        self.b.goto(self.url("/workspace"))
+        self.b.wait(f"typeof sessionFor === 'function' && {json.dumps(keys)}.every((k) => sessionFor(k))",
+                    "the sessions in the Workspace", timeout=15)
+
+    def test_palette_lists_what_needs_you_first_and_jumps(self):
+        b = self.b
+        keys = [f"{MACHINE}/hp-demo-api-{i}" for i in (1, 2)]
+        before = self.storage(self.LAYOUT + ("yardbell.tree.seen",))
+        made = self.palette_sessions([k.split("/", 1)[1] for k in keys])
+        try:
+            self.workspace_with(keys)
+            b.js(f"""(() => {{
+              const seen = Object.fromEntries(sessions().map((s) => [keyOf(s), stateOf(s)]));
+              seen[{json.dumps(keys[1])}] = 'working';
+              localStorage.setItem('yardbell.tree.seen', JSON.stringify(seen));
+            }})()""")
+            b.key("k", "Control")
+            b.wait("document.getElementById('palette')?.open", "Ctrl+K to open the palette")
+            first = b.wait("document.querySelector('#palette-list li[data-href*=\"open=\"]')?.dataset.href", "a session in the palette")
+            if first != "/workspace?open=" + urllib.parse.quote(keys[1], safe=""):
+                raise Failure(f"the first session in the palette is {first}, not the one changed since it was looked at")
+            b.type("#84")
+            b.wait("document.querySelector('#palette-list li[aria-selected=true]')?.dataset.href === '/pipeline?p=review&tab=runs&run=run-c'",
+                   "#84 to find the run on merge request 84")
+            b.key("ArrowDown")
+            b.key("ArrowUp")
+            b.wait("document.querySelector('#palette-list li[aria-selected=true]')?.dataset.href.endsWith('run=run-c')", "the arrows to move the selection")
+            for _ in "#84":
+                b.key("Backspace")
+            b.type("demo-api-1")
+            b.wait(f"document.querySelector('#palette-list li[aria-selected=true]')?.dataset.href === {json.dumps('/workspace?open=' + urllib.parse.quote(keys[0], safe=''))}",
+                   "the typed session to be selected")
+            b.key("Enter")
+            b.wait(f"!document.getElementById('palette').open && focusedLeaf()?.key === {json.dumps(keys[0])}"
+                   f" && document.querySelector('.ws-pane:not([hidden]) iframe[data-key=\"{keys[0]}\"]') && location.pathname === '/workspace'",
+                   "Enter to open the session in a pane and close the palette", timeout=15)
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.drop_palette_sessions(made)
+
+    def test_ctrl_k_in_a_terminal_opens_the_palette_and_ctrl_j_still_reaches_it(self):
+        b = self.b
+        key = f"{MACHINE}/hp-demo-api-1"
+        frame = f'iframe[data-key="{key}"]'
+        el = f"document.querySelector({json.dumps(frame)})"
+        inside = lambda expr: f"{el}?.contentWindow?.eval({json.dumps(expr)})"
+        before = self.storage(self.LAYOUT)
+        made = self.palette_sessions([key.split("/", 1)[1]])
+        try:
+            self.workspace_with([key])
+            b.js(f"open({json.dumps(key)})")
+            b.wait(inside("typeof term === 'object' && Boolean(term.element) && screenText().length > 0"), "the terminal's prompt", timeout=15)
+            b.click(frame)
+            b.wait(f"document.activeElement === {el}", "the terminal to take the focus")
+            # With the cursor at the start of the line, a Ctrl+K that reached the shell would kill it.
+            b.type("echo ke''ep")
+            b.key("\ue011")
+            b.key("k", "Control")
+            b.wait("document.getElementById('palette')?.open", "Ctrl+K in the terminal to open the palette")
+            b.key("Escape")
+            b.wait("!document.getElementById('palette').open", "Esc to close the palette")
+            b.wait(f"document.activeElement === {el}", "the focus to go back to the terminal")
+            b.key("\ue010")
+            b.key("Enter")
+            b.wait(inside("screenText().split('\\n').some((l) => l.trim() === 'keep')"), "the line typed before Ctrl+K to run whole", timeout=15)
+            b.click(frame)
+            b.type("printf 'a'")
+            b.key("j", "Control")
+            b.type("printf 'b'")
+            b.key("j", "Control")
+            # printf leaves no newline, so each output starts the line of the prompt after it.
+            b.wait(inside("""(() => {
+              const lines = screenText().split('\\n');
+              const at = lines.findIndex((l) => l.startsWith('a') && l.includes("printf 'b'"));
+              return at >= 0 && (lines[at + 1] || '').startsWith('b');
+            })()"""), "Ctrl+J to run both commands", timeout=15)
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.drop_palette_sessions(made)
+
+    def test_ctrl_k_in_a_dispatch_pane_opens_the_palette(self):
+        b = self.b
+        frame = "document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]')"
+        composer = f"{frame}.contentDocument.querySelector('#dispatch-input')"
+        before = self.storage(self.LAYOUT)
+        try:
+            self.put_storage({"workspace.v5": None, "yardbell.dispatch": "closed"})
+            b.goto(self.url("/workspace"))
+            b.wait("typeof leaves === 'function' && state !== null", "the Workspace to load")
+            b.js("openDispatch()")
+            b.wait(f"{frame}?.contentDocument?.readyState === 'complete' && {frame}.contentWindow.location.pathname === '/dispatch'",
+                   "Dispatch to load in its pane")
+            b.js("focusPane(findDispatch().leaf.pane)")
+            b.wait(f"document.activeElement === {frame} && {frame}.contentDocument.activeElement === {composer}", "the cursor in the composer")
+            b.key("k", "Control")
+            b.wait("document.getElementById('palette')?.open", "Ctrl+K in Dispatch to open the palette")
+            if b.js(f"{composer}.value"):
+                raise Failure("Ctrl+K reached the composer")
+            b.key("Escape")
+            b.wait("!document.getElementById('palette').open", "Esc to close the palette")
+        finally:
+            self.settle()
+            self.put_storage(before)
+
+    def test_palette_says_which_source_failed(self):
+        b = self.b
+        key = f"{MACHINE}/hp-demo-api-1"
+        before = self.storage(self.LAYOUT)
+        made = self.palette_sessions([key.split("/", 1)[1]])
+        try:
+            self.workspace_with([key])
+            b.js("""(() => {
+              const real = window.fetch;
+              window.fetch = (url, opts) => String(url).startsWith('/api/runs') ? Promise.reject(new TypeError('offline')) : real(url, opts);
+            })()""")
+            b.js("document.activeElement?.blur()")
+            b.key("k", "Control")
+            b.wait("document.getElementById('palette')?.open", "Ctrl+K to open the palette")
+            b.wait("document.querySelector('#palette .palette-note')?.textContent.trim() === \"Couldn't load runs\"", "the note for runs")
+            b.wait(f"document.querySelector('#palette-list li[data-href=\"/workspace?open={urllib.parse.quote(key, safe='')}\"]')",
+                   "the session to still list")
+            b.wait("document.querySelector('#palette-list li[data-href=\"/settings\"]')", "the pages to still list")
+            if b.js("document.querySelector('#palette-list li[data-href*=\"tab=runs\"]')"):
+                raise Failure("a run listed although runs failed to load")
+            b.key("Escape")
+            b.wait("!document.getElementById('palette').open", "Esc to close the palette")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.drop_palette_sessions(made)
+
+    def test_palette_closes_on_a_phone(self):
+        b = self.b
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait("typeof leaves === 'function' && state !== null && document.body.classList.contains('ws-list')", "the Workspace on a phone")
+            b.click("#col-search")
+            b.wait("document.getElementById('palette')?.open", "the search button to open the palette")
+            sheet = b.js("(() => { const r = document.getElementById('palette').getBoundingClientRect(); return [Math.round(r.width), Math.round(r.height)]; })()")
+            if sheet != [390, 844]:
+                raise Failure(f"the palette on a phone is {sheet}, not a full-screen sheet")
+            b.click("#palette .palette-close")
+            b.wait("!document.getElementById('palette').open", "the close button to close the palette")
+        finally:
+            b.viewport(1280, 800)
+
+    def demo_api_session(self):
+        name = "hp-demo-api-1"
+        made = self.y.tmux("has-session", "-t", f"={name}").returncode != 0
+        if made:
+            self.y.tmux("new", "-d", "-s", name, "-c", os.path.join(self.y.root, "demo-api"), self.y.shell)
+        self.api("POST", "/refresh")
+        return f"{MACHINE}/{name}", made
+
+    def drop_demo_api_session(self, key, made):
+        if not made:
+            return
+        self.y.tmux("kill-session", "-t", f"={key.split('/', 1)[1]}")
+        self.api("POST", "/refresh")
+
+    def test_workspace_terminal_fills_its_pane(self):
+        b = self.b
+        key, made = self.demo_api_session()
+        frame = f"document.querySelector('.ws-pane:not([hidden]) iframe[data-key={json.dumps(key)}]')"
+        before = self.storage(self.LAYOUT)
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait(f"state !== null && sessionFor({json.dumps(key)})", "the session in the Workspace", timeout=15)
+            b.js(f"open({json.dumps(key)}); openDispatch()")
+            b.wait(f"document.querySelector('.ws-pane:not([hidden]) iframe[data-dispatch]') && {frame}?.contentDocument?.querySelector('.xterm-screen')",
+                   "the terminal beside a Dispatch pane", timeout=15)
+            b.pump(0.5)
+            got = b.js(f"""(() => {{
+              const f = {frame};
+              const doc = f.contentDocument.documentElement;
+              return {{
+                frame: Math.round(f.getBoundingClientRect().bottom),
+                pane: Math.round(f.closest('.ws-pane').getBoundingClientRect().bottom),
+                height: Math.round(f.getBoundingClientRect().height),
+                inside: doc.clientHeight,
+              }};
+            }})()""")
+            if abs(got["frame"] - got["pane"]) > 1:
+                raise Failure(f"the terminal stops short of its pane: {got}")
+            if abs(got["inside"] - got["height"]) > 1:
+                raise Failure(f"the terminal page does not fill its frame, a scrollbar takes the bottom: {got}")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.drop_demo_api_session(key, made)
+
+    PANEL = ("workspace.v5", "workspace.side")
+    PAST_ID = "5f0c9a1e-0000-4000-8000-00000000beef"
+
+    # Files of their own in demo-api, the Workspace on that folder with no session in focus, and
+    # the right panel open on the tab asked for.
+    def panel_on_demo_api(self, tab="files"):
+        b = self.b
+        folder = os.path.join(self.y.root, "demo-api")
+        stuff = os.path.join(folder, "panel-demo")
+        write(os.path.join(stuff, "app.js"), "// greets\nexport function greet(name) {\n  return `hi ${name}`;\n}\nconst answer = 42;\n")
+        write(os.path.join(stuff, "notes.txt"), "a needle in the haystack\n")
+        with open(os.path.join(stuff, "logo.bin"), "wb") as f:
+            f.write(b"\x89PNG\x00\x00\x01binary")
+        self.put_storage({"workspace.side": json.dumps({"open": False, "tab": tab, "width": 320})})
+        b.goto(self.url("/workspace"))
+        b.wait(f"state !== null && (state.folders || []).some((f) => f.path === {json.dumps(folder)})", "demo-api in the Workspace", timeout=15)
+        b.js(f"""(() => {{
+          const f = state.folders.find((f) => f.path === {json.dumps(folder)});
+          saved.tabs = [];
+          saved.hidden = sessions().map(keyOf);
+          saved.folder = f.machine + SEP + f.label;
+          save();
+          render();
+        }})()""")
+        b.click("#panel-toggle")
+        b.wait("!document.getElementById('ws-right').hidden", "the right panel to open")
+        return folder
+
+    def drop_panel_files(self):
+        shutil.rmtree(os.path.join(self.y.root, "demo-api", "panel-demo"), ignore_errors=True)
+
+    def set_input(self, selector, text):
+        self.b.js(f"""(() => {{
+          const i = document.querySelector({json.dumps(selector)});
+          i.value = {json.dumps(text)};
+          i.dispatchEvent(new Event('input'));
+        }})()""")
+
+    def test_workspace_panel_opens_resizes_and_remembers(self):
+        b = self.b
+        before = self.storage(self.PANEL)
+        try:
+            self.panel_on_demo_api()
+            b.wait("""document.querySelector('#side-tree [data-dir="panel-demo"]') && document.querySelector('#side-tree [data-file="README.md"]')""",
+                   "demo-api's folders and files in the tree")
+            if b.js("document.getElementById('panel-toggle').getAttribute('aria-pressed')") != "true":
+                raise Failure("the toggle does not show the panel as open")
+            width = b.js("document.getElementById('ws-right').getBoundingClientRect().width")
+            if abs(width - 320) > 2:
+                raise Failure(f"the panel is {width}px wide, not the 320px it was given")
+            grip = b.centre("#ws-right-grip")
+            b.drag((grip["x"], grip["y"]), (grip["x"] - 100, grip["y"]))
+            wider = b.js("document.getElementById('ws-right').getBoundingClientRect().width")
+            if not 410 <= wider <= 430:
+                raise Failure(f"dragging the edge 100px left made the panel {wider}px wide")
+            b.goto(self.url("/workspace"))
+            b.wait(f"!document.getElementById('ws-right').hidden && Math.abs(document.getElementById('ws-right').getBoundingClientRect().width - {round(wider)}) < 3",
+                   "the panel open at its width after a reload")
+            b.click("[data-side-tab=history]")
+            b.wait("!document.querySelector('[data-side=history]').hidden && document.querySelector('[data-side=files]').hidden", "the History tab")
+            b.click("#panel-toggle")
+            b.wait("document.getElementById('ws-right').hidden && document.getElementById('panel-toggle').getAttribute('aria-pressed') === 'false'", "the panel to close")
+            stored = json.loads(b.js("localStorage.getItem('workspace.side')"))
+            if stored.get("open") or stored.get("tab") != "history":
+                raise Failure(f"the panel stored {stored}")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.drop_panel_files()
+
+    def test_workspace_panel_finds_files_by_name_and_contents(self):
+        b = self.b
+        before = self.storage(self.PANEL)
+        found = "[...document.querySelectorAll('#side-tree .side-row')].map((r) => r.dataset.file).join()"
+        try:
+            self.panel_on_demo_api()
+            b.wait("""document.querySelector('#side-tree [data-dir="panel-demo"]')""", "the tree")
+            b.click("#side-find")
+            b.type("APP")
+            b.wait(f"{found} === 'panel-demo/app.js'", "only app.js found by name")
+            b.click("[data-find=contents]")
+            b.wait("document.querySelector('[data-find=contents]').getAttribute('aria-selected') === 'true'", "Contents to be picked")
+            self.set_input("#side-find", "needle")
+            b.wait(f"{found} === 'panel-demo/notes.txt'", "only notes.txt found by its contents")
+            self.set_input("#side-find", "nothing-has-this")
+            b.wait("document.getElementById('side-tree').textContent.includes('No file contains')", "a note that nothing matched")
+            self.set_input("#side-find", "")
+            b.wait("""document.querySelector('#side-tree [data-dir="panel-demo"]')""", "the tree again once the box is empty")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.drop_panel_files()
+
+    def test_workspace_panel_opens_a_file_tab(self):
+        b = self.b
+        before = self.storage(self.PANEL)
+        try:
+            folder = self.panel_on_demo_api()
+            b.click('#side-tree [data-dir="panel-demo"]')
+            b.click('#side-tree [data-file="panel-demo/app.js"]')
+            b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-file-text .hl-keyword')", "app.js shown with colours")
+            seen = b.js("""(() => {
+              const pane = document.querySelector('.ws-pane:not([hidden])');
+              return {
+                tab: document.querySelector('#tabs .ws-tab.current .ws-tab-name').textContent,
+                lines: pane.querySelector('.ws-file-gutter').textContent.split(String.fromCharCode(10)).length,
+                keywords: [...pane.querySelectorAll('.hl-keyword')].map((k) => k.textContent),
+                comment: pane.querySelector('.hl-comment')?.textContent,
+                meta: pane.querySelector('.ws-file-meta').textContent,
+                leaf: focusedLeaf(),
+              };
+            })()""")
+            if seen["tab"] != "app.js" or seen["lines"] != 5:
+                raise Failure(f"the file tab is wrong: {seen}")
+            if not {"export", "function", "return", "const"} <= set(seen["keywords"]) or seen["comment"] != "// greets":
+                raise Failure(f"the file is not coloured as JavaScript: {seen}")
+            if "read only" not in seen["meta"]:
+                raise Failure(f"the file tab does not say it is read only: {seen['meta']}")
+            leaf = seen["leaf"]
+            if (leaf.get("kind"), leaf.get("machine"), leaf.get("root"), leaf.get("path")) != ("file", MACHINE, folder, "panel-demo/app.js"):
+                raise Failure(f"the file leaf is {leaf}")
+            tabs = b.js("document.querySelectorAll('#tabs .ws-tab').length")
+            b.click('#side-tree [data-file="panel-demo/app.js"]')
+            b.pump(0.3)
+            if b.js("document.querySelectorAll('#tabs .ws-tab').length") != tabs:
+                raise Failure("opening the same file again made another tab")
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#tabs .ws-tab.current')?.textContent.includes('app.js') && document.querySelector('.ws-pane:not([hidden]) .ws-file-text .hl-keyword')",
+                   "the file tab back after a reload")
+            b.click('#side-tree [data-dir="panel-demo"]')
+            b.click('#side-tree [data-file="panel-demo/logo.bin"]')
+            b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-file-error')?.textContent.includes('is a binary file')", "a binary file refused with a reason")
+            b.click(".ws-pane:not([hidden]) [data-act=more]")
+            b.click("#ws-menu [role=menuitem]:last-child")
+            b.wait("![...document.querySelectorAll('#tabs .ws-tab-name')].some((t) => t.textContent === 'logo.bin')", "the file tab closed")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.drop_panel_files()
+
+    def past_session(self, folder):
+        d = os.path.join(self.y.home, ".claude", "projects", re.sub(r"[^a-zA-Z0-9]", "-", folder))
+        lines = [
+            {"type": "user", "cwd": folder, "sessionId": self.PAST_ID, "message": {"role": "user", "content": "Add a health check to demo-api"}},
+            {"type": "assistant", "message": {"content": [{"type": "text", "text": "Added GET /health with a test. All tests pass."}]}},
+            {"type": "ai-title", "aiTitle": "Health check for demo-api", "sessionId": self.PAST_ID},
+        ]
+        path = os.path.join(d, self.PAST_ID + ".jsonl")
+        write(path, "".join(json.dumps(x, separators=(",", ":")) + "\n" for x in lines))
+        return path
+
+    def test_workspace_panel_lists_history_and_resumes(self):
+        b = self.b
+        before = self.storage(self.PANEL)
+        transcript = self.past_session(os.path.join(self.y.root, "demo-api"))
+        item = f".side-past[data-id='{self.PAST_ID}']"
+        shown = f"document.querySelector({json.dumps(item)})"
+        try:
+            folder = self.panel_on_demo_api(tab="history")
+            b.wait(shown, "the past session in History", timeout=15)
+            seen = b.js(f"""(() => {{
+              const el = {shown};
+              return {{
+                title: el.querySelector('.side-past-title').textContent,
+                summary: el.querySelector('.side-past-sum').textContent,
+                meta: el.querySelector('.side-past-meta').textContent,
+              }};
+            }})()""")
+            if seen["title"] != "Health check for demo-api" or "Added GET /health" not in seen["summary"] or "2 msgs" not in seen["meta"]:
+                raise Failure(f"the past session reads wrong: {seen}")
+            b.click("#side-hist-find")
+            b.type("zebra")
+            b.wait(f"!{shown} && document.getElementById('side-hist-list').textContent.includes('No session matches')", "the search to hide it")
+            self.set_input("#side-hist-find", "health")
+            b.wait(shown, "the search to find it")
+            b.click("[data-scope=all]")
+            b.wait(f"document.querySelector({json.dumps(item + ' .side-past-folder')})", "All to name the folder of each session")
+            # The real server would run claude here, so the test holds the request and reads it.
+            b.js("""(() => {
+              window.resumeAsked = null;
+              const real = window.fetch;
+              window.fetch = (url, init) => {
+                if (String(url) === '/sessions' && init?.method === 'POST') {
+                  window.resumeAsked = JSON.parse(init.body);
+                  return Promise.resolve(new Response(JSON.stringify({ error: 'held by the test' }), { status: 409 }));
+                }
+                return real(url, init);
+              };
+            })()""")
+            b.click(f"{item} [data-resume]")
+            b.wait("document.getElementById('toast').textContent.includes('held by the test')", "the resume answer shown")
+            asked = b.js("window.resumeAsked")
+            want = {"machine": MACHINE, "path": folder, "agent": "claude", "resume_id": self.PAST_ID, "wait": True}
+            if asked != want:
+                raise Failure(f"Resume asked for {asked}, not {want}")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.drop_panel_files()
+            os.remove(transcript)
+
+    def test_workspace_panel_is_hidden_on_a_phone(self):
+        b = self.b
+        before = self.storage(self.PANEL)
+        self.put_storage({"workspace.side": json.dumps({"open": True, "tab": "files", "width": 320})})
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait("state !== null", "the Workspace on a phone", timeout=15)
+            seen = b.js("""({
+              panel: getComputedStyle(document.getElementById('ws-right')).display,
+              toggle: getComputedStyle(document.getElementById('panel-toggle')).display,
+              sideways: document.documentElement.scrollWidth > innerWidth,
+            })""")
+            if seen != {"panel": "none", "toggle": "none", "sideways": False}:
+                raise Failure(f"the right panel shows on a phone: {seen}")
+        finally:
+            b.viewport(1280, 800, 1)
+            self.put_storage(before)
+
+    CHANGES = ("workspace.v5", "workspace.side", "workspace.notes", "workspace.diff.view")
+    LONG = "".join(f"line {i}\n" for i in range(1, 41))
+
+    # demo-api with a staged edit, an unstaged one in a long file and an untracked file, on top of
+    # a fixture commit; the Workspace on that folder with the right panel open on Changes.
+    def changes_on_demo_api(self, tab="changes"):
+        b = self.b
+        repo = os.path.join(self.y.root, "demo-api")
+        head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=repo, capture_output=True, text=True, check=True).stdout.strip()
+        write(os.path.join(repo, "long.txt"), self.LONG)
+        write(os.path.join(repo, "src", "app.js"), "export const answer = 1;\n")
+        git("add", "long.txt", "src/app.js", cwd=repo)
+        git("commit", "-q", "-m", "fixture", cwd=repo)
+        git("config", "user.name", "Changes Test", cwd=repo)
+        git("config", "user.email", "changes@example.invalid", cwd=repo)
+        write(os.path.join(repo, "long.txt"), self.LONG.replace("line 20\n", "line twenty\n"))
+        write(os.path.join(repo, "src", "app.js"), "export const answer = 2;\n// asked twice\n")
+        git("add", "src/app.js", cwd=repo)
+        write(os.path.join(repo, "notes.txt"), "a new note\n")
+        self.put_storage({"workspace.side": json.dumps({"open": False, "tab": tab, "width": 360}), "workspace.notes": None, "workspace.diff.view": None})
+        b.goto(self.url("/workspace"))
+        b.wait(f"state !== null && (state.folders || []).some((f) => f.path === {json.dumps(repo)})", "demo-api in the Workspace", timeout=15)
+        b.js(f"""(() => {{
+          const f = state.folders.find((f) => f.path === {json.dumps(repo)});
+          saved.tabs = [];
+          saved.hidden = sessions().map(keyOf);
+          saved.folder = f.machine + SEP + f.label;
+          save();
+          render();
+        }})()""")
+        b.click("#panel-toggle")
+        b.wait("!document.getElementById('ws-right').hidden", "the right panel to open")
+        return repo, head
+
+    def drop_changes(self, repo, head):
+        git("reset", "-q", "--hard", head, cwd=repo)
+        git("clean", "-fdq", cwd=repo)
+        git("config", "--remove-section", "user", cwd=repo)
+
+    def changed_rows(self):
+        return self.b.js("""[...document.querySelectorAll('#chg-list .chg-group, #chg-list .chg-row')].map((el) => el.classList.contains('chg-group')
+          ? [...el.children].map((c) => c.textContent).join(' ')
+          : [el.querySelector('.chg-st').textContent, el.dataset.path, el.dataset.staged, el.querySelector('.chg-stats').textContent].join(' '))""")
+
+    def open_long_diff(self):
+        b = self.b
+        b.click('#chg-list [data-path="long.txt"]')
+        b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-diff-table')", "the diff of long.txt")
+
+    def test_workspace_changes_lists_a_repo_with_counts(self):
+        b = self.b
+        before = self.storage(self.CHANGES)
+        repo = head = None
+        try:
+            repo, head = self.changes_on_demo_api()
+            b.wait("document.querySelector('#chg-list [data-path=\"notes.txt\"]')", "the changes listed", timeout=15)
+            rows = self.changed_rows()
+            want = ["Staged 1", "M src/app.js true +2-1", "Changes 1", "M long.txt false +1-1", "Untracked 1", "U notes.txt false +1-0"]
+            if rows != want:
+                raise Failure(f"the Changes tab lists {rows}, not {want}")
+            seen = b.js("""({
+              badge: document.getElementById('side-changes-count').textContent,
+              hidden: document.getElementById('side-changes-count').hidden,
+              branch: document.querySelector('#chg-branch .chg-branch-name')?.textContent,
+              dir: document.querySelector('#chg-list [data-path="src/app.js"] .side-dir')?.textContent.replace(/\\u200e/g, ''),
+              commit: document.getElementById('chg-commit-go').textContent,
+              disabled: document.getElementById('chg-commit-go').disabled,
+            })""")
+            if seen != {"badge": "3", "hidden": False, "branch": "main", "dir": "src", "commit": "Commit 3 files", "disabled": True}:
+                raise Failure(f"the Changes tab reads wrong: {seen}")
+            write(os.path.join(repo, "later.txt"), "made while the tab is open\n")
+            b.wait("document.querySelector('#chg-list [data-path=\"later.txt\"]') && document.getElementById('side-changes-count').textContent === '4'",
+                   "a new file to show up on its own within a few seconds", timeout=12)
+            b.click("[data-side-tab=files]")
+            b.wait("document.querySelector('[data-side=changes]').hidden", "the Files tab")
+            if b.js("document.getElementById('side-changes-count').hidden"):
+                raise Failure("the count went away with the tab")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            if repo:
+                self.drop_changes(repo, head)
+
+    def test_workspace_changes_diff_tab_unified_split_survives_reload(self):
+        b = self.b
+        before = self.storage(self.CHANGES)
+        repo = head = None
+        pane = ".ws-pane:not([hidden])"
+        try:
+            repo, head = self.changes_on_demo_api()
+            self.open_long_diff()
+            seen = b.js(f"""(() => {{
+              const pane = document.querySelector('{pane}');
+              const rows = [...pane.querySelectorAll('tr.dl.add, tr.dl.del')].map((r) => [r.className.replace('dl ', ''), r.querySelector('.dn.o').textContent, r.querySelector('.dn.n').textContent, r.querySelector('.dc').textContent.slice(1)]);
+              return {{
+                tab: document.querySelector('#tabs .ws-tab.current .ws-tab-name').textContent,
+                rows,
+                folds: [...pane.querySelectorAll('tr.dfold button')].map((b) => b.textContent),
+                counts: pane.querySelector('.ws-diff-counts').textContent,
+                leaf: focusedLeaf(),
+              }};
+            }})()""")
+            if seen["tab"] != "long.txt" or seen["rows"] != [["del", "20", "", "line 20"], ["add", "", "20", "line twenty"]]:
+                raise Failure(f"the unified diff is wrong: {seen}")
+            if seen["folds"] != ["Show 16 lines", "Show 17 lines"] or seen["counts"] != "+1-1":
+                raise Failure(f"the unchanged lines do not fold as they should: {seen}")
+            leaf = seen["leaf"]
+            if (leaf.get("kind"), leaf.get("machine"), leaf.get("root"), leaf.get("path"), leaf.get("staged")) != ("diff", MACHINE, repo, "long.txt", False):
+                raise Failure(f"the diff leaf is {leaf}")
+            b.click(f"{pane} tr.dfold button")
+            b.wait(f"document.querySelectorAll('{pane} tr.dfold').length === 1 && [...document.querySelectorAll('{pane} tr.dl .dn.n')].some((n) => n.textContent === '1')",
+                   "the first 16 lines shown")
+            b.click(f"{pane} [data-view=split]")
+            b.wait(f"document.querySelector('{pane} .ws-diff-table.split')", "the split view")
+            pair = b.js(f"""(() => {{
+              const r = document.querySelector('{pane} tr.pair');
+              return [r.className, r.querySelector('.dc.left').textContent.slice(1), r.querySelector('.dc.right').textContent.slice(1), r.querySelector('.dn.o').textContent, r.querySelector('.dn.n').textContent];
+            }})()""")
+            if pair != ["dl pair has-del has-add", "line 20", "line twenty", "20", "20"]:
+                raise Failure(f"the split view pairs the lines wrong: {pair}")
+            if json.loads(b.js("localStorage.getItem('workspace.diff.view')")) != "split":
+                raise Failure("the split view is not remembered")
+            tabs = b.js("document.querySelectorAll('#tabs .ws-tab').length")
+            self.open_long_diff()
+            b.pump(0.3)
+            if b.js("document.querySelectorAll('#tabs .ws-tab').length") != tabs:
+                raise Failure("opening the same diff again made another tab")
+            b.goto(self.url("/workspace"))
+            b.wait(f"document.querySelector('#tabs .ws-tab.current')?.textContent.includes('long.txt') && document.querySelector('{pane} .ws-diff-table.split tr.pair')",
+                   "the diff tab back in the split view after a reload", timeout=15)
+            b.click('#chg-list [data-path="src/app.js"]')
+            b.wait(f"document.querySelector('#tabs .ws-tab.current')?.textContent.includes('app.js (staged)') && document.querySelector('{pane} .ws-diff-table .hl-keyword')",
+                   "the staged diff of app.js coloured as JavaScript")
+            got = b.js(f"""(() => {{
+              const pane = document.querySelector('{pane}');
+              return {{
+                side: pane.querySelector('.ws-diff-side').textContent,
+                left: [...pane.querySelectorAll('tr.pair .dc.left:not(.dvoid)')].map((c) => c.textContent.slice(1)),
+                right: [...pane.querySelectorAll('tr.pair .dc.right:not(.dvoid)')].map((c) => c.textContent.slice(1)),
+                keywords: [...pane.querySelectorAll('.hl-keyword')].map((k) => k.textContent),
+              }};
+            }})()""")
+            if got["side"] != "Staged" or got["left"] != ["export const answer = 1;"] or got["right"] != ["export const answer = 2;", "// asked twice"]:
+                raise Failure(f"the staged diff is wrong: {got}")
+            if not {"export", "const"} <= set(got["keywords"]):
+                raise Failure(f"the staged diff is not coloured: {got}")
+            b.click(f"{pane} [data-view=unified]")
+            b.wait(f"document.querySelector('{pane} .ws-diff-table.unified')", "the unified view again")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            if repo:
+                self.drop_changes(repo, head)
+
+    def notes_stored(self):
+        return json.loads(self.b.js("localStorage.getItem('workspace.notes') || '{}'"))
+
+    def test_workspace_diff_line_notes_add_edit_remove(self):
+        b = self.b
+        before = self.storage(self.CHANGES)
+        repo = head = None
+        pane = ".ws-pane:not([hidden])"
+        try:
+            repo, head = self.changes_on_demo_api()
+            self.open_long_diff()
+            b.click(f'{pane} .dplus[data-at="new:20"]')
+            b.wait(f"document.activeElement?.matches('{pane} .dnote-box')", "a note box under the line, focused")
+            b.type("Use a word here")
+            b.click(f"{pane} [data-act=save-note]")
+            b.wait(f"document.querySelector('{pane} .dnote .dnote-text')?.textContent === 'Use a word here'", "the note under its line")
+            stored = self.notes_stored()
+            key = "\n".join([MACHINE, repo, "long.txt", "worktree"])
+            notes = stored.get(key, [])
+            if len(notes) != 1 or (notes[0]["side"], notes[0]["line"], notes[0]["code"], notes[0]["text"]) != ("new", 20, "line twenty", "Use a word here"):
+                raise Failure(f"the note is stored as {stored}")
+            row = b.js(f"document.querySelector('{pane} tr.dnote-row').previousElementSibling.querySelector('.dc').textContent")
+            if row != "+line twenty":
+                raise Failure(f"the note is not under its line but under {row!r}")
+            b.wait("document.querySelector('#chg-list [data-path=\"long.txt\"] .chg-noted')?.textContent === '1' && document.getElementById('chg-send-all').textContent === 'Send notes (1)' && !document.getElementById('chg-send-all').hidden",
+                   "the Changes tab to count the note")
+            if b.js(f"document.querySelector('{pane} [data-act=send-notes]').textContent") != "Send notes to agent (1)":
+                raise Failure("the diff header does not offer to send the note")
+            b.click(f"{pane} [data-act=edit-note]")
+            b.wait(f"document.querySelector('{pane} .dnote.editing textarea')?.value === 'Use a word here'", "the note open for editing")
+            self.set_input(f"{pane} .dnote.editing textarea", "Spell the number out")
+            b.click(f"{pane} .dnote.editing [data-act=save-note]")
+            b.wait(f"document.querySelector('{pane} .dnote .dnote-text')?.textContent === 'Spell the number out'", "the edited note")
+            b.click(f'{pane} .dplus[data-at="old:20"]')
+            b.wait(f"document.querySelector('{pane} .dnote.editing textarea')", "a second note box")
+            self.set_input(f"{pane} .dnote.editing textarea", "Why remove it?")
+            b.click(f"{pane} .dnote.editing textarea")
+            b.key("Enter", "Control")
+            b.wait(f"document.querySelectorAll('{pane} .dnote:not(.editing)').length === 2", "two notes")
+            b.goto(self.url("/workspace"))
+            b.wait(f"document.querySelectorAll('{pane} .dnote').length === 2", "the notes back after a reload", timeout=15)
+            b.click(f"{pane} .dnote [data-act=remove-note]")
+            b.wait(f"document.querySelectorAll('{pane} .dnote').length === 1", "one note removed")
+            left = [n["text"] for n in self.notes_stored().get(key, [])]
+            if left != ["Spell the number out"]:
+                raise Failure(f"the notes left are {left}")
+            b.click(f"{pane} .dnote [data-act=remove-note]")
+            b.wait(f"!document.querySelector('{pane} .dnote') && document.getElementById('chg-send-all').hidden", "the last note removed")
+            if self.notes_stored():
+                raise Failure(f"removed notes are still stored: {self.notes_stored()}")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            if repo:
+                self.drop_changes(repo, head)
+
+    def test_workspace_diff_notes_send_to_the_session(self):
+        b = self.b
+        before = self.storage(self.CHANGES)
+        repo = head = None
+        pane = ".ws-pane:not([hidden])"
+        key, made = self.demo_api_session()
+        second = "hp-demo-api-2"
+        self.y.tmux("new", "-d", "-s", second, "-c", os.path.join(self.y.root, "demo-api"), self.y.shell)
+        self.api("POST", "/refresh")
+        try:
+            repo, head = self.changes_on_demo_api()
+            notes = {
+                "\n".join([MACHINE, repo, "long.txt", "worktree"]): [{"id": "n1", "side": "new", "line": 20, "code": "line twenty", "text": "Use a word here", "at": 1}],
+                "\n".join([MACHINE, repo, "src/app.js", "staged"]): [{"id": "n2", "side": "old", "line": 1, "code": "export const answer = 1;", "text": "Keep the old answer?\nIt was right.", "at": 2}],
+            }
+            self.put_storage({"workspace.notes": json.dumps(notes)})
+            b.goto(self.url("/workspace"))
+            b.wait(f"state !== null && sessionFor({json.dumps(key)}) && sessionFor({json.dumps(MACHINE + '/' + second)})", "both demo-api sessions", timeout=20)
+            b.wait("document.getElementById('chg-send-all').textContent === 'Send notes (2)'", "both notes counted in the Changes tab", timeout=15)
+            # The real server would type into the session, so the test holds the request and reads it.
+            b.js("""(() => {
+              window.sentNotes = [];
+              const real = window.fetch;
+              window.fetch = (url, init) => {
+                if (/^\\/sessions\\/[^/]+\\/[^/]+\\/text$/.test(String(url)) && init?.method === 'POST') {
+                  window.sentNotes.push({ url: String(url), body: JSON.parse(init.body) });
+                  return Promise.resolve(new Response(JSON.stringify({ ok: true }), { status: 200 }));
+                }
+                return real(url, init);
+              };
+            })()""")
+            self.open_long_diff()
+            b.click(f"{pane} [data-act=send-notes]")
+            b.wait(f"document.getElementById('chg-send').open && document.querySelector('#chg-send input[data-tmux={json.dumps(second)}]') && document.querySelector('#chg-send input[data-tmux={json.dumps(key.split('/', 1)[1])}]')",
+                   "a choice of the sessions in demo-api")
+            preview = b.js("document.getElementById('chg-send-text').textContent")
+            if preview != "long.txt:20\n> line twenty\nUse a word here":
+                raise Failure(f"the composed notes read {preview!r}")
+            b.click(f"#chg-send input[data-tmux={json.dumps(second)}]")
+            b.click("#chg-send button[value=send]")
+            b.wait("window.sentNotes.length === 1 && !document.getElementById('chg-send').open", "the notes sent")
+            sent = b.js("window.sentNotes[0]")
+            want_url = f"/sessions/{MACHINE}/{second}/text"
+            if sent != {"url": want_url, "body": {"text": "long.txt:20\n> line twenty\nUse a word here", "enter": False}}:
+                raise Failure(f"sent {sent}, not to {want_url}")
+            b.wait(f"!document.querySelector('{pane} .dnote') && document.getElementById('chg-send-all').textContent === 'Send notes (1)'", "the sent note cleared")
+            b.click("#chg-send-all")
+            b.wait("document.getElementById('chg-send').open", "the dialog for every note in the folder")
+            b.click("#chg-send-now")
+            b.click("#chg-send button[value=send]")
+            b.wait("window.sentNotes.length === 2", "the second send")
+            body = b.js("window.sentNotes[1].body")
+            want = {"text": "src/app.js:1 (removed line)\n> export const answer = 1;\nKeep the old answer?\nIt was right.", "enter": True}
+            if body != want:
+                raise Failure(f"sent {body}, not {want}")
+            b.wait("document.getElementById('chg-send-all').hidden", "no notes left")
+            if self.notes_stored():
+                raise Failure(f"sent notes are still stored: {self.notes_stored()}")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            self.y.tmux("kill-session", "-t", f"={second}")
+            self.drop_demo_api_session(key, made)
+            if repo:
+                self.drop_changes(repo, head)
+
+    def test_workspace_changes_commit_refreshes_the_list(self):
+        b = self.b
+        before = self.storage(self.CHANGES)
+        repo = head = None
+        try:
+            repo, head = self.changes_on_demo_api()
+            b.wait("document.getElementById('chg-commit-go').textContent === 'Commit 3 files'", "the changes listed", timeout=15)
+            b.click("#chg-draft")
+            b.wait("document.getElementById('chg-message').value !== ''", "a drafted message")
+            drafted = b.js("document.getElementById('chg-message').value")
+            if drafted != "Update long.txt and app.js, add notes.txt":
+                raise Failure(f"the draft reads {drafted!r}")
+            message = 'Fixture "commit" from the box\n\nWith a body line.'
+            self.set_input("#chg-message", message)
+            b.click("#chg-message")
+            b.key("Enter", "Control")
+            b.wait("document.getElementById('toast').classList.contains('show')", "the commit toast", timeout=15)
+            said = b.js("document.getElementById('toast').textContent")
+            if not said.startswith("Committed "):
+                raise Failure(f"the commit toast says {said!r}")
+            short = said.split(" ")[1]
+            got = subprocess.run(["git", "log", "-1", "--format=%h%n%B"], cwd=repo, capture_output=True, text=True, check=True).stdout
+            if not got.startswith(short) or got.split("\n", 1)[1] != message + "\n\n":
+                raise Failure(f"git has {got!r} after the toast said {short}")
+            b.wait("document.getElementById('chg-list').textContent.includes('No changes') && document.getElementById('side-changes-count').hidden && document.getElementById('chg-message').value === ''",
+                   "the list empty after the commit")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            if repo:
+                self.drop_changes(repo, head)
+
+    def test_phone_sessions_list_opens_a_session_and_back(self):
+        b = self.b
+        key, made = self.demo_api_session()
+        row = f"#col-body [data-key={json.dumps(key)}]"
+        sideways = "document.documentElement.scrollWidth > innerWidth"
+        before = self.storage(self.LAYOUT)
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait(f"state !== null && document.body.classList.contains('ws-list') && document.querySelector({json.dumps(row)})",
+                   "the Sessions list on a phone", timeout=15)
+            self.mock_usage('{ windows: [{ label: "5 hour", used: 0.42, resets_at: Math.floor(Date.now() / 1000) + 7200, status: "allowed" }] }')
+            b.pump(0.3)
+            seen = b.js(f"""(() => {{
+              const row = document.querySelector({json.dumps(row)});
+              const head = document.querySelector('#col-body .tree-head[data-fold={json.dumps(MACHINE)}] .tree-name');
+              return {{
+                height: row.getBoundingClientRect().height,
+                facts: row.querySelectorAll('.tree-pr, .tree-age, .tree-fact').length,
+                head: head?.textContent || '',
+                usage: document.getElementById('usage-card')?.checkVisibility() ? document.getElementById('usage-card').textContent.replace(/\\s+/g, ' ') : '',
+                main: getComputedStyle(document.getElementById('main')).display,
+                col: Math.round(document.getElementById('col').getBoundingClientRect().width),
+                sideways: {sideways},
+              }};
+            }})()""")
+            if seen["height"] < 44:
+                raise Failure(f"a session row on a phone is {seen['height']}px tall")
+            if seen["facts"] != 1:
+                raise Failure(f"a session row on a phone shows {seen['facts']} facts, not one")
+            if not re.fullmatch(rf"{MACHINE} · (\d+%|offline)", seen["head"]):
+                raise Failure(f"the machine header reads {seen['head']!r}")
+            if "Claude" not in seen["usage"] or "42%" not in seen["usage"]:
+                raise Failure(f"the usage card under the list reads {seen['usage']!r}")
+            if seen["main"] != "none" or seen["col"] != 390:
+                raise Failure(f"the list should fill the screen with the main area hidden: {seen}")
+            if seen["sideways"]:
+                raise Failure("the Sessions list scrolls sideways")
+            b.click(row)
+            b.wait(f"document.body.classList.contains('ws-session') && !document.body.classList.contains('ws-list') && document.querySelector('.ws-pane:not([hidden]) iframe[data-key={json.dumps(key)}]')",
+                   "the session full screen")
+            b.pump(0.3)
+            shown = b.js(f"""(() => {{
+              const pane = document.querySelector('.ws-pane:has(iframe[data-key={json.dumps(key)}])');
+              const back = document.getElementById('back');
+              return {{
+                width: Math.round(pane.getBoundingClientRect().width),
+                panes: document.querySelectorAll('.ws-pane:not([hidden])').length,
+                back: back.getClientRects().length > 0 && back.getAttribute('aria-label'),
+                title: document.getElementById('ws-title').textContent,
+                more: document.getElementById('ws-more').getClientRects().length > 0,
+                tabs: document.getElementById('tabs').getClientRects().length,
+                sideways: {sideways},
+              }};
+            }})()""")
+            if shown["width"] != 390 or shown["panes"] != 1:
+                raise Failure(f"the session should fill the width alone: {shown}")
+            if shown["back"] != "Sessions" or not shown["more"] or shown["tabs"]:
+                raise Failure(f"the top bar should have back, the title and the menu, and no tabs: {shown}")
+            if "demo-api" not in shown["title"]:
+                raise Failure(f"the top bar title reads {shown['title']!r}")
+            if shown["sideways"]:
+                raise Failure("the full-screen session scrolls sideways")
+            b.click("#back")
+            b.wait("document.body.classList.contains('ws-list') && !document.body.classList.contains('ws-session')", "back to the Sessions list")
+            b.pump(0.3)
+            if b.js(sideways):
+                raise Failure("the Sessions list scrolls sideways after going back")
+        finally:
+            b.viewport(1280, 800)
+            self.settle()
+            self.put_storage(before)
+            self.drop_demo_api_session(key, made)
+
+    def test_phone_session_keeps_its_place_across_widths(self):
+        b = self.b
+        key, made = self.demo_api_session()
+        row = f"#col-body [data-key={json.dumps(key)}]"
+        before = self.storage(self.LAYOUT)
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait(f"state !== null && document.querySelector({json.dumps(row)})", "the session in the Sessions list", timeout=15)
+            b.click(row)
+            b.wait(f"document.body.classList.contains('ws-session') && focusedLeaf().key === {json.dumps(key)}", "the session full screen")
+            b.viewport(1280, 800)
+            b.wait(f"!phone.matches && !document.body.classList.contains('ws-list') && !document.body.classList.contains('ws-session') && focusedLeaf().key === {json.dumps(key)}",
+                   "the desktop with the same pane focused")
+            b.viewport(390, 844, 3)
+            b.wait(f"phone.matches && document.body.classList.contains('ws-session') && focusedLeaf().key === {json.dumps(key)} && document.querySelector('.ws-pane:not([hidden]) iframe[data-key={json.dumps(key)}]')",
+                   "the same session full screen again")
+        finally:
+            b.viewport(1280, 800)
+            self.settle()
+            self.put_storage(before)
+            self.drop_demo_api_session(key, made)
 
     def test_workspace_sidebar_matches_the_other_pages(self):
-        b = self.b
         dashboard = self.menu("/")
         workspace = self.menu("/workspace")
-        if [w for w in workspace if w != "Keyboard shortcuts"] != dashboard:
-            raise Failure(f"the Workspace menu {workspace} is not the dashboard's {dashboard}")
-        rows = b.js(
-            """(() => {
-              const mid = (el) => { const r = el.getBoundingClientRect(); return r.top + r.height / 2; };
-              const home = document.querySelector('.ws-home');
-              return {
-                wordmark: mid(document.querySelector('#ws-side .wordmark')),
-                toggle: mid(document.querySelector('#ws-side .side-toggle')),
-                home: home && home.getClientRects().length > 0,
-              };
-            })()"""
-        )
-        if abs(rows["wordmark"] - rows["toggle"]) > 4:
-            raise Failure(f"the collapse button is not on the wordmark's row: {rows}")
-        if rows["home"]:
-            raise Failure("the Workspace sidebar shows a second Dashboard button next to its menu")
+        if workspace != [d for d in dashboard if d != "Keyboard shortcuts"]:
+            raise Failure(f"the Workspace rail {workspace} is not the dashboard's menu {dashboard}")
 
-    def test_collapsed_sidebar_draws_icons_only(self):
+    def test_settings_nav_lives_in_the_column(self):
         b = self.b
-        b.goto(self.url("/"))
+        b.goto(self.url("/settings"))
+        b.wait("document.querySelector('#col-body .settings-nav a[href=\"#machines\"]')", "the Settings sections in the column")
+        if b.js("document.querySelector('.side, .page-body .settings-nav')"):
+            raise Failure("Settings still draws its own sidebar or inner section list")
+        b.click('#col-body .settings-nav a[href="#voice"]')
+        b.wait("location.hash === '#voice' && !document.getElementById('voice').hidden", "the Voice section")
+        b.wait("document.querySelector('#col-body .settings-nav a[href=\"#voice\"]').getAttribute('aria-current') === 'page'", "Voice marked current")
+        b.click("#settings-search")
+        b.type("whisper")
+        b.wait("[...document.querySelectorAll('#col-body .settings-nav a')].filter((a) => !a.hidden).map((a) => a.hash).join() === '#voice'", "only Voice matching whisper")
+        b.key("Enter")
+        b.wait("location.hash === '#voice'", "Enter to open the first match")
+
+    def test_settings_column_is_only_back_search_and_sections(self):
+        b = self.b
+        b.goto(self.url("/settings"))
+        b.wait("document.querySelector('#col-body .settings-back')", "the Back to app row")
+        if not b.js("document.querySelector('#col-body .settings-back').getAttribute('href') === '/workspace'"):
+            raise Failure("Back to app should go to Workspace when Settings was opened directly")
+        shown = b.js("""JSON.stringify(Object.fromEntries(['.col-brand', '#col-search-row', '.col-nav', '#col-head', '.col-foot', '.rail']
+          .map((sel) => [sel, getComputedStyle(document.querySelector(sel)).display !== 'none'])))""")
+        if any(json.loads(shown).values()):
+            raise Failure(f"the shell's own column parts still show on Settings: {shown}")
+        if not b.js("document.getElementById('col-search') && getComputedStyle(document.querySelector('#col-body .settings-nav')).display !== 'none'"):
+            raise Failure("the jump button should stay in the page and the section list should show")
+        b.key("k", "Control")
+        b.wait("document.getElementById('palette')?.open", "Ctrl+K to still open the palette on Settings")
+        b.key("Escape")
+        b.goto(self.url("/pipeline"))
+        b.wait("document.getElementById('col-body')", "the Pipelines page")
+        b.js("location.href = '/settings#voice'")
+        b.wait("location.pathname === '/settings' && document.querySelector('#col-body .settings-back')", "Settings opened from Pipelines")
+        if not b.js("document.querySelector('#col-body .settings-back').getAttribute('href') === '/pipeline'"):
+            raise Failure("Back to app should return to the page Settings was opened from")
+        b.click("#col-body .settings-back")
+        b.wait("location.pathname === '/pipeline'", "Back to app to leave Settings")
+
+    def test_every_page_shares_one_shell(self):
+        b = self.b
+        pages = ["/", "/workspace", "/pipeline", "/dispatch", "/proposals", "/diagrams", "/settings", "/add"]
+        b.goto(self.url("/workspace"))
+        b.wait("document.querySelector('#rail .rail-link')", "the rail on the Workspace")
+        want = b.js("[...document.querySelectorAll('#rail .rail-link[data-page]')].map((a) => a.dataset.page)")
         b.js("localStorage.setItem('yardbell.side', 'rail')")
         try:
-            for path in PAGES[:4]:
+            for path in pages:
                 b.goto(self.url(path))
-                b.wait("document.documentElement.classList.contains('side-rail') && document.querySelector('.side-toggle')", f"the rail on {path}")
+                b.wait("document.querySelector('#rail .rail-link') && document.getElementById('status-group')", f"the shell on {path}")
+                seen = b.js("""(() => ({
+                  rail: [...document.querySelectorAll('#rail .rail-link[data-page]')].map((a) => a.dataset.page),
+                  old: Boolean(document.querySelector('.side, .side-foot, #nav-machines')),
+                  collapsed: document.documentElement.classList.contains('side-rail'),
+                  col: (() => { const c = document.getElementById('col'); return c ? getComputedStyle(c).display : 'none'; })(),
+                  search: Boolean(document.querySelector('#col-search')) && document.querySelector('#col-search').getClientRects().length > 0,
+                }))()""")
+                if seen["rail"] != want or seen["old"]:
+                    raise Failure(f"{path} does not share the shell: {seen}")
+                if path == "/settings":
+                    if seen["col"] == "none":
+                        raise Failure(f"Settings should keep its own column even when the others are collapsed: {seen}")
+                    b.key("k", "Control")
+                    b.wait("document.getElementById('palette')?.open", "Ctrl+K to open the palette on /settings")
+                    b.key("Escape")
+                    continue
+                if not seen["collapsed"] or seen["col"] != "none" or not seen["search"]:
+                    raise Failure(f"{path} ignores the collapsed column or hides search: {seen}")
+                b.click("#col-search")
+                b.wait("document.getElementById('palette')?.open", f"the palette on {path}")
+                b.key("Escape")
+            b.js("localStorage.removeItem('yardbell.side')")
+            b.viewport(390, 844, 3)
+            for path in pages:
+                b.goto(self.url(path))
+                b.wait("document.getElementById('tabbar')", f"the phone tabs on {path}")
                 b.pump(0.3)
-                drawn = b.js(
-                    """(() => {
-                      const side = document.querySelector('.side, .ws-side');
-                      const walk = document.createTreeWalker(side, NodeFilter.SHOW_TEXT);
-                      const out = [];
-                      for (let n = walk.nextNode(); n; n = walk.nextNode()) {
-                        if (!n.textContent.trim() || n.parentElement.closest('.rail-initial, .side-count')) continue;
-                        const range = document.createRange();
-                        range.selectNodeContents(n);
-                        if ([...range.getClientRects()].some((r) => r.width > 0 && r.height > 0)) out.push(n.textContent.trim().slice(0, 30));
-                      }
-                      return out;
-                    })()"""
-                )
-                if drawn:
-                    raise Failure(f"the collapsed sidebar on {path} still draws words: {drawn}")
-                b.wait("document.getElementById('nav-proposals-count') && !document.getElementById('nav-proposals-count').hidden", f"the proposals count on {path}")
-                on_icon = b.js(
-                    """(() => {
-                      const c = document.getElementById('nav-proposals-count').getBoundingClientRect();
-                      const l = document.querySelector('.side-link[href="/proposals"]').getBoundingClientRect();
-                      const x = c.left + c.width / 2, y = c.top + c.height / 2;
-                      return x >= l.left && x <= l.right && y >= l.top && y <= l.bottom;
-                    })()"""
-                )
-                if not on_icon:
-                    raise Failure(f"the collapsed sidebar on {path} draws the proposals count away from its icon")
+                seen = b.js("""(() => ({
+                  tabs: [...document.querySelectorAll('#tabbar > a, #tabbar > button')].map((t) => t.textContent.trim().replace(/\\s*[0-9]+$/, '')),
+                  sideways: document.documentElement.scrollWidth > innerWidth,
+                }))()""")
+                if seen["tabs"] != ["Sessions", "Board", "Pipelines", "Dispatch", "More"] or seen["sideways"]:
+                    raise Failure(f"{path} on a phone: {seen}")
         finally:
             b.js("localStorage.removeItem('yardbell.side')")
+            b.viewport(1280, 800)
 
     def test_narrow_dispatch_has_chat_chats_and_tasks_tabs(self):
         b = self.b
@@ -1277,6 +3804,49 @@ class Suite:
         finally:
             b.viewport(1280, 800)
 
+    def test_dispatch_lists_sit_in_the_shared_sidebar_and_it_resizes(self):
+        b = self.b
+        b.viewport(1280, 800)
+        b.goto(self.url("/dispatch"))
+        b.wait("document.querySelector('#col-body #dispatch-side')?.getBoundingClientRect().width > 0", "the conversation list in the sidebar")
+        if b.js("document.querySelector('#col .col-title')?.textContent") != "Dispatch":
+            raise Failure("the sidebar is not headed Dispatch")
+        before = b.js("document.getElementById('col').getBoundingClientRect().width")
+        try:
+            b.js("document.getElementById('col-edge').focus()")
+            b.key("ArrowRight")
+            b.key("ArrowRight")
+            b.wait(f"document.getElementById('col').getBoundingClientRect().width >= {before} + 30", "the sidebar to widen")
+            b.goto(self.url("/pipeline"))
+            b.wait(f"document.getElementById('col')?.getBoundingClientRect().width >= {before} + 30", "the same width on Pipelines")
+            b.goto(self.url("/dispatch"))
+            b.wait("document.querySelector('#col-body #dispatch-side')", "the list back in the sidebar")
+            b.click("#col-toggle")
+            b.wait("document.querySelector('#dispatch #dispatch-side')?.getBoundingClientRect().width > 0", "the list beside the chat with the sidebar folded")
+            b.click("#col-toggle")
+            b.wait("document.querySelector('#col-body #dispatch-side')", "the list back in the sidebar when it opens")
+        finally:
+            b.js("localStorage.removeItem('yardbell.side.width'); localStorage.removeItem('yardbell.side')")
+
+    def test_dispatch_model_picker_changes_the_model(self):
+        b = self.b
+        before = self.api("GET", "/api/settings")["dispatch"]
+        try:
+            b.goto(self.url("/dispatch"))
+            b.wait("document.querySelector('#runs-on .runs-on-label')?.textContent.includes('·')", "the runs-on chip")
+            b.click("#runs-on")
+            b.wait("!document.getElementById('model-menu').hidden", "the model picker")
+            names = b.js("[...document.querySelectorAll('#model-menu [data-model]')].map((x) => x.textContent.trim())")
+            if "Sonnet" not in names or "Opus" not in names:
+                raise Failure(f"the picker offers {names}")
+            b.click('#model-menu [data-model="sonnet"]')
+            b.wait("document.querySelector('#runs-on .runs-on-label').textContent.includes('Sonnet')", "the chip to show Sonnet")
+            if self.api("GET", "/api/settings")["dispatch"].get("model") != "sonnet":
+                raise Failure("the picked model was not saved")
+        finally:
+            restore = {k: before.get(k, d) for k, d in (("instructions", ""), ("agent", ""), ("runs_on", "claude"), ("model", ""), ("codex_model", ""), ("approval", None), ("rules", []))}
+            self.api("POST", "/api/settings/dispatch", {k: v for k, v in restore.items() if v is not None})
+
     def test_wide_dispatch_is_an_app_layout(self):
         b = self.b
         b.viewport(1280, 800)
@@ -1298,7 +3868,7 @@ class Suite:
                     title: document.getElementById('chat-title').textContent.trim(),
                     titleShown: title.top >= 0 && title.bottom <= innerHeight && title.height > 0,
                     formBottom: form.bottom, lastBottom: last.bottom, formTop: form.top, height: innerHeight,
-                    back: document.querySelector('.back-link').getClientRects().length > 0,
+                    back: (document.querySelector('.back-link')?.getClientRects().length || 0) > 0,
                     sideScrolls: getComputedStyle(document.getElementById('dispatch-side')).overflowY,
                   };
                 })()"""
@@ -1369,14 +3939,15 @@ class Suite:
             b.goto(self.url("/dispatch"))
             b.wait("document.querySelector('.dispatch-intro')?.textContent.includes('Dispatch runs Codex (gpt-6.1-sol) on this machine')", "the intro naming Codex and its model")
             b.wait("document.getElementById('runs-on').textContent === 'Codex · gpt-6.1-sol'", "the label naming Codex and its model")
-            b.click("#dispatch-form textarea")
+            b.click("#dispatch-input")
             b.type("Fix the login redirect in demo-app")
             b.click("#dispatch-form button[type=submit]")
             card = "#dispatch-log .step-card.pending"
             b.wait(f"document.querySelector('{card}')?.textContent.includes('Fix the login redirect.')", "the proposed session, waiting for approval", timeout=20)
             b.wait("[...document.querySelectorAll('#dispatch-log .msg')].some((m) => m.textContent.includes('I proposed a session on hp in demo-app.'))", "Codex's reply")
             b.wait("[...document.querySelectorAll('#dispatch-log *')].some((x) => x.textContent === 'Checked machines')", "the tool Codex called")
-            b.wait("document.querySelector('#nav-usage')?.textContent.includes('Codex usage') && document.querySelector('#nav-usage')?.textContent.includes('42%')", "Codex's limits in the sidebar")
+            b.wait("document.getElementById('usage-card')?.getClientRects().length > 0 && document.getElementById('usage-card').getAttribute('aria-label').includes('Codex 5h 42%')",
+                   "Codex's limits on the sidebar's usage card")
             id = b.js("new URLSearchParams(location.search).get('c')")
             convo = self.api("GET", f"/dispatch/conversations/{id}")
             if convo["backend"] != "codex" or any(e["role"] == "error" for e in convo["events"]):
@@ -1384,7 +3955,7 @@ class Suite:
 
             b.click(f"{card} .step-card-actions .btn.danger")
             b.wait("document.querySelector('#dispatch-log .step-card.rejected, #dispatch-log .step-card.done')", "the step rejected")
-            b.click("#dispatch-form textarea")
+            b.click("#dispatch-input")
             b.type("ok")
             b.click("#dispatch-form button[type=submit]")
             b.wait("[...document.querySelectorAll('#dispatch-log .msg')].some((m) => m.textContent.includes('Understood, nothing started.'))",
@@ -1419,7 +3990,7 @@ class Suite:
         try:
             b.goto(self.url("/dispatch"))
             b.wait("document.getElementById('runs-on').textContent.startsWith('Codex')", "a new conversation on Codex")
-            b.js(f"(() => {{ {files} const paste = new Event('paste', {{ bubbles: true, cancelable: true }}); Object.defineProperty(paste, 'clipboardData', {{ value: carry(files.png) }}); document.querySelector('#dispatch-form textarea').dispatchEvent(paste); }})()")
+            b.js(f"(() => {{ {files} const paste = new Event('paste', {{ bubbles: true, cancelable: true }}); Object.defineProperty(paste, 'clipboardData', {{ value: carry(files.png) }}); document.querySelector('#dispatch-input').dispatchEvent(paste); }})()")
             b.wait(f"{chips} === 1 && document.querySelector('#compose-files .compose-file img')", "the pasted image as a chip with a thumbnail")
             b.js(f"(() => {{ {files} drop(files.log); }})()")
             b.wait(f"{chips} === 2", "the dropped text file")
@@ -1433,7 +4004,7 @@ class Suite:
             b.wait(f"{toast} === 'Codex cannot read PDFs, so a.pdf cannot be sent in this conversation'", "the refusal of a PDF on Codex")
             if b.js(chips) != 2:
                 raise Failure("a refused file became a chip")
-            b.click("#dispatch-form textarea")
+            b.click("#dispatch-input")
             b.type("what is in these?")
             b.click("#dispatch-send")
             b.wait("[...document.querySelectorAll('#dispatch-log .msg')].some((m) => m.textContent.includes('I saw 1 image and 1 text file.'))", "Codex's reply", timeout=20)
@@ -1466,14 +4037,14 @@ class Suite:
         drop = """(() => { const dt = new DataTransfer(); dt.items.add(new File(['hello'], 'notes.log'));
           document.getElementById('dispatch-chat').dispatchEvent(new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: dt })); })()"""
         kept = ("document.querySelectorAll('#compose-files .compose-file').length === 1"
-                " && document.querySelector('#dispatch-form textarea').value === 'read this'"
+                " && document.querySelector('#dispatch-input').value === 'read this'"
                 " && !document.querySelector('#dispatch-log .msg.user')")
         b.js("""(() => { const real = window.fetch; window.fetch = (url, options) => String(url) === '/dispatch/ask'
           ? Promise.resolve(new Response(JSON.stringify({ error: 'could not save notes.log: disk full' }), { status: 409 }))
           : real(url, options); })()""")
         b.js(drop)
         b.wait("document.querySelectorAll('#compose-files .compose-file').length === 1", "the dropped file")
-        b.click("#dispatch-form textarea")
+        b.click("#dispatch-input")
         b.type("read this")
         b.click("#dispatch-send")
         b.wait("document.querySelector('#dispatch-log .msg.error')?.textContent.includes('disk full')", "the server's refusal")
@@ -1485,7 +4056,7 @@ class Suite:
         b.js("FileReader.prototype.readAsDataURL = function () { setTimeout(() => this.onerror?.(new ProgressEvent('error'))); }")
         b.js(drop)
         b.wait("document.querySelectorAll('#compose-files .compose-file').length === 1", "the dropped file")
-        b.click("#dispatch-form textarea")
+        b.click("#dispatch-input")
         b.type("read this")
         b.click("#dispatch-send")
         b.wait("document.querySelector('#dispatch-log .msg.error')?.textContent.includes('could not read notes.log')", "the read failure")
@@ -1671,7 +4242,7 @@ class Suite:
                 """(() => {
                   const last = [...document.querySelectorAll('#dispatch-log .msg')].pop().getBoundingClientRect();
                   const form = document.getElementById('dispatch-form').getBoundingClientRect();
-                  const bar = document.querySelector('.side-foot').getBoundingClientRect();
+                  const bar = document.getElementById('tabbar').getBoundingClientRect();
                   return {last: last.bottom, top: form.top, bottom: form.bottom, bar: bar.top};
                 })()"""
             )
@@ -1681,6 +4252,43 @@ class Suite:
                 raise Failure(f"the composer ends at {box['bottom']}px, not on the tab bar at {box['bar']}px")
         finally:
             b.viewport(1280, 800)
+
+    def test_dispatch_composer_pills_and_pasted_text(self):
+        b = self.b
+        editor = "document.getElementById('dispatch-input')"
+        paste = """(() => { const dt = new DataTransfer(); dt.setData('text/plain', Array.from({length: 20}, (_, i) => 'log line ' + i).join('\\n'));
+          const e = new Event('paste', { bubbles: true, cancelable: true }); Object.defineProperty(e, 'clipboardData', { value: dt });
+          document.getElementById('dispatch-input').dispatchEvent(e); })()"""
+        b.js("localStorage.removeItem('yardbell.dispatch.drafts')")
+        b.goto(self.url("/dispatch"))
+        b.wait(f"{editor}?.classList.contains('is-empty')", "the empty composer with its placeholder")
+        b.click("#dispatch-input")
+        b.type("Fix ")
+        b.type("@")
+        b.wait("!document.getElementById('compose-menu').hidden && document.querySelector('#compose-menu .compose-option')", "the @ menu")
+        b.type(MACHINE)
+        b.wait(f"document.querySelector('#compose-menu .compose-option.active .compose-option-label')?.textContent === {json.dumps(MACHINE)}", "the machine first in the menu")
+        b.key("Enter")
+        b.wait(f"{editor}.querySelector('.compose-pill.name')?.textContent.trim() === {json.dumps(MACHINE)}", "the machine as a pill")
+        if b.js(f"{editor}.value") != f"Fix {MACHINE} ":
+            raise Failure(f"the message reads {b.js(f'{editor}.value')!r}")
+        b.key("Backspace")
+        b.key("Backspace")
+        b.wait(f"!{editor}.querySelector('.compose-pill') && {editor}.value === 'Fix '", "Backspace to take the pill away whole")
+        b.type("`npm test` ")
+        b.wait(f"{editor}.querySelector('.compose-code')?.textContent === '`npm test`'", "the backticks drawn as code")
+        b.js(paste)
+        b.wait(f"{editor}.querySelector('.compose-pill.paste')?.textContent.trim() === 'Pasted text · 20 lines'", "the long paste as a pill")
+        if not b.js(f"{editor}.value.includes('log line 0\\nlog line 1') && {editor}.value.includes('log line 19')"):
+            raise Failure("the pasted text is not in the message")
+        b.goto(self.url("/dispatch"))
+        b.wait(f"{editor}.querySelector('.compose-pill.paste') && {editor}.value.startsWith('Fix `npm test` log line 0')", "the draft and its pill after a reload")
+        b.click("#dispatch-input .compose-pill.paste")
+        b.wait(f"!{editor}.querySelector('.compose-pill') && {editor}.textContent.includes('log line 19')", "a click to put the paste back as text")
+        b.key("z", "Control")
+        b.wait(f"{editor}.querySelector('.compose-pill.paste')", "Ctrl+Z to bring the pill back")
+        self.set_field("#dispatch-input", "")
+        b.js("localStorage.removeItem('yardbell.dispatch.drafts')")
 
     def test_settings_voice_input_and_dispatch_dictation(self):
         b = self.b
@@ -1703,13 +4311,25 @@ class Suite:
             b.wait("!document.getElementById('mic').hidden", "the microphone button in the composer")
             b.click("#mic")
             b.wait("document.getElementById('mic').classList.contains('recording')", "recording to start on the fake microphone")
+            b.wait("!document.getElementById('dictation-pill').hidden && document.querySelectorAll('#dictation-pill .dict-grape').length === 9 && document.querySelector('#dictation-pill .dict-btn.finish')",
+                   "the dictation pill with its meter and Finish")
             b.pump(0.5)
             b.click("#mic")
             b.wait(
-                f"document.querySelector('#dispatch-form textarea').value.includes({json.dumps(FAKE_DICTATION)})",
+                f"document.querySelector('#dispatch-input').value.includes({json.dumps(FAKE_DICTATION)})",
                 "the dictation to land in the message box",
             )
-            self.set_field("#dispatch-form textarea", "")
+            b.wait("document.getElementById('dictation-pill').hidden", "the pill gone once the words are in")
+            self.set_field("#dispatch-input", "")
+            b.click("#dispatch-input")
+            b.key(" ", "Control", "Shift")
+            b.wait("document.getElementById('mic').classList.contains('recording')", "Ctrl+Shift+Space to start recording")
+            b.wait("!document.getElementById('dictation-pill').hidden", "the dictation pill")
+            b.click("#dictation-pill .dict-btn")
+            b.wait("!document.getElementById('mic').classList.contains('recording') && document.getElementById('dictation-pill').hidden", "Cancel to discard the recording")
+            b.pump(0.5)
+            if b.js("document.querySelector('#dispatch-input').value"):
+                raise Failure("a cancelled recording typed something")
         finally:
             self.api("POST", "/api/settings/voice", {"input": "off"})
 
@@ -1741,10 +4361,139 @@ class Suite:
             b.pump(1.0)
             b.click("#mic")
             b.wait(
-                f"document.querySelector('#dispatch-form textarea').value.includes({json.dumps(FAKE_DICTATION)})",
+                f"document.querySelector('#dispatch-input').value.includes({json.dumps(FAKE_DICTATION)})",
                 "the fallback dictation to land in the message box",
             )
-            self.set_field("#dispatch-form textarea", "")
+            self.set_field("#dispatch-input", "")
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+
+    def test_settings_voice_setup_card_models_and_mode(self):
+        b = self.b
+        models = self.y.models
+        model = os.path.join(models, "ggml-tiny.en.bin")
+        tiny = "#voice-models [data-model='tiny.en']"
+        b.goto(self.url("/settings#voice"))
+        b.wait("!document.getElementById('voice-setup-card').hidden && document.querySelectorAll('#voice-models .voice-model').length === 6",
+               "the Set up dictation card and the six speech models")
+        card = b.js("document.getElementById('voice-setup-model').textContent")
+        if "Whisper Base (English)" not in card or "148 MB" not in card or "Good" not in card:
+            raise Failure(f"the setup card recommends {card!r}")
+        base = "#voice-models [data-model='base.en']"
+        if not b.js(f"document.querySelector({json.dumps(base + ' .voice-badge')})?.textContent === 'Recommended' && document.querySelectorAll({json.dumps(base + ' .voice-dot.on')}).length === 3"):
+            raise Failure("the recommended row lacks its badge or its three quality dots")
+        if b.js("document.querySelectorAll('#voice-models [data-voice-act=download]').length") != 6:
+            raise Failure("not every model offers Download")
+        b.click("#voice-setup-btn")
+        b.wait("document.getElementById('voice-setup-note').classList.contains('voice-error') && document.getElementById('voice-setup-note').textContent.includes('404')",
+               "Set up to say the download failed")
+        if FakeModels.asked[-1:] != ["/ggml-base.en.bin"]:
+            raise Failure(f"Set up asked the model host for {FakeModels.asked}")
+        if os.path.isdir(models) and os.listdir(models):
+            raise Failure(f"a failed download left {os.listdir(models)} behind")
+        os.makedirs(models, exist_ok=True)
+        with open(model, "wb") as f:
+            f.write(b"lmgg" + bytes(64))
+        try:
+            b.goto(self.url("/settings?seeded#voice"))
+            b.wait(f"document.querySelector({json.dumps(tiny + ' [data-voice-act=use]')})", "Use on the downloaded model")
+            b.click(f"{tiny} [data-voice-act=use]")
+            b.wait(f"document.querySelector({json.dumps(tiny)})?.dataset.current === 'true' && document.getElementById('voice-setup-card').hidden",
+                   "the model in use and the setup card gone")
+            if b.js(f"document.querySelector({json.dumps(tiny + ' .voice-delete')})"):
+                raise Failure("the model in use offers Delete")
+            if "Ready with Whisper Tiny" not in b.js("document.getElementById('voice-state').textContent"):
+                raise Failure("the Dictation row does not say it is ready")
+            with open(self.y.config) as f:
+                config = f.read()
+            if "input: local" not in config or "whisper_model: tiny.en" not in config or os.path.join(self.y.fake_bin, "whisper-cli") not in config:
+                raise Failure(f"Use did not switch to the model and the fake whisper-cli:\n{config}")
+            b.wait("document.getElementById('voice-mode-desc').textContent.startsWith('Tap')", "Auto described")
+            b.click("#voice-mode label:nth-child(2)")
+            b.wait("document.getElementById('voice-mode-desc').textContent.startsWith('Talk while you hold')", "Hold described")
+            b.click("#voice-fillers")
+            self.set_field("#voice-vocabulary", "Yardbell, Dispatch")
+            b.click("#voice-form button[type=submit]")
+            b.wait("!document.getElementById('undo-bar').hidden", "the voice settings to save")
+            with open(self.y.config) as f:
+                config = f.read()
+            for line in ("mode: hold", "remove_fillers: true", "vocabulary: Yardbell, Dispatch"):
+                if line not in config:
+                    raise Failure(f"yardbell.yml lacks {line!r}:\n{config}")
+            if self.api("GET", "/dispatch/runs-on")["voice_mode"] != "hold":
+                raise Failure("Dispatch is not told the dictation mode")
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+            b.goto(self.url("/settings?off#voice"))
+            b.wait(f"document.querySelector({json.dumps(tiny + ' .voice-delete')})", "Delete once the model is not in use")
+            b.click(f"{tiny} .voice-delete")
+            b.wait(f"document.querySelector({json.dumps(tiny + ' [data-voice-act=download]')})", "the model back to Download")
+            if os.path.exists(model):
+                raise Failure("Delete left the model file")
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+            if os.path.exists(model):
+                os.remove(model)
+
+    def test_dictation_types_each_pause_as_it_comes(self):
+        # A tone that can be switched on and off stands in for the microphone, and the
+        # transcription answers from a list, so the test speaks two phrases with a pause between.
+        b = self.b
+        b.goto(self.url("/dispatch"))
+        b.js("window.__clock = new AudioContext(); window.__clock.resume().catch(() => {}); 0")
+        b.pump(0.5)
+        able = b.js("window.__clock.state === 'running'")
+        b.js("window.__clock.close().catch(() => {}); delete window.__clock; 0")
+        if not able:
+            return
+        self.api("POST", "/api/settings/voice", {"input": "local", "whisper_model": self.y.config})
+        try:
+            b.goto(self.url("/dispatch"))
+            b.wait("!document.getElementById('mic').hidden && !document.getElementById('mic').classList.contains('voice-off')", "the microphone button, voice on")
+            b.js("""(() => {
+              const ctx = new AudioContext();
+              const tone = ctx.createOscillator();
+              const gain = ctx.createGain();
+              gain.gain.value = 0;
+              const out = ctx.createMediaStreamDestination();
+              tone.connect(gain).connect(out);
+              tone.start();
+              ctx.resume();
+              window.__speak = (on) => { gain.gain.value = on ? 0.4 : 0; };
+              navigator.mediaDevices.getUserMedia = async () => out.stream;
+              const said = ["Fix the login test.", "Then run it again."];
+              window.__sent = [];
+              const real = window.fetch;
+              window.fetch = async (url, init) => {
+                if (String(url) !== "/dispatch/transcribe") return real(url, init);
+                window.__sent.push(init.body.size);
+                await new Promise((r) => setTimeout(r, 150));
+                const text = said[window.__sent.length - 1] || "";
+                return new Response(JSON.stringify({ text }), { status: 200, headers: { "Content-Type": "application/json" } });
+              };
+              return 0;
+            })()""")
+            self.set_field("#dispatch-input", "")
+            b.click("#mic")
+            b.wait("document.getElementById('mic').classList.contains('recording')", "recording to start")
+            b.js("window.__speak(true)")
+            b.pump(0.8)
+            b.js("window.__speak(false)")
+            b.wait("document.querySelector('#dispatch-input').value.includes('Fix the login test.')",
+                   "the first phrase typed in at the pause")
+            if not b.js("document.getElementById('mic').classList.contains('recording')"):
+                raise Failure("recording stopped when the first phrase landed")
+            if b.js("window.__sent.length") != 1:
+                raise Failure(f"{b.js('window.__sent.length')} pieces were sent after one phrase")
+            b.js("window.__speak(true)")
+            b.pump(0.8)
+            b.click("#dictation-pill .dict-btn.finish")
+            b.wait("document.querySelector('#dispatch-input').value.trim() === 'Fix the login test. Then run it again.'",
+                   "the second phrase after the first, once Finish is pressed")
+            b.wait("document.getElementById('dictation-pill').hidden && !document.getElementById('mic').classList.contains('recording')",
+                   "the pill gone once every piece landed")
+            if b.js("window.__sent.length") != 2:
+                raise Failure(f"{b.js('window.__sent.length')} pieces were sent for two phrases")
+            self.set_field("#dispatch-input", "")
         finally:
             self.api("POST", "/api/settings/voice", {"input": "off"})
 
@@ -1810,8 +4559,7 @@ class Suite:
         if not href.startswith("/dispatch?c="):
             raise Failure(f"the review mark links to {href!r}")
         b.goto(self.url("/workspace"))
-        b.wait("document.querySelector('#tree .ws-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace sidebar")
-        b.wait("document.querySelector('#tree .ws-review')?.textContent === 'review waiting'", "the review mark in the Workspace sidebar")
+        b.wait("document.querySelector('#col-body .tree-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace tree")
 
     def test_pull_request_card_sends_to_the_session(self):
         b = self.b
@@ -2559,8 +5307,8 @@ class Suite:
     def test_pipeline_in_the_sidebar(self):
         for page in ("/", "/workspace", "/dispatch", "/settings", "/pipeline"):
             self.b.goto(self.url(page))
-            self.b.wait("document.querySelector('.side-link[href=\"/pipeline\"]')", f"the Pipeline link on {page}")
-            order = self.b.js("[...document.querySelectorAll('a.side-link[href]')].map((a) => a.getAttribute('href')).join(' ')")
+            self.b.wait("document.querySelector(':is(.side-link, .rail-link)[href=\"/pipeline\"]')", f"the Pipeline link on {page}")
+            order = self.b.js("[...document.querySelectorAll('a:is(.side-link, .rail-link)[href]')].map((a) => a.getAttribute('href')).join(' ')")
             if "/workspace /pipeline /diagrams /dispatch" not in order:
                 raise Failure(f"the sidebar on {page} reads {order}")
 
@@ -2598,6 +5346,86 @@ class Suite:
             raise Failure("the waiting list does not name the merge request")
         self.check_errors("the Pipelines list")
 
+    def test_pipelines_column_lists_waiting_first(self):
+        b = self.b
+        before = self.storage(["yardbell.side", "yb-pipeline-full"])
+        made = self.api("POST", "/api/pipelines", {"empty": True})["id"]
+        try:
+            self.put_storage({"yardbell.side": None, "yb-pipeline-full": "0"})
+            pipelines = self.api("GET", "/api/pipelines")["pipelines"]
+            want = [p["definition"]["id"] for p in sorted(pipelines, key=lambda p: (p["runs"]["waiting"] == 0, p["definition"]["name"].lower()))]
+            review = next(p for p in pipelines if p["definition"]["id"] == "review")["runs"]["waiting"]
+            if want[0] != "review" or not review or len(want) < 2:
+                raise Failure(f"the test needs the review pipeline waiting and another one after it: {want}")
+            b.goto(self.url("/pipeline"))
+            rows = "#col-body a.col-row"
+            b.wait(f"document.querySelectorAll('{rows}').length === {len(want)}", "every pipeline in the column")
+            if b.js("Boolean(window.YardbellNav) || document.querySelector('.side') !== null"):
+                raise Failure("the Pipelines page still draws the old sidebar")
+            b.wait("window.YardbellShell.lastState !== null", "the state for the strip")
+            listed = b.js(f"""[...document.querySelectorAll('{rows}')].map((r) => ({{
+              href: r.getAttribute('href'),
+              meta: r.querySelector('.col-row-meta')?.textContent || '',
+              warn: Boolean(r.querySelector('.col-row-meta.warn')),
+              current: r.getAttribute('aria-current'),
+            }}))""")
+            if [r["href"] for r in listed] != [f"/pipeline?p={id}" for id in want]:
+                raise Failure(f"the column lists {[r['href'] for r in listed]}, not waiting first then by name {want}")
+            if listed[0]["meta"] != str(review) or not listed[0]["warn"]:
+                raise Failure(f"the review row does not show its {review} waiting runs in the warn tone: {listed[0]}")
+            if any(r["meta"] for r in listed[1:] if r["href"] == f"/pipeline?p={made}"):
+                raise Failure(f"a pipeline with no waiting runs shows a count: {listed}")
+            if any(r["current"] for r in listed):
+                raise Failure(f"a row is current on the list: {listed}")
+            badge = b.js("document.querySelector('#rail [data-count=pipelines]')?.textContent")
+            if badge != str(sum(p["runs"]["waiting"] for p in pipelines)):
+                raise Failure(f"the rail's Pipelines badge reads {badge!r}")
+
+            b.js(f"""(() => {{
+              window.__stayed = true;
+              const real = window.fetch;
+              window.fetch = async (url, init) => {{
+                const res = await real(url, init);
+                if (String(url) !== '/api/pipelines') return res;
+                const body = await res.json();
+                for (const p of body.pipelines) if (p.definition.id === {json.dumps(made)}) p.problem = 'The trigger needs a connector';
+                return new Response(JSON.stringify(body), {{ status: 200, headers: {{ 'Content-Type': 'application/json' }} }});
+              }};
+            }})()""")
+            b.click(f"{rows}[href='/pipeline?p=review']")
+            b.wait("new URLSearchParams(location.search).get('p') === 'review' && document.querySelector('.pl-builder .pl-run-view')", "the review pipeline's runs")
+            b.wait(f"document.querySelector(\"{rows}[href='/pipeline?p=review']\").getAttribute('aria-current') === 'page'", "its row marked current")
+            if not b.js("window.__stayed === true"):
+                raise Failure("opening a pipeline from the column reloaded the page")
+            if b.js(f"[...document.querySelectorAll('{rows}[aria-current]')].length") != 1:
+                raise Failure("more than one row is current")
+            b.wait(f"document.querySelector(\"{rows}[href='/pipeline?p={made}'] .dot.bad\")", "the problem pipeline's dot")
+            if b.js("document.documentElement.classList.contains('side-rail')"):
+                raise Failure("the Runs tab collapsed the column")
+
+            b.click(f"{rows}[href='/pipeline?p={made}']")
+            b.wait(f"new URLSearchParams(location.search).get('p') === {json.dumps(made)} && document.querySelector('.pl-builder:not(.full) .pl-canvas')", "the empty pipeline's builder")
+            b.wait("document.documentElement.classList.contains('side-rail')", "the builder to collapse the column")
+            seen = b.js("""(() => ({
+              stored: localStorage.getItem('yardbell.side'),
+              left: Math.round(document.querySelector('.pl-builder').getBoundingClientRect().left),
+              rail: Math.round(document.getElementById('rail').getBoundingClientRect().right),
+              stayed: window.__stayed === true,
+            }))()""")
+            if seen["stored"] is not None or not seen["stayed"] or seen["left"] - seen["rail"] > 40:
+                raise Failure(f"the builder's collapse is stored, reloads or leaves the column's room empty: {seen}")
+            b.click("#pl-back")
+            b.wait("!new URLSearchParams(location.search).get('p') && !document.documentElement.classList.contains('side-rail')", "the column back on the list")
+
+            b.click("#col-new")
+            b.wait("document.getElementById('pl-templates')", "the column's New pipeline to open the templates")
+            if b.js("document.getElementById('col-new').getAttribute('aria-expanded')") != "true":
+                raise Failure("the column's New pipeline does not say the templates are open")
+        finally:
+            self.api("DELETE", f"/api/pipelines/{made}")
+            self.put_storage(before)
+        self.check_errors("the Pipelines column")
+
     def test_pipeline_new_from_template(self):
         b = self.b
         b.goto(self.url("/pipeline"))
@@ -2623,7 +5451,7 @@ class Suite:
         if groups != "Start when|Agent|Yardbell|You":
             raise Failure(f"the library groups read {groups}")
         b.click("#pl-full")
-        b.wait("document.querySelector('.pl-builder:not(.full)') && document.querySelector('.side').getBoundingClientRect().width > 0", "the builder back in the page")
+        b.wait("document.querySelector('.pl-builder:not(.full)') && document.getElementById('rail').getBoundingClientRect().width > 0", "the builder back in the page")
         b.goto(self.url("/pipeline?p=review&run=run-a"))
         b.wait("document.querySelector('.pl-builder:not(.full) .pl-run-view')", "the Runs tab remembering the choice")
         if b.js("document.querySelector('.pl-run-main').getBoundingClientRect().bottom") < b.js("innerHeight") - 40:
@@ -3119,7 +5947,7 @@ class Suite:
         if off != {"on": False, "disabled": True, "value": ""}:
             raise Failure(f"the memory limit is not off with no number by default: {off}")
         help_text = b.js("document.querySelector('#pl-settings input[name=memory_limit]').parentElement.textContent")
-        if "tick it and enter" not in help_text or "On a Mac" not in help_text:
+        if "switch it on and enter" not in help_text or "On a Mac" not in help_text:
             raise Failure(f"the settings do not say how to turn the hold on: {help_text}")
         b.click("#pl-settings input[name=memory_on]")
         b.wait("!document.querySelector('#pl-settings input[name=memory_limit]').disabled", "the limit enabled")
@@ -3253,7 +6081,7 @@ class Suite:
         b.wait("document.getElementById('pl-ask')", "Ask Dispatch in the builder")
         b.click("#pl-ask")
         want = f'Change the pipeline "{name}" (review): '
-        b.wait(f"location.pathname === '/dispatch' && document.querySelector('#dispatch-form textarea[name=text]')?.value === {json.dumps(want)}", "Dispatch with the request started")
+        b.wait(f"location.pathname === '/dispatch' && document.querySelector('#dispatch-input')?.value === {json.dumps(want)}", "Dispatch with the request started")
         if "ask=" in b.js("location.search"):
             raise Failure("the ask parameter stayed in the address")
 
@@ -3261,16 +6089,16 @@ class Suite:
         b = self.b
         for path in PAGES + ["/pipeline", "/proposals"]:
             b.goto(self.url(path))
-            b.wait("document.querySelector('.side-link[href=\"/proposals\"]')", f"Proposals in the menu on {path}")
+            b.wait("document.querySelector(':is(.side-link, .rail-link)[href=\"/proposals\"]')", f"Proposals in the menu on {path}")
 
     def test_proposals_only_shows_in_the_menu_when_something_waits(self):
         b = self.b
-        link = """document.querySelector('.side-link[href="/proposals"]')"""
-        shown = f"{link}.getClientRects().length > 0"
-        b.goto(self.url("/settings"))
-        b.wait(f"{link} && document.getElementById('nav-proposals-count')", "the menu")
+        link = """document.querySelector(':is(.side-link, .rail-link, .col-nav-link)[href="/proposals"]')"""
+        shown = """[...document.querySelectorAll(':is(.side-link, .rail-link, .col-nav-link)[href="/proposals"]')].some((a) => a.getClientRects().length > 0)"""
+        b.goto(self.url("/"))
+        b.wait(f"{link}", "the menu")
         waiting = len([p for p in self.api("GET", "/api/proposals")["proposals"] if p["status"] == "pending"])
-        for path in ("/", "/settings", "/workspace", "/diagrams", "/dispatch", "/pipeline"):
+        for path in ("/", "/workspace", "/diagrams", "/dispatch", "/pipeline"):
             b.goto(self.url(path))
             if waiting:
                 b.wait(shown, f"Proposals in the menu on {path} while {waiting} wait")
@@ -3288,7 +6116,8 @@ class Suite:
         b = self.b
         b.goto(self.url("/proposals"))
         b.wait("document.querySelectorAll('.step-card.pending').length === 3", "three waiting proposals")
-        b.wait("document.getElementById('nav-proposals-count')?.textContent === '3'", "the badge counting them")
+        badge = "document.querySelector('#rail [data-count=proposals]')"
+        b.wait(f"{badge}?.textContent === '3' && !{badge}.hidden", "the badge counting them")
         trail = b.js("document.querySelector('[aria-label=\"Change Settings: Phone notifications\"] .step-card-trail').textContent")
         if "Proposed by claude-code" not in trail:
             raise Failure(f"the card says {trail!r}")
@@ -3296,7 +6125,7 @@ class Suite:
         b.wait("document.querySelector('[aria-label=\"Change Settings: Phone notifications\"].done')", "the phone change approved")
         b.click('[aria-label="Save the task Inbox task"] .step-card-actions .btn.danger')
         b.wait("document.querySelector('[aria-label=\"Save the task Inbox task\"].rejected')", "the task rejected")
-        b.wait("document.getElementById('nav-proposals-count')?.textContent === '1'", "the badge down to one")
+        b.wait(f"{badge}?.textContent === '1'", "the badge down to one")
         heads = b.js("[...document.querySelectorAll('.pr-head')].map((h) => h.textContent)")
         if heads != ["Waiting for you", "Decided"]:
             raise Failure(f"the page has the sections {heads}")
@@ -4903,7 +7732,7 @@ class Suite:
     def test_a_session_says_why_it_has_no_badge(self):
         b = self.b
         b.goto(self.url("/"))
-        b.wait("document.querySelector('.side-link[href=\"/proposals\"]')", "the dashboard")
+        b.wait("document.querySelector('#rail .rail-link[href=\"/proposals\"]')", "the dashboard")
         b.js("""(() => {
           const real = window.fetch;
           window.fetch = async (url, init) => {
@@ -4923,30 +7752,36 @@ class Suite:
     def test_phone_menu_is_a_bottom_tab_bar(self):
         b = self.b
         b.viewport(390, 844, 3)
+        # The shell's #tabbar on a page it draws, the sidebar's foot elsewhere.
         probe = """(() => {
           const rect = (el) => el.getBoundingClientRect();
-          const bar = document.querySelector('.side-foot, .ws-nav');
-          const tabs = [...bar.querySelectorAll('.side-link:not(.theme-toggle):not(#logout):not(.desk-only)')].filter((el) => el.getClientRects().length);
-          const main = document.querySelector('.main, .ws-side');
+          const shell = document.getElementById('tabbar');
+          const bar = shell || document.querySelector('.side-foot');
+          const tabs = (shell ? [...bar.querySelectorAll('.tab')] : [...bar.querySelectorAll('.side-link:not(.theme-toggle):not(#logout):not(.desk-only)')])
+            .filter((el) => el.getClientRects().length);
+          const col = document.getElementById('col');
+          const main = !shell ? document.querySelector('.main') : col?.getClientRects().length ? col : document.getElementById('main');
           return {
             bottom: Math.round(rect(bar).bottom), height: innerHeight, wide: Math.round(rect(bar).width), page: innerWidth,
-            tabs: tabs.map((t) => t.textContent.trim().replace(/\\s*[0-9]+$/, '')),
+            tabs: tabs.map((t) => (shell ? t.querySelector('.tab-label').textContent : t.textContent).trim().replace(/\\s*[0-9]+$/, '')),
             row: new Set(tabs.map((t) => Math.round(rect(t).top))).size,
             inside: tabs.every((t) => rect(t).left >= 0 && rect(t).right <= innerWidth),
             hit: tabs.every((t) => { const r = rect(t); return t.contains(document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)); }),
             mainEnd: Math.round(rect(main).bottom), barTop: Math.round(rect(bar).top),
             sideways: document.documentElement.scrollWidth > innerWidth,
+            shell: Boolean(shell),
           };
         })()"""
-        want = ["Dashboard", "Workspace", "Pipelines", "Diagrams", "Dispatch", "Proposals", "Settings"]
+        sidebar = ["Dashboard", "Workspace", "Pipelines", "Diagrams", "Dispatch", "Settings"]
+        shell_tabs = ["Sessions", "Board", "Pipelines", "Dispatch", "More"]
         try:
             for path in ("/", "/pipeline", "/settings", "/dispatch", "/proposals", "/workspace"):
                 b.goto(self.url(path))
-                b.wait("document.querySelector('.side-foot .side-link, .ws-nav .side-link')", f"the menu on {path}")
+                b.wait("document.querySelector('#tabbar .tab, .side-foot .side-link')", f"the menu on {path}")
                 b.pump(0.4)
                 seen = b.js(probe)
                 problems = []
-                if [t for t in seen["tabs"] if t != "Proposals"] != [t for t in want if t != "Proposals"]:
+                if [t for t in seen["tabs"] if t != "Proposals"] != (shell_tabs if seen["shell"] else sidebar):
                     problems.append("tabs")
                 if abs(seen["bottom"] - seen["height"]) > 1 or seen["wide"] != seen["page"]:
                     problems.append("not along the bottom")
@@ -4954,15 +7789,24 @@ class Suite:
                     problems.append("tabs not in one tappable row")
                 if seen["sideways"]:
                     problems.append("sideways scroll")
-                if seen["mainEnd"] > seen["barTop"] + 1 and path != "/workspace":
+                if seen["mainEnd"] > seen["barTop"] + 1:
                     problems.append("the page runs under the bar")
                 if problems:
                     raise Failure(f"{path}: {problems}: {seen}")
-            b.goto(self.url("/dispatch"))
-            b.wait("document.querySelector('.side-foot .side-link[aria-current=page]')", "the current tab")
-            b.js("document.documentElement.classList.add('keyboard')")
-            if b.js("document.querySelector('.side-foot').getClientRects().length"):
-                raise Failure("the tab bar stays up over the keyboard")
+            b.click("#tab-more")
+            b.wait("!document.getElementById('tab-menu').hidden", "the More menu")
+            more = b.js("""[...document.querySelectorAll('#tab-menu [role=menuitem]')].filter((el) => el.getClientRects().length)
+              .map((el) => el.matches('[data-theme-toggle]') ? 'theme' : el.querySelector('.menu-label').textContent)""")
+            if more != ["Search", "Diagrams", "Proposals", "Settings", "Usage", "Keep computer awake", "Live ports", "theme", "Log out"]:
+                raise Failure(f"More holds {more}")
+            b.key("Escape")
+            b.wait("document.getElementById('tab-menu').hidden", "the More menu to close")
+            for path, bar in (("/dispatch", "#tabbar"), ("/workspace", "#tabbar")):
+                b.goto(self.url(path))
+                b.wait(f"document.querySelector('{bar} [aria-current=page]')", f"the current tab on {path}")
+                b.js("document.documentElement.classList.add('keyboard')")
+                if b.js(f"document.querySelector('{bar}').getClientRects().length"):
+                    raise Failure(f"the tab bar on {path} stays up over the keyboard")
         finally:
             b.viewport(1280, 800)
 
@@ -5008,7 +7852,7 @@ class Suite:
             b.goto(self.url("/pipeline"))
             b.wait("document.querySelectorAll('.pl-card[data-id]').length >= 8", "a long list")
             moved = b.js("""(() => {
-              const main = document.querySelector('.main');
+              const main = document.getElementById('main');
               main.scrollTop = 100000;
               return main.scrollTop;
             })()""")

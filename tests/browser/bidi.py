@@ -245,6 +245,10 @@ class Browser:
         p = msg.get("params", {})
         if p.get("level") != "error":
             return
+        # A test that moves to the next page while a web font is still downloading cancels it
+        # (NS_BINDING_ABORTED); Firefox logs that as an error, though nothing failed.
+        if "downloadable font" in (p.get("text") or "") and "status=2152398850" in p.get("text"):
+            return
         frames = (p.get("stackTrace") or {}).get("callFrames") or []
         where = f" at {frames[0].get('url')}:{frames[0].get('lineNumber', 0) + 1}" if frames else ""
         kind = "page error" if p.get("type") == "javascript" else "console.error"

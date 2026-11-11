@@ -7,6 +7,7 @@ mod scan;
 
 use diff::valid_sha;
 pub use diff::{changed_file, changed_files, valid_base, valid_path, Anchor};
+pub(crate) use diff::{parse_diff, Line, DIFF, DIFF_BYTES, GIT};
 pub use evidence::{gather, valid_file as valid_evidence_file};
 pub use files::{file_view, places};
 pub use mark::{mark_for, marks, Mark};

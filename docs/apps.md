@@ -41,7 +41,7 @@ Download the file for your system from the
   server. The phone must be on the same mesh VPN. Once it knows one server, the start screen lists
   the others it finds under **On your mesh**, where signing in takes only the passcode; it keeps
   offering a server you removed. The app shows the server's own pages, so the dashboard, terminals,
-  Workspace and Dispatch work as in a browser, kept clear of the status bar and the keyboard; the
+  Workspace and Dispatch work as in a browser, kept clear of the phone's status bar and the keyboard; the
   back gesture returns to the server list. It also shows the notifications, see
   [Phone notifications](#phone-notifications).
 - **iPhone and Windows.** There is no app yet. On an iPhone, open the dashboard in the browser, see

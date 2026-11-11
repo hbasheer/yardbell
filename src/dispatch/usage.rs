@@ -43,16 +43,67 @@ const USAGE_URL: &str = "https://api.anthropic.com/api/oauth/usage";
 const OAUTH_BETA: &str = "oauth-2025-04-20";
 const KEYCHAIN_SERVICE: &str = "Claude Code-credentials";
 
+// Where the Claude account's plan limits are read from: Anthropic's endpoint, or a stand-in set by
+// YARDBELL_CLAUDE_USAGE_URL, with the sign-in Claude Code keeps in its config folder.
+#[derive(Debug, Clone)]
+pub struct ClaudeAccount {
+    pub url: String,
+    pub dir: Option<PathBuf>,
+    pub keychain: bool,
+}
+
+impl ClaudeAccount {
+    pub fn system() -> ClaudeAccount {
+        let dir = match std::env::var_os("CLAUDE_CONFIG_DIR") {
+            Some(dir) => Some(PathBuf::from(dir)),
+            None => std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".claude")),
+        };
+        ClaudeAccount {
+            url: std::env::var("YARDBELL_CLAUDE_USAGE_URL").unwrap_or_else(|_| USAGE_URL.into()),
+            dir,
+            keychain: cfg!(target_os = "macos"),
+        }
+    }
+
+    pub fn signed_in(&self) -> bool {
+        self.keychain
+            || self
+                .dir
+                .as_ref()
+                .is_some_and(|dir| dir.join(".credentials.json").is_file())
+    }
+
+    async fn credentials(&self) -> Option<String> {
+        if self.keychain {
+            let out = tokio::process::Command::new("security")
+                .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
+                .output()
+                .await
+                .ok()?;
+            if out.status.success() {
+                return String::from_utf8(out.stdout).ok();
+            }
+        }
+        tokio::fs::read_to_string(self.dir.as_ref()?.join(".credentials.json"))
+            .await
+            .ok()
+    }
+}
+
 // The same figures Claude Code's /usage shows, for the Claude account signed in on this machine,
 // so the card also counts sessions Dispatch did not run. The endpoint is not documented.
-pub async fn from_account(http: &reqwest::Client) -> Result<Value, String> {
-    let creds = credentials()
+pub async fn from_account(
+    http: &reqwest::Client,
+    account: &ClaudeAccount,
+) -> Result<Value, String> {
+    let creds = account
+        .credentials()
         .await
         .ok_or("no Claude Code sign-in on this machine")?;
     let token = token_from(&creds, chrono::Utc::now().timestamp_millis())
         .ok_or("the Claude Code sign-in has expired; it renews the next time Claude Code runs")?;
     let res = http
-        .get(USAGE_URL)
+        .get(&account.url)
         .bearer_auth(token)
         .header("anthropic-beta", OAUTH_BETA)
         .timeout(Duration::from_secs(10))
@@ -63,19 +114,30 @@ pub async fn from_account(http: &reqwest::Client) -> Result<Value, String> {
         return Err(format!("Anthropic answered {}", res.status()));
     }
     let body: Value = res.json().await.map_err(|e| e.to_string())?;
-    parse_account(&body).ok_or_else(|| "no plan limits in the answer".to_string())
+    let mut usage =
+        parse_account(&body).ok_or_else(|| "no plan limits in the answer".to_string())?;
+    if let Some(plan) = plan_from(&creds) {
+        usage["plan"] = json!(plan);
+    }
+    Ok(usage)
+}
+
+const MODEL_WEEKLY: [(&str, &str); 2] =
+    [("seven_day_opus", "Opus"), ("seven_day_sonnet", "Sonnet")];
+
+fn resets_from(value: &Value) -> Option<i64> {
+    value
+        .as_str()
+        .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
+        .map(|t| t.timestamp())
 }
 
 fn parse_account(body: &Value) -> Option<Value> {
-    let found: Vec<Value> = WINDOWS
+    let mut found: Vec<Value> = WINDOWS
         .iter()
         .filter_map(|(key, label)| {
             let w = &body[*key];
             let used = w["utilization"].as_f64()? / 100.0;
-            let resets_at = w["resets_at"]
-                .as_str()
-                .and_then(|t| chrono::DateTime::parse_from_rfc3339(t).ok())
-                .map(|t| t.timestamp());
             let status = if w["locked_reason"].is_null() {
                 "allowed"
             } else {
@@ -85,11 +147,42 @@ fn parse_account(body: &Value) -> Option<Value> {
                 "name": key,
                 "label": label,
                 "used": used.clamp(0.0, 1.0),
-                "resets_at": resets_at,
+                "resets_at": resets_from(&w["resets_at"]),
                 "status": status,
             }))
         })
         .collect();
+    for (key, model) in MODEL_WEEKLY {
+        if let Some(used) = body[key]["utilization"].as_f64() {
+            found.push(model_weekly(
+                model,
+                used,
+                resets_from(&body[key]["resets_at"]),
+            ));
+        }
+    }
+    // Newer answers list a weekly limit per model in `limits`, named only by the model.
+    for limit in body["limits"].as_array().into_iter().flatten() {
+        let model = limit["scope"]["model"]["display_name"].as_str();
+        let (Some(model), Some(used)) = (model, limit["percent"].as_f64()) else {
+            continue;
+        };
+        if limit["kind"] != "weekly_scoped" || found.iter().any(|w| w["model"] == model) {
+            continue;
+        }
+        found.push(model_weekly(model, used, resets_from(&limit["resets_at"])));
+    }
+    // Paid use past the plan's limits, when the account has it turned on.
+    if let Some(used) = body["extra_usage"]["utilization"].as_f64() {
+        found.push(json!({
+            "name": "extra_usage",
+            "label": "Extra usage",
+            "short": "extra",
+            "used": (used / 100.0).clamp(0.0, 1.0),
+            "resets_at": resets_from(&body["extra_usage"]["resets_at"]),
+            "status": "allowed",
+        }));
+    }
     if found.is_empty() {
         return None;
     }
@@ -98,6 +191,18 @@ fn parse_account(body: &Value) -> Option<Value> {
         "seen": chrono::Local::now().to_rfc3339(),
         "source": "account",
     }))
+}
+
+fn model_weekly(model: &str, used: f64, resets_at: Option<i64>) -> Value {
+    json!({
+        "name": format!("seven_day_{}", model.to_lowercase()),
+        "label": format!("Weekly {model}"),
+        "short": format!("{model} wk"),
+        "model": model,
+        "used": (used / 100.0).clamp(0.0, 1.0),
+        "resets_at": resets_at,
+        "status": "allowed",
+    })
 }
 
 // Only read, never refreshed: refreshing would replace the sign-in Claude Code itself relies on.
@@ -111,53 +216,48 @@ fn token_from(creds: &str, now_ms: i64) -> Option<String> {
     oauth["accessToken"].as_str().map(str::to_string)
 }
 
-async fn credentials() -> Option<String> {
-    if cfg!(target_os = "macos") {
-        let out = tokio::process::Command::new("security")
-            .args(["find-generic-password", "-s", KEYCHAIN_SERVICE, "-w"])
-            .output()
-            .await
-            .ok()?;
-        if out.status.success() {
-            return String::from_utf8(out.stdout).ok();
-        }
+// "max" with the tier "default_claude_max_20x" reads "Max 20x".
+fn plan_from(creds: &str) -> Option<String> {
+    let creds: Value = serde_json::from_str(creds).ok()?;
+    let oauth = &creds["claudeAiOauth"];
+    let plan = oauth["subscriptionType"].as_str()?.trim();
+    let first = plan.chars().next()?;
+    let mut label = first.to_uppercase().collect::<String>() + &plan[first.len_utf8()..];
+    let times = oauth["rateLimitTier"]
+        .as_str()
+        .and_then(|tier| tier.rsplit('_').next())
+        .filter(|last| {
+            last.strip_suffix('x')
+                .is_some_and(|n| n.parse::<u32>().is_ok())
+        });
+    if let Some(times) = times {
+        label = format!("{label} {times}");
     }
-    tokio::fs::read_to_string(credentials_file()?).await.ok()
+    Some(label)
 }
-
-fn credentials_file() -> Option<PathBuf> {
-    let dir = match std::env::var_os("CLAUDE_CONFIG_DIR") {
-        Some(dir) => PathBuf::from(dir),
-        None => PathBuf::from(std::env::var_os("HOME")?).join(".claude"),
-    };
-    Some(dir.join(".credentials.json"))
-}
-
-const USAGE_FRESH: chrono::TimeDelta = chrono::TimeDelta::seconds(30);
 
 impl Dispatch {
-    pub async fn refresh_usage(&self, http: &reqwest::Client) -> Result<(), String> {
-        self.shared.set_usage(from_account(http).await?);
+    pub async fn refresh_usage(
+        &self,
+        http: &reqwest::Client,
+        account: &ClaudeAccount,
+    ) -> Result<(), String> {
+        self.shared.set_usage(from_account(http, account).await?);
         Ok(())
-    }
-
-    // A click right after a check gets that check's figures instead of asking Anthropic again.
-    pub async fn refresh_usage_now(&self, http: &reqwest::Client) -> Result<Value, String> {
-        let current = self.usage();
-        let fresh = current["source"] == "account"
-            && current["seen"]
-                .as_str()
-                .and_then(|seen| chrono::DateTime::parse_from_rfc3339(seen).ok())
-                .is_some_and(|seen| chrono::Local::now().signed_duration_since(seen) < USAGE_FRESH);
-        if !fresh {
-            self.refresh_usage(http).await?;
-        }
-        Ok(self.usage())
     }
 
     pub fn usage(&self) -> Value {
         self.shared
             .usage
+            .lock()
+            .expect("dispatch lock")
+            .clone()
+            .unwrap_or(Value::Null)
+    }
+
+    pub fn codex_usage(&self) -> Value {
+        self.shared
+            .codex_usage
             .lock()
             .expect("dispatch lock")
             .clone()
@@ -172,13 +272,7 @@ impl Dispatch {
             _ => json!({}),
         };
         card["runs_on"] = json!(runs_on);
-        card["codex"] = self
-            .shared
-            .codex_usage
-            .lock()
-            .expect("dispatch lock")
-            .clone()
-            .unwrap_or(Value::Null);
+        card["codex"] = self.codex_usage();
         card
     }
 }
@@ -186,7 +280,6 @@ impl Dispatch {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::dispatch::tests::fake_claude;
 
     #[test]
     fn plan_limits_are_read_from_the_rate_limit_event() {
@@ -247,20 +340,89 @@ mod tests {
         assert_eq!(token_from("not json", 0), None);
     }
 
-    #[tokio::test]
-    async fn a_refresh_right_after_a_check_reuses_its_figures() {
-        let dir = tempfile::tempdir().unwrap();
-        let dispatch = fake_claude(dir.path(), "true");
-        let checked = json!({
-            "windows": [{"name": "five_hour", "label": "5-hour limit", "used": 0.12, "resets_at": null, "status": "allowed"}],
-            "seen": chrono::Local::now().to_rfc3339(),
-            "source": "account",
+    #[test]
+    fn model_weekly_limits_and_the_plan_are_read() {
+        let body = json!({
+            "five_hour": null,
+            "seven_day": {"utilization": 16.0, "resets_at": "2026-11-17T00:59:59.646438+00:00", "locked_reason": null},
+            "seven_day_opus": {"utilization": 40.0, "resets_at": null},
+            "seven_day_sonnet": null,
+            "extra_usage": {"is_enabled": true, "utilization": 25.0},
+            "limits": [
+                {"kind": "weekly_all", "percent": 16, "resets_at": "2026-11-17T00:59:59+00:00", "scope": null},
+                {"kind": "weekly_scoped", "percent": 3, "resets_at": "2026-11-17T00:59:59+00:00", "scope": {"model": {"id": null, "display_name": "Fable"}}},
+                {"kind": "weekly_scoped", "percent": 9, "scope": {"model": {"display_name": "Opus"}}}
+            ]
         });
-        dispatch.shared.set_usage(checked.clone());
-        let usage = dispatch
-            .refresh_usage_now(&reqwest::Client::new())
+        let usage = parse_account(&body).unwrap();
+        let labels: Vec<&str> = usage["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| w["label"].as_str().unwrap())
+            .collect();
+        assert_eq!(
+            labels,
+            ["Weekly limit", "Weekly Opus", "Weekly Fable", "Extra usage"],
+            "with five_hour null every other window still shows"
+        );
+        assert_eq!(usage["windows"][2]["short"], "Fable wk");
+        assert_eq!(usage["windows"][3]["used"], 0.25);
+        let off = json!({"seven_day": {"utilization": 1.0}, "extra_usage": {"is_enabled": false, "utilization": null}});
+        assert_eq!(
+            parse_account(&off).unwrap()["windows"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(usage["windows"][2]["used"], 0.03);
+        assert_eq!(usage["windows"][2]["name"], "seven_day_fable");
+        assert_eq!(usage["windows"][2]["resets_at"], 1794877199);
+
+        let creds = r#"{"claudeAiOauth": {"subscriptionType": "max", "rateLimitTier": "default_claude_max_20x"}}"#;
+        assert_eq!(plan_from(creds).as_deref(), Some("Max 20x"));
+        let pro = r#"{"claudeAiOauth": {"subscriptionType": "pro", "rateLimitTier": "default_claude_ai"}}"#;
+        assert_eq!(plan_from(pro).as_deref(), Some("Pro"));
+        assert_eq!(plan_from(r#"{"claudeAiOauth": {}}"#), None);
+    }
+
+    #[tokio::test]
+    async fn account_limits_are_fetched_from_the_configured_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join(".credentials.json"),
+            r#"{"claudeAiOauth": {"accessToken": "fixture-token", "expiresAt": 99999999999999, "subscriptionType": "pro"}}"#,
+        )
+        .unwrap();
+        let fake = crate::testing::FakeHttp::json(json!({
+            "five_hour": {"utilization": 25.0, "resets_at": null, "locked_reason": null}
+        }))
+        .await;
+        let account = ClaudeAccount {
+            url: format!("{}/api/oauth/usage", fake.url),
+            dir: Some(dir.path().to_path_buf()),
+            keychain: false,
+        };
+        assert!(account.signed_in());
+        let usage = from_account(&reqwest::Client::new(), &account)
             .await
             .unwrap();
-        assert_eq!(usage, checked);
+        assert_eq!(usage["windows"][0]["used"], 0.25);
+        assert_eq!(usage["plan"], "Pro");
+        let asked = fake.asked();
+        assert_eq!(asked[0].path, "/api/oauth/usage");
+        assert_eq!(
+            asked[0].header("authorization").as_deref(),
+            Some("Bearer fixture-token")
+        );
+        let nobody = ClaudeAccount {
+            dir: Some(dir.path().join("nowhere")),
+            ..account
+        };
+        assert!(!nobody.signed_in());
+        assert!(from_account(&reqwest::Client::new(), &nobody)
+            .await
+            .is_err());
     }
 }

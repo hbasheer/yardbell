@@ -86,7 +86,7 @@
 
   root.classList.toggle("side-rail", railed());
   document.addEventListener("DOMContentLoaded", () => {
-    const head = document.querySelector(".side-head, .ws-side-head");
+    const head = document.querySelector(".side-head");
     if (!head) return;
     const button = document.createElement("button");
     button.type = "button";
@@ -96,7 +96,7 @@
     button.addEventListener("click", () => set(!root.classList.contains("side-rail"), button));
     head.append(button);
     document.querySelectorAll(".side-link:not(.theme-toggle), .nav-add").forEach(label);
-    const side = head.closest(".side, .ws-side");
+    const side = head.closest(".side");
     if (!side || document.documentElement.classList.contains("embedded")) return;
     const edge = document.createElement("div");
     edge.className = "resize-edge side-edge";

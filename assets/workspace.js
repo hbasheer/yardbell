@@ -1,14 +1,15 @@
 const $ = (id) => document.getElementById(id);
-const STORE = "workspace.v4";
+const STORE = "workspace.v5";
+const OLD_STORE = "workspace.v4";
 // A workspace is one folder on one machine: the same folder name on two machines is two places.
 const SEP = "\t";
 const phone = matchMedia("(max-width: 760px)");
-const RANK = { blocked: 0, error: 0, done: 1, working: 2, idle: 3 };
-const WORD = { blocked: "blocked", error: "stopped on an error", done: "done", working: "working", idle: "idle" };
+const WORD = window.YardbellTree.WORD;
 
 let state = null;
 let saved = { folder: "", tabs: [], tab: 0, focus: "", hidden: [] };
 const lastActivity = new Map();
+const changedAt = new Map();
 const done = new Set();
 const paneEls = new Map();
 const starting = new Set();
@@ -16,12 +17,26 @@ const startErrors = new Map();
 const missing = new Map();
 // A session missing from a few checks in a row has ended; one missed check is only a hiccup.
 const GONE_AFTER = 3;
+let dispatchAfterSync = false;
+const dispatchTitles = new Map();
+
+window.YardbellShell.head.querySelector(".col-title").insertAdjacentHTML("afterend", `
+  <button class="btn quiet icon-btn" id="side-add-project" type="button" aria-label="Add a project" title="Add a project" aria-haspopup="dialog">
+    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z"/><path d="M8 7.5v3.5M6.25 9.25h3.5"/></svg>
+  </button>
+  <button class="btn quiet icon-btn" id="side-new" type="button" aria-label="New session" title="New session">
+    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+  </button>
+  <button class="btn quiet icon-btn desk-only" id="keys-btn" type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">
+    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="4" width="13" height="8" rx="1.5"/><path d="M4 6.75h1M7.5 6.75h1M11 6.75h1M5 9.25h6"/></svg>
+  </button>`);
+window.YardbellShell.column.innerHTML = '<div class="col-tree"></div>';
+const treeEl = window.YardbellShell.column.querySelector(".col-tree");
+window.YardbellShell.column.insertAdjacentHTML("afterend", '<aside class="setup-card" id="setup-card" aria-labelledby="setup-card-title" hidden></aside>');
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
 }
-
-const version = (server) => (server.version ? ` <a class="server-version" href="/settings#about" title="About Yardbell">v${esc(server.version)}</a>` : "");
 
 function short(path) {
   return String(path ?? "").replace(/^\/(home|Users)\/[^/]+(?=\/|$)/, "~");
@@ -31,11 +46,42 @@ function newId() {
   return Math.random().toString(36).slice(2, 10);
 }
 
-function restore() {
+function validNode(node) {
+  if (!node || typeof node !== "object") return false;
+  if (node.split) return (node.split === "row" || node.split === "col") && validNode(node.a) && validNode(node.b);
+  return typeof node.pane === "string";
+}
+
+function stored(key) {
+  try { return localStorage.getItem(key); } catch { return null; }
+}
+
+function parseLayout(text) {
   try {
-    const raw = JSON.parse(localStorage.getItem(STORE) || "null");
-    if (raw && Array.isArray(raw.tabs)) saved = { ...saved, ...raw };
-  } catch {}
+    const raw = JSON.parse(text);
+    if (!raw || !Array.isArray(raw.tabs) || !raw.tabs.every((t) => t && validNode(t.root))) return null;
+    if (raw.tab !== undefined && !Number.isInteger(raw.tab)) return null;
+    if (raw.hidden !== undefined && !Array.isArray(raw.hidden)) return null;
+    return raw;
+  } catch {
+    return null;
+  }
+}
+
+// A v4 layout carries over as it is, since its leaves are session leaves already. Its Dispatch
+// lived in a side panel, so a panel that was showing comes back as a pane once the tabs are synced.
+// A v5 that is there but unreadable means v4 is older than it, so v4 is not used then.
+function restore() {
+  const now = stored(STORE);
+  if (now !== null) {
+    const layout = parseLayout(now);
+    if (layout) saved = { ...saved, ...layout };
+    return;
+  }
+  const old = parseLayout(stored(OLD_STORE));
+  if (!old) return;
+  saved = { ...saved, ...old };
+  dispatchAfterSync = !phone.matches && stored("yardbell.dispatch") !== "closed";
 }
 
 function save() {
@@ -88,10 +134,38 @@ function stateOf(s) {
 }
 
 function worst(list) {
-  return list.map(stateOf).filter(Boolean).sort((a, b) => RANK[a] - RANK[b])[0] || "";
+  return window.YardbellTree.worst(list.map(stateOf));
 }
 
-// Layout trees: a leaf is { pane, key }, a split is { split: "row" | "col", ratio, a, b }.
+// Layout trees: a leaf is { pane, key } for a session (key null for an empty pane),
+// { pane, kind: "dispatch", conversation }, { pane, kind: "file", machine, root, path } or
+// { pane, kind: "diff", machine, root, path, staged } with path relative to root, and a split is
+// { split: "row" | "col", ratio, a, b }.
+
+function isDispatch(leaf) {
+  return leaf?.kind === "dispatch";
+}
+
+function isFile(leaf) {
+  return leaf?.kind === "file";
+}
+
+function isDiff(leaf) {
+  return leaf?.kind === "diff";
+}
+
+function isDoc(leaf) {
+  return isFile(leaf) || isDiff(leaf);
+}
+
+function isEmpty(leaf) {
+  return !isDispatch(leaf) && !isDoc(leaf) && !leaf.key;
+}
+
+function fileName(leaf) {
+  const name = String(leaf.path || "").split("/").pop() || "File";
+  return isDiff(leaf) && leaf.staged ? `${name} (staged)` : name;
+}
 
 function leaves(node, out = []) {
   if (!node) return out;
@@ -129,8 +203,20 @@ function gridOf(list) {
   return even(rows, "col");
 }
 
+// A folder picked while a session holds the focus stays the workspace until the focus moves.
+let picked = null;
+
+function pickedFolder() {
+  if (!picked) return "";
+  if (picked.focus === (saved.tabs.length ? focusedLeaf()?.key : null) && picked.tab === saved.tab && saved.folder === picked.name) return picked.name;
+  picked = null;
+  return "";
+}
+
 // The workspace you are in is the folder of the focused session, or the one last picked.
 function project() {
+  const chosen = pickedFolder();
+  if (chosen) return chosen;
   const s = saved.tabs.length ? sessionFor(focusedLeaf()?.key) : null;
   return s ? projectOf(s) : saved.folder;
 }
@@ -165,7 +251,8 @@ function detach(sp, key) {
   for (const t of sp.tabs) {
     const leaf = leaves(t.root).find((l) => l.key === key);
     if (!leaf) continue;
-    if (!removeLeaf(t, leaf)) {
+    if (removeLeaf(t, leaf)) nameDispatchTab(t);
+    else {
       const at = sp.tabs.indexOf(t);
       if (sp.tabs.length === 1) t.root = { pane: newId(), key: null };
       else {
@@ -176,6 +263,12 @@ function detach(sp, key) {
     return leaf;
   }
   return null;
+}
+
+function nameDispatchTab(t) {
+  const all = leaves(t.root);
+  if (all.length === 1 && isDispatch(all[0])) t.name = "Dispatch";
+  if (all.length === 1 && isDoc(all[0])) t.name = fileName(all[0]);
 }
 
 function tabName(sp, s) {
@@ -211,7 +304,7 @@ function sync() {
   for (const s of mine) {
     const key = keyOf(s);
     if (s.stale || placed.has(key) || sp.hidden.includes(key)) continue;
-    const blank = sp.tabs.length === 1 && !leaves(sp.tabs[0].root).some((l) => l.key) ? sp.tabs[0] : null;
+    const blank = sp.tabs.length === 1 && leaves(sp.tabs[0].root).every(isEmpty) ? sp.tabs[0] : null;
     if (blank) {
       leaves(blank.root)[0].key = key;
       blank.name = tabName({ tabs: [] }, s);
@@ -236,7 +329,7 @@ function focusedLeaf() {
 }
 
 function visibleKeys() {
-  if (document.hidden || !saved.tabs.length) return new Set();
+  if (document.hidden || !saved.tabs.length || document.body.classList.contains("ws-list")) return new Set();
   const all = phone.matches ? [focusedLeaf()] : leaves(tab().root);
   return new Set(all.map((l) => l.key).filter(Boolean));
 }
@@ -251,100 +344,54 @@ function trackActivity() {
     const before = lastActivity.get(key);
     if (s.activity === "idle" && before && before !== "idle" && !visible.has(key)) done.add(key);
     if (s.activity !== "idle" || visible.has(key)) done.delete(key);
+    if (before !== undefined && before !== s.activity) changedAt.set(key, Date.now());
     lastActivity.set(key, s.activity);
+    if (visible.has(key)) window.YardbellTree.look(key, stateOf(s));
   }
   for (const key of [...done]) if (!live.has(key)) done.delete(key);
+  for (const key of [...changedAt.keys()]) if (!live.has(key)) changedAt.delete(key);
+}
+
+const KEPT_KEY = "yardbell.ws.kept";
+
+function kept() {
+  try {
+    const list = JSON.parse(stored(KEPT_KEY) || "[]");
+    return Array.isArray(list) ? list.filter((k) => k && typeof k.machine === "string" && typeof k.folder === "string") : [];
+  } catch {
+    return [];
+  }
+}
+
+function keepFolder(entry) {
+  const list = kept().filter((k) => !(k.machine === entry.machine && k.folder === entry.folder));
+  list.push(entry);
+  try { localStorage.setItem(KEPT_KEY, JSON.stringify(list)); } catch {}
 }
 
 function projects() {
-  const names = [...new Set(sessions().map(projectOf))];
+  const names = [...new Set([...sessions().map(projectOf), ...kept().map((k) => `${k.machine}${SEP}${k.folder}`)])];
   if (saved.folder && !names.includes(saved.folder)) names.push(saved.folder);
   return names.filter((n) => n.includes(SEP)).sort((a, b) => machineOf(a).localeCompare(machineOf(b)) || folderOf(a).localeCompare(folderOf(b)));
-}
-
-function pullMark(p) {
-  if (!p) return "";
-  const { word, tone } = window.YardbellPull.status(p);
-  return `<span class="ws-pr ${tone}" title="${esc(window.YardbellPull.describe(p))}" aria-label="${esc(window.YardbellPull.noun(p))} ${esc(window.YardbellPull.ref(p))}, ${esc(word)}">${esc(window.YardbellPull.ref(p))}</span>`;
-}
-
-function reviewMark(s) {
-  const m = window.YardbellPull.reviewMark(s);
-  if (!m) return "";
-  return `<span class="ws-pr ws-review ${m.tone}" title="${esc(m.title)}">${esc(m.word)}</span>`;
 }
 
 function dot(st) {
   return `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
 }
 
-// Every state the server pushes renders the sidebar, and writing the same markup again replaces
-// its buttons, which drops a click that lands in between. Only a change is written.
-const painted = new WeakMap();
-
-function paint(el, markup) {
-  if (painted.get(el) === markup) return;
-  painted.set(el, markup);
-  el.innerHTML = markup;
-}
-
 function renderSide() {
-  const all = sessions().filter((s) => !s.stale);
-  const counts = {};
-  for (const s of all) counts[stateOf(s)] = (counts[stateOf(s)] || 0) + 1;
-  const server = state.server;
-  paint($("server"), server ? `<span>Running on</span> <b>${esc(server.machine)}</b> <code>${esc(server.address)}</code>${version(server)}` : "");
-  const mesh = state.mesh;
-  const on = mesh?.on === true ? "on" : mesh?.on === false ? "off" : "status unknown";
-  $("nav-vpn").title = mesh ? `${mesh.label} ${on}` : "";
-  paint($("nav-vpn"), mesh ? `<span class="dot ${mesh.on === true ? "ok" : mesh.on === false ? "bad" : ""}"></span>${esc(mesh.label)} ${on}` : "");
-  const summary = ["blocked", "done", "working", "idle"]
-    .filter((k) => counts[k]).map((k) => `${counts[k]} ${WORD[k]}`).join(" · ") || "No agents running";
-  if ($("summary").textContent !== summary) $("summary").textContent = summary;
-
-  const inPane = new Map(leaves(tab().root).map((l, i) => [l.key, i + 1]));
-  const row = (s) => {
-    const key = keyOf(s);
-    const st = stateOf(s);
-    const n = inPane.get(key);
-    const where = n && !phone.matches ? `<span class="ws-pane-no" title="In pane ${n}">${n}</span>` : "";
-    return `<li><button type="button" class="ws-item${n && key === focusedLeaf()?.key ? " current" : ""}${s.stale ? " stale" : ""}" data-key="${esc(key)}"${s.stale ? " disabled" : ""}>
-      ${dot(st)}
-      <span class="ws-item-main"><span class="ws-item-title">${esc(title(s))}</span><span class="ws-item-sub">${pullMark(s.pull)}${reviewMark(s)}${esc([agentLabel(s.agent), s.branch].filter(Boolean).join(" · "))}</span></span>
-      <span class="ws-item-word ${st}">${esc(WORD[st] || "last known")}</span>${where}
-    </button></li>`;
-  };
-  let lastMachine = "";
-  const folds = foldedMachines();
-  paint($("tree"), projects().map((name) => {
-    const mine = sessions().filter((s) => projectOf(s) === name);
-    const current = name === project();
-    const machine = machineOf(name);
-    const folded = folds.has(machine);
-    const live = sessions().filter((s) => !s.stale && s.machine === machine).length;
-    const head = machine !== lastMachine ? `<li class="ws-machine"><button type="button" class="ws-machine-btn" data-fold="${esc(machine)}" aria-expanded="${!folded}" title="${folded ? "Show" : "Hide"} the sessions on ${esc(machine)}">
-      <svg class="icon chevron" viewBox="0 0 16 16" aria-hidden="true"><path d="M6 4l4 4-4 4"/></svg><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2" y="3" width="12" height="8" rx="1.2"/><path d="M6 13.5h4M8 11v2.5"/></svg><span class="ws-machine-name">${esc(machine)}</span><span class="ws-count">${live}</span>
-    </button></li>` : "";
-    lastMachine = machine;
-    const hide = folded ? ' class="ws-folded"' : "";
-    return `${head}<li${hide}><button type="button" class="ws-space${current ? " current" : ""}" data-space="${esc(name)}" title="${esc(spaceLabel(name))}"${current ? ' aria-current="true"' : ""}>
-      ${dot(worst(mine))}<span class="rail-initial" aria-hidden="true">${esc(window.YardbellSide.initials(spaceLabel(name)))}</span><span class="ws-space-name">${esc(spaceLabel(name))}</span><span class="ws-count">${mine.filter((s) => !s.stale).length}</span>
-    </button></li>${mine.length ? `<li${hide}><ul class="ws-terminals">${mine.map(row).join("")}</ul></li>` : ""}`;
-  }).join("") || `<li class="ws-empty">No sessions running. Start one with New session.</li>`);
-}
-
-const FOLDED_KEY = "yardbell.ws.folded";
-
-function foldedMachines() {
-  try { return new Set(JSON.parse(localStorage.getItem(FOLDED_KEY) || "[]")); } catch { return new Set(); }
-}
-
-function fold(machine, hide) {
-  const folds = foldedMachines();
-  if (hide) folds.add(machine);
-  else folds.delete(machine);
-  try { localStorage.setItem(FOLDED_KEY, JSON.stringify([...folds])); } catch {}
-  renderSide();
+  const here = project();
+  const focused = saved.tabs.length ? focusedLeaf()?.key : null;
+  const folder = here ? { machine: machineOf(here), folder: folderOf(here) } : null;
+  window.YardbellTree.render(treeEl, state, {
+    stateOf,
+    phone: phone.matches,
+    selected: focused && sessionFor(focused) && !pickedFolder() ? { key: focused } : folder,
+    keep: [...kept(), ...(folder ? [folder] : [])],
+    ageOf: (key) => changedAt.get(key),
+    onSession: open,
+    onFolder: ({ machine, folder: path }) => openSpace(`${machine}${SEP}${path}`),
+  });
 }
 
 let renaming = null;
@@ -358,14 +405,43 @@ function tabState(t) {
   return worst(leaves(t.root).map((l) => sessionFor(l.key)).filter(Boolean));
 }
 
+const CHECK_CIRCLE = '<circle cx="8" cy="8" r="6"/><path d="m5.5 8.2 1.7 1.7 3.3-3.6"/>';
+const STATE_ICONS = {
+  done: CHECK_CIRCLE,
+  idle: CHECK_CIRCLE,
+  working: '<circle cx="8" cy="8" r="6" opacity=".25"/><path d="M8 2a6 6 0 0 1 6 6"/>',
+  blocked: '<circle cx="8" cy="8" r="6"/><path d="M8 5v3.5M8 11h.01"/>',
+  error: '<circle cx="8" cy="8" r="6"/><path d="m6 6 4 4M10 6l-4 4"/>',
+};
+
+const DIFF_ICON = '<svg class="ws-agent" viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1.75H4.25c-.83 0-1.5.67-1.5 1.5v9.5c0 .83.67 1.5 1.5 1.5h7.5c.83 0 1.5-.67 1.5-1.5V6z"/><path d="M8 5.5v4M6 7.5h4M6 11.5h4"/></svg>';
+const FILE_ICON = '<svg class="ws-agent" viewBox="0 0 16 16" aria-hidden="true"><path d="M9 1.75H4.25c-.83 0-1.5.67-1.5 1.5v9.5c0 .83.67 1.5 1.5 1.5h7.5c.83 0 1.5-.67 1.5-1.5V6z"/><path d="M9 1.75V6h4.25"/></svg>';
+
+const AGENT_ICONS = {
+  claude: `<svg class="ws-agent claude" viewBox="0 0 16 16" aria-hidden="true">${[0, 30, 60, 90, 120, 150, 180, 210, 240, 270, 300, 330].map((a, n) => `<path d="M8 8V${n % 2 ? 2.2 : 1}" transform="rotate(${a} 8 8)"/>`).join("")}</svg>`,
+  other: '<svg class="ws-agent" viewBox="0 0 16 16" aria-hidden="true"><path d="m3.5 5 3 3-3 3M8 11.5h4.5"/></svg>',
+};
+
+function stateIcon(st) {
+  return STATE_ICONS[st] ? `<span class="ws-tab-state ${st}" title="${esc(WORD[st])}"><svg viewBox="0 0 16 16" aria-hidden="true">${STATE_ICONS[st]}</svg></span>` : "";
+}
+
+function tabAgent(t, current) {
+  const all = leaves(t.root);
+  if (all.every(isDoc)) return all.every(isDiff) ? DIFF_ICON : FILE_ICON;
+  const live = all.map((l) => ({ l, s: sessionFor(l.key) })).filter((x) => x.s);
+  const pick = (current && live.find((x) => x.l.pane === space().focus)) || live[0];
+  return pick?.s.agent === "claude" ? AGENT_ICONS.claude : AGENT_ICONS.other;
+}
+
 function renderTabs() {
   if (renaming !== null) return;
   const sp = space();
   const strip = $("tabs");
   const html = sp.tabs.map((t, i) => {
     const st = tabState(t);
-    const close = sp.tabs.length > 1 || leaves(t.root).some((l) => l.key) ? `<span class="ws-tab-close" data-close-tab="${i}" role="button" aria-label="Close tab ${esc(t.name)}" title="Close tab">×</span>` : "";
-    return `<div class="ws-tab${i === sp.tab ? " current" : ""}" role="tab" aria-selected="${i === sp.tab}" tabindex="0" data-tab="${i}" title="${esc(t.name)}&#10;Double-click to rename, right-click for more">${st ? dot(st) : ""}<span class="ws-tab-name">${esc(t.name)}</span>${close}</div>`;
+    const close = sp.tabs.length > 1 || !leaves(t.root).every(isEmpty) ? `<span class="ws-tab-close" data-close-tab="${i}" role="button" aria-label="Close tab ${esc(t.name)}" title="Close tab"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></span>` : "";
+    return `<div class="ws-tab${i === sp.tab ? " current" : ""}" role="tab" aria-selected="${i === sp.tab}" tabindex="0" data-tab="${i}" title="${esc(t.name)}&#10;Double-click to rename, right-click for more">${stateIcon(st)}${tabAgent(t, i === sp.tab)}<span class="ws-tab-name">${esc(t.name)}</span>${close}</div>`;
   }).join("");
   if (html !== tabsHtml) {
     const focused = strip.contains(document.activeElement) ? document.activeElement.closest("[data-tab]")?.dataset.tab : undefined;
@@ -428,15 +504,15 @@ function paneEl(leaf) {
   el.className = "ws-pane";
   el.dataset.pane = leaf.pane;
   el.innerHTML = `<header class="ws-pane-head">
-      <span class="ws-pane-no"></span>
-      <span class="ws-pane-title"></span>
-      <button class="btn quiet ws-pane-btn" type="button" data-act="text" title="Show the screen as text you can select and copy">Copy text</button>
-      <a class="btn quiet ws-pane-btn" data-act="full" target="_blank" rel="noopener" title="Open in its own tab">Open</a>
-      <button class="btn quiet icon-btn ws-split-btn" type="button" data-act="split-row" aria-label="Split right" title="Split right (Alt+\\)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10"/></svg></button>
-      <button class="btn quiet icon-btn ws-split-btn" type="button" data-act="split-col" aria-label="Split down" title="Split down (Alt+-)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M2.5 8h11"/></svg></button>
-      <button class="btn quiet icon-btn ws-own-btn" type="button" data-act="own-tab" aria-label="Move to its own tab" title="Move to its own tab"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M9.5 2.5h4v4M13.5 2.5 8 8M11.5 9.5v3a1 1 0 0 1-1 1h-7a1 1 0 0 1-1-1v-7a1 1 0 0 1 1-1h3"/></svg></button>
-      <button class="btn quiet icon-btn ws-more-btn" type="button" data-act="more" aria-label="More for this session" title="More" aria-haspopup="menu" aria-expanded="false"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r=".9"/><circle cx="8" cy="8" r=".9"/><circle cx="12.5" cy="8" r=".9"/></svg></button>
-      <button class="btn quiet icon-btn" type="button" data-act="close" aria-label="Close pane" title="Close pane (Alt+X)"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>
+      <span class="ws-state" hidden></span>
+      <strong class="ws-pane-title"></strong>
+      <span class="ws-pane-sub"></span>
+      <span class="ws-views" hidden></span>
+      <span class="ws-pane-end">
+        <span class="ws-pane-pr" hidden></span>
+        <button class="btn quiet ws-main-btn" type="button" data-act="main" hidden></button>
+        <button class="btn quiet icon-btn ws-more-btn" type="button" data-act="more" aria-label="More for this pane" title="More" aria-haspopup="menu" aria-expanded="false"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r=".9"/><circle cx="8" cy="8" r=".9"/><circle cx="12.5" cy="8" r=".9"/></svg></button>
+      </span>
     </header>
     <div class="ws-pane-body"></div>`;
   $("panes").append(el);
@@ -447,8 +523,56 @@ function paneEl(leaf) {
 function home() {
   const name = project();
   if (!name) return null;
-  return (state?.folders || []).find((f) => f.label === folderOf(name) && f.machine === machineOf(name));
+  const known = (state?.folders || []).find((f) => f.label === folderOf(name) && f.machine === machineOf(name));
+  if (known) return known;
+  const mine = kept().find((k) => k.machine === machineOf(name) && k.folder === folderOf(name));
+  return mine ? { machine: mine.machine, label: mine.folder, path: mine.path } : null;
 }
+
+function addProject() {
+  if (!state) return;
+  const up = (state.machines || []).filter((m) => m.up).map((m) => m.name);
+  if (!up.length) { toast("No machine is connected right now"); return; }
+  window.YardbellNewSession.addProject({
+    machines: up,
+    machine: home()?.machine || (project() ? machineOf(project()) : ""),
+    onAdd: ({ machine, path }) => {
+      const label = (state?.folders || []).find((f) => f.machine === machine && f.path === path)?.label || path;
+      keepFolder({ machine, folder: label, path });
+      openSpace(`${machine}${SEP}${label}`);
+    },
+  });
+}
+
+const SETUP_DISMISS_KEY = "yardbell.setup-card.dismissed";
+let setupConfigured = null;
+
+async function checkSetup() {
+  try {
+    const res = await fetch("/api/settings/worktree-setup", { headers: { Accept: "application/json" } });
+    if (!res.ok) return;
+    const { setups } = await res.json();
+    setupConfigured = (setups || []).some((s) => String(s.command || "").trim());
+  } catch {
+    return;
+  }
+  renderSetupCard();
+}
+
+function renderSetupCard() {
+  const card = $("setup-card");
+  const dismissed = stored(SETUP_DISMISS_KEY) === "1";
+  card.hidden = setupConfigured !== false || dismissed;
+  if (card.hidden) return;
+  const here = project();
+  const where = here ? `<p class="setup-card-where"><span class="setup-card-mark" aria-hidden="true"></span>${esc(spaceLabel(here))}</p>` : "";
+  card.innerHTML = `<button class="setup-card-x" type="button" id="setup-card-x" aria-label="Dismiss" title="Dismiss"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+    <h2 class="setup-card-title" id="setup-card-title">Add a setup script</h2>${where}
+    <p class="setup-card-text">Add a setup command to run when Yardbell creates new worktrees.</p>
+    <a class="btn setup-card-go" href="/settings#worktree-setup"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Configure</a>`;
+}
+
+const START_ICON = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5l3 3-3 3M8 11.5h5"/></svg>`;
 
 function emptyPane(leaf) {
   const shown = new Set(leaves(tab().root).map((l) => l.key));
@@ -465,21 +589,23 @@ function emptyPane(leaf) {
     ? `<select class="ws-other" data-start-other aria-label="Start another agent"${busy}><option value="">Other agent…</option>${rest.map((a) => `<option value="${esc(a.name)}">${esc(a.label)}</option>`).join("")}</select>`
     : "";
   const start = where && all.length
-    ? `<p>Start an agent in ${esc(short(where.label).split("/").pop())}:</p><div class="ws-picks">${mine.map((a, i) =>
-      `<button class="btn${i === 0 ? " primary" : ""}" type="button" data-start="${esc(a.name)}"${busy}>${esc(a.label)}</button>`).join("")}${other}</div>${busy ? "<p>Starting…</p>" : ""}`
+    ? `<p class="ws-empty-label">Start an agent in ${esc(short(where.label).split("/").pop())}:</p><div class="ws-picks">${mine.map((a, i) =>
+      `<button class="btn${i === 0 ? " primary" : ""}" type="button" data-start="${esc(a.name)}"${busy}>${START_ICON}${esc(a.label)}</button>`).join("")}${other}</div>${busy ? `<p class="ws-empty-note">Starting…</p>` : ""}`
     : "";
   const list = picks.length
-    ? `<p>Or open one that is running:</p><div class="ws-picks">${picks.map((s) => `<button class="btn" type="button" data-pick="${esc(keyOf(s))}">${dot(stateOf(s))}${esc(title(s))} <span>${esc(agentLabel(s.agent))}</span></button>`).join("")}</div>`
+    ? `<p class="ws-empty-label">Or open one that is running:</p><div class="ws-picks">${picks.map((s) => `<button class="btn" type="button" data-pick="${esc(keyOf(s))}">${dot(stateOf(s))}${esc(title(s))} <span>${esc(agentLabel(s.agent))}</span></button>`).join("")}</div>`
     : "";
   const failed = startErrors.get(leaf.pane);
+  const ended = leaf.ended ? `<p class="ws-empty-note">That session has ended.</p>` : "";
   return `<div class="ws-pane-empty">
-    <p>Nothing open in this pane.</p>${start}${failed ? `<p class="ws-pane-error" role="alert">${esc(failed)}</p>` : ""}${list}
+    ${ended}<p class="ws-empty-title">Nothing open in this pane.</p>${start}${failed ? `<p class="ws-pane-error" role="alert">${esc(failed)}</p>` : ""}${list}
   </div>`;
 }
 
 async function startHere(leaf, agent) {
   const where = home();
   if (!where || starting.has(leaf.pane)) return;
+  delete leaf.ended;
   starting.add(leaf.pane);
   startErrors.delete(leaf.pane);
   render();
@@ -502,17 +628,125 @@ async function startHere(leaf, agent) {
   }
 }
 
-function fillPane(el, leaf, n, alone) {
-  const s = leaf.key && sessionFor(leaf.key);
-  el.querySelector(".ws-pane-no").textContent = n;
-  el.querySelectorAll(".ws-pane-btn").forEach((b) => { b.hidden = !leaf.key; });
-  el.querySelector(".ws-own-btn").hidden = !leaf.key || alone;
-  el.querySelector(".ws-more-btn").hidden = !leaf.key;
+function dispatchSrc(conversation) {
+  return `/dispatch${conversation ? `?c=${encodeURIComponent(conversation)}` : ""}`;
+}
+
+async function loadDispatchTitles() {
+  try {
+    const res = await fetch("/dispatch/conversations", { headers: { Accept: "application/json" } });
+    if (!res.ok) return;
+    for (const c of await res.json()) dispatchTitles.set(c.id, c.title);
+    render();
+  } catch {}
+}
+
+function termSrc(key) {
+  const [machine, ...rest] = key.split("/");
+  return `/term/${encodeURIComponent(machine)}/${encodeURIComponent(rest.join("/"))}`;
+}
+
+// Only an activity change seen on this page dates a session, so a fresh page shows no age.
+function ageOf(key) {
+  const since = changedAt.get(key);
+  if (!since) return "";
+  const minutes = Math.floor((Date.now() - since) / 60000);
+  if (minutes < 1) return "";
+  return minutes < 60 ? ` ${minutes}m` : ` ${Math.floor(minutes / 60)}h`;
+}
+
+function subOf(s) {
+  const st = stateOf(s);
+  const age = ["idle", "done", "blocked"].includes(st) ? ageOf(keyOf(s)) : "";
+  return `${agentLabel(s.agent)} · ${WORD[st] || "last known"}${age}`;
+}
+
+function canMerge(s) {
+  return s.pull?.state === "open" && window.YardbellPull.ready(s.pull) && !s.stale;
+}
+
+function asksReview(s) {
+  return s.review?.state === "asking";
+}
+
+function mainAction(s) {
+  if (!s) return null;
+  const P = window.YardbellPull;
+  if (canMerge(s)) return { kind: "merge", label: `Merge ${P.ref(s.pull)}` };
+  if (asksReview(s)) return { kind: "review", label: "Open review", title: P.reviewMark(s)?.title || "" };
+  return null;
+}
+
+function pullLine(s) {
+  const P = window.YardbellPull;
+  const { word, tone } = P.status(s.pull);
+  const review = P.reviewMark(s);
+  return { text: `${P.ref(s.pull)} ${word}`, tone, title: review ? `${P.describe(s.pull)} ${review.title}` : P.describe(s.pull) };
+}
+
+function paintHead(el, { st = null, name, sub = "", s = null }) {
+  const head = el.querySelector(".ws-pane-head");
+  const mark = head.querySelector(":scope > .ws-state");
+  mark.hidden = st === null;
+  if (st !== null) {
+    mark.className = `ws-state ${st}`;
+    mark.title = WORD[st] || "last known";
+  }
+  const strong = head.querySelector(".ws-pane-title");
+  strong.textContent = name;
+  strong.title = name;
+  head.querySelector(".ws-pane-sub").textContent = sub;
+  const pr = head.querySelector(".ws-pane-pr");
+  pr.hidden = !s?.pull;
+  if (s?.pull) {
+    const { text, tone, title: why } = pullLine(s);
+    pr.className = `ws-pane-pr${tone ? ` ${tone}` : ""}`;
+    pr.textContent = text;
+    pr.title = why;
+  }
+  const main = head.querySelector('[data-act="main"]');
+  const act = mainAction(s);
+  main.hidden = !act;
+  main.textContent = act?.label || "";
+  main.title = act?.title || "";
+}
+
+// The frame is made once: a new src would reload Dispatch and drop whatever is half typed in it.
+function fillDispatch(leaf, body) {
+  delete body.dataset.html;
+  if (body.querySelector("iframe[data-dispatch]")) return;
+  const frame = document.createElement("iframe");
+  frame.dataset.dispatch = "";
+  frame.title = "Dispatch";
+  frame.src = dispatchSrc(leaf.conversation);
+  body.replaceChildren(frame);
+  loadDispatchTitles();
+}
+
+function fillPane(el, leaf) {
   const body = el.querySelector(".ws-pane-body");
   const frame = body.querySelector("iframe");
-  const head = el.querySelector(".ws-pane-title");
-  if (!leaf.key) {
-    head.textContent = "Empty";
+  if (!isFile(leaf)) delete body.dataset.file;
+  if (!isDiff(leaf)) delete body.dataset.diff;
+  if (isFile(leaf)) {
+    delete body.dataset.html;
+    paintHead(el, { name: fileName(leaf), sub: `on ${leaf.machine}` });
+    window.YardbellSide.fillFile(body, leaf);
+    return;
+  }
+  if (isDiff(leaf)) {
+    delete body.dataset.html;
+    paintHead(el, { name: fileName(leaf), sub: `changes on ${leaf.machine}` });
+    window.YardbellChanges.fillDiff(body, leaf);
+    return;
+  }
+  if (isDispatch(leaf)) {
+    paintHead(el, { name: dispatchTitles.get(leaf.conversation) || "Dispatch" });
+    fillDispatch(leaf, body);
+    return;
+  }
+  if (isEmpty(leaf)) {
+    paintHead(el, { name: "Empty" });
     const html = emptyPane(leaf);
     if (body.dataset.html !== html) {
       body.innerHTML = html;
@@ -521,18 +755,15 @@ function fillPane(el, leaf, n, alone) {
     return;
   }
   delete body.dataset.html;
+  const s = sessionFor(leaf.key);
   const [machine, ...rest] = leaf.key.split("/");
   const name = rest.join("/");
-  const src = `/term/${encodeURIComponent(machine)}/${encodeURIComponent(name)}`;
-  head.innerHTML = s
-    ? `${dot(stateOf(s))}<strong>${esc(title(s))}</strong> <span>${esc(agentLabel(s.agent))} on ${esc(machine)}</span>`
-    : `<strong>${esc(name)}</strong> <span>on ${esc(machine)}</span>`;
-  el.querySelector('[data-act="full"]').href = src;
+  paintHead(el, s ? { st: stateOf(s), name: title(s), sub: subOf(s), s } : { name, sub: `on ${machine}` });
   if (frame?.dataset.key === leaf.key) return;
   const next = document.createElement("iframe");
   next.dataset.key = leaf.key;
   next.title = `Terminal for ${name} on ${machine}`;
-  next.src = `${src}?embed=1`;
+  next.src = `${termSrc(leaf.key)}?embed=1`;
   body.replaceChildren(next);
 }
 
@@ -544,13 +775,16 @@ function renderPanes() {
   $("panes").classList.toggle("many", !phone.matches && leaves(tab().root).length > 1);
   sp.tabs.forEach((t, ti) => {
     const layout = rects(t.root, { x: 0, y: 0, w: 1, h: 1 });
-    layout.panes.forEach(({ leaf, box }, i) => {
+    layout.panes.forEach(({ leaf, box }) => {
       keep.add(leaf.pane);
       const el = paneEl(leaf);
       el.hidden = ti !== sp.tab || (phone.matches && leaf.pane !== focusedLeaf().pane);
-      el.classList.toggle("focused", leaf.pane === sp.focus && layout.panes.length > 1);
-      place(el, phone.matches ? { x: 0, y: 0, w: 1, h: 1 } : box);
-      fillPane(el, leaf, i + 1, layout.panes.length === 1);
+      el.classList.toggle("focused", !phone.matches && leaf.pane === sp.focus && layout.panes.length > 1);
+      const at = phone.matches ? { x: 0, y: 0, w: 1, h: 1 } : box;
+      place(el, at);
+      el.classList.toggle("edge-right", at.x + at.w < 0.999);
+      el.classList.toggle("edge-bottom", at.y + at.h < 0.999);
+      fillPane(el, leaf);
     });
   });
   for (const [id, el] of paneEls) {
@@ -594,11 +828,54 @@ function drag(e, node, box) {
 function render() {
   if (!state) return;
   sync();
+  if (dispatchAfterSync) {
+    dispatchAfterSync = false;
+    if (!saved.tabs.some((t) => leaves(t.root).some(isDispatch))) placeDispatch("");
+  }
   if (!projects().includes(saved.folder)) saved.folder = projects()[0] || "";
+  for (const t of saved.tabs) for (const l of leaves(t.root)) if (l.ended && l.key) delete l.ended;
   save();
   renderTabs();
   renderPanes();
+  renderTop();
   renderSide();
+  renderSetupCard();
+  syncDispatchPressed();
+  window.YardbellSide.update();
+}
+
+function setMode(mode) {
+  document.body.classList.toggle("ws-list", mode === "list");
+  document.body.classList.toggle("ws-session", mode === "session");
+}
+
+function showSession() {
+  if (phone.matches) setMode("session");
+}
+
+function showList() {
+  setMode("list");
+  render();
+}
+
+// The phone's top bar and pull request strip stand in for the one pane's own header.
+function renderTop() {
+  const leaf = focusedLeaf();
+  const name = paneEls.get(leaf.pane)?.querySelector(".ws-pane-title").textContent || "";
+  const heading = $("ws-title");
+  heading.textContent = name;
+  heading.title = name;
+  const strip = $("pr-strip");
+  const s = phone.matches && leaf.key ? sessionFor(leaf.key) : null;
+  strip.hidden = !s?.pull;
+  if (!s?.pull) return;
+  const { text, tone, title: why } = pullLine(s);
+  const ref = strip.querySelector(".ws-pr-ref");
+  ref.className = `ws-pr-ref${tone ? ` ${tone}` : ""}`;
+  ref.textContent = text;
+  ref.title = why;
+  strip.querySelector('[data-pr="merge"]').hidden = !canMerge(s);
+  strip.querySelector('[data-pr="review"]').hidden = !asksReview(s);
 }
 
 function focusPane(id, { into = true } = {}) {
@@ -606,7 +883,10 @@ function focusPane(id, { into = true } = {}) {
   if (!leaves(tab().root).some((l) => l.pane === id)) return;
   sp.focus = id;
   const leaf = focusedLeaf();
-  if (leaf?.key) done.delete(leaf.key);
+  if (leaf?.key) {
+    done.delete(leaf.key);
+    lookAt(leaf.key);
+  }
   save();
   render();
   if (into) paneEls.get(id)?.querySelector("iframe")?.contentWindow?.postMessage({ yardbell: "focus" }, location.origin);
@@ -617,22 +897,91 @@ function reveal(key) {
   const ti = sp.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === key));
   if (ti < 0) return false;
   sp.tab = ti;
-  document.body.classList.remove("ws-picking");
+  showSession();
   focusPane(leaves(sp.tabs[ti].root).find((l) => l.key === key).pane);
   return true;
 }
 
+function lookAt(key) {
+  const s = sessionFor(key);
+  if (s) window.YardbellTree.look(key, stateOf(s));
+}
+
 function open(key) {
+  picked = null;
   done.delete(key);
+  lookAt(key);
   const sp = space();
   sp.hidden = (sp.hidden || []).filter((k) => k !== key);
   sync();
   if (reveal(key)) return;
-  const all = leaves(tab().root);
-  const target = [focusedLeaf(), ...all].find((l) => !l.key) || focusedLeaf();
+  const all = [focusedLeaf(), ...leaves(tab().root)];
+  const target = all.find(isEmpty) || all.find((l) => !isDispatch(l) && !isDoc(l));
+  showSession();
+  if (!target) {
+    const s = sessionFor(key);
+    const leaf = { pane: newId(), key };
+    sp.tabs.splice(sp.tab + 1, 0, { id: newId(), name: s ? tabName(sp, s) : key.split("/").pop(), root: leaf });
+    sp.tab += 1;
+    focusPane(leaf.pane);
+    return;
+  }
   target.key = key;
-  document.body.classList.remove("ws-picking");
   focusPane(target.pane);
+}
+
+function findDispatch() {
+  for (const [ti, t] of space().tabs.entries()) {
+    const leaf = leaves(t.root).find(isDispatch);
+    if (leaf) return { ti, leaf };
+  }
+  return null;
+}
+
+// Goes to the right of the focused pane, or takes the place of a tab's one empty pane. It does
+// not move the focus, so a layout brought over from v4 keeps its focused session.
+function placeDispatch(conversation) {
+  const leaf = { pane: newId(), kind: "dispatch", conversation };
+  const t = tab();
+  const all = leaves(t.root);
+  if (all.length === 1 && isEmpty(all[0])) {
+    t.root = leaf;
+    t.name = "Dispatch";
+    space().focus = leaf.pane;
+    return leaf;
+  }
+  const at = focusedLeaf();
+  const parent = parentOf(t.root, at);
+  const pair = { split: "row", ratio: 0.5, a: at, b: leaf };
+  if (!parent) t.root = pair;
+  else if (parent.a === at) parent.a = pair;
+  else parent.b = pair;
+  return leaf;
+}
+
+function openDispatch(conversation = "") {
+  const found = findDispatch();
+  if (!found) {
+    const leaf = placeDispatch(conversation);
+    focusPane(leaf.pane);
+    return leaf;
+  }
+  const { ti, leaf } = found;
+  if (conversation && conversation !== leaf.conversation) {
+    leaf.conversation = conversation;
+    const frame = dispatchFrame();
+    if (frame) frame.src = dispatchSrc(conversation);
+    if (!dispatchTitles.has(conversation)) loadDispatchTitles();
+  }
+  space().tab = ti;
+  showSession();
+  focusPane(leaf.pane);
+  return leaf;
+}
+
+function dispatchFrame() {
+  const found = findDispatch();
+  return (found && paneEls.get(found.leaf.pane)?.querySelector("iframe[data-dispatch]")) || null;
 }
 
 function split(dir) {
@@ -652,17 +1001,22 @@ function closePane(id = space().focus) {
   const t = tab();
   const leaf = leaves(t.root).find((l) => l.pane === id);
   if (!leaf) return;
+  if (phone.matches) setMode("list");
   const sp = space();
   if (leaf.key) sp.hidden.push(leaf.key);
   if (removeLeaf(t, leaf)) {
+    nameDispatchTab(t);
     sp.focus = leaves(t.root)[0].pane;
   } else if (sp.tabs.length > 1) {
     sp.tabs.splice(sp.tab, 1);
     switchTab(Math.min(sp.tab, sp.tabs.length - 1));
     return;
+  } else if (isDispatch(leaf) || isDoc(leaf)) {
+    t.root = { pane: newId(), key: null };
+    t.name = "Agents";
+    sp.focus = t.root.pane;
   } else {
     leaf.key = null;
-    if (phone.matches) document.body.classList.add("ws-picking");
   }
   save();
   render();
@@ -672,9 +1026,10 @@ function ownTab(id) {
   const sp = space();
   const t = tab();
   const leaf = leaves(t.root).find((l) => l.pane === id);
-  if (!leaf?.key || !removeLeaf(t, leaf)) return;
+  if (!leaf || isEmpty(leaf) || !removeLeaf(t, leaf)) return;
   const s = sessionFor(leaf.key);
-  sp.tabs.splice(sp.tab + 1, 0, { id: newId(), name: s ? title(s) : leaf.key.split("/").pop(), root: leaf });
+  const name = isDispatch(leaf) ? "Dispatch" : isDoc(leaf) ? fileName(leaf) : s ? title(s) : leaf.key.split("/").pop();
+  sp.tabs.splice(sp.tab + 1, 0, { id: newId(), name, root: leaf });
   sp.tab += 1;
   sp.focus = leaf.pane;
   save();
@@ -690,7 +1045,7 @@ function mergeTab(from, to) {
   if (!source || !target || source === target) return;
   const mine = leaves(target.root);
   const added = leaves(source.root);
-  target.root = gridOf(mine.length === 1 && !mine[0].key ? added : [...mine, ...added]);
+  target.root = gridOf(mine.length === 1 && isEmpty(mine[0]) ? added : [...mine, ...added]);
   sp.tabs.splice(from, 1);
   sp.tab = sp.tabs.indexOf(target);
   sp.focus = added[0].pane;
@@ -773,6 +1128,10 @@ function showMenu(rect, items, trigger = null) {
     el.addEventListener("click", (e) => {
       const item = e.target.closest("[data-i]");
       if (!item) return;
+      if (item.matches("a[href]")) {
+        closeMenu();
+        return;
+      }
       const run = el.actions[Number(item.dataset.i)];
       closeMenu(e.detail === 0);
       run();
@@ -790,7 +1149,11 @@ function showMenu(rect, items, trigger = null) {
   el.trigger = trigger;
   trigger?.setAttribute("aria-expanded", "true");
   el.actions = items.map((it) => it.run);
-  el.innerHTML = items.map((it, i) => `<button type="button" role="menuitem" data-i="${i}"${it.danger ? ' class="danger"' : ""}${it.current ? ' aria-current="true"' : ""}>${it.state ? dot(it.state) : ""}<span class="menu-label">${esc(it.label)}</span>${it.state ? `<span class="ws-item-word ${it.state}">${esc(WORD[it.state])}</span>` : ""}</button>`).join("");
+  el.innerHTML = items.map((it, i) => {
+    const inner = `${it.state ? dot(it.state) : ""}<span class="menu-label">${esc(it.label)}</span>${it.state ? `<span class="ws-item-word ${it.state}">${esc(WORD[it.state])}</span>` : ""}`;
+    if (it.href) return `<a role="menuitem" data-i="${i}" href="${esc(it.href)}" target="_blank" rel="noopener">${inner}</a>`;
+    return `<button type="button" role="menuitem" data-i="${i}"${it.danger ? ' class="danger"' : ""}${it.current ? ' aria-current="true"' : ""}>${inner}</button>`;
+  }).join("");
   el.hidden = false;
   const width = el.offsetWidth;
   el.style.left = `${Math.max(8, Math.min(rect.right - width, innerWidth - width - 8))}px`;
@@ -949,6 +1312,7 @@ function openSpace(name) {
     return s && projectOf(s) === name;
   });
   if (!first || !reveal(first.key)) {
+    picked = { name, focus: saved.tabs.length ? focusedLeaf()?.key : null, tab: saved.tab };
     save();
     render();
   }
@@ -976,21 +1340,6 @@ function shortcut(code) {
   else return false;
   return true;
 }
-
-$("tree").addEventListener("click", (e) => {
-  const folder = e.target.closest("[data-fold]");
-  if (folder) {
-    fold(folder.dataset.fold, folder.getAttribute("aria-expanded") === "true");
-    return;
-  }
-  const b = e.target.closest("[data-space]");
-  if (b) {
-    openSpace(b.dataset.space);
-    return;
-  }
-  const item = e.target.closest(".ws-item");
-  if (item && !item.disabled) open(item.dataset.key);
-});
 
 $("tabs").addEventListener("click", (e) => {
   const close = e.target.closest("[data-close-tab]");
@@ -1069,6 +1418,12 @@ $("tab-list").addEventListener("click", (e) => {
 
 $("new-tab").addEventListener("click", newTab);
 $("side-new").addEventListener("click", newTab);
+$("side-add-project").addEventListener("click", addProject);
+$("setup-card").addEventListener("click", (e) => {
+  if (!e.target.closest("#setup-card-x")) return;
+  try { localStorage.setItem(SETUP_DISMISS_KEY, "1"); } catch {}
+  renderSetupCard();
+});
 
 $("panes").addEventListener("pointerdown", (e) => {
   if (phone.matches || e.button !== 0) return;
@@ -1091,47 +1446,191 @@ $("panes").addEventListener("click", (e) => {
     done.delete(pick);
     focusPane(id);
   } else if (e.target.closest("[data-start]") && leaf) startHere(leaf, e.target.closest("[data-start]").dataset.start);
-  else if (act === "close") closePane(id);
-  else if (act === "more" && leaf?.key) paneMenu(e.target.closest("[data-act]"), leaf);
-  else if (act === "own-tab") ownTab(id);
-  else if (act === "split-row" || act === "split-col") {
-    space().focus = id;
-    split(act === "split-row" ? "row" : "col");
-  } else if (act === "text") {
-    pane.querySelector("iframe")?.contentWindow?.postMessage({ yardbell: "text" }, location.origin);
-  } else if (act !== "full") {
-    focusPane(id);
-  }
+  else if (act === "main" && leaf) runMain(e.target.closest("[data-act]"), leaf);
+  else if (act === "more" && leaf) paneMenu(e.target.closest("[data-act]"), leaf);
+  else focusPane(id);
 });
 
-function paneMenu(button, leaf) {
-  if ($("ws-menu")?.trigger === button && !$("ws-menu").hidden) {
-    closeMenu();
-    return;
+function runMain(button, leaf) {
+  const s = sessionFor(leaf.key);
+  const act = mainAction(s);
+  if (act?.kind === "merge") mergeFrom(s, button);
+  else if (act?.kind === "review") openReview(s.review.conversation);
+}
+
+async function mergeFrom(s, button) {
+  const ref = window.YardbellPull.ref(s.pull);
+  const text = window.YardbellPull.mergeText(s.pull);
+  $("merge-confirm-title").textContent = text.title;
+  $("merge-confirm-text").textContent = text.body;
+  if ((await ask($("merge-confirm"))) !== "merge") return;
+  button.disabled = true;
+  try {
+    await window.YardbellPull.merge(s);
+    toast(`Merged ${ref}`);
+    load();
+  } catch (err) {
+    toast(err.message);
+  } finally {
+    button.disabled = false;
   }
+}
+
+function openReview(conversation) {
+  if (phone.matches) location.href = dispatchSrc(conversation);
+  else openDispatch(conversation);
+}
+
+function splitPane(id, dir) {
+  space().focus = id;
+  split(dir);
+}
+
+function copyText(id) {
+  paneEls.get(id)?.querySelector("iframe")?.contentWindow?.postMessage({ yardbell: "text" }, location.origin);
+}
+
+function sessionItems(leaf) {
   const [machine, ...rest] = leaf.key.split("/");
   const name = rest.join("/");
-  const all = leaves(tab().root);
-  const swaps = phone.matches ? [] : all.flatMap((other, n) => {
+  const swaps = phone.matches ? [] : leaves(tab().root).flatMap((other, n) => {
     if (other === leaf) return [];
     const s = other.key && sessionFor(other.key);
-    const what = s ? title(s) : other.key ? other.key.split("/").pop() : "empty pane";
+    const what = isDispatch(other) ? "Dispatch" : isDoc(other) ? fileName(other) : s ? title(s) : other.key ? other.key.split("/").pop() : "empty pane";
     return [{ label: `Swap with ${n + 1} · ${what}`, run: () => swapPanes(leaf.pane, other.pane) }];
   });
   const s = sessionFor(leaf.key);
   const review = window.YardbellPull.reviewable(s)
     ? [{ label: `Review ${window.YardbellPull.noun(s.pull).toLowerCase()} ${window.YardbellPull.ref(s.pull)}`, run: () => reviewPull(machine, name) }]
     : [];
-  showMenu(button.getBoundingClientRect(), [
+  return [
     ...review,
     { label: "Insights", run: () => window.YardbellInsights.open({ machine, name, onSuggest: (data) => askDispatch(data) }) },
     { label: "Suggest a better prompt", run: () => askDispatch({ machine, name }) },
     ...swaps,
-  ], button);
+  ];
 }
 
-// The review runs in Dispatch, so the conversation it went to opens in the panel, or on a phone
-// as the Dispatch page.
+function reloadFile(leaf) {
+  const body = paneEls.get(leaf.pane)?.querySelector(".ws-pane-body");
+  if (!body) return;
+  if (isDiff(leaf)) window.YardbellChanges.fillDiff(body, leaf, { reload: true });
+  else window.YardbellSide.fillFile(body, leaf, { reload: true });
+}
+
+async function copyPath(leaf) {
+  const path = `${leaf.root.replace(/\/$/, "")}/${leaf.path}`;
+  try {
+    await navigator.clipboard.writeText(path);
+    toast(`Copied ${short(path)}`);
+  } catch {
+    toast(path);
+  }
+}
+
+// A file or a diff opens in a tab of its own after the current one, or goes to the tab already
+// showing it.
+function openFile({ machine, root, path }) {
+  openDoc({ kind: "file", machine, root, path }, (l) => isFile(l));
+}
+
+function openDiff({ machine, root, path, staged }) {
+  openDoc({ kind: "diff", machine, root, path, staged: Boolean(staged) }, (l) => isDiff(l) && Boolean(l.staged) === Boolean(staged));
+}
+
+function openDoc(want, same) {
+  const sp = space();
+  for (const [ti, t] of sp.tabs.entries()) {
+    const leaf = leaves(t.root).find((l) => same(l) && l.machine === want.machine && l.root === want.root && l.path === want.path);
+    if (!leaf) continue;
+    sp.tab = ti;
+    showSession();
+    focusPane(leaf.pane);
+    return;
+  }
+  const leaf = { pane: newId(), ...want };
+  const t = tab();
+  const all = leaves(t.root);
+  if (all.length === 1 && isEmpty(all[0])) {
+    t.root = leaf;
+    t.name = fileName(leaf);
+  } else {
+    const taken = new Set(sp.tabs.map((x) => x.name));
+    let name = fileName(leaf);
+    for (let n = 2; taken.has(name); n++) name = `${fileName(leaf)} ${n}`;
+    sp.tabs.splice(sp.tab + 1, 0, { id: newId(), name, root: leaf });
+    sp.tab += 1;
+  }
+  showSession();
+  focusPane(leaf.pane);
+}
+
+// Where the side panel looks: the open file's folder, else the folder of the focused session
+// or the one picked in the tree.
+function sideWhere() {
+  const leaf = saved.tabs.length ? focusedLeaf() : null;
+  if (isDoc(leaf) && leaf.machine && leaf.root) return { machine: leaf.machine, path: leaf.root };
+  const f = home();
+  if (f?.path) return { machine: f.machine, path: f.path };
+  const s = leaf?.key ? sessionFor(leaf.key) : null;
+  const path = s?.path || s?.cwd;
+  return s && path ? { machine: s.machine, path } : null;
+}
+
+async function resumePast({ machine, path, id }) {
+  try {
+    const res = await fetch("/sessions", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Accept: "application/json" },
+      body: JSON.stringify({ machine, path, agent: "claude", resume_id: id, wait: true }),
+    });
+    const data = await res.json().catch(() => ({}));
+    if (!res.ok) throw new Error(data.error || `Could not resume the session (${res.status})`);
+    const key = `${machine}/${data.name}`;
+    await load();
+    open(key);
+  } catch (err) {
+    toast(err.message);
+  }
+}
+
+// A phone shows one pane at a time, so it has nothing to split or move into a tab of its own.
+function paneMenu(button, leaf) {
+  if ($("ws-menu")?.trigger === button && !$("ws-menu").hidden) {
+    closeMenu();
+    return;
+  }
+  const id = leaf.pane;
+  const desk = !phone.matches;
+  const splits = desk ? [
+    { label: "Split right", run: () => splitPane(id, "row") },
+    { label: "Split down", run: () => splitPane(id, "col") },
+  ] : [];
+  const own = desk && !isEmpty(leaf) && leaves(tab().root).length > 1 ? [{ label: "Move to its own tab", run: () => ownTab(id) }] : [];
+  const close = { label: "Close", run: () => closePane(id) };
+  let items;
+  if (isDispatch(leaf)) items = [{ label: "Open in its own tab", href: dispatchSrc(leaf.conversation) }, ...splits, ...own, close];
+  else if (isDoc(leaf)) items = [
+    { label: "Reload", run: () => reloadFile(leaf) },
+    { label: "Copy path", run: () => copyPath(leaf) },
+    ...splits,
+    ...own,
+    close,
+  ];
+  else if (isEmpty(leaf)) items = [...splits, close];
+  else items = [
+    { label: "Copy text", run: () => copyText(id) },
+    { label: "Open in its own tab", href: termSrc(leaf.key) },
+    ...splits,
+    ...own,
+    ...sessionItems(leaf),
+    close,
+  ];
+  showMenu(button.getBoundingClientRect(), items, button);
+}
+
+// The review runs in Dispatch, so the conversation it went to opens in the Dispatch pane, or on
+// a phone as the Dispatch page.
 async function reviewPull(machine, name) {
   let conversation;
   try {
@@ -1140,24 +1639,28 @@ async function reviewPull(machine, name) {
     toast(err.message);
     return;
   }
-  const url = `/dispatch?c=${encodeURIComponent(conversation)}`;
   if (phone.matches) {
-    location.href = url;
+    location.href = dispatchSrc(conversation);
     return;
   }
-  showDispatch(true);
-  $("ws-dispatch").querySelector("iframe").src = url;
+  const shown = findDispatch()?.leaf.conversation === conversation;
+  openDispatch(conversation);
+  const frame = dispatchFrame();
+  if (shown && frame) frame.src = dispatchSrc(conversation);
 }
 
-// Dispatch's panel takes the request; on a phone, or with the panel closed for good, the
-// Dispatch page does.
+// The Dispatch pane takes the request; on a phone the Dispatch page does.
 function askDispatch({ machine, name }) {
   if (phone.matches) {
     window.YardbellInsights.handOver({ machine, name });
     return;
   }
-  showDispatch(true);
-  const frame = $("ws-dispatch").querySelector("iframe");
+  openDispatch();
+  const frame = dispatchFrame();
+  if (!frame) {
+    window.YardbellInsights.handOver({ machine, name });
+    return;
+  }
   const post = () => frame.contentWindow?.postMessage({ yardbell: "suggest", machine, name }, location.origin);
   if (frame.contentDocument?.readyState === "complete" && frame.contentWindow?.location.pathname === "/dispatch") post();
   else frame.addEventListener("load", post, { once: true });
@@ -1170,9 +1673,15 @@ $("panes").addEventListener("change", (e) => {
   if (select?.value && leaf) startHere(leaf, select.value);
 });
 
-$("back").addEventListener("click", () => {
-  document.body.classList.add("ws-picking");
-  render();
+$("back").addEventListener("click", showList);
+$("ws-more").addEventListener("click", (e) => paneMenu(e.currentTarget, focusedLeaf()));
+
+$("pr-strip").addEventListener("click", (e) => {
+  const button = e.target.closest("[data-pr]");
+  const s = button && sessionFor(focusedLeaf()?.key);
+  if (!s) return;
+  if (button.dataset.pr === "merge" && canMerge(s)) mergeFrom(s, button);
+  else if (button.dataset.pr === "review" && asksReview(s)) openReview(s.review.conversation);
 });
 
 $("keys-btn").addEventListener("click", () => $("keys").showModal());
@@ -1185,6 +1694,7 @@ window.addEventListener("yardbell-app", (e) => {
 window.addEventListener("message", (e) => {
   if (e.origin !== location.origin) return;
   if (e.data?.yardbell === "key") shortcut(e.data.code);
+  if (e.data?.yardbell === "palette") window.YardbellPalette?.open();
   if (e.data?.yardbell !== "focused") return;
   for (const [id, el] of paneEls) {
     if (el.querySelector("iframe")?.contentWindow === e.source && id !== space().focus) focusPane(id, { into: false });
@@ -1196,12 +1706,50 @@ document.addEventListener("keydown", (e) => {
   if (shortcut(e.code)) e.preventDefault();
 });
 
-phone.addEventListener("change", render);
+phone.addEventListener("change", () => {
+  if (!phone.matches) setMode(null);
+  else setMode(focusedLeaf()?.key ? "session" : "list");
+  render();
+});
 document.addEventListener("visibilitychange", () => {
   if (document.hidden) return;
   trackActivity();
   render();
 });
+
+function followLink() {
+  const query = new URLSearchParams(location.search);
+  const split = (value) => {
+    const at = value.indexOf("/");
+    return at < 0 ? null : { machine: value.slice(0, at), rest: value.slice(at + 1) };
+  };
+  const wantOpen = split(query.get("open") || "");
+  const wantFolder = split(query.get("folder") || "");
+  history.replaceState(null, "", "/workspace");
+  if (wantOpen) {
+    const key = `${wantOpen.machine}/${wantOpen.rest}`;
+    if (sessionFor(key)) {
+      open(key);
+      return;
+    }
+    const gone = (state.ended || []).find((e) => e.id === `${wantOpen.machine}:${wantOpen.rest}`);
+    if (gone) openSpace(`${gone.machine}${SEP}${gone.folder}`);
+    let leaf = leaves(tab().root).find(isEmpty);
+    if (!leaf) {
+      const sp = space();
+      leaf = { pane: newId(), key: null };
+      sp.tabs.splice(sp.tab + 1, 0, { id: newId(), name: "Agents", root: leaf });
+      sp.tab += 1;
+    }
+    leaf.ended = true;
+    showSession();
+    focusPane(leaf.pane, { into: false });
+  } else if (wantFolder && (state.folders || []).some((f) => f.machine === wantFolder.machine)) {
+    openSpace(`${wantFolder.machine}${SEP}${wantFolder.rest}`);
+  }
+}
+
+let linked = false;
 
 async function load() {
   try {
@@ -1209,65 +1757,77 @@ async function load() {
     if (res.status === 401) { location.href = "/login"; return; }
     if (!res.ok) return;
     state = await res.json();
-    const waiting = document.getElementById("nav-proposals-count");
-    if (waiting) {
-      waiting.textContent = state.proposals ? String(state.proposals) : "";
-      waiting.hidden = !state.proposals;
-      waiting.closest(".side-link")?.classList.toggle("has-waiting", Boolean(state.proposals));
-    }
+    window.YardbellShell.update(state);
     trackActivity();
     render();
+    if (!linked) {
+      linked = true;
+      followLink();
+    }
   } catch {}
 }
 
 restore();
-if (phone.matches) document.body.classList.add("ws-picking");
+if (phone.matches) setMode("list");
+// The sessions a folder's notes can go to: any session running in it, or in a folder holding it.
+function sessionsIn(machine, root) {
+  const inside = (path, base) => {
+    const b = String(base || "").replace(/\/$/, "");
+    return Boolean(b) && (path === b || String(path).startsWith(`${b}/`));
+  };
+  return sessions()
+    .filter((s) => !s.stale && s.machine === machine)
+    .filter((s) => {
+      const at = s.path || s.cwd;
+      return at && (inside(at, root) || inside(root, at));
+    })
+    .map((s) => ({ machine: s.machine, tmux: s.tmux, label: title(s) }));
+}
+
+window.YardbellSide.init({ where: () => (state ? sideWhere() : null), openFile, openDiff, sessionsIn, toast, resume: resumePast });
 load();
+checkSetup();
 window.YardbellLive.follow(load, 3000);
 
-const DISPATCH_KEY = "yardbell.dispatch";
+window.YardbellShell.stateOf = stateOf;
 
-function dispatchShown() {
-  try { return localStorage.getItem(DISPATCH_KEY) !== "closed"; } catch { return true; }
-}
-
-function showDispatch(open) {
-  const toggle = $("dispatch-toggle");
-  const aside = $("ws-dispatch");
-  if (open && !aside.querySelector("iframe")) {
-    const frame = document.createElement("iframe");
-    frame.src = "/dispatch";
-    frame.title = "Dispatch";
-    aside.append(frame);
-  }
-  aside.hidden = !open;
-  toggle.setAttribute("aria-pressed", String(open));
-  toggle.title = open ? "Hide Dispatch" : "Show Dispatch";
-  try {
-    if (open) localStorage.removeItem(DISPATCH_KEY);
-    else localStorage.setItem(DISPATCH_KEY, "closed");
-  } catch {}
-}
-
-function toggleDispatch() {
-  if (phone.matches) { location.href = "/dispatch"; return; }
-  showDispatch($("ws-dispatch").hidden);
-}
-
-$("dispatch-toggle").addEventListener("click", toggleDispatch);
-
-$("logout").hidden = Boolean(window.__TAURI__);
-$("logout").addEventListener("click", async () => {
-  await fetch("/logout", { method: "POST" });
-  location.href = "/login";
+window.addEventListener("yardbell-jump", (e) => {
+  const { kind, id } = e.detail;
+  if (kind === "session" && sessionFor(id)) open(id);
+  else if (kind === "folder") openSpace(`${id.machine}${SEP}${id.folder}`);
+  else if (kind === "conversation" && !phone.matches) openDispatch(id);
+  else return;
+  e.preventDefault();
 });
+
+window.YardbellShell.onRail((page) => {
+  if (page !== "dispatch" || phone.matches) return false;
+  const shown = leaves(tab().root).find(isDispatch);
+  if (shown) closePane(shown.pane);
+  else openDispatch();
+  return true;
+});
+
+function syncDispatchPressed() {
+  window.YardbellShell.pressed("dispatch", !phone.matches && leaves(tab().root).some(isDispatch));
+}
+
+function dispatchLeafOf(source) {
+  for (const t of space().tabs) {
+    const leaf = leaves(t.root).find((l) => isDispatch(l) && paneEls.get(l.pane)?.querySelector("iframe[data-dispatch]")?.contentWindow === source);
+    if (leaf) return leaf;
+  }
+  return null;
+}
 
 window.addEventListener("message", (e) => {
   if (e.origin !== location.origin || e.data?.yardbell !== "dispatch") return;
-  if (e.data.action === "hide") showDispatch(false);
   if (e.data.action === "open" && typeof e.data.key === "string") open(e.data.key);
+  if (e.data.action !== "conversation" || typeof e.data.id !== "string") return;
+  const leaf = dispatchLeafOf(e.source);
+  if (!leaf || leaf.conversation === e.data.id) return;
+  leaf.conversation = e.data.id;
+  save();
+  if (e.data.id && !dispatchTitles.has(e.data.id)) loadDispatchTitles();
+  else render();
 });
-
-if (dispatchShown() && !phone.matches) showDispatch(true);
-
-window.YardbellSide.resizable({ handle: $("dispatch-resize"), panel: $("ws-dispatch"), prop: "--ws-dispatch", key: "yardbell.ws.dispatch-width", min: 300, normal: 380, max: 640 });

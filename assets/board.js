@@ -11,12 +11,6 @@
     return p.ci === "failing" || p.mergeable === "conflicting" || p.review === "changes_requested";
   }
 
-  // GitHub can take a moment to say whether a pull request merges cleanly, so only a known conflict
-  // keeps an approved, green one out of Ready to merge.
-  function ready(p) {
-    return !p.draft && p.review === "approved" && (p.ci === "passing" || p.ci === "none") && p.mergeable !== "conflicting";
-  }
-
   // A working agent is left to work, whatever its pull request says; an idle one is placed by what
   // its pull request needs next.
   function lane(s) {
@@ -25,9 +19,9 @@
     const p = s.pull;
     if (!p || p.state !== "open") return "idle";
     if (needsFix(p)) return "needs";
-    if (ready(p)) return "ready";
+    if (window.YardbellPull.ready(p)) return "ready";
     return "review";
   }
 
-  window.YardbellBoard = { LANES, lane, ready };
+  window.YardbellBoard = { LANES, lane, ready: window.YardbellPull.ready };
 })();

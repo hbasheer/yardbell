@@ -3,6 +3,7 @@ import { markdown } from "/markdown.js";
 import { canvas, settle, nodeState, triggerWords, setConnectors, icon, toWorld, centreOf, NODE_W, KINDS, WORDS } from "/pipeline-canvas.js";
 
 const $ = (id) => document.getElementById(id);
+const Shell = window.YardbellShell;
 const OUTCOMES = [["pass", "On pass"], ["fail", "On fail"], ["needs_you", "On needs you"]];
 const ANSWERABLE = ["needs_you", "asking", "questions", "no_result"];
 const SUBJECTLESS = ["manual", "schedule"];
@@ -192,29 +193,40 @@ function settingsForm() {
     show.settings = false;
     await load();
   });
-  return html`<form class="pl-panel" id="pl-settings" @submit=${(e) => { e.preventDefault(); save(); }}>
-    <div class="pl-fields">
-      <label class="pl-field"><span>Agent steps at once on each machine</span>
-        <input type="number" name="per_machine" min="1" max="6" .value=${String(s.per_machine)} @input=${(e) => set("per_machine", e.target.value)}></label>
-      <label class="pl-field"><span>Minutes a step may run before it waits for you</span>
-        <input type="number" name="minutes" min="10" max="1440" .value=${String(s.minutes)} @input=${(e) => set("minutes", e.target.value)}></label>
-      <div class="pl-field">
-        <label class="check"><input type="checkbox" name="memory_on" .checked=${s.memory_on} @change=${(e) => set("memory_on", e.target.checked)}>Hold new steps when memory runs short</label>
-        <input type="number" name="memory_limit" min="50" max="99" required placeholder="50 to 99" aria-label="Percent of memory in use that holds new steps" ?disabled=${!s.memory_on} .value=${String(s.memory_limit)} @input=${(e) => set("memory_limit", e.target.value)}>
-        <small>Off unless you tick this box. To turn it on, tick it and enter the percent of memory in use, from 50 to 99, that holds new steps. New agent steps on that machine then wait until it has stayed under for two minutes, and at most one starts a minute. Running steps are never stopped. On a Mac this figure can read well above what macOS itself reports, so look at each machine's figure when it is idle before you choose.</small>
-      </div>
-      <label class="pl-field"><span>Tokens one run may use before it waits for you</span>
+  return html`<form class="pl-settings" id="pl-settings" @submit=${(e) => { e.preventDefault(); save(); }}>
+    <h2 class="pl-group-title">Limits</h2>
+    <div class="pl-fields pl-rows">
+      <label class="pl-field"><span>Agent steps at once</span>
+        <input type="number" name="per_machine" min="1" max="6" .value=${String(s.per_machine)} @input=${(e) => set("per_machine", e.target.value)}>
+        <small>On each machine, from 1 to 6.</small></label>
+      <label class="pl-field"><span>Minutes a step may run</span>
+        <input type="number" name="minutes" min="10" max="1440" .value=${String(s.minutes)} @input=${(e) => set("minutes", e.target.value)}>
+        <small>Past this the step waits for you. A step can set its own.</small></label>
+      <label class="pl-field"><span>Tokens one run may use</span>
         <input type="number" name="token_limit" min="0" placeholder="No limit" .value=${s.token_limit ? String(s.token_limit) : ""} @input=${(e) => set("token_limit", e.target.value)}>
-        <small>Empty or 0 means no limit. A pipeline can set its own in its builder.</small></label>
+        <small>Past this the run waits for you. Empty or 0 means no limit. A pipeline can set its own in its builder.</small></label>
     </div>
-    <div class="pl-notes">
-      <p class="pl-field-head">QA notes per folder <span>Added to every agent step working in that folder, such as how to run its specs and console.</span></p>
+    <h2 class="pl-group-title">Memory</h2>
+    <div class="pl-fields pl-rows">
+      <div class="pl-field pl-memory">
+        <label class="pl-switch-label" for="pl-memory-on">Hold new steps when memory runs short</label>
+        <input type="checkbox" class="switch" id="pl-memory-on" name="memory_on" .checked=${s.memory_on} @change=${(e) => set("memory_on", e.target.checked)}>
+        <input type="number" name="memory_limit" min="50" max="99" required placeholder="50 to 99" aria-label="Percent of memory in use that holds new steps" ?disabled=${!s.memory_on} .value=${String(s.memory_limit)} @input=${(e) => set("memory_limit", e.target.value)}>
+        <small>Off unless you switch it on. To turn it on, switch it on and enter the percent of memory in use, from 50 to 99, that holds new steps. New agent steps on that machine then wait until it has stayed under for two minutes, and at most one starts a minute. Running steps are never stopped. On a Mac this figure can read well above what macOS itself reports, so look at each machine's figure when it is idle before you choose.</small>
+      </div>
+    </div>
+    <div class="pl-group-head">
+      <h2 class="pl-group-title">QA notes per folder</h2>
+      <button class="btn" type="button" id="pl-note-add" @click=${() => { notes.push({ folder: "", note: "" }); draw(); }}>Add a note</button>
+    </div>
+    <p class="pl-group-desc">Added to every agent step working in that folder, such as how to run its specs and console.</p>
+    <div class="pl-notes pl-rows">
+      ${notes.length ? nothing : html`<p class="pl-notes-empty">No notes yet.</p>`}
       <ul>${notes.map((n, i) => html`<li class="pl-note">
         <input name="folder" placeholder="acme/web" aria-label="Folder" .value=${n.folder} @input=${(e) => setNote(i, "folder", e.target.value)}>
         <input name="note" placeholder="Run bin/rspec, then check the page in the browser" aria-label="Note" .value=${n.note} @input=${(e) => setNote(i, "note", e.target.value)}>
         <button class="btn quiet" type="button" aria-label="Remove this note" @click=${() => { notes.splice(i, 1); draw(); }}>Remove</button>
       </li>`)}</ul>
-      <button class="btn" type="button" id="pl-note-add" @click=${() => { notes.push({ folder: "", note: "" }); draw(); }}>Add a note</button>
     </div>
     <div class="pl-panel-actions">
       <button class="btn quiet" type="button" @click=${() => { show.settings = false; draw(); }}>Cancel</button>
@@ -226,17 +238,25 @@ function settingsForm() {
 function listView() {
   const waiting = allRuns.filter(asksForYou).length;
   const openSettings = () => {
+    if (show.settings) return;
     const s = data.settings;
     settings = { per_machine: s.per_machine, minutes: s.minutes, memory_on: s.memory_limit > 0, memory_limit: s.memory_limit || "", token_limit: s.token_limit, notes: Object.entries(s.qa_notes || {}).map(([folder, note]) => ({ folder, note })) };
-    show.settings = !show.settings;
+    show.settings = true;
+    show.waiting = false;
     draw();
   };
+  const view = show.settings ? "settings" : show.waiting ? "waiting" : "list";
+  const showList = () => { show.waiting = false; show.settings = false; draw(); };
+  const showWaiting = () => { show.waiting = true; show.settings = false; draw(); };
   return html`
-    <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard</a>
-    <header class="main-head"><h1>Pipelines</h1>
+    <header class="main-head page-bar"><h1 class="col-dup">Pipelines</h1>
+      <div class="segmented pill-tabs pl-views" role="group" aria-label="Show">
+        <button type="button" id="pl-list-tab" aria-pressed=${view === "list" ? "true" : "false"} @click=${showList}>Pipelines${data.pipelines.length ? html`<span class="seg-count">${data.pipelines.length}</span>` : nothing}</button>
+        <button type="button" id="pl-waiting-toggle" aria-pressed=${view === "waiting" ? "true" : "false"} @click=${showWaiting}>Waiting for me${waiting ? html` <span class="pl-count">${waiting}</span>` : nothing}</button>
+        <button type="button" id="pl-settings-open" aria-pressed=${view === "settings" ? "true" : "false"} @click=${openSettings}>Settings</button>
+      </div>
+      <span class="spacer"></span>
       <div class="pl-head-actions">
-        <button class="btn" type="button" id="pl-waiting-toggle" aria-pressed=${show.waiting ? "true" : "false"} @click=${() => { show.waiting = !show.waiting; draw(); }}>Waiting for me${waiting ? html` <span class="pl-count">${waiting}</span>` : nothing}</button>
-        <button class="btn" type="button" id="pl-settings-open" aria-expanded=${show.settings ? "true" : "false"} @click=${openSettings}>Settings</button>
         <button class="btn primary" type="button" id="pl-new" aria-expanded=${show.templates ? "true" : "false"} @click=${() => { show.templates = !show.templates; draw(); }}><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>New pipeline</button>
       </div>
     </header>
@@ -251,12 +271,12 @@ function listView() {
         </button>`)}
       </div>
     </div>` : nothing}
-    ${show.settings ? settingsForm() : nothing}
-    ${show.waiting ? html`<section class="pl-section" id="pl-waiting" aria-label="Waiting for me">${waitingList()}</section>` : nothing}
-    <section class="pl-cards" aria-label="Your pipelines">
+    ${view === "settings" ? settingsForm() : nothing}
+    ${view === "waiting" ? html`<section class="pl-section" id="pl-waiting" aria-label="Waiting for me">${waitingList()}</section>` : nothing}
+    ${view === "list" ? html`<section class="pl-cards" aria-label="Your pipelines">
       ${data.pipelines.map(card)}
       ${data.pipelines.length ? nothing : html`<p class="pl-empty">No pipelines yet. Start one from a template with New pipeline.</p>`}
-    </section>`;
+    </section>` : nothing}`;
 }
 
 function runsOf(id) {
@@ -380,10 +400,13 @@ function tokenLimitForm(d, redraw) {
   const names = blind.map((s) => s.name).join(", ");
   return html`<fieldset class="pl-step-form pl-token-form">
     <legend>Token limit</legend>
+    <p class="pl-group-title">Token limit</p>
+    <div class="pl-rows">
     ${field("Tokens one run may use", html`<input type="number" name="token_limit" min="0" placeholder=${fallback ? tokensOf(fallback) : "No limit"} .value=${d.token_limit == null ? "" : String(d.token_limit)}
       @input=${(e) => { d.token_limit = e.target.value === "" ? null : Number(e.target.value); redraw(); }}>`,
       `Past this the run starts no new step that uses tokens and waits for you. Pushes, ticket updates and connected tools go through. Empty uses the default in Settings, ${fallback ? `${tokensOf(fallback)} tokens` : "no limit"}. 0 means no limit here.`)}
     ${blind.length ? html`<p class="pl-tokens-note" id="pl-token-blind" role="status">${names} cannot report tokens, because only Claude Code does. A run waits and asks you before starting ${blind.length === 1 ? "it" : "each of them"}, then leaves what it uses out of the total.</p>` : nothing}
+    </div>
   </fieldset>`;
 }
 
@@ -681,6 +704,10 @@ function field(lbl, input, hint) {
   return html`<label class="pl-field"><span>${lbl}</span>${input}${hint ? html`<small>${hint}</small>` : nothing}</label>`;
 }
 
+function toggle(name, lbl, checked, onChange, hint) {
+  return html`<label class="pl-field pl-toggle"><span>${lbl}</span><input type="checkbox" class="switch" name=${name} .checked=${checked} @change=${(e) => onChange(e.target.checked)}>${hint ? html`<small>${hint}</small>` : nothing}</label>`;
+}
+
 function picks(list, chosen, onChange, name) {
   return html`<div class="pl-picks">${list.map((m) => html`<label class="check"><input type="checkbox" name=${name} .checked=${chosen.includes(m)}
     @change=${(e) => onChange(e.target.checked ? [...chosen, m] : chosen.filter((x) => x !== m))}>${m}</label>`)}</div>`;
@@ -699,6 +726,8 @@ function agentFields(step, others, redraw) {
   const setMachine = (value) => { step.machine = value; redraw(); };
   const ws = step.workspace || { kind: "new_worktree" };
   return html`
+    <p class="pl-group-title">Agent</p>
+    <div class="pl-rows">
     ${field("Instructions", html`<textarea name="instructions" rows="5" .value=${step.instructions || ""} @input=${(e) => { step.instructions = e.target.value; redraw(); }}></textarea>`,
       "Fill in {ticket}, {title}, {url}, {description}, {branch}, {pr}, {report} or {report:Step name}.")}
     <div class="pl-fields">
@@ -715,6 +744,9 @@ function agentFields(step, others, redraw) {
       ${mode === "same_as" ? field("Same machine as", stepSelect(m.same_as, others, (v) => setMachine({ same_as: v }))) : nothing}
     </div>
     ${mode === "pick" ? field("Dispatch may pick from", picks(data.machines, m.pick || [], (list) => setMachine({ pick: list }), "pick"), "None ticked means any machine.") : nothing}
+    </div>
+    <p class="pl-group-title">Workspace</p>
+    <div class="pl-rows">
     <div class="pl-fields">
       ${field("Works in", html`<select name="workspace" @change=${(e) => { const k = e.target.value; step.workspace = k === "new_worktree" ? { kind: k } : k === "same_as" ? { kind: k, step: others[0]?.id || "" } : { kind: k, from: others[0]?.id || "" }; redraw(); }}>
         <option value="new_worktree" ?selected=${ws.kind === "new_worktree"}>A new worktree on the run's branch</option>
@@ -724,8 +756,9 @@ function agentFields(step, others, redraw) {
       ${ws.kind === "same_as" ? field("Folder of", stepSelect(ws.step, others, (v) => { step.workspace = { kind: "same_as", step: v }; redraw(); })) : nothing}
       ${ws.kind === "copy" ? field("Copy of", stepSelect(ws.from, others, (v) => { step.workspace = { kind: "copy", from: v }; redraw(); })) : nothing}
     </div>
-    <label class="check"><input type="checkbox" name="read_only" .checked=${!!step.read_only} @change=${(e) => { step.read_only = e.target.checked; redraw(); }}>Review: new read-only session. Other steps share the run's one session.</label>
-    ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "An agent signs in to a server itself, on its own machine. Signing in here is for Yardbell's own steps. Saved with the step; agents do not get them yet.") : nothing}`;
+    ${toggle("read_only", "Review: new read-only session", !!step.read_only, (on) => { step.read_only = on; redraw(); }, "Other steps share the run's one session.")}
+    ${data.mcp_servers.length ? field("MCP servers", picks(data.mcp_servers, step.mcp_servers || [], (list) => { step.mcp_servers = list; redraw(); }, "mcp"), "An agent signs in to a server itself, on its own machine. Signing in here is for Yardbell's own steps. Saved with the step; agents do not get them yet.") : nothing}
+    </div>`;
 }
 
 // What a connection's lists hold, kept per address so a redraw does not ask again.
@@ -922,10 +955,11 @@ function webhookFields(d, redraw) {
   const t = d.trigger;
   const map = t.map || (t.map = {});
   const address = hookAddress?.url || (hookAddress ? `/hooks/pipeline/${d.id}/${hookAddress.token}` : "");
-  return html`<p class="help">Yardbell listens on this machine and your mesh. An outside service cannot reach this address without a tunnel you set up.</p>
-    ${address ? html`<p class="pl-hook-address"><code>${address}</code></p><p class="help">Copy it now: it is shown only this once. It works once this is saved and switched on.</p>` : nothing}
-    <button class="btn" type="button" id="pl-hook-new" ?disabled=${busy} @click=${() => newHookAddress(d)}>New address</button>
-    <p class="help">A new address replaces the old one. The body is JSON with <code>id</code> and <code>title</code>, and optional <code>url</code> and <code>description</code>. If yours differs, name where each one is:</p>
+  return html`<div class="pl-field pl-action-row"><span>Address</span>
+      <button class="btn" type="button" id="pl-hook-new" ?disabled=${busy} @click=${() => newHookAddress(d)}>New address</button>
+      <small>Yardbell listens on this machine and your mesh. An outside service cannot reach this address without a tunnel you set up. A new address replaces the old one.</small></div>
+    ${address ? html`<div class="pl-hook-shown"><p class="pl-hook-address"><code>${address}</code></p><p class="help">Copy it now: it is shown only this once. It works once this is saved and switched on.</p></div>` : nothing}
+    <p class="help">The body is JSON with <code>id</code> and <code>title</code>, and optional <code>url</code> and <code>description</code>. If yours differs, name where each one is:</p>
     ${["id", "title", "url", "description"].map((name) => field(name, html`<input name=${`map-${name}`} placeholder=${name} .value=${map[name] || ""} autocapitalize="off" spellcheck="false"
       @change=${(e) => { if (e.target.value.trim()) map[name] = e.target.value.trim(); else delete map[name]; redraw(); }}>`))}`;
 }
@@ -1002,8 +1036,7 @@ function toolFields(step, redraw) {
       ${listed.tools.map((t) => html`<option value=${t.name} ?selected=${t.name === step.tool}>${t.name}</option>`)}
     </select>`, tool?.description || "")}
     ${tool ? Object.entries(properties).map(([name, schema]) => argumentField(step, name, schema, required.includes(name), redraw)) : nothing}
-    ${tool ? html`<label class="check"><input type="checkbox" name="only_reads" .checked=${step.call_kind === "lookup"} @change=${(e) => { step.call_kind = e.target.checked ? "lookup" : "change"; redraw(); }}>Only reads</label>
-      <small class="help">A tool's own label is only a hint, so check it. A step that changes things can be refused by your Dispatch rules.</small>` : nothing}
+    ${tool ? toggle("only_reads", "Only reads", step.call_kind === "lookup", (on) => { step.call_kind = on ? "lookup" : "change"; redraw(); }, "A tool's own label is only a hint, so check it. A step that changes things can be refused by your Dispatch rules.") : nothing}
   </div>`;
 }
 
@@ -1024,15 +1057,23 @@ function kindFields(step, others, redraw) {
   switch (step.kind) {
     case "call": return html`${connectionField(step, redraw)}${callFields(step, redraw)}`;
     case "tool": return html`${connectionField(step, redraw)}${toolFields(step, redraw)}`;
-    case "agent": return agentFields(step, others, redraw);
     case "plan": return field("Dispatch may pick from", picks(data.machines, step.machines || [], (list) => { step.machines = list; redraw(); }, "plan"), "None ticked means any machine.");
     case "update": return updateFields(step, redraw);
     case "command": return commandFields(step, redraw);
-    case "checks": return html`<label class="check"><input type="checkbox" name="require_approval" .checked=${!!step.require_approval} @change=${(e) => { step.require_approval = e.target.checked; redraw(); }}>Also wait for an approval</label>
+    case "checks": return html`${toggle("require_approval", "Also wait for an approval", !!step.require_approval, (on) => { step.require_approval = on; redraw(); })}
       <p class="help">Follows pass when CI is green, and fail when a check fails or a reviewer asks for changes. Its report holds the failed logs and open comments, so a Fix step can use {report}. Stops for you if a check fails the same way on two commits, or checks fail on four commits in a row.</p>`;
     case "wait": return field("Message", html`<textarea name="message" rows="2" .value=${step.message || ""} @input=${(e) => { step.message = e.target.value; redraw(); }}></textarea>`);
     default: return nothing;
   }
+}
+
+const KIND_GROUPS = { plan: "Machines", update: "Ticket", checks: "Checks", call: "Connection", tool: "Connection", command: "Command", wait: "Message" };
+
+function kindOptions(step, others, redraw) {
+  if (step.kind === "agent") return agentFields(step, others, redraw);
+  const title = KIND_GROUPS[step.kind];
+  if (!title) return nothing;
+  return html`<p class="pl-group-title">${title}</p><div class="pl-rows">${kindFields(step, others, redraw)}</div>`;
 }
 
 // A renamed step keeps the {report:Name} placeholders that point at it.
@@ -1052,7 +1093,8 @@ function stepForm(step, d, redraw) {
   const targets = [["end", "End the run"], ["wait", "Wait for me"]];
   return html`<fieldset class="pl-step-form" data-step=${step.id}>
     <legend>${step.name || step.id} <span>${KINDS[step.kind]}</span></legend>
-    <div class="pl-fields">
+    <p class="pl-group-title">Step</p>
+    <div class="pl-fields pl-rows">
       ${field("Name", html`<input name="name" .value=${step.name} @input=${(e) => { rename(d, step, e.target.value); redraw(); }}>`)}
       ${field("Runs at most", html`<input type="number" name="max_runs" min="1" max="10" .value=${String(step.max_runs ?? 2)} @input=${(e) => { step.max_runs = Number(e.target.value); redraw(); }}>`)}
       ${step.kind === "agent" || step.kind === "checks" ? field("Minutes", html`<input type="number" name="minutes" min="10" max="1440" placeholder=${String(data.settings.minutes)} .value=${step.minutes == null ? "" : String(step.minutes)}
@@ -1060,8 +1102,9 @@ function stepForm(step, d, redraw) {
       ${step.kind === "command" ? field("Stop after minutes", html`<input type="number" name="minutes" min="1" max="1440" placeholder="10" .value=${step.minutes == null ? "" : String(step.minutes)}
         @input=${(e) => { step.minutes = e.target.value === "" ? null : Number(e.target.value); redraw(); }}>`) : nothing}
     </div>
-    ${kindFields(step, others, redraw)}
-    <div class="pl-fields pl-next">${OUTCOMES.map(([o, lbl]) => field(lbl, stepSelect(step.next[o], others, (v) => { step.next[o] = v; redraw(); }, targets)))}</div>
+    ${kindOptions(step, others, redraw)}
+    <p class="pl-group-title">Then</p>
+    <div class="pl-fields pl-rows pl-next">${OUTCOMES.map(([o, lbl]) => field(lbl, stepSelect(step.next[o], others, (v) => { step.next[o] = v; redraw(); }, targets)))}</div>
   </fieldset>`;
 }
 
@@ -1074,7 +1117,8 @@ function triggerFields(d, redraw) {
   };
   return html`<fieldset class="pl-step-form pl-trigger-form">
     <legend>Start when</legend>
-    <div class="pl-fields">
+    <p class="pl-group-title">Trigger</p>
+    <div class="pl-fields pl-rows">
       ${field("Starts", html`<select name="trigger" @change=${(e) => setKind(e.target.value)}>${kinds.map(([k, l]) => html`<option value=${k} ?selected=${t.kind === k || (k === "linear" && t.kind === "connector")}>${l}</option>`)}</select>`)}
       ${t.kind === "linear" || t.kind === "connector" ? field("From", html`<select name="ticket-source" @change=${(e) => {
         d.trigger = e.target.value === "linear" ? newTrigger("linear") : { kind: "connector", connector: e.target.value, params: {}, states: [] };
@@ -1092,10 +1136,9 @@ function triggerFields(d, redraw) {
       </select>`) : nothing}
       ${t.kind === "schedule" && t.connector ? paramFields(data.connectors.find((c) => c.id === t.connector), t.params || (t.params = {}), (name, value) => { if (value) t.params[name] = value; else delete t.params[name]; redraw(); }) : nothing}
       ${t.kind === "connector" ? connectorFields(t, redraw) : nothing}
-      ${t.kind === "webhook" ? webhookFields(d, redraw) : nothing}
       ${t.kind === "linear" ? field("In the states", html`<input name="states" placeholder="Todo, In Progress" .value=${(t.states || []).join(", ")}
         @change=${(e) => { t.states = e.target.value.split(",").map((x) => x.trim()).filter(Boolean); redraw(); }}>`, "Empty means when it is assigned to you.") : nothing}
-      ${t.kind === "linear" ? html`<label class="check"><input type="checkbox" name="assigned" .checked=${!!t.assigned} @change=${(e) => { t.assigned = e.target.checked; redraw(); }}>Only tickets assigned to me</label>` : nothing}
+      ${t.kind === "linear" ? toggle("assigned", "Only tickets assigned to me", !!t.assigned, (on) => { t.assigned = on; redraw(); }) : nothing}
       ${t.kind === "linear" ? linearFilterFields(t, redraw) : nothing}
       ${t.kind === "gitlab_reviewer" ? field("GitLab host", data.gitlab_hosts.length
         ? html`<select name="host" @change=${(e) => { t.host = e.target.value; redraw(); }}>${data.gitlab_hosts.map((h) => html`<option value=${h} ?selected=${t.host === h}>${h}</option>`)}</select>`
@@ -1103,7 +1146,8 @@ function triggerFields(d, redraw) {
         data.gitlab_hosts.length ? "" : "Add the host under Settings, GitHub and GitLab first.") : nothing}
       ${field("First step", stepSelect(d.start, d.steps, (v) => { d.start = v; redraw(); }))}
     </div>
-    ${t.kind === "linear" || t.kind === "connector" ? ticketPreview(t) : nothing}
+    ${t.kind === "webhook" ? html`<p class="pl-group-title">Webhook</p><div class="pl-rows">${webhookFields(d, redraw)}</div>` : nothing}
+    ${t.kind === "linear" || t.kind === "connector" ? html`<p class="pl-group-title">What matches</p>${ticketPreview(t)}` : nothing}
   </fieldset>`;
 }
 
@@ -1498,8 +1542,7 @@ function inspector() {
   const mine = step ? problems.filter((p) => p.startsWith(`${step.name}: `) || p === `${step.name} is never reached`) : [];
   let body;
   if (step) {
-    body = html`${mine.length ? html`<ul class="pl-inspector-problems" role="alert">${mine.map((p) => html`<li>${p.startsWith(`${step.name}: `) ? p.slice(step.name.length + 2) : p}</li>`)}</ul>` : nothing}${stepForm(step, draft, redraw)}
-      <div class="pl-inspector-foot"><button class="btn quiet danger" type="button" @click=${() => removeStep(step.id)}>Delete step</button></div>`;
+    body = html`${mine.length ? html`<ul class="pl-inspector-problems" role="alert">${mine.map((p) => html`<li>${p.startsWith(`${step.name}: `) ? p.slice(step.name.length + 2) : p}</li>`)}</ul>` : nothing}${stepForm(step, draft, redraw)}`;
   } else if (selected?.startsWith("line:")) {
     const [, from, outcome] = selected.split(":");
     const src = stepOf(from);
@@ -1511,11 +1554,15 @@ function inspector() {
   } else if (selected === "@start") {
     body = html`${triggerFields(draft, redraw)}${tokenLimitForm(draft, redraw)}`;
   } else {
-    body = html`<div class="pl-inspector-empty">
-      <p><b>${draft.name}</b></p>
-      <p>Click a step to edit it, or the Start when card for the trigger. Drag a step in from the library, or click one to add it.</p>
-      <p>${draft.steps.length} ${draft.steps.length === 1 ? "step" : "steps"} · ${triggerWords(draft.trigger)}</p>
-    </div>${tokenLimitForm(draft, redraw)}`;
+    const first = stepOf(draft.start);
+    body = html`<p class="pl-group-title">Summary</p>
+    <div class="pl-rows pl-summary">
+      <button class="pl-value-row" type="button" id="pl-open-trigger" @click=${() => select("@start")}><span>Starts</span><span class="pl-value">${triggerWords(draft.trigger)}</span>${chevron("right")}</button>
+      ${first ? html`<button class="pl-value-row" type="button" @click=${() => select(first.id)}><span>First step</span><span class="pl-value">${first.name}</span>${chevron("right")}</button>` : nothing}
+      <div class="pl-value-row"><span>Steps</span><span class="pl-value">${draft.steps.length}</span></div>
+    </div>
+    <p class="pl-inspector-hint">Click a step to edit it, or the Start when card for the trigger. Drag a step in from the library, or click one to add it.</p>
+    ${tokenLimitForm(draft, redraw)}`;
   }
   if (phone.matches && !selected) return nothing;
   return html`<aside class=${`pl-inspector ${phone.matches ? "sheet" : ""}`} id="pl-inspector" aria-label="Selected step">
@@ -1526,6 +1573,7 @@ function inspector() {
         : html`<button class="btn quiet" type="button" title="Hide the panel" aria-label="Hide the panel" @click=${() => { inspectorOpen = false; draw(); }}>${chevron("right")}</button>`}
     </div>
     <div class="pl-inspector-body">${body}</div>
+    ${step ? html`<div class="pl-inspector-foot"><button class="btn quiet danger" type="button" @click=${() => removeStep(step.id)}>Delete step</button></div>` : nothing}
   </aside>`;
 }
 
@@ -1639,7 +1687,7 @@ function runNowPanel(d) {
     toast(`Started ${out.runs.length} ${out.runs.length === 1 ? "run" : "runs"}`, "ok");
     await load();
   });
-  return html`<div class="pl-panel" id="pl-run-now-panel">
+  return html`<div class="pl-panel pl-rows" id="pl-run-now-panel">
     ${hook ? html`<p class="help">Starts one run with no item.</p>` : tool ? field("Item ids or links", html`<textarea rows="2" id="pl-subjects" placeholder="abc123"
       .value=${subjects} @input=${(e) => { subjects = e.target.value; draw(); }}></textarea>`, "One run each.") : field(optional ? "Ticket ids or links (optional)" : linear ? "Ticket ids" : "Merge or pull request links", html`<textarea rows="2" id="pl-subjects" placeholder=${linear || optional ? "COM-1234 COM-1240" : "https://gitlab.example.com/group/app/-/merge_requests/87"}
       .value=${subjects} @input=${(e) => { subjects = e.target.value; draw(); }}></textarea>`, optional ? "One run each, or leave it empty for one run with no ticket." : "One run each. Ticket ids and links can be mixed.")}
@@ -1652,7 +1700,7 @@ function runNowPanel(d) {
 }
 
 // The page's own dialog, since the desktop app's webview has no window.confirm.
-const ask = (title, body, options) => window.YardbellNav.confirm(title, body, options);
+const ask = (title, body, options) => Shell.confirm(title, body, options);
 const leave = () => ask("Leave without saving your changes?", "Your changes to this pipeline are lost.", { confirm: "Leave", danger: true });
 
 async function removePipeline(d) {
@@ -1762,10 +1810,12 @@ window.addEventListener("beforeunload", (e) => {
   e.returnValue = "";
 });
 
+const tabOf = (d) => params().get("tab") || (runsOf(d.id).length ? "runs" : "build");
+
 function pipelineView() {
   const d = def;
   const runs = runsOf(d.id);
-  const tab = params().get("tab") || (runs.length ? "runs" : "build");
+  const tab = tabOf(d);
   const changed = JSON.stringify(draft) !== JSON.stringify(def);
   const setTab = (t) => {
     const q = params();
@@ -1781,7 +1831,7 @@ function pipelineView() {
       <input class="pl-name pl-title-name" aria-label="Pipeline name" .value=${draft.name} @input=${(e) => { draft.name = e.target.value; draw(); }}>
       ${onOff(d)}
       <span class="pl-version">v${d.version}</span>
-      <div class="segmented pl-tabs" role="tablist">${tabs.map(([t, l]) => html`<button type="button" role="tab" aria-selected=${tab === t ? "true" : "false"} @click=${() => setTab(t)}>${l}</button>`)}</div>
+      <div class="segmented pill-tabs pl-tabs" role="tablist">${tabs.map(([t, l]) => html`<button type="button" role="tab" aria-selected=${tab === t ? "true" : "false"} @click=${() => setTab(t)}>${l}</button>`)}</div>
       <span class="pl-bar-space"></span>
       <button class="btn quiet" type="button" id="pl-full" aria-pressed=${full ? "true" : "false"} title=${full ? "Exit full screen" : "Full screen"} aria-label=${full ? "Exit full screen" : "Full screen"} @click=${toggleFull}>
         <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d=${full ? "M6.5 2.5v4h-4 M9.5 2.5v4h4 M6.5 13.5v-4h-4 M9.5 13.5v-4h4" : "M2.5 6.5v-4h4 M13.5 6.5v-4h-4 M2.5 9.5v4h4 M13.5 9.5v4h-4"}></path></svg>
@@ -1798,12 +1848,74 @@ function pipelineView() {
   </div>`;
 }
 
+Shell.column.innerHTML = '<nav class="col-list" aria-label="Pipelines"></nav>';
+Shell.head.querySelector(".col-title").insertAdjacentHTML("afterend", '<button class="btn quiet icon-btn" id="col-new" type="button" aria-label="New pipeline" title="New pipeline"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg></button>');
+$("col-new").addEventListener("click", async () => {
+  if (params().has("p") || params().has("proposal")) {
+    if (unsaved() && !(await leave())) return;
+    go("");
+    show.templates = true;
+  } else {
+    show.templates = !show.templates;
+  }
+  draw();
+});
+
+async function openFromColumn(e, id) {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
+  e.preventDefault();
+  if (unsaved() && def.id !== id && !(await leave())) return;
+  go(`p=${encodeURIComponent(id)}`);
+}
+
+const byWaitingThenName = (a, b) => (b.runs.waiting > 0) - (a.runs.waiting > 0) || a.definition.name.localeCompare(b.definition.name);
+
+function columnRow(p, open) {
+  const d = p.definition;
+  const waiting = p.runs.waiting;
+  return html`<a class="col-row" href=${`/pipeline?p=${encodeURIComponent(d.id)}`} aria-current=${d.id === open ? "page" : nothing} @click=${(e) => openFromColumn(e, d.id)}>
+    <span class="col-row-name">${d.name}</span>
+    ${p.problem ? html`<span class="dot bad col-row-dot" title=${p.problem}></span><span class="sr">Has a problem: ${p.problem}</span>` : nothing}
+    ${waiting ? html`<span class="col-row-meta warn" title=${`${waiting} waiting for you`}>${waiting}</span>` : nothing}
+  </a>`;
+}
+
+function column() {
+  const open = proposal ? null : params().get("p");
+  const list = [...data.pipelines].sort(byWaitingThenName);
+  render(list.length ? list.map((p) => columnRow(p, open)) : html`<p class="col-empty">No pipelines yet.</p>`, Shell.column.firstElementChild);
+  $("col-new").setAttribute("aria-expanded", String(Boolean(show.templates && !params().has("p"))));
+  Shell.badge("pipelines", data.pipelines.reduce((n, p) => n + p.runs.waiting, 0));
+}
+
+// The column steps aside for the canvas without touching the stored choice; a toggle by hand while
+// the canvas is open is the person's own choice, so leaving the canvas does not undo it.
+let collapsedForCanvas = false;
+let canvasWasOpen = false;
+
+window.addEventListener("yardbell-shell", (e) => { if (e.detail.kept) collapsedForCanvas = false; });
+
+function makeRoomForCanvas(open) {
+  if (open === canvasWasOpen) return;
+  canvasWasOpen = open;
+  if (open && !Shell.collapsed()) {
+    Shell.collapse(true, { keep: false });
+    collapsedForCanvas = true;
+  } else if (!open && collapsedForCanvas) {
+    collapsedForCanvas = false;
+    Shell.collapse(false, { keep: false });
+  }
+}
+
 function draw() {
-  const root = $("pl-root");
   if (!data) return;
   const id = params().get("p");
   document.title = id && def ? `${def.name} · Pipelines · Yardbell` : "Pipelines · Yardbell";
-  render(proposal && def ? proposalView() : id && def ? pipelineView() : listView(), root);
+  const view = proposal && def ? "proposal" : id && def ? "pipeline" : "list";
+  const tab = view === "pipeline" && tabOf(def);
+  render(view === "proposal" ? proposalView() : view === "pipeline" ? pipelineView() : listView(), $("main"));
+  column();
+  makeRoomForCanvas(view === "proposal" || tab === "build");
   here = location.href;
   settle();
   inView(document.getElementById("pl-add-menu"));
@@ -1877,3 +1989,6 @@ window.addEventListener("popstate", async () => {
 });
 window.YardbellLive.follow(() => { if (!busy) load().catch(() => {}); }, 5000);
 load().catch((err) => toast(err.message));
+const loadState = () => Shell.loadState().catch(() => {});
+loadState();
+window.YardbellLive.follow(loadState, 10000);

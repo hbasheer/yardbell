@@ -14,6 +14,12 @@
   let attempt = 0;
   let retry = 0;
 
+  function opened(now) {
+    if (open === now) return;
+    open = now;
+    window.dispatchEvent(new CustomEvent("yardbell-live", { detail: { open } }));
+  }
+
   function run(f) {
     if (f.running) { f.again = true; return; }
     f.running = true;
@@ -44,7 +50,7 @@
     const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/state/live`);
     socket = ws;
     ws.onopen = () => {
-      open = true;
+      opened(true);
       attempt = 0;
       heard = Date.now();
       if (missed) changed();
@@ -55,7 +61,7 @@
     ws.onclose = () => {
       if (socket !== ws) return;
       socket = null;
-      open = false;
+      opened(false);
       missed = true;
       followers.forEach(schedule);
       if (!document.hidden) retry = setTimeout(connect, RETRY[Math.min(attempt++, RETRY.length - 1)]);
@@ -66,7 +72,7 @@
     clearTimeout(retry);
     const ws = socket;
     socket = null;
-    open = false;
+    opened(false);
     if (ws) ws.close();
   }
 
@@ -94,6 +100,7 @@
   });
 
   window.YardbellLive = {
+    connected: () => open,
     // Calls load whenever the state may have changed. The page makes the first call itself.
     follow(load, every) {
       const f = { load, every, timer: 0, running: false, again: false };
