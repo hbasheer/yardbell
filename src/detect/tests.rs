@@ -252,3 +252,145 @@ fn an_error_without_a_reset_time_has_none() {
     assert_eq!(reset("You've hit your limit · resets soon", now), None);
     assert_eq!(reset("You've hit your limit · resets 13pm", now), None);
 }
+
+const CLAUDE_BASH_PROMPT: &str = "\
+● I will clear the build folder first.
+
+────────────────────────────────────────────────────────────────
+ Bash command
+
+   rm -rf build
+   Remove the build folder
+
+ Do you want to proceed?
+ ❯ 1. Yes
+   2. Yes, and don't ask again for rm commands in /r/app
+   3. No, and tell Claude what to do differently (esc)
+
+ Esc to cancel · Tab to amend · ctrl+e to explain";
+
+const CLAUDE_QUESTION: &str = "\
+● Here is the plan:
+  1. Add the table
+  2. Fill it
+  3. Show it
+  4. Test it
+  5. Ship it
+
+────────────────────────────────────────────────────────────────
+ ☐ Database
+
+Which database should the app use?
+
+❯ 1. Postgres
+     Relational, the default
+  2. SQLite
+     A file, no server
+  3. Type something.
+────────────────
+  4. Chat about this
+
+Enter to select · ↑/↓ to navigate · Esc to cancel";
+
+fn picks(p: &Prompt) -> Vec<(&str, &str, Option<Role>)> {
+    p.choices
+        .iter()
+        .map(|c| (c.keys.as_str(), c.label.as_str(), c.role))
+        .collect()
+}
+
+#[test]
+fn claude_permission_prompt_offers_yes_always_and_no() {
+    let p = prompt("claude", CLAUDE_BASH_PROMPT).unwrap();
+    assert_eq!(p.kind, PromptKind::Permission);
+    assert_eq!(
+        picks(&p),
+        [
+            ("1", "Yes", Some(Role::Yes)),
+            (
+                "2",
+                "Yes, and don't ask again for rm commands in /r/app",
+                Some(Role::Always)
+            ),
+            (
+                "3",
+                "No, and tell Claude what to do differently (esc)",
+                Some(Role::No)
+            ),
+        ]
+    );
+}
+
+#[test]
+fn claude_question_offers_each_choice_and_skips_a_list_above_it() {
+    let p = prompt("claude", CLAUDE_QUESTION).unwrap();
+    assert_eq!(p.kind, PromptKind::Question);
+    assert_eq!(
+        picks(&p),
+        [
+            ("1", "Postgres", None),
+            ("2", "SQLite", None),
+            ("3", "Type something.", None),
+            ("4", "Chat about this", None),
+        ]
+    );
+}
+
+#[test]
+fn empty_rows_below_a_question_in_a_tall_pane_are_skipped() {
+    let screen = format!("{CLAUDE_QUESTION}{}", "\n".repeat(40));
+    assert_eq!(prompt("claude", &screen).unwrap().choices.len(), 4);
+}
+
+#[test]
+fn a_prompt_with_choices_beyond_yes_and_no_is_a_question() {
+    let screen = " Would you like to proceed?\n ❯ 1. Yes, and auto-accept edits\n   2. Yes, and manually approve edits\n   3. No, keep planning";
+    let p = prompt("claude", screen).unwrap();
+    assert_eq!(p.kind, PromptKind::Question);
+    assert!(p.choices.iter().all(|c| c.role.is_none()));
+}
+
+#[test]
+fn choices_inside_an_old_style_frame_are_read() {
+    let screen = "╭──────────────╮\n│ Do you want to proceed? │\n│ ❯ 1. Yes      │\n│   2. No       │\n╰──────────────╯";
+    let p = prompt("claude", screen).unwrap();
+    assert_eq!(p.kind, PromptKind::Permission);
+    assert_eq!(p.choices[1].label, "No");
+}
+
+#[test]
+fn codex_permission_is_answered_with_its_letters() {
+    let screen = "Would you like to run the following command?\n\n  $ rm -rf build\n\n› 1. Yes, proceed (y)\n  2. Yes, and don't ask again for this command (p)\n  3. No, and tell Codex what to do differently (esc)\n\n  Press enter to confirm or esc to cancel";
+    let p = prompt("codex", screen).unwrap();
+    assert_eq!(p.kind, PromptKind::Permission);
+    let keys: Vec<_> = p
+        .choices
+        .iter()
+        .map(|c| (c.keys.as_str(), c.role))
+        .collect();
+    assert_eq!(
+        keys,
+        [
+            ("y", Some(Role::Yes)),
+            ("p", Some(Role::Always)),
+            ("\x1b", Some(Role::No))
+        ]
+    );
+}
+
+#[test]
+fn unknown_shapes_offer_nothing() {
+    assert_eq!(
+        prompt("codex", CLAUDE_QUESTION),
+        None,
+        "a Codex question has no letters to pick by"
+    );
+    assert_eq!(prompt("aider", CLAUDE_BASH_PROMPT), None);
+    assert_eq!(prompt("claude", "Do you want to proceed?\n❯ 1. Yes"), None);
+    assert_eq!(
+        prompt("claude", "  2. Yes\n  3. No"),
+        None,
+        "choices must count from 1"
+    );
+    assert_eq!(prompt("claude", "nothing to pick"), None);
+}
