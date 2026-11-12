@@ -32,7 +32,6 @@ window.YardbellShell.head.querySelector(".col-title").insertAdjacentHTML("aftere
   </button>`);
 window.YardbellShell.column.innerHTML = '<div class="col-tree"></div>';
 const treeEl = window.YardbellShell.column.querySelector(".col-tree");
-window.YardbellShell.column.insertAdjacentHTML("afterend", '<aside class="setup-card" id="setup-card" aria-labelledby="setup-card-title" hidden></aside>');
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -544,34 +543,6 @@ function addProject() {
   });
 }
 
-const SETUP_DISMISS_KEY = "yardbell.setup-card.dismissed";
-let setupConfigured = null;
-
-async function checkSetup() {
-  try {
-    const res = await fetch("/api/settings/worktree-setup", { headers: { Accept: "application/json" } });
-    if (!res.ok) return;
-    const { setups } = await res.json();
-    setupConfigured = (setups || []).some((s) => String(s.command || "").trim());
-  } catch {
-    return;
-  }
-  renderSetupCard();
-}
-
-function renderSetupCard() {
-  const card = $("setup-card");
-  const dismissed = stored(SETUP_DISMISS_KEY) === "1";
-  card.hidden = setupConfigured !== false || dismissed;
-  if (card.hidden) return;
-  const here = project();
-  const where = here ? `<p class="setup-card-where"><span class="setup-card-mark" aria-hidden="true"></span>${esc(spaceLabel(here))}</p>` : "";
-  card.innerHTML = `<button class="setup-card-x" type="button" id="setup-card-x" aria-label="Dismiss" title="Dismiss"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
-    <h2 class="setup-card-title" id="setup-card-title">Add a setup script</h2>${where}
-    <p class="setup-card-text">Add a setup command to run when Yardbell creates new worktrees.</p>
-    <a class="btn setup-card-go" href="/settings#worktree-setup"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Configure</a>`;
-}
-
 const START_ICON = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5l3 3-3 3M8 11.5h5"/></svg>`;
 
 function emptyPane(leaf) {
@@ -839,7 +810,6 @@ function render() {
   renderPanes();
   renderTop();
   renderSide();
-  renderSetupCard();
   syncDispatchPressed();
   window.YardbellSide.update();
 }
@@ -1419,11 +1389,6 @@ $("tab-list").addEventListener("click", (e) => {
 $("new-tab").addEventListener("click", newTab);
 $("side-new").addEventListener("click", newTab);
 $("side-add-project").addEventListener("click", addProject);
-$("setup-card").addEventListener("click", (e) => {
-  if (!e.target.closest("#setup-card-x")) return;
-  try { localStorage.setItem(SETUP_DISMISS_KEY, "1"); } catch {}
-  renderSetupCard();
-});
 
 $("panes").addEventListener("pointerdown", (e) => {
   if (phone.matches || e.button !== 0) return;
@@ -1786,7 +1751,6 @@ function sessionsIn(machine, root) {
 
 window.YardbellSide.init({ where: () => (state ? sideWhere() : null), openFile, openDiff, sessionsIn, toast, resume: resumePast });
 load();
-checkSetup();
 window.YardbellLive.follow(load, 3000);
 
 window.YardbellShell.stateOf = stateOf;

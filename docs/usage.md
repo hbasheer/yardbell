@@ -242,9 +242,7 @@ Workspace remembers whether it was open, its width and its tab. It is not shown 
 
 The folder button over the machines opens **Add a project**: pick the machine under **Host**, then
 **Browse folder** to the folder and **Add project**. The folder stays in the sidebar in this browser,
-selected, so **+** starts a session there even before it has one. While no worktree setup command
-is configured, a card at the foot of the sidebar offers **Configure**, which opens Settings,
-**Worktree setup**; **×** hides it in this browser.
+selected, so **+** starts a session there even before it has one.
 
 There is no bar along the bottom. The right of the sidebar's foot, beside Settings, theme and log
 out, has a cup for **Keep computer awake** (**On**, **While agents work** or **Off**, see Settings,

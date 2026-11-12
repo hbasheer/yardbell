@@ -2838,44 +2838,6 @@ class Suite:
         finally:
             self.api("POST", "/api/settings/keep-awake", {"mode": "off"})
 
-    def test_setup_script_card_until_configured_or_dismissed(self):
-        b = self.b
-        setups = self.api("GET", "/api/settings/worktree-setup")["setups"]
-        before = self.storage(["yardbell.setup-card.dismissed"])
-        try:
-            self.api("POST", "/api/settings/worktree-setup", {"setups": []})
-            self.put_storage({"yardbell.setup-card.dismissed": None})
-            b.goto(self.url("/workspace"))
-            b.wait("!document.getElementById('setup-card').hidden", "the setup script card")
-            seen = b.js("""(() => {
-              const card = document.getElementById('setup-card');
-              const r = card.getBoundingClientRect();
-              const column = document.getElementById('col').getBoundingClientRect();
-              return { title: card.querySelector('.setup-card-title').textContent, href: card.querySelector('.setup-card-go').getAttribute('href'),
-                inside: r.left >= column.left && r.right <= column.right, low: r.bottom > column.bottom - 120 };
-            })()""")
-            if seen["title"] != "Add a setup script" or seen["href"] != "/settings#worktree-setup":
-                raise Failure(f"the card reads {seen}")
-            if not seen["inside"] or not seen["low"]:
-                raise Failure(f"the card is not at the bottom of the sidebar: {seen}")
-            b.click("#setup-card-x")
-            b.wait("document.getElementById('setup-card').hidden && localStorage.getItem('yardbell.setup-card.dismissed') === '1'",
-                   "Dismiss to hide the card and remember it")
-            b.goto(self.url("/workspace"))
-            b.wait("setupConfigured === false", "the setup check")
-            if not b.js("document.getElementById('setup-card').hidden"):
-                raise Failure("a dismissed card came back after a reload")
-            self.put_storage({"yardbell.setup-card.dismissed": None})
-            self.api("POST", "/api/settings/worktree-setup", {"setups": [{"folder": "demo-app", "command": "true"}]})
-            b.goto(self.url("/workspace"))
-            b.wait("setupConfigured === true", "the setup check to find the command")
-            if not b.js("document.getElementById('setup-card').hidden"):
-                raise Failure("the card shows although a setup command is configured")
-            self.check_errors("the setup script card")
-        finally:
-            self.api("POST", "/api/settings/worktree-setup", {"setups": setups})
-            self.put_storage(before)
-
     def palette_sessions(self, names):
         made = []
         for name in names:

@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **No setup script card.** The Workspace sidebar no longer shows an "Add a setup script" card. Worktree
+  setup is one setting for every workspace, and it stays in Settings, **Worktree setup**.
 - **One page highlighted at a time.** With Dispatch open as a pane in the Workspace, its sidebar link shows
   a small dot (and says a click closes it) instead of the current page's highlight. Machine rows in the
   sidebar are plain until hovered or picked, so they no longer all look selected.
