@@ -64,7 +64,7 @@ five lanes, by what each needs next:
 | **Ready to merge** | Approved, CI green (or no CI) and no known merge conflict. |
 | **Idle** | An idle agent with no open pull request, including one whose pull request was merged or closed. |
 
-![The Board, with sessions in lanes from Needs you to Ready to merge](screenshots/board.png)
+![The Board, with six sessions in lanes: Needs you, Working, In review, Ready to merge and Idle](screenshots/board.png)
 
 Each card shows the folder, ticket, branch, the pull request badge, the machine and the agent. A card
 in **Ready to merge** has a **Merge** button, as does the session's row on **Machines**: it asks
@@ -138,7 +138,7 @@ as the task's next version.
 
 ### New session
 
-![New session dialog with branch picker](screenshots/new-session.png)
+![The New session dialog with acme/web picked on devbox, the folder browser under it, and Name chosen under Create from for a new branch](screenshots/new-session.png)
 
 1. Pick the folder under **Project**, from **Recent** or by browsing the machine, and the machine
    under **Run on**. Git repositories show their branch. **Project** folds the browser away and
@@ -171,6 +171,8 @@ command, listed below. Starting an agent in a folder that already has a session 
 one, named like the first with `-2` after it.
 
 ### Workspace
+
+![The Workspace with two terminals side by side, a diff of stripe.js docked under them, and the Changes tab on the right](screenshots/workspace.png)
 
 The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
 machine, then folder (a workspace), then the sessions in it, each with its state. A session with a pull request shows its number, colored by its state, and
@@ -274,7 +276,7 @@ line only for a machine that is down or short of memory.
 
 ### Terminal and phone
 
-<img src="screenshots/phone.png" alt="Yardbell on a phone" width="320" align="right">
+<img src="screenshots/phone.png" alt="The dashboard on a phone: machine filters, session cards with their buttons, and the tab bar along the bottom" width="320" align="right">
 
 Turn on the mesh VPN on your phone and open `http://<host-mesh-ip>:4000`. Everything works the same,
 including the terminal. Several devices can attach to one session. The one you are using sets the
@@ -303,7 +305,7 @@ too, a message points you to **Copy text**.
 
 ### Add machine
 
-![Add machine flow](screenshots/add-machine.png)
+![Add machine with the mesh peers on top, studio picked, and its name, user and mesh address filled in the form](screenshots/add-machine.png)
 
 Pick a peer from your mesh (phones and tablets are hidden) or type an IP or hostname, then enter the
 username and a short name. Yardbell checks each step and stops with the reason when one fails:
@@ -315,7 +317,7 @@ last step says which port its apps open at on the host.
 
 ### Settings
 
-![Settings page](screenshots/settings.png)
+![Settings on Stats & Usage: cards for tokens, sessions and active days, a daily chart and the share of each model](screenshots/settings.png)
 
 Settings shows one section at a time; pick it from the section list (a row of buttons on a phone).
 
@@ -509,7 +511,7 @@ list, each run's conversation has the pipeline mark.
 
 ### Dispatch
 
-![Dispatch page with a conversation](screenshots/dispatch.png)
+![Dispatch with a conversation that started an agent, the session's card, and a message being written with a session picked by @](screenshots/dispatch.png)
 
 The **Dispatch** page takes a task in plain words, like "fix the flaky checkout test in acme/web on a
 new branch eng-1234-checkout-flake". It runs Claude Code (`claude -p`) or Codex (`codex exec`) on
