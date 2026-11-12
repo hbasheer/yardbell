@@ -414,8 +414,12 @@
           <h3 class="set-group-title">Input</h3>
           <div class="set-rows">
             <div class="set-row">
-              <div class="set-text"><span class="set-label">Shortcut</span><span class="set-desc">Starts dictation in Dispatch's message box.</span></div>
-              <span class="voice-keys" role="img" aria-label="Control Shift Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd></span>
+              <div class="set-text"><span class="set-label">Shortcut</span><span class="set-desc" id="voice-shortcut-desc">Starts dictation in Dispatch's message box. Kept on this device.</span></div>
+              <div class="voice-shortcut-ctl">
+                <span class="voice-keys" id="voice-shortcut" role="img"></span>
+                <button class="btn quiet" type="button" id="voice-shortcut-change">Change</button>
+                <button class="btn quiet" type="button" id="voice-shortcut-reset" hidden>Reset</button>
+              </div>
             </div>
             <div class="set-row">
               <div class="set-text"><span class="set-label" id="voice-mode-title">Dictation mode</span><span class="set-desc" id="voice-mode-desc"></span></div>
@@ -833,6 +837,7 @@
   </main>
 <div id="toast" role="status"></div>
 <script src="/machines.js"></script>
+<script src="/voice-keys.js"></script>
 <script src="/shell.js"></script>
 <script src="/strip.js"></script>
 <script src="/usage.js"></script>

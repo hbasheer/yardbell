@@ -5,6 +5,10 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Dictate from the keyboard on a Mac.** The shortcut is **⌘E** on a Mac, since macOS takes Control+Space
+  for switching keyboard input sources, and stays **Ctrl+Shift+Space** elsewhere. **Shortcut** in Settings,
+  Voice now sets your own for each device: click **Change** and press the keys. The microphone's hint and
+  the Voice page name the shortcut in use.
 - **Dictation modes work as named.** Hold now records for as long as the button or shortcut is held, and Toggle
   until it is pressed again; only Auto stops by itself after a few seconds of quiet. Dictation mode, language,
   vocabulary and Remove filler words save the moment they change, like the speech model buttons, instead of

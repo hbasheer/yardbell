@@ -471,7 +471,7 @@ document.addEventListener("keydown", (e) => {
 
 // With voice input off, the mic offers setup in place, rather than vanishing.
 document.addEventListener("keydown", (e) => {
-  if (!runsOn || runsOn.voice_input || !(e.code === "Space" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey)) return;
+  if (!runsOn || runsOn.voice_input || !window.YardbellVoiceKeys?.matches(e)) return;
   e.preventDefault();
   e.stopImmediatePropagation();
   $("mic").click();

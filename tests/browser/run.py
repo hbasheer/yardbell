@@ -4568,6 +4568,54 @@ class Suite:
         finally:
             self.api("POST", "/api/settings/voice", {"input": "off", "mode": "auto", "remove_fillers": False, "vocabulary": ""})
 
+    def test_dictation_shortcut_defaults_per_platform_and_can_be_changed(self):
+        b = self.b
+        recording = "document.getElementById('mic').classList.contains('recording')"
+        b.goto(self.url("/settings#voice"))
+        b.wait("window.YardbellVoiceKeys && document.getElementById('voice-shortcut')", "the dictation shortcut row")
+        mac = b.js("JSON.stringify(YardbellVoiceKeys.defaults(true))")
+        other = b.js("JSON.stringify(YardbellVoiceKeys.defaults(false))")
+        if json.loads(mac) != {"code": "KeyE", "ctrl": False, "shift": False, "alt": False, "meta": True}:
+            raise Failure(f"a Mac's default dictation shortcut is {mac}, not Command+E")
+        if json.loads(other) != {"code": "Space", "ctrl": True, "shift": True, "alt": False, "meta": False}:
+            raise Failure(f"the default elsewhere is {other}, not Ctrl+Shift+Space")
+        if b.js("YardbellVoiceKeys.label(YardbellVoiceKeys.defaults(true), true)") != "\u2318E":
+            raise Failure("the Mac shortcut is not written as \u2318E")
+        try:
+            b.click("#voice-shortcut-change")
+            b.wait("document.getElementById('voice-shortcut').classList.contains('listening')", "the shortcut row to listen for keys")
+            b.key("d", "Alt")
+            b.wait("!document.getElementById('voice-shortcut').classList.contains('listening')", "the new shortcut to be taken")
+            kept = json.loads(b.js("localStorage.getItem('yardbell.voice.shortcut')") or "null")
+            if not kept or kept.get("code") != "KeyD" or not kept.get("alt") or kept.get("ctrl"):
+                raise Failure(f"Alt+D was stored as {kept}")
+            if "D" not in b.js("document.getElementById('voice-shortcut').textContent"):
+                raise Failure("the row does not show the new shortcut")
+            self.api("POST", "/api/settings/voice", {"input": "local", "whisper_model": self.y.config})
+            b.goto(self.url("/dispatch"))
+            b.wait("!document.getElementById('mic').hidden && !document.getElementById('mic').classList.contains('voice-off')", "the microphone button, voice on")
+            b.js("document.getElementById('mic').dispatchEvent(new PointerEvent('pointerenter')); 0")
+            title = b.js("document.getElementById('mic').title")
+            if "Alt+D" not in title:
+                raise Failure(f"the microphone's hint does not name the new shortcut: {title!r}")
+            b.click("#dispatch-input")
+            b.key(" ", "Control", "Shift")
+            b.pump(0.6)
+            if b.js(recording):
+                raise Failure("the old Ctrl+Shift+Space still starts dictation after the shortcut changed")
+            b.key("d", "Alt")
+            b.wait(recording, "Alt+D to start recording")
+            b.click("#dictation-pill .dict-btn")
+            b.wait(f"!({recording})", "Cancel to stop it")
+            b.goto(self.url("/settings#voice"))
+            b.wait("document.getElementById('voice-shortcut-reset')", "the reset button")
+            b.click("#voice-shortcut-reset")
+            if b.js("localStorage.getItem('yardbell.voice.shortcut')") is not None:
+                raise Failure("Reset did not go back to the default shortcut")
+        finally:
+            b.js("localStorage.removeItem('yardbell.voice.shortcut')")
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+
     def test_dispatch_speak_toggle_mutes_at_once(self):
         b = self.b
         b.goto(self.url("/dispatch"))

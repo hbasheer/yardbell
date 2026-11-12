@@ -1802,9 +1802,9 @@ $("dispatch-form").elements.codex_model.addEventListener("input", codexModelNote
 const QUALITY = ["Poor", "Fair", "Good", "Very good", "Excellent"];
 const MIC_KEY = "yardbell.voice.mic";
 const MODE_HELP = {
-  auto: "Tap Ctrl+Shift+Space or the microphone to start and stop, or hold it while you talk. It stops by itself after a few seconds of quiet.",
-  hold: "Talk while you hold Ctrl+Shift+Space or the microphone.",
-  toggle: "Press Ctrl+Shift+Space or the microphone to start, and again to stop.",
+  auto: (keys) => `Tap ${keys} or the microphone to start and stop, or hold it while you talk. It stops by itself after a few seconds of quiet.`,
+  hold: (keys) => `Talk while you hold ${keys} or the microphone.`,
+  toggle: (keys) => `Press ${keys} or the microphone to start, and again to stop.`,
 };
 let voiceModels = null;
 let voicePoll = 0;
@@ -1838,7 +1838,7 @@ function voiceInputMode() {
 
 function voiceModeHelp() {
   const mode = $("voice-form").elements.mode.value || "auto";
-  $("voice-mode-desc").textContent = MODE_HELP[mode];
+  $("voice-mode-desc").textContent = MODE_HELP[mode](YardbellVoiceKeys.label());
 }
 
 function voiceValues() {
@@ -1895,7 +1895,7 @@ function renderVoiceState() {
     return;
   }
   if (input === "api") {
-    el.textContent = "Recordings are sent to the cloud API below. Press Ctrl+Shift+Space in Dispatch's message box.";
+    el.textContent = `Recordings are sent to the cloud API below. Press ${YardbellVoiceKeys.label()} in Dispatch's message box.`;
     return;
   }
   if (!voiceModels) {
@@ -1906,12 +1906,12 @@ function renderVoiceState() {
   const active = activeModel();
   if (voiceModels.custom) {
     el.textContent = voiceModels.custom.found
-      ? `Ready with your own model file. Press Ctrl+Shift+Space in Dispatch's message box.${missing}`
+      ? `Ready with your own model file. Press ${YardbellVoiceKeys.label()} in Dispatch's message box.${missing}`
       : `There is no model file at ${voiceModels.custom.path}. Download a speech model below, or fix the path under Advanced.`;
   } else if (active?.download?.running) {
     el.textContent = `Works once ${active.label} finishes downloading.`;
   } else if (active?.downloaded) {
-    el.textContent = `Ready with ${active.label}. Press Ctrl+Shift+Space in Dispatch's message box.${missing}`;
+    el.textContent = `Ready with ${active.label}. Press ${YardbellVoiceKeys.label()} in Dispatch's message box.${missing}`;
   } else {
     el.textContent = `Download a speech model below to start. It runs on this machine, so your audio stays here.${missing}`;
   }
@@ -2062,6 +2062,53 @@ $("voice-use-api").addEventListener("click", () => {
 
 $("voice-form").elements.input.addEventListener("change", voiceInputMode);
 $("voice-mode").addEventListener("change", voiceModeHelp);
+
+function paintVoiceShortcut() {
+  const keys = YardbellVoiceKeys;
+  const row = $("voice-shortcut");
+  row.innerHTML = keys.parts().map((p) => `<kbd>${esc(p)}</kbd>`).join("");
+  row.setAttribute("aria-label", keys.label());
+  $("voice-shortcut-reset").hidden = JSON.stringify(keys.get()) === JSON.stringify(keys.defaults());
+  voiceModeHelp();
+}
+
+// Change listens for the next key combination; Esc gives up, and a key with no Control,
+// Option or Command is refused, since it would fire while typing.
+let stopListening = null;
+$("voice-shortcut-change").addEventListener("click", () => {
+  if (stopListening) return stopListening();
+  const row = $("voice-shortcut");
+  const button = $("voice-shortcut-change");
+  row.classList.add("listening");
+  row.innerHTML = "<span class=\"voice-keys-wait\">Press the new shortcut…</span>";
+  button.textContent = "Cancel";
+  const listen = (e) => {
+    if (["Control", "Shift", "Alt", "Meta", "OS"].includes(e.key)) return;
+    e.preventDefault();
+    e.stopPropagation();
+    if (e.key === "Escape") return stopListening();
+    const picked = YardbellVoiceKeys.fromEvent(e);
+    if (!YardbellVoiceKeys.valid(picked)) {
+      row.innerHTML = `<span class="voice-keys-wait">Hold ${YardbellVoiceKeys.isMac ? "⌃, ⌥ or ⌘" : "Ctrl, Alt or Super"} with a key</span>`;
+      return;
+    }
+    YardbellVoiceKeys.set(picked);
+    stopListening();
+  };
+  stopListening = () => {
+    document.removeEventListener("keydown", listen, true);
+    stopListening = null;
+    row.classList.remove("listening");
+    button.textContent = "Change";
+    paintVoiceShortcut();
+  };
+  document.addEventListener("keydown", listen, true);
+});
+$("voice-shortcut-reset").addEventListener("click", () => {
+  YardbellVoiceKeys.reset();
+  paintVoiceShortcut();
+});
+paintVoiceShortcut();
 
 // How dictation behaves applies the moment it is picked, like the model buttons above it; the
 // engine, paths and API fields still wait for Save, since a half-typed path would fail.

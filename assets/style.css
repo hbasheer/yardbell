@@ -4557,3 +4557,10 @@ tr.dnote-row td { padding: 6px 16px 8px 116px; font: 13px/1.45 var(--sans); }
 .dnote-box { display: block; width: 100%; min-height: 64px; padding: 6px 8px; border: 1px solid var(--term-edge); border-radius: 6px; background: var(--term-bg); box-shadow: none; color: var(--term-ink); font: 400 13px/1.45 var(--sans); resize: vertical; }
 .dnote-box:focus-visible { outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px color-mix(in srgb, var(--accent) 30%, transparent); }
 @media (prefers-reduced-motion: reduce) { .dplus { transition: none; } }
+
+/* The dictation shortcut row: the keys, then Change and Reset; while listening the keys give way
+   to a prompt. */
+.voice-shortcut-ctl { display: inline-flex; flex: none; align-items: center; gap: 6px; }
+.voice-keys.listening { padding: 0 8px; min-height: 22px; align-items: center; border: 1px dashed var(--line-strong); border-radius: 6px; }
+.voice-keys-wait { color: var(--muted); font: 500 12px var(--sans); white-space: nowrap; }
+@media (max-width: 760px) { .voice-shortcut-ctl { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; } }
