@@ -12,15 +12,44 @@ struct Saved {
     definition: Definition,
 }
 
+// Restoring points `current` at an older version instead of copying it, so the list keeps every
+// version and a newer one can be restored again. `last` keeps a deleted number from coming back.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 struct File {
     #[serde(default)]
     history: Vec<Saved>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    current: Option<u32>,
+    #[serde(default)]
+    last: u32,
 }
 
 impl File {
+    fn current_saved(&self) -> Option<&Saved> {
+        self.current
+            .and_then(|v| self.history.iter().find(|s| s.version == v))
+            .or_else(|| self.history.first())
+    }
+
+    fn current_saved_mut(&mut self) -> Option<&mut Saved> {
+        let at = self
+            .current
+            .and_then(|v| self.history.iter().position(|s| s.version == v))
+            .unwrap_or(0);
+        self.history.get_mut(at)
+    }
+
     fn current(&self) -> Option<&Definition> {
-        self.history.first().map(|s| &s.definition)
+        self.current_saved().map(|s| &s.definition)
+    }
+
+    fn newest_number(&self) -> u32 {
+        self.history
+            .iter()
+            .map(|s| s.version)
+            .max()
+            .unwrap_or(0)
+            .max(self.last)
     }
 }
 
@@ -92,7 +121,9 @@ impl Library {
         check(&def, cfg)?;
         let mut files = self.lock();
         let file = files.entry(def.id.clone()).or_default();
-        def.version = file.current().map_or(1, |d| d.version + 1);
+        def.version = file.newest_number() + 1;
+        file.last = def.version;
+        file.current = None;
         file.history.insert(
             0,
             Saved {
@@ -175,8 +206,8 @@ impl Library {
         check(&def, cfg)?;
         let mut files = self.lock();
         let file = files.entry(id.to_string()).or_default();
-        if let Some(newest) = file.history.first_mut() {
-            newest.definition.enabled = enabled;
+        if let Some(current) = file.current_saved_mut() {
+            current.definition.enabled = enabled;
         }
         let written = write(&self.dir, id, file);
         drop(files);
@@ -184,14 +215,80 @@ impl Library {
         Ok(def)
     }
 
+    pub fn current_version(&self, id: &str) -> Option<u32> {
+        self.lock()
+            .get(id)
+            .and_then(|f| f.current_saved().map(|s| s.version))
+    }
+
+    // Makes an older (or newer) version the current one; whether the pipeline is on carries over.
     pub fn restore(&self, id: &str, version: u32, cfg: &Config) -> Result<Definition, Vec<String>> {
-        let old = self
-            .history(id)
-            .into_iter()
-            .find(|(v, _, _)| *v == version)
-            .map(|(_, _, d)| d)
+        let mut files = self.lock();
+        let file = files
+            .get_mut(id)
+            .ok_or_else(|| vec![format!("there is no pipeline {id}")])?;
+        let enabled = file.current().map(|d| d.enabled).unwrap_or(false);
+        let at = file
+            .history
+            .iter()
+            .position(|s| s.version == version)
             .ok_or_else(|| vec![format!("{id} has no version {version}")])?;
-        self.save(old, cfg)
+        let mut def = file.history[at].definition.clone();
+        def.enabled = enabled;
+        check(&def, cfg)?;
+        file.history[at].definition.enabled = enabled;
+        file.current = (at != 0).then_some(version);
+        let written = write(&self.dir, id, file);
+        drop(files);
+        written.map_err(|e| vec![e])?;
+        Ok(def)
+    }
+
+    pub fn delete_version(&self, id: &str, version: u32) -> Result<(), String> {
+        let mut files = self.lock();
+        let file = files
+            .get_mut(id)
+            .ok_or_else(|| format!("there is no pipeline {id}"))?;
+        let at = file
+            .history
+            .iter()
+            .position(|s| s.version == version)
+            .ok_or_else(|| format!("{id} has no version {version}"))?;
+        if file.current_saved().map(|s| s.version) == Some(version) {
+            return Err(format!(
+                "version {version} is the current version; restore another one first"
+            ));
+        }
+        file.last = file.newest_number();
+        file.history.remove(at);
+        if file
+            .current
+            .is_some_and(|v| file.history.first().map(|s| s.version) == Some(v))
+        {
+            file.current = None;
+        }
+        let written = write(&self.dir, id, file);
+        drop(files);
+        written
+    }
+
+    // Every version but the current one goes; returns how many.
+    pub fn clear_history(&self, id: &str) -> Result<usize, String> {
+        let mut files = self.lock();
+        let file = files
+            .get_mut(id)
+            .ok_or_else(|| format!("there is no pipeline {id}"))?;
+        let keep = file
+            .current_saved()
+            .cloned()
+            .ok_or_else(|| format!("{id} has no versions"))?;
+        let removed = file.history.len() - 1;
+        file.last = file.newest_number();
+        file.history = vec![keep];
+        file.current = None;
+        let written = write(&self.dir, id, file);
+        drop(files);
+        written.map(|_| removed)
     }
 
     pub fn delete(&self, id: &str) -> Result<(), String> {
@@ -237,16 +334,107 @@ mod tests {
     }
 
     #[test]
-    fn restore_brings_back_an_old_version() {
+    fn restore_makes_an_old_version_current_without_adding_one() {
         let (lib, _dir) = library();
         let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
         def.steps[1].name = "Build it".into();
         let id = lib.save(def, &cfg()).unwrap().id;
         let restored = lib.restore(&id, 1, &cfg()).unwrap();
-        assert_eq!(restored.version, 3);
+        assert_eq!(restored.version, 1);
         assert_eq!(restored.steps[1].name, "Implement");
+        assert_eq!(
+            lib.history(&id).iter().map(|h| h.0).collect::<Vec<_>>(),
+            vec![2, 1]
+        );
+        assert_eq!(lib.current_version(&id), Some(1));
         let again = Library::load(lib.dir().to_path_buf());
-        assert_eq!(again.get(&id).unwrap().version, 3);
+        assert_eq!(again.get(&id).unwrap().version, 1);
+        let forward = again.restore(&id, 2, &cfg()).unwrap();
+        assert_eq!(forward.steps[1].name, "Build it");
+        assert_eq!(again.history(&id).len(), 2);
+    }
+
+    #[test]
+    fn an_edit_after_a_restore_is_the_newest_version() {
+        let (lib, _dir) = library();
+        let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
+        def.steps[1].name = "Build it".into();
+        let id = lib.save(def, &cfg()).unwrap().id;
+        let mut old = lib.restore(&id, 1, &cfg()).unwrap();
+        old.steps[1].name = "Ship it".into();
+        let saved = lib.save(old, &cfg()).unwrap();
+        assert_eq!(saved.version, 3);
+        assert_eq!(lib.current_version(&id), Some(3));
+        assert_eq!(
+            lib.history(&id).iter().map(|h| h.0).collect::<Vec<_>>(),
+            vec![3, 2, 1]
+        );
+    }
+
+    #[test]
+    fn switching_a_restored_version_on_keeps_it_current() {
+        let (lib, _dir) = library();
+        let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
+        def.steps[1].name = "Build it".into();
+        let id = lib.save(def, &cfg()).unwrap().id;
+        lib.restore(&id, 1, &cfg()).unwrap();
+        let on = lib.set_enabled(&id, true, &cfg()).unwrap();
+        assert_eq!(on.version, 1);
+        assert!(lib.get(&id).unwrap().enabled);
+        assert_eq!(lib.current_version(&id), Some(1));
+    }
+
+    #[test]
+    fn versions_can_be_deleted_but_never_the_current_one() {
+        let (lib, _dir) = library();
+        let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
+        for name in ["Build it", "Ship it"] {
+            def.steps[1].name = name.into();
+            def = lib.save(def, &cfg()).unwrap();
+        }
+        let id = def.id.clone();
+        lib.delete_version(&id, 2).unwrap();
+        assert_eq!(
+            lib.history(&id).iter().map(|h| h.0).collect::<Vec<_>>(),
+            vec![3, 1]
+        );
+        let problem = lib.delete_version(&id, 3).unwrap_err();
+        assert!(problem.contains("current version"), "{problem}");
+        assert!(lib
+            .delete_version(&id, 9)
+            .unwrap_err()
+            .contains("no version 9"));
+        lib.restore(&id, 1, &cfg()).unwrap();
+        lib.delete_version(&id, 3).unwrap();
+        assert_eq!(
+            lib.history(&id).iter().map(|h| h.0).collect::<Vec<_>>(),
+            vec![1]
+        );
+        let again = Library::load(lib.dir().to_path_buf());
+        assert_eq!(again.history(&id).len(), 1);
+        let mut next = again.get(&id).unwrap();
+        next.steps[1].name = "Again".into();
+        assert_eq!(
+            again.save(next, &cfg()).unwrap().version,
+            4,
+            "a deleted number is not reused"
+        );
+    }
+
+    #[test]
+    fn clearing_history_keeps_only_the_current_version() {
+        let (lib, _dir) = library();
+        let mut def = lib.copy_template("Implement my tickets", &cfg()).unwrap();
+        for name in ["Build it", "Ship it"] {
+            def.steps[1].name = name.into();
+            def = lib.save(def, &cfg()).unwrap();
+        }
+        let id = def.id.clone();
+        lib.restore(&id, 2, &cfg()).unwrap();
+        assert_eq!(lib.clear_history(&id).unwrap(), 2);
+        let history = lib.history(&id);
+        assert_eq!(history.iter().map(|h| h.0).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(lib.get(&id).unwrap().steps[1].name, "Build it");
     }
 
     #[test]

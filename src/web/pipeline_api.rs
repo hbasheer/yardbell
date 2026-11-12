@@ -24,6 +24,11 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/pipelines/{id}/enabled", post(enabled))
         .route("/api/pipelines/{id}/history", get(history))
         .route("/api/pipelines/{id}/restore", post(restore))
+        .route(
+            "/api/pipelines/{id}/history/{version}/delete",
+            post(delete_version),
+        )
+        .route("/api/pipelines/{id}/history/clear", post(clear_history))
         .route("/api/pipelines/{id}/runs", get(runs).post(start))
         .route("/api/pipelines/{id}/clear-runs", post(clear_runs))
         .route("/api/pipelines/{id}/webhook-token", post(webhook_token))
@@ -226,21 +231,47 @@ async fn enabled(
     )
 }
 
-async fn history(
-    AxState(app): AxState<Arc<AppState>>,
-    Path(id): Path<String>,
-) -> Result<Response, ApiError> {
-    found(&app, &id)?;
-    let history: Vec<Value> = app
-        .pipelines
-        .library()
-        .history(&id)
+fn history_json(app: &AppState, id: &str) -> Value {
+    let library = app.pipelines.library();
+    let history: Vec<Value> = library
+        .history(id)
         .into_iter()
         .map(|(version, saved, definition)| {
             json!({ "version": version, "saved": saved, "definition": definition })
         })
         .collect();
-    Ok(Json(json!({ "history": history })).into_response())
+    json!({ "history": history, "current": library.current_version(id) })
+}
+
+async fn history(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    found(&app, &id)?;
+    Ok(Json(history_json(&app, &id)).into_response())
+}
+
+async fn delete_version(
+    AxState(app): AxState<Arc<AppState>>,
+    Path((id, version)): Path<(String, u32)>,
+) -> Result<Response, ApiError> {
+    found(&app, &id)?;
+    app.pipelines
+        .library()
+        .delete_version(&id, version)
+        .map_err(bad)?;
+    Ok(Json(history_json(&app, &id)).into_response())
+}
+
+async fn clear_history(
+    AxState(app): AxState<Arc<AppState>>,
+    Path(id): Path<String>,
+) -> Result<Response, ApiError> {
+    found(&app, &id)?;
+    let removed = app.pipelines.library().clear_history(&id).map_err(bad)?;
+    let mut body = history_json(&app, &id);
+    body["removed"] = json!(removed);
+    Ok(Json(body).into_response())
 }
 
 #[derive(Deserialize)]

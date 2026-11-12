@@ -5849,7 +5849,9 @@ class Suite:
         if b.js("document.querySelector('.pl-canvas .pl-node[data-step=\"understand\"] b').textContent") != "Understand":
             raise Failure("the canvas does not show version 1")
         b.js("[...document.querySelectorAll('.pl-history-preview button')].find((x) => x.textContent.trim() === 'Restore').click()")
-        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
+        b.wait("(async () => (await (await fetch('/api/pipelines/review')).json()).version === 1)()", "version 1 made current")
+        if len(self.api("GET", "/api/pipelines/review/history")["history"]) < saved["version"]:
+            raise Failure("restoring added or dropped a version")
 
     def test_builder_on_a_phone(self):
         b = self.b
@@ -6051,18 +6053,39 @@ class Suite:
             raise Failure("pressing the minimap does not move the view")
         self.check_errors("the canvas")
 
-    def test_pipeline_history_restore(self):
+    def test_pipeline_history_restore_delete_and_clear(self):
         b = self.b
         definition = self.api("GET", "/api/pipelines/review")
         first = definition["steps"][0]["name"]
         definition["steps"][0]["name"] = "Read it"
         saved = self.api("PUT", "/api/pipelines/review", definition)
+        newest = saved["version"]
+        count = len(self.api("GET", "/api/pipelines/review/history")["history"])
         b.goto(self.url("/pipeline?p=review&tab=history"))
-        b.wait(f"document.querySelector('.pl-history-row')?.dataset.version === '{saved['version']}'", "the newest version first")
-        b.click('.pl-history-row[data-version="1"] .btn')
-        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
+        b.wait(f"document.querySelector('.pl-history-row')?.dataset.version === '{newest}'", "the newest version first")
+        b.click('.pl-history-row[data-version="1"] .pl-history-restore')
+        b.wait("(async () => (await (await fetch('/api/pipelines/review')).json()).version === 1)()", "version 1 made current")
         if self.api("GET", "/api/pipelines/review")["steps"][0]["name"] != first:
             raise Failure("restoring version 1 did not bring its step names back")
+        history = self.api("GET", "/api/pipelines/review/history")
+        if len(history["history"]) != count or history["current"] != 1:
+            raise Failure(f"a restore should add no version and make v1 current: {len(history['history'])} versions, current {history['current']}")
+        b.wait("document.querySelector('.pl-history-row[data-version=\"1\"] .pl-current')", "v1 marked Current")
+        if b.js(f"!!document.querySelector('.pl-history-row[data-version=\"{newest}\"] .pl-history-restore')") is not True:
+            raise Failure("the newer version cannot be restored again")
+        b.click(f'.pl-history-row[data-version="{newest}"] .pl-history-delete')
+        b.wait("document.querySelector('dialog.confirm[open]')", "the delete question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait(f"!document.querySelector('.pl-history-row[data-version=\"{newest}\"]')", "the deleted version gone")
+        if b.js("!!document.querySelector('.pl-history-row[data-version=\"1\"] .pl-history-delete')"):
+            raise Failure("the current version offers Delete")
+        if count > 2:
+            b.click("#pl-history-clear")
+            b.wait("document.querySelector('dialog.confirm[open]')", "the clear question")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait("document.querySelectorAll('.pl-history-row').length === 1", "only the current version left")
+            if self.api("GET", "/api/pipelines/review/history")["history"][0]["version"] != 1:
+                raise Failure("Clear history did not keep the current version")
 
     def test_pipeline_run_held_for_memory(self):
         b = self.b

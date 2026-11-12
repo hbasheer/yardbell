@@ -452,7 +452,10 @@ A pipeline opens full screen (the button beside **Delete** puts it back in the p
   conversation; the waiting box with **Send answer**, **Retry step**, **Continue on pass**,
   **Continue on fail** and **Drop**; and each step's report.
 - **History**: every saved version. Click one to see it on the canvas, then **Restore** it or go
-  **Back to the current version**.
+  **Back to the current version**. Restoring makes that version the current one without adding a
+  version, so a newer one can be restored again; the next edit saves as the newest. The bin on a
+  version deletes it, and **Clear history** keeps only the current version. The current version
+  cannot be deleted, and a deleted number is never used again.
 
 On the **Runs** tab:
 

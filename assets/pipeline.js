@@ -14,6 +14,7 @@ let def = null;
 let draft = null;
 let problems = [];
 let versions = [];
+let currentVersion = null;
 let show = { waiting: false, settings: false, templates: false, runNow: false };
 let settings = null;
 let answers = new Map();
@@ -1600,29 +1601,66 @@ function buildTab(d) {
 
 let previewing = null;
 
+function takeHistory(res) {
+  versions = res.history;
+  currentVersion = res.current ?? versions[0]?.version ?? null;
+}
+
+// Restore points the pipeline at a version already in the list; nothing new is added, so a newer
+// version can be restored again.
 async function restore(v) {
   if (unsaved() && !(await leave())) return;
   doing(async () => {
     def = await api("POST", `/api/pipelines/${encodeURIComponent(def.id)}/restore`, { version: v.version });
     draft = structuredClone(def);
     previewing = null;
-    toast(`Restored v${v.version} as v${def.version}`, "ok");
+    toast(`Version ${v.version} is the current one now`, "ok");
     await load();
   });
 }
 
+async function deleteVersion(v) {
+  if (!(await ask(`Delete version ${v.version}?`, "It goes from this pipeline's history. The current version stays as it is.", { confirm: "Delete", danger: true }))) return;
+  doing(async () => {
+    takeHistory(await api("POST", `/api/pipelines/${encodeURIComponent(def.id)}/history/${v.version}/delete`));
+    if (previewing === v.version) previewing = null;
+    draw();
+  });
+}
+
+async function clearHistory() {
+  const n = versions.length - 1;
+  if (!(await ask(`Delete ${n} older ${n === 1 ? "version" : "versions"}?`, `Only the current version, v${currentVersion}, is kept.`, { confirm: "Delete", danger: true }))) return;
+  doing(async () => {
+    const res = await api("POST", `/api/pipelines/${encodeURIComponent(def.id)}/history/clear`);
+    takeHistory(res);
+    previewing = null;
+    toast(`Deleted ${res.removed} ${res.removed === 1 ? "version" : "versions"}`, "ok");
+    draw();
+  });
+}
+
 function historyTab() {
-  const shown = versions.find((v) => v.version === previewing) || versions[0];
-  const current = shown === versions[0];
+  const live = versions.find((v) => v.version === currentVersion) || versions[0];
+  const shown = versions.find((v) => v.version === previewing) || live;
+  const current = shown === live;
+  const trash = html`<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5h10M6.5 4.5V3h3v1.5M4.5 4.5l.6 8.5h5.8l.6-8.5"/></svg>`;
   return html`<div class="pl-history-view">
-    <ol class="pl-history">${versions.map((v, i) => html`<li class=${`pl-history-row ${v === shown ? "sel" : ""}`} data-version=${String(v.version)}>
-      <button class="pl-history-pick" type="button" aria-current=${v === shown ? "true" : "false"} @click=${() => { previewing = v.version; draw(); }}>
-        <span class="pl-v">v${v.version}</span>
-        <span class="pl-history-steps">${v.definition.steps.map((s) => s.name).join(" · ") || "No steps"}</span>
-        <time>${clock(v.saved)}</time>
-      </button>
-      ${i === 0 ? html`<span class="pl-current">Current</span>` : html`<button class="btn" type="button" ?disabled=${busy} @click=${() => restore(v)}>Restore</button>`}
-    </li>`)}</ol>
+    <div class="pl-history-list">
+      <div class="pl-history-head"><span>${versions.length} ${versions.length === 1 ? "version" : "versions"}</span>
+        ${versions.length > 1 ? html`<button class="btn quiet danger" type="button" id="pl-history-clear" ?disabled=${busy} @click=${clearHistory}>Clear history</button>` : nothing}</div>
+      <ol class="pl-history">${versions.map((v) => html`<li class=${`pl-history-row ${v === shown ? "sel" : ""}`} data-version=${String(v.version)}>
+        <button class="pl-history-pick" type="button" aria-current=${v === shown ? "true" : "false"} @click=${() => { previewing = v.version; draw(); }}>
+          <span class="pl-v">v${v.version}</span>
+          <span class="pl-history-steps">${v.definition.steps.map((s) => s.name).join(" · ") || "No steps"}</span>
+          <time>${clock(v.saved)}</time>
+        </button>
+        ${v === live
+          ? html`<span class="pl-current">Current</span>`
+          : html`<button class="btn pl-history-restore" type="button" ?disabled=${busy} @click=${() => restore(v)}>Restore</button>
+            <button class="btn quiet icon-btn pl-history-delete" type="button" aria-label=${`Delete version ${v.version}`} title="Delete this version" ?disabled=${busy} @click=${() => deleteVersion(v)}>${trash}</button>`}
+      </li>`)}</ol>
+    </div>
     ${shown ? canvas({
       def: shown.definition,
       key: `${def.id}:history:${shown.version}`,
@@ -1959,7 +1997,7 @@ async function load() {
       def = found;
       if (!editing) draft = structuredClone(found);
       draft.enabled = found.enabled;
-      if (params().get("tab") === "history") versions = (await api("GET", `/api/pipelines/${encodeURIComponent(id)}/history`)).history;
+      if (params().get("tab") === "history") takeHistory(await api("GET", `/api/pipelines/${encodeURIComponent(id)}/history`));
     }
   } else {
     def = null;

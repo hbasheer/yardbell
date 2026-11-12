@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Pipeline history: restore without a new version, and delete old ones.** **Restore** now makes
+  the version you pick the current one instead of saving a copy of it, so the list stays the same
+  and a newer version can be restored again. Each version but the current one has a delete button,
+  and **Clear history** keeps only the current version.
+
 ## [0.11.100] - 2026-11-12
 
 - **The Files tree shows what changed.** In the Workspace's right panel, a changed file's name takes the colour

@@ -4578,3 +4578,16 @@ tr.dnote-row td { padding: 6px 16px 8px 116px; font: 13px/1.45 var(--sans); }
 .side-dot { flex: none; width: 6px; height: 6px; margin-left: auto; margin-right: 3px; border-radius: 50%; background: var(--chg-modified); }
 .side-row.found .side-mark { margin-left: 6px; }
 .chg-st.untracked { color: var(--chg-added); }
+
+/* Pipeline history: a count with Clear history over the list, and Restore with a delete button on
+   each version but the current one. */
+.pl-history-view .pl-history-list { display: flex; flex-direction: column; min-height: 0; border-right: 1px solid var(--line); }
+.pl-history-view .pl-history-list .pl-history { flex: 1; border-right: 0; }
+.pl-history-head { display: flex; flex: none; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; padding: 4px 8px 4px 14px; border-bottom: 1px solid var(--line); color: var(--muted); font-size: 12.5px; }
+.pl-history-row { display: flex; align-items: center; gap: 6px; }
+.pl-history-row .pl-history-pick { flex: 1 1 auto; min-width: 0; }
+.pl-history-row .pl-history-delete { flex: none; color: var(--muted); }
+.pl-history-row .pl-history-delete:hover { color: var(--bad-text); }
+@media (max-width: 760px) {
+  .pl-history-view .pl-history-list { border-right: 0; border-bottom: 1px solid var(--line); }
+}
