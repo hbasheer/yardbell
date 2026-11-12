@@ -249,6 +249,10 @@ class Browser:
         # (NS_BINDING_ABORTED); Firefox logs that as an error, though nothing failed.
         if "downloadable font" in (p.get("text") or "") and "status=2152398850" in p.get("text"):
             return
+        # Likewise a terminal's websocket still connecting when the test moves on is cut off with
+        # "was interrupted while the page was loading"; the page did nothing wrong.
+        if "was interrupted while the page was loading" in (p.get("text") or "") and "/ws" in p.get("text"):
+            return
         frames = (p.get("stackTrace") or {}).get("callFrames") or []
         where = f" at {frames[0].get('url')}:{frames[0].get('lineNumber', 0) + 1}" if frames else ""
         kind = "page error" if p.get("type") == "javascript" else "console.error"

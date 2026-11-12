@@ -343,7 +343,6 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
   // sent to be guessed at, unless it is the whole recording: a quiet microphone can fool the meter.
   function cut(last, send = true) {
     const keep = send && (segmentHeard || !meter || (last && !queued));
-    if (keep) queued = true;
     segmentHeard = false;
     segmentAt = performance.now();
     if (wav) {
@@ -378,7 +377,10 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
     }
   }
 
+  // Only a piece that really goes out counts: on a slow machine the Web Audio fallback can close
+  // an empty first piece, and the last piece must still be sent then.
   function enqueue(blob) {
+    queued = true;
     queue.push(blob);
     pump();
   }
