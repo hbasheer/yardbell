@@ -356,6 +356,37 @@ class Browser:
         )
         self.pump(0.2)
 
+    # A drag through several points with the button held. A point (x, y, ms) rests there for ms
+    # before going on, and {"key": name} presses a key on the way.
+    def drag_path(self, points, steps=6):
+        pointer, keys = [], []
+
+        def tick(p, k=None):
+            pointer.append(p)
+            keys.append(k or {"type": "pause"})
+
+        x, y = points[0][0], points[0][1]
+        tick({"type": "pointerMove", "x": int(x), "y": int(y), "origin": "viewport"})
+        tick({"type": "pointerDown", "button": 0})
+        for p in points[1:]:
+            if isinstance(p, dict):
+                key = KEYS.get(p["key"], p["key"])
+                tick({"type": "pause"}, {"type": "keyDown", "value": key})
+                tick({"type": "pause"}, {"type": "keyUp", "value": key})
+                continue
+            for i in range(1, steps + 1):
+                tick({"type": "pointerMove", "x": int(x + (p[0] - x) * i / steps), "y": int(y + (p[1] - y) * i / steps),
+                      "origin": "viewport", "duration": 16})
+            x, y = p[0], p[1]
+            if len(p) > 2:
+                tick({"type": "pause", "duration": int(p[2])})
+        tick({"type": "pointerUp", "button": 0})
+        self._actions(
+            {"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": pointer},
+            {"type": "key", "id": "keyboard", "actions": keys},
+        )
+        self.pump(0.2)
+
     def type(self, text):
         keys = []
         for ch in text:

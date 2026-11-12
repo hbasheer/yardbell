@@ -64,7 +64,7 @@ five lanes, by what each needs next:
 | **Ready to merge** | Approved, CI green (or no CI) and no known merge conflict. |
 | **Idle** | An idle agent with no open pull request, including one whose pull request was merged or closed. |
 
-![The Board, with sessions in lanes from Needs you to Ready to merge](screenshots/board.png)
+![The Board, with six sessions in lanes: Needs you, Working, In review, Ready to merge and Idle](screenshots/board.png)
 
 Each card shows the folder, ticket, branch, the pull request badge, the machine and the agent. A card
 in **Ready to merge** has a **Merge** button, as does the session's row on **Machines**: it asks
@@ -138,7 +138,7 @@ as the task's next version.
 
 ### New session
 
-![New session dialog with branch picker](screenshots/new-session.png)
+![The New session dialog with acme/web picked on devbox, the folder browser under it, and Name chosen under Create from for a new branch](screenshots/new-session.png)
 
 1. Pick the folder under **Project**, from **Recent** or by browsing the machine, and the machine
    under **Run on**. Git repositories show their branch. **Project** folds the browser away and
@@ -172,6 +172,8 @@ one, named like the first with `-2` after it.
 
 ### Workspace
 
+![The Workspace with two terminals side by side, a diff of stripe.js docked under them, and the Changes tab on the right](screenshots/workspace.png)
+
 The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
 machine, then folder (a workspace), then the sessions in it, each with its state. A session with a pull request shows its number, colored by its state, and
 the full state on hover, followed by its newest review as on the dashboard. A pane's **⋯** menu has
@@ -186,7 +188,23 @@ you switch to always scrolls into view, and a tab's tooltip shows its full name.
 A tab lays its panes out as an even grid: two side by side, three as a pair over a full-width
 pane, four as two by two. Moving panes in or closing one lays the grid out again. To rearrange,
 drag a pane by its title bar onto another pane and they swap places, or pick **Swap with** from
-the pane's **⋯** menu. An empty pane offers to start an
+the pane's **⋯** menu.
+
+Tabs, panes and sessions also dock by dragging, on a desktop:
+
+- **A tab** dragged along the tab row moves there, with a line marking the spot. Dropped near an
+  edge of a pane, every pane in the tab moves next to that pane on that side, and the tab goes away.
+  A tinted box shows the half of the pane it will take. Dropped in the middle of a pane, or on its
+  title bar, a tab with one pane swaps places with that pane, and a tab with several moves them all
+  into the tab. Hold a dragged tab over another tab for a moment to switch to it and drop there.
+- **A pane** dragged by its title bar docks next to another pane the same way, swaps with it in the
+  middle, or becomes a tab of its own when dropped on the tab row.
+- **A session** dragged from the sidebar opens next to a pane or in its place, or in a new tab when
+  dropped on the tab row. An empty pane it lands on is replaced; any other pane takes the session's
+  old place in its tab, or a tab of its own. A session already open in the tab moves instead of
+  opening twice.
+
+Esc cancels a drag. The layout is remembered, like the rest of the Workspace. An empty pane offers to start an
 agent there or to open one of the workspace's sessions. Panes also split right or down and resize by
 dragging the border between them; the split's shape lasts until a pane is added or removed, when
 the grid takes over again. **Keyboard shortcuts** in the sidebar lists the keys. On a phone
@@ -242,9 +260,7 @@ Workspace remembers whether it was open, its width and its tab. It is not shown 
 
 The folder button over the machines opens **Add a project**: pick the machine under **Host**, then
 **Browse folder** to the folder and **Add project**. The folder stays in the sidebar in this browser,
-selected, so **+** starts a session there even before it has one. While no worktree setup command
-is configured, a card at the foot of the sidebar offers **Configure**, which opens Settings,
-**Worktree setup**; **×** hides it in this browser.
+selected, so **+** starts a session there even before it has one.
 
 There is no bar along the bottom. The right of the sidebar's foot, beside Settings, theme and log
 out, has a cup for **Keep computer awake** (**On**, **While agents work** or **Off**, see Settings,
@@ -260,7 +276,7 @@ line only for a machine that is down or short of memory.
 
 ### Terminal and phone
 
-<img src="screenshots/phone.png" alt="Yardbell on a phone" width="320" align="right">
+<img src="screenshots/phone.png" alt="The dashboard on a phone: machine filters, session cards with their buttons, and the tab bar along the bottom" width="320" align="right">
 
 Turn on the mesh VPN on your phone and open `http://<host-mesh-ip>:4000`. Everything works the same,
 including the terminal. Several devices can attach to one session. The one you are using sets the
@@ -289,7 +305,7 @@ too, a message points you to **Copy text**.
 
 ### Add machine
 
-![Add machine flow](screenshots/add-machine.png)
+![Add machine with the mesh peers on top, studio picked, and its name, user and mesh address filled in the form](screenshots/add-machine.png)
 
 Pick a peer from your mesh (phones and tablets are hidden) or type an IP or hostname, then enter the
 username and a short name. Yardbell checks each step and stops with the reason when one fails:
@@ -301,7 +317,7 @@ last step says which port its apps open at on the host.
 
 ### Settings
 
-![Settings page](screenshots/settings.png)
+![Settings on Stats & Usage: cards for tokens, sessions and active days, a daily chart and the share of each model](screenshots/settings.png)
 
 Settings shows one section at a time; pick it from the section list (a row of buttons on a phone).
 
@@ -452,7 +468,10 @@ A pipeline opens full screen (the button beside **Delete** puts it back in the p
   conversation; the waiting box with **Send answer**, **Retry step**, **Continue on pass**,
   **Continue on fail** and **Drop**; and each step's report.
 - **History**: every saved version. Click one to see it on the canvas, then **Restore** it or go
-  **Back to the current version**.
+  **Back to the current version**. Restoring makes that version the current one without adding a
+  version, so a newer one can be restored again; the next edit saves as the newest. The bin on a
+  version deletes it, and **Clear history** keeps only the current version. The current version
+  cannot be deleted, and a deleted number is never used again.
 
 On the **Runs** tab:
 
@@ -492,7 +511,7 @@ list, each run's conversation has the pipeline mark.
 
 ### Dispatch
 
-![Dispatch page with a conversation](screenshots/dispatch.png)
+![Dispatch with a conversation that started an agent, the session's card, and a message being written with a session picked by @](screenshots/dispatch.png)
 
 The **Dispatch** page takes a task in plain words, like "fix the flaky checkout test in acme/web on a
 new branch eng-1234-checkout-flake". It runs Claude Code (`claude -p`) or Codex (`codex exec`) on

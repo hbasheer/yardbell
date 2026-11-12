@@ -190,8 +190,70 @@ async fn history_and_restore() {
             restored["version"].clone(),
             restored["steps"][1]["name"].clone()
         ),
-        (json!(3), json!("Implement"))
+        (json!(1), json!("Implement"))
     );
+    let (_, history) = call(&r, &c, "GET", &format!("/api/pipelines/{id}/history"), None).await;
+    assert_eq!(history["current"], json!(1));
+    assert_eq!(
+        history["history"].as_array().unwrap().len(),
+        2,
+        "a restore adds no version"
+    );
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/history/1/delete"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+    assert!(
+        body["error"].as_str().unwrap().contains("current version"),
+        "{body}"
+    );
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/history/2/delete"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["history"].as_array().unwrap().len(), 1);
+    assert_eq!(body["current"], json!(1));
+}
+
+#[tokio::test]
+async fn clearing_pipeline_history_keeps_the_current_version() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = copy(&r, &c, IMPLEMENT).await;
+    for name in ["Build it", "Ship it"] {
+        let (_, mut def) = call(&r, &c, "GET", &format!("/api/pipelines/{id}"), None).await;
+        def["steps"][1]["name"] = json!(name);
+        call(&r, &c, "PUT", &format!("/api/pipelines/{id}"), Some(def)).await;
+    }
+    let (status, body) = call(
+        &r,
+        &c,
+        "POST",
+        &format!("/api/pipelines/{id}/history/clear"),
+        None,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["removed"], json!(2));
+    let versions: Vec<_> = body["history"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|h| h["version"].clone())
+        .collect();
+    assert_eq!(versions, vec![json!(3)]);
+    let (_, def) = call(&r, &c, "GET", &format!("/api/pipelines/{id}"), None).await;
+    assert_eq!(def["steps"][1]["name"], json!("Ship it"));
 }
 
 #[tokio::test]

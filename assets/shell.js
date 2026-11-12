@@ -324,8 +324,13 @@
     setWidth(saved || WIDTH.normal, false);
   }
 
+  // A page open as a pane beside the current one is marked, not highlighted like the page you are on.
   function pressed(page, on) {
-    shell.querySelectorAll(`:is(.rail-link, .col-nav-link)[data-page="${page}"]`).forEach((link) => link.setAttribute("aria-pressed", String(Boolean(on))));
+    const name = PAGES.find((p) => p.page === page)?.name || page;
+    shell.querySelectorAll(`:is(.rail-link, .col-nav-link)[data-page="${page}"]`).forEach((link) => {
+      link.setAttribute("aria-pressed", String(Boolean(on)));
+      link.title = on ? `${name} is open beside your sessions. Click to close it.` : link.classList.contains("rail-link") ? name : "";
+    });
   }
 
   searchButton.addEventListener("click", () => window.YardbellPalette?.open());

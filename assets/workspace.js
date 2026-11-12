@@ -32,7 +32,6 @@ window.YardbellShell.head.querySelector(".col-title").insertAdjacentHTML("aftere
   </button>`);
 window.YardbellShell.column.innerHTML = '<div class="col-tree"></div>';
 const treeEl = window.YardbellShell.column.querySelector(".col-tree");
-window.YardbellShell.column.insertAdjacentHTML("afterend", '<aside class="setup-card" id="setup-card" aria-labelledby="setup-card-title" hidden></aside>');
 
 function esc(value) {
   return String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
@@ -544,34 +543,6 @@ function addProject() {
   });
 }
 
-const SETUP_DISMISS_KEY = "yardbell.setup-card.dismissed";
-let setupConfigured = null;
-
-async function checkSetup() {
-  try {
-    const res = await fetch("/api/settings/worktree-setup", { headers: { Accept: "application/json" } });
-    if (!res.ok) return;
-    const { setups } = await res.json();
-    setupConfigured = (setups || []).some((s) => String(s.command || "").trim());
-  } catch {
-    return;
-  }
-  renderSetupCard();
-}
-
-function renderSetupCard() {
-  const card = $("setup-card");
-  const dismissed = stored(SETUP_DISMISS_KEY) === "1";
-  card.hidden = setupConfigured !== false || dismissed;
-  if (card.hidden) return;
-  const here = project();
-  const where = here ? `<p class="setup-card-where"><span class="setup-card-mark" aria-hidden="true"></span>${esc(spaceLabel(here))}</p>` : "";
-  card.innerHTML = `<button class="setup-card-x" type="button" id="setup-card-x" aria-label="Dismiss" title="Dismiss"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
-    <h2 class="setup-card-title" id="setup-card-title">Add a setup script</h2>${where}
-    <p class="setup-card-text">Add a setup command to run when Yardbell creates new worktrees.</p>
-    <a class="btn setup-card-go" href="/settings#worktree-setup"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Configure</a>`;
-}
-
 const START_ICON = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5l3 3-3 3M8 11.5h5"/></svg>`;
 
 function emptyPane(leaf) {
@@ -839,9 +810,9 @@ function render() {
   renderPanes();
   renderTop();
   renderSide();
-  renderSetupCard();
   syncDispatchPressed();
   window.YardbellSide.update();
+  paintDock();
 }
 
 function setMode(mode) {
@@ -1022,14 +993,17 @@ function closePane(id = space().focus) {
   render();
 }
 
+function leafName(leaf) {
+  const s = sessionFor(leaf.key);
+  return isDispatch(leaf) ? "Dispatch" : isDoc(leaf) ? fileName(leaf) : s ? title(s) : leaf.key ? leaf.key.split("/").pop() : "Agents";
+}
+
 function ownTab(id) {
   const sp = space();
   const t = tab();
   const leaf = leaves(t.root).find((l) => l.pane === id);
   if (!leaf || isEmpty(leaf) || !removeLeaf(t, leaf)) return;
-  const s = sessionFor(leaf.key);
-  const name = isDispatch(leaf) ? "Dispatch" : isDoc(leaf) ? fileName(leaf) : s ? title(s) : leaf.key.split("/").pop();
-  sp.tabs.splice(sp.tab + 1, 0, { id: newId(), name, root: leaf });
+  sp.tabs.splice(sp.tab + 1, 0, { id: newId(), name: leafName(leaf), root: leaf });
   sp.tab += 1;
   sp.focus = leaf.pane;
   save();
@@ -1073,41 +1047,321 @@ function swapPanes(aId, bId) {
   render();
 }
 
-function movePane(e, id) {
-  e.preventDefault();
-  try { e.target.setPointerCapture(e.pointerId); } catch {}
-  const start = { x: e.clientX, y: e.clientY };
-  let target = null;
-  let active = false;
-  const mark = (el) => {
-    if (el === target) return;
-    target?.classList.remove("ws-move-into");
-    target = el;
-    target?.classList.add("ws-move-into");
-  };
-  const move = (ev) => {
-    if (!active) {
-      if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 6) return;
-      active = true;
-      $("panes").classList.add("moving");
-      paneEls.get(id)?.classList.add("ws-move-src");
+function replaceIn(t, old, node) {
+  const parent = parentOf(t.root, old);
+  if (!parent) t.root = node;
+  else if (parent.a === old) parent.a = node;
+  else parent.b = node;
+}
+
+function pluck(t, leaf) {
+  const parent = parentOf(t.root, leaf);
+  if (parent) replaceIn(t, parent, parent.a === leaf ? parent.b : parent.a);
+}
+
+const SIDES = { left: ["row", true], right: ["row", false], top: ["col", true], bottom: ["col", false] };
+
+function dockBeside(t, target, node, side) {
+  const [dir, first] = SIDES[side];
+  replaceIn(t, target, { split: dir, ratio: 0.5, a: first ? node : target, b: first ? target : node });
+}
+
+function moveTab(from, at) {
+  const sp = space();
+  const current = sp.tabs[sp.tab];
+  const [moved] = sp.tabs.splice(from, 1);
+  sp.tabs.splice(at > from ? at - 1 : at, 0, moved);
+  sp.tab = sp.tabs.indexOf(current);
+}
+
+function dockTab(id, drop) {
+  const sp = space();
+  const source = sp.tabs.find((t) => t.id === id);
+  if (!source) return;
+  if (drop.strip) {
+    moveTab(sp.tabs.indexOf(source), drop.at);
+    save();
+    render();
+    return;
+  }
+  const t = tab();
+  const target = leaves(t.root).find((l) => l.pane === drop.pane);
+  if (source === t || !target) return;
+  const moved = leaves(source.root);
+  if (drop.zone === "centre" && moved.length > 1) {
+    mergeTab(sp.tabs.indexOf(source), sp.tab);
+    focusPane(moved[0].pane);
+    return;
+  }
+  if (drop.zone !== "centre") dockBeside(t, target, source.root, drop.zone);
+  else replaceIn(t, target, moved[0]);
+  if (drop.zone === "centre" && !isEmpty(target)) {
+    source.root = target;
+    source.name = leafName(target);
+  } else {
+    sp.tabs.splice(sp.tabs.indexOf(source), 1);
+  }
+  sp.tab = sp.tabs.indexOf(t);
+  focusPane(moved[0].pane);
+}
+
+function dockPane(id, drop) {
+  const sp = space();
+  const t = tab();
+  const leaf = leaves(t.root).find((l) => l.pane === id);
+  if (!leaf) return;
+  if (drop.strip) {
+    if (leaves(t.root).length === 1) moveTab(sp.tab, drop.at);
+    else {
+      removeLeaf(t, leaf);
+      nameDispatchTab(t);
+      const own = { id: newId(), name: leafName(leaf), root: leaf };
+      sp.tabs.splice(drop.at, 0, own);
+      sp.tab = sp.tabs.indexOf(own);
     }
-    const over = document.elementsFromPoint(ev.clientX, ev.clientY).find((el) => el.classList?.contains("ws-pane") && !el.hidden);
-    mark(over && over.dataset.pane !== id ? over : null);
+    focusPane(id);
+    return;
+  }
+  const target = leaves(t.root).find((l) => l.pane === drop.pane);
+  if (!target || target === leaf) return;
+  if (drop.zone === "centre") swapPanes(id, target.pane);
+  else {
+    pluck(t, leaf);
+    dockBeside(t, target, leaf, drop.zone);
+  }
+  focusPane(id);
+}
+
+// A session held by another tab keeps its pane object, so its terminal does not reconnect.
+function dockSession(key, drop) {
+  const sp = space();
+  picked = null;
+  sp.hidden = (sp.hidden || []).filter((k) => k !== key);
+  done.delete(key);
+  lookAt(key);
+  const t = tab();
+  const here = leaves(t.root).find((l) => l.key === key);
+  if (here) {
+    dockPane(here.pane, drop);
+    return;
+  }
+  const holder = sp.tabs.find((x) => leaves(x.root).some((l) => l.key === key));
+  const held = holder && leaves(holder.root).find((l) => l.key === key);
+  if (drop.strip) {
+    if (held && leaves(holder.root).length === 1) {
+      moveTab(sp.tabs.indexOf(holder), drop.at);
+      sp.tab = sp.tabs.indexOf(holder);
+    } else {
+      if (held) {
+        removeLeaf(holder, held);
+        nameDispatchTab(holder);
+      }
+      const leaf = held || { pane: newId(), key };
+      const own = { id: newId(), name: leafName(leaf), root: leaf };
+      sp.tabs.splice(drop.at, 0, own);
+      sp.tab = sp.tabs.indexOf(own);
+    }
+    focusPane(leaves(tab().root)[0].pane);
+    return;
+  }
+  const target = leaves(t.root).find((l) => l.pane === drop.pane);
+  if (!target) return;
+  if (drop.zone === "centre" && held && !isEmpty(target)) {
+    replaceIn(holder, held, target);
+    replaceIn(t, target, held);
+    if (leaves(holder.root).length === 1) holder.name = leafName(target);
+    focusPane(held.pane);
+    return;
+  }
+  const leaf = held ? detach(sp, key) : { pane: newId(), key };
+  if (drop.zone !== "centre") dockBeside(t, target, leaf, drop.zone);
+  else {
+    replaceIn(t, target, leaf);
+    if (!isEmpty(target)) sp.tabs.splice(sp.tabs.indexOf(t) + 1, 0, { id: newId(), name: leafName(target), root: target });
+  }
+  sp.tab = sp.tabs.indexOf(t);
+  focusPane(leaf.pane);
+}
+
+// Docking runs on pointer events: HTML drag and drop is unreliable in the WebKit desktop apps.
+let dock = null;
+
+function dockLayer(cls) {
+  const el = document.createElement("div");
+  el.className = cls;
+  el.setAttribute("aria-hidden", "true");
+  el.hidden = true;
+  document.body.append(el);
+  return el;
+}
+
+function ghostChip(icon, name) {
+  const el = document.createElement("div");
+  el.className = "ws-tab current";
+  el.innerHTML = `${icon}<span class="ws-tab-name">${esc(name)}</span>`;
+  return el;
+}
+
+// Without the capture a quick drag loses its moves to a terminal's iframe before the iframes stop
+// taking the pointer. The release after a drag, or after an Esc during one, would still click
+// whatever is under it.
+function beginDock(e, holder, what, ghost) {
+  try { holder.setPointerCapture(e.pointerId); } catch {}
+  const start = { x: e.clientX, y: e.clientY };
+  let stage = "press";
+  const move = (ev) => {
+    if (stage === "spent") return;
+    if (stage === "press") {
+      if (Math.hypot(ev.clientX - start.x, ev.clientY - start.y) < 6) return;
+      stage = "lifted";
+      liftDock(what, ghost);
+    }
+    trackDock(ev.clientX, ev.clientY);
   };
-  const end = (ev) => {
+  const key = (ev) => {
+    if (ev.key !== "Escape" || stage !== "lifted") return;
+    ev.preventDefault();
+    ev.stopPropagation();
+    stage = "spent";
+    endDock(false);
+  };
+  const stop = (ev) => {
     window.removeEventListener("pointermove", move);
-    window.removeEventListener("pointerup", end);
-    window.removeEventListener("pointercancel", end);
-    $("panes").classList.remove("moving");
-    paneEls.get(id)?.classList.remove("ws-move-src");
-    const to = ev.type === "pointerup" ? target : null;
-    mark(null);
-    if (to) swapPanes(id, to.dataset.pane);
+    window.removeEventListener("pointerup", stop);
+    window.removeEventListener("pointercancel", stop);
+    window.removeEventListener("keydown", key, true);
+    if (stage === "press") return;
+    const eat = (c) => {
+      c.preventDefault();
+      c.stopPropagation();
+    };
+    window.addEventListener("click", eat, true);
+    setTimeout(() => window.removeEventListener("click", eat, true), 0);
+    if (stage === "lifted") endDock(ev.type === "pointerup");
   };
   window.addEventListener("pointermove", move);
-  window.addEventListener("pointerup", end);
-  window.addEventListener("pointercancel", end);
+  window.addEventListener("pointerup", stop);
+  window.addEventListener("pointercancel", stop);
+  window.addEventListener("keydown", key, true);
+}
+
+function liftDock(what, ghost) {
+  closeMenu();
+  if (document.activeElement?.tagName === "IFRAME") document.activeElement.blur();
+  dock = { ...what, drop: null, hover: null, timer: 0, x: 0, y: 0 };
+  document.body.classList.add("ws-docking");
+  dock.preview = dockLayer("ws-dock-preview");
+  dock.mark = dockLayer("ws-dock-mark");
+  dock.ghost = dockLayer("ws-dock-ghost");
+  dock.ghost.append(ghost);
+  dock.ghost.hidden = false;
+  paintDock();
+}
+
+function endDock(commit) {
+  const d = dock;
+  dock = null;
+  clearTimeout(d.timer);
+  for (const el of [d.preview, d.mark, d.ghost]) el.remove();
+  document.body.classList.remove("ws-docking");
+  paintDock();
+  if (!commit || !d.drop) return;
+  if (d.kind === "tab") dockTab(d.tab, d.drop);
+  else if (d.kind === "pane") dockPane(d.pane, d.drop);
+  else dockSession(d.key, d.drop);
+}
+
+function paintDock() {
+  document.querySelectorAll(".ws-dock-src").forEach((el) => el.classList.remove("ws-dock-src"));
+  if (!dock) return;
+  const at = dock.kind === "tab" ? space().tabs.findIndex((t) => t.id === dock.tab) : -1;
+  const el = dock.kind === "tab" ? $("tabs").querySelector(`.ws-tab[data-tab="${at}"]`)
+    : dock.kind === "pane" ? paneEls.get(dock.pane)
+    : treeEl.querySelector(`.tree-session[data-key="${CSS.escape(dock.key)}"]`);
+  el?.classList.add("ws-dock-src");
+}
+
+function trackDock(x, y) {
+  dock.x = x;
+  dock.y = y;
+  const wide = dock.ghost.offsetWidth;
+  const gx = x + 12 + wide > innerWidth - 4 ? x - 12 - wide : x + 12;
+  dock.ghost.style.transform = `translate(${Math.round(gx)}px, ${Math.round(y + 12)}px)`;
+  const hit = document.elementsFromPoint(x, y);
+  const over = hit.find((el) => el.matches?.(".ws-tab[data-tab]"));
+  hoverTab(over ? space().tabs[Number(over.dataset.tab)]?.id : null);
+  dock.drop = hit.includes($("tabs").closest(".ws-head")) ? stripDrop(x) : paneDrop(hit, x, y);
+  dock.mark.hidden = !dock.drop?.strip;
+  dock.preview.hidden = !dock.drop?.zone;
+}
+
+function hoverTab(id) {
+  if (dock.kind !== "tab" || id === tab().id) id = null;
+  if (id === dock.hover) return;
+  clearTimeout(dock.timer);
+  dock.hover = id;
+  if (id === null) return;
+  dock.timer = setTimeout(() => {
+    if (!dock) return;
+    const sp = space();
+    const i = sp.tabs.findIndex((t) => t.id === id);
+    dock.hover = null;
+    if (i < 0) return;
+    sp.tab = i;
+    sp.focus = leaves(tab().root)[0].pane;
+    render();
+    trackDock(dock.x, dock.y);
+  }, 600);
+}
+
+function stripDrop(x) {
+  const sp = space();
+  const els = [...$("tabs").querySelectorAll(".ws-tab[data-tab]")];
+  let at = els.findIndex((el) => {
+    const r = el.getBoundingClientRect();
+    return x < r.left + r.width / 2;
+  });
+  if (at < 0) at = els.length;
+  const from = dock.kind === "tab" ? sp.tabs.findIndex((t) => t.id === dock.tab)
+    : dock.kind === "pane" && leaves(tab().root).length === 1 ? sp.tab : -1;
+  if (from >= 0 && (at === from || at === from + 1)) return null;
+  const strip = $("tabs").getBoundingClientRect();
+  const edge = at < els.length ? els[at].getBoundingClientRect().left : els[els.length - 1].getBoundingClientRect().right;
+  const left = Math.min(Math.max(edge, strip.left + 1), strip.right - 1);
+  Object.assign(dock.mark.style, { left: `${left - 1}px`, top: `${strip.top + 4}px`, height: `${Math.max(0, strip.height - 8)}px` });
+  return { strip: true, at };
+}
+
+// The title bar counts as the centre, so dropping a pane on another's title still swaps them.
+function dockZone(el, x, y) {
+  const r = el.getBoundingClientRect();
+  const top = el.querySelector(".ws-pane-head").getBoundingClientRect().bottom;
+  if (y < top) return "centre";
+  const h = r.bottom - top;
+  const bx = Math.min(Math.max(40, r.width * 0.25), r.width / 3);
+  const by = Math.min(Math.max(40, h * 0.25), h / 3);
+  const near = [["left", (x - r.left) / bx], ["right", (r.right - x) / bx], ["top", (y - top) / by], ["bottom", (r.bottom - y) / by]]
+    .filter(([, d]) => d < 1)
+    .sort((a, b) => a[1] - b[1]);
+  return near.length ? near[0][0] : "centre";
+}
+
+function paneDrop(hit, x, y) {
+  const el = hit.find((h) => h.classList?.contains("ws-pane") && !h.hidden);
+  const pane = el?.dataset.pane;
+  if (!pane) return null;
+  const t = tab();
+  if (dock.kind === "tab" && dock.tab === t.id) return null;
+  if (dock.kind === "pane" && dock.pane === pane) return null;
+  if (dock.kind === "session" && leaves(t.root).find((l) => l.key === dock.key)?.pane === pane) return null;
+  const zone = dockZone(el, x, y);
+  const r = el.getBoundingClientRect();
+  const w = zone === "left" || zone === "right" ? r.width / 2 : r.width;
+  const h = zone === "top" || zone === "bottom" ? r.height / 2 : r.height;
+  const left = zone === "right" ? r.right - w : r.left;
+  const top = zone === "bottom" ? r.bottom - h : r.top;
+  Object.assign(dock.preview.style, { left: `${left + 3}px`, top: `${top + 3}px`, width: `${w - 6}px`, height: `${h - 6}px` });
+  return { pane, zone };
 }
 
 function toast(message) {
@@ -1419,18 +1673,35 @@ $("tab-list").addEventListener("click", (e) => {
 $("new-tab").addEventListener("click", newTab);
 $("side-new").addEventListener("click", newTab);
 $("side-add-project").addEventListener("click", addProject);
-$("setup-card").addEventListener("click", (e) => {
-  if (!e.target.closest("#setup-card-x")) return;
-  try { localStorage.setItem(SETUP_DISMISS_KEY, "1"); } catch {}
-  renderSetupCard();
-});
 
 $("panes").addEventListener("pointerdown", (e) => {
   if (phone.matches || e.button !== 0) return;
   const head = e.target.closest(".ws-pane-head");
   if (!head || e.target.closest("button, a, select, input")) return;
-  if (leaves(tab().root).length < 2) return;
-  movePane(e, head.closest(".ws-pane").dataset.pane);
+  const leaf = leaves(tab().root).find((l) => l.pane === head.closest(".ws-pane").dataset.pane);
+  if (!leaf) return;
+  e.preventDefault();
+  beginDock(e, e.target, { kind: "pane", pane: leaf.pane }, ghostChip(tabAgent({ root: leaf }), head.querySelector(".ws-pane-title").textContent || leafName(leaf)));
+});
+
+$("tabs").addEventListener("pointerdown", (e) => {
+  if (phone.matches || e.button !== 0 || renaming !== null) return;
+  const el = e.target.closest(".ws-tab[data-tab]");
+  const t = el && space().tabs[Number(el.dataset.tab)];
+  if (!t || e.target.closest("[data-close-tab], input")) return;
+  const ghost = el.cloneNode(true);
+  for (const attr of ["data-tab", "tabindex", "role", "aria-selected", "title"]) ghost.removeAttribute(attr);
+  ghost.querySelector(".ws-tab-close")?.remove();
+  ghost.classList.add("current");
+  beginDock(e, el, { kind: "tab", tab: t.id }, ghost);
+});
+
+treeEl.addEventListener("pointerdown", (e) => {
+  if (phone.matches || e.button !== 0) return;
+  const row = e.target.closest(".tree-session[data-key]");
+  const s = row && !row.disabled && sessionFor(row.dataset.key);
+  if (!s) return;
+  beginDock(e, row, { kind: "session", key: row.dataset.key }, ghostChip(tabAgent({ root: { key: row.dataset.key } }), row.querySelector(".tree-name")?.textContent || title(s)));
 });
 
 $("panes").addEventListener("click", (e) => {
@@ -1786,7 +2057,6 @@ function sessionsIn(machine, root) {
 
 window.YardbellSide.init({ where: () => (state ? sideWhere() : null), openFile, openDiff, sessionsIn, toast, resume: resumePast });
 load();
-checkSetup();
 window.YardbellLive.follow(load, 3000);
 
 window.YardbellShell.stateOf = stateOf;

@@ -1328,6 +1328,186 @@ class Suite:
         if order != keys:
             raise Failure(f"Swap with 1 should put the panes back in reading order: {order}")
 
+    # Every grid session back in a tab of its own, with the tab of the first one showing. Other
+    # sessions earlier tests left running are hidden, so the counts below are the grid's alone.
+    def own_tabs(self, keys):
+        self.b.js(f"(() => {{ saved.tabs = []; saved.hidden = sessions().map(keyOf).filter((k) => !{json.dumps(keys)}.includes(k)); saved.tab = 0; render(); }})()")
+        self.b.wait(
+            f"saved.tabs.length === {len(keys)} && {json.dumps(keys)}.every((k) => saved.tabs.some((t) => leaves(t.root).length === 1 && leaves(t.root)[0].key === k))",
+            "a tab per grid session",
+        )
+        self.b.js(f"switchTab(saved.tabs.findIndex((t) => leaves(t.root)[0].key === {json.dumps(keys[0])}))")
+        self.b.wait(f"leaves(tab().root)[0].key === {json.dumps(keys[0])} && !document.querySelector('.ws-pane[data-pane=\"' + tab().root.pane + '\"]').hidden", "the first grid tab")
+
+    def tab_point(self, key, at="centre"):
+        p = self.b.wait(
+            f"""(() => {{
+              const i = saved.tabs.findIndex((t) => leaves(t.root).some((l) => l.key === {json.dumps(key)}));
+              const el = document.querySelector(`#tabs .ws-tab[data-tab="${{i}}"]`);
+              if (!el) return null;
+              el.scrollIntoView({{block: "nearest", inline: "nearest"}});
+              const r = el.getBoundingClientRect();
+              return r.width ? {{x: {"r.left + 6" if at == "start" else "r.left + r.width / 2"}, y: r.top + r.height / 2}} : null;
+            }})()""",
+            f"the tab holding {key}",
+        )
+        return (p["x"], p["y"])
+
+    # A point in a pane's body: near one edge, or in the middle for "centre".
+    def zone_point(self, key, zone):
+        p = self.b.wait(
+            f"""(() => {{
+              const leaf = leaves(tab().root).find((l) => l.key === {json.dumps(key)});
+              const el = leaf && document.querySelector(`.ws-pane[data-pane="${{leaf.pane}}"]`);
+              if (!el || el.hidden) return null;
+              const r = el.getBoundingClientRect();
+              const top = el.querySelector('.ws-pane-head').getBoundingClientRect().bottom;
+              const mid = {{x: (r.left + r.right) / 2, y: (top + r.bottom) / 2}};
+              return {{left: {{x: r.left + 12, y: mid.y}}, right: {{x: r.right - 12, y: mid.y}},
+                       top: {{x: mid.x, y: top + 12}}, bottom: {{x: mid.x, y: r.bottom - 12}}, centre: mid}}[{json.dumps(zone)}];
+            }})()""",
+            f"the pane for {key} in the shown tab",
+        )
+        return (p["x"], p["y"])
+
+    def tab_keys(self):
+        return self.b.js("saved.tabs.map((t) => leaves(t.root).map((l) => l.key))")
+
+    def end_docking(self, keys):
+        if self.b.js("location.pathname === '/workspace' && typeof saved === 'object'"):
+            self.b.js("(() => { saved.hidden = []; save(); })()")
+        self.drop_grid_tab(keys)
+
+    def test_workspace_tab_docks_by_drag(self):
+        keys = self.grid_tab()
+        try:
+            self.tab_docks_by_drag(keys)
+        finally:
+            self.end_docking(keys)
+
+    def tab_docks_by_drag(self, keys):
+        b = self.b
+        k1, k2, k3, k4 = keys
+        self.own_tabs(keys)
+        shown = b.js("tab().id")
+        before = self.tab_keys()
+        last = before[-1][0]
+        b.drag_path([self.tab_point(last), self.tab_point(before[0][0], at="start")])
+        after = self.tab_keys()
+        if after != [before[-1], *before[:-1]]:
+            raise Failure(f"dropping the last tab before the first should move it there: {before} -> {after}")
+        if b.js("tab().id") != shown:
+            raise Failure("reordering the tabs changed which tab is shown")
+
+        want = {"left": ("row", [k2, k1]), "right": ("row", [k1, k2]), "top": ("col", [k2, k1]), "bottom": ("col", [k1, k2])}
+        for zone, (split, order) in want.items():
+            self.own_tabs(keys)
+            b.drag_path([self.tab_point(k2), self.zone_point(k1, zone)])
+            got = b.js("({split: tab().root.split, ratio: tab().root.ratio, order: leaves(tab().root).map((l) => l.key), tabs: saved.tabs.length, focus: focusedLeaf().key})")
+            if got != {"split": split, "ratio": 0.5, "order": order, "tabs": 3, "focus": k2}:
+                raise Failure(f"a tab dropped on the {zone} edge should split {split} as {order}, focused, its own tab gone: {got}")
+
+        self.own_tabs(keys)
+        b.drag_path([self.tab_point(k2), self.zone_point(k1, "centre")])
+        if b.js("leaves(tab().root).map((l) => l.key)") != [k2] or [k1] not in self.tab_keys() or len(self.tab_keys()) != 4:
+            raise Failure(f"a one-pane tab dropped on a pane's centre should swap with it: {self.tab_keys()}")
+
+        self.own_tabs(keys)
+        b.drag_path([self.tab_point(k3), (*self.tab_point(k2), 900), self.zone_point(k1, "right")])
+        got = b.js("({split: tab().root.split, order: leaves(tab().root).map((l) => l.key)})")
+        if got != {"split": "row", "order": [k2, k3]}:
+            raise Failure(f"hovering a tab should switch to it, and the drop should land in its panes: {got} {self.tab_keys()}")
+        b.js(f"switchTab(saved.tabs.findIndex((t) => leaves(t.root)[0].key === {json.dumps(k4)}))")
+        b.drag_path([self.tab_point(k2), self.zone_point(k4, "centre")])
+        if b.js("leaves(tab().root).map((l) => l.key)") != [k4, k2, k3] or len(self.tab_keys()) != 2:
+            raise Failure(f"a tab of several panes dropped on a centre should merge into the tab: {self.tab_keys()}")
+
+        self.own_tabs(keys)
+        b.drag_path([self.tab_point(k2), self.zone_point(k1, "left"), {"key": "Escape"}])
+        left = b.js("({tabs: saved.tabs.length, root: tab().root.key, ghost: document.querySelectorAll('.ws-dock-ghost, .ws-dock-preview, .ws-dock-mark').length, docking: document.body.classList.contains('ws-docking')})")
+        if left != {"tabs": 4, "root": k1, "ghost": 0, "docking": False}:
+            raise Failure(f"Esc should cancel the drag and leave the layout alone: {left}")
+
+        b.drag_path([self.tab_point(k2), self.zone_point(k1, "bottom")])
+        b.goto(self.url("/workspace"))
+        b.wait(f"typeof leaves === 'function' && saved.tabs.some((t) => leaves(t.root).length === 2) && (state?.sessions || []).length > 0", "the workspace after a reload")
+        kept = b.js(f"""(() => {{
+          const t = saved.tabs.find((x) => leaves(x.root).some((l) => l.key === {json.dumps(k1)}));
+          return {{split: t.root.split, order: leaves(t.root).map((l) => l.key), stored: JSON.parse(localStorage.getItem('workspace.v5')).tabs.length}};
+        }})()""")
+        if kept != {"split": "col", "order": [k1, k2], "stored": 3}:
+            raise Failure(f"the docked layout should survive a reload: {kept}")
+
+    def test_workspace_pane_docks_by_drag(self):
+        keys = self.grid_tab()
+        try:
+            self.pane_docks_by_drag(keys)
+        finally:
+            self.end_docking(keys)
+
+    def pane_docks_by_drag(self, keys):
+        b = self.b
+        k1, k2, k3, k4 = keys
+        self.own_tabs(keys)
+        self.merge_grid_tabs(keys)
+        b.drag_path([self.pane_point(k4), self.zone_point(k1, "left")])
+        got = b.js(f"""(() => {{
+          const leaf = leaves(tab().root).find((l) => l.key === {json.dumps(k1)});
+          const p = parentOf(tab().root, leaf);
+          return {{order: leaves(tab().root).map((l) => l.key), split: p.split, ratio: p.ratio, first: p.a.key, focus: focusedLeaf().key}};
+        }})()""")
+        if got != {"order": [k4, k1, k2, k3], "split": "row", "ratio": 0.5, "first": k4, "focus": k4}:
+            raise Failure(f"a pane dropped on the left edge of another should sit to its left: {got}")
+
+        strip = b.js("""(() => {
+          const s = document.getElementById('tabs').getBoundingClientRect();
+          const last = [...document.querySelectorAll('#tabs .ws-tab')].pop().getBoundingClientRect();
+          return {x: last.right + 12, y: s.top + s.height / 2};
+        })()""")
+        b.drag_path([self.pane_point(k2), (strip["x"], strip["y"])])
+        got = {"tabs": self.tab_keys(), "shown": b.js("leaves(tab().root).map((l) => l.key)")}
+        if got != {"tabs": [[k4, k1, k3], [k2]], "shown": [k2]}:
+            raise Failure(f"a pane dropped on the tab strip should become a tab of its own there: {got}")
+
+    def test_workspace_tree_session_docks_by_drag(self):
+        keys = self.grid_tab()
+        try:
+            self.tree_session_docks_by_drag(keys)
+        finally:
+            self.end_docking(keys)
+
+    def tree_row(self, key):
+        p = self.b.wait(
+            f"""(() => {{
+              const el = document.querySelector('#col-body .tree-session[data-key={json.dumps(key)}]');
+              if (!el) return null;
+              el.scrollIntoView({{block: "nearest"}});
+              const r = el.getBoundingClientRect();
+              return r.width ? {{x: r.left + r.width / 2, y: r.top + r.height / 2}} : null;
+            }})()""",
+            f"the tree row for {key}",
+        )
+        return (p["x"], p["y"])
+
+    def tree_session_docks_by_drag(self, keys):
+        b = self.b
+        k1, k2, k3, k4 = keys
+        self.own_tabs(keys)
+        b.drag_path([self.tree_row(k2), self.zone_point(k1, "bottom")])
+        got = b.js("({split: tab().root.split, order: leaves(tab().root).map((l) => l.key), tabs: saved.tabs.length, focus: focusedLeaf().key})")
+        if got != {"split": "col", "order": [k1, k2], "tabs": 3, "focus": k2}:
+            raise Failure(f"a session dragged from the tree onto a bottom edge should open below it: {got}")
+
+        b.drag_path([self.tree_row(k1), self.zone_point(k2, "right")])
+        got = b.js(f"({{split: tab().root.split, order: leaves(tab().root).map((l) => l.key), copies: saved.tabs.flatMap((t) => leaves(t.root)).filter((l) => l.key === {json.dumps(k1)}).length}})")
+        if got != {"split": "row", "order": [k2, k1], "copies": 1}:
+            raise Failure(f"a session already open in the tab should move, not open twice: {got}")
+
+        b.drag_path([self.tree_row(k3), self.tab_point(self.tab_keys()[0][0], at="start")])
+        got = {"first": self.tab_keys()[0], "shown": b.js("leaves(tab().root).map((l) => l.key)")}
+        if got != {"first": [k3], "shown": [k3]}:
+            raise Failure(f"a session dropped on the tab strip should show in a tab there: {got}")
+
     def menu(self, path):
         self.b.goto(self.url(path))
         self.b.wait("document.querySelector('[data-theme-toggle] .theme-word')", f"the menu on {path}")
@@ -1801,12 +1981,34 @@ class Suite:
                 raise Failure("the icon made more than one Dispatch pane")
             if b.js(f"{icon}.getAttribute('aria-pressed')") != "true":
                 raise Failure("the Dispatch icon is not pressed while its pane shows")
+            looks = b.js(f"""(() => {{
+              const bg = (el) => getComputedStyle(el).backgroundColor;
+              const here = document.querySelector('.col-nav [aria-current=page]');
+              const open = {icon};
+              return {{ here: bg(here), open: bg(open), dot: getComputedStyle(open, '::after').content, title: open.title }};
+            }})()""")
+            if looks["open"] == looks["here"]:
+                raise Failure(f"an open Dispatch pane makes its link look like a second current page: {looks}")
+            if looks["dot"] in ("none", "normal", "") or "close" not in looks["title"].lower():
+                raise Failure(f"the open Dispatch link shows no dot or says nothing about closing: {looks}")
             b.click(".col-nav [data-page=dispatch]")
             b.wait("!document.querySelector('iframe[data-dispatch]')", "the Dispatch pane to close")
             if b.js(f"{icon}.getAttribute('aria-pressed')") != "false":
                 raise Failure("the Dispatch icon is still pressed after closing the pane")
         finally:
             self.put_storage(before)
+
+    def test_sidebar_machine_rows_are_quiet_unless_picked(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait("document.querySelector('#col-body .tree-machine')", "the machines in the sidebar")
+        seen = b.js("""(() => {
+          const rows = [...document.querySelectorAll('#col-body .tree-machine')].filter((r) => !r.classList.contains('current'));
+          return rows.map((r) => [getComputedStyle(r).backgroundColor, getComputedStyle(r).borderTopColor]);
+        })()""")
+        clear = ("rgba(0, 0, 0, 0)", "transparent")
+        if not seen or any(bg not in clear or line not in clear for bg, line in seen):
+            raise Failure(f"machine rows that are not picked still look picked: {seen}")
 
     def test_dispatch_opens_as_a_pane_and_survives_a_reload(self):
         b = self.b
@@ -2815,44 +3017,6 @@ class Suite:
             self.check_errors("keep computer awake")
         finally:
             self.api("POST", "/api/settings/keep-awake", {"mode": "off"})
-
-    def test_setup_script_card_until_configured_or_dismissed(self):
-        b = self.b
-        setups = self.api("GET", "/api/settings/worktree-setup")["setups"]
-        before = self.storage(["yardbell.setup-card.dismissed"])
-        try:
-            self.api("POST", "/api/settings/worktree-setup", {"setups": []})
-            self.put_storage({"yardbell.setup-card.dismissed": None})
-            b.goto(self.url("/workspace"))
-            b.wait("!document.getElementById('setup-card').hidden", "the setup script card")
-            seen = b.js("""(() => {
-              const card = document.getElementById('setup-card');
-              const r = card.getBoundingClientRect();
-              const column = document.getElementById('col').getBoundingClientRect();
-              return { title: card.querySelector('.setup-card-title').textContent, href: card.querySelector('.setup-card-go').getAttribute('href'),
-                inside: r.left >= column.left && r.right <= column.right, low: r.bottom > column.bottom - 120 };
-            })()""")
-            if seen["title"] != "Add a setup script" or seen["href"] != "/settings#worktree-setup":
-                raise Failure(f"the card reads {seen}")
-            if not seen["inside"] or not seen["low"]:
-                raise Failure(f"the card is not at the bottom of the sidebar: {seen}")
-            b.click("#setup-card-x")
-            b.wait("document.getElementById('setup-card').hidden && localStorage.getItem('yardbell.setup-card.dismissed') === '1'",
-                   "Dismiss to hide the card and remember it")
-            b.goto(self.url("/workspace"))
-            b.wait("setupConfigured === false", "the setup check")
-            if not b.js("document.getElementById('setup-card').hidden"):
-                raise Failure("a dismissed card came back after a reload")
-            self.put_storage({"yardbell.setup-card.dismissed": None})
-            self.api("POST", "/api/settings/worktree-setup", {"setups": [{"folder": "demo-app", "command": "true"}]})
-            b.goto(self.url("/workspace"))
-            b.wait("setupConfigured === true", "the setup check to find the command")
-            if not b.js("document.getElementById('setup-card').hidden"):
-                raise Failure("the card shows although a setup command is configured")
-            self.check_errors("the setup script card")
-        finally:
-            self.api("POST", "/api/settings/worktree-setup", {"setups": setups})
-            self.put_storage(before)
 
     def palette_sessions(self, names):
         made = []
@@ -5849,7 +6013,9 @@ class Suite:
         if b.js("document.querySelector('.pl-canvas .pl-node[data-step=\"understand\"] b').textContent") != "Understand":
             raise Failure("the canvas does not show version 1")
         b.js("[...document.querySelectorAll('.pl-history-preview button')].find((x) => x.textContent.trim() === 'Restore').click()")
-        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
+        b.wait("(async () => (await (await fetch('/api/pipelines/review')).json()).version === 1)()", "version 1 made current")
+        if len(self.api("GET", "/api/pipelines/review/history")["history"]) < saved["version"]:
+            raise Failure("restoring added or dropped a version")
 
     def test_builder_on_a_phone(self):
         b = self.b
@@ -6051,18 +6217,39 @@ class Suite:
             raise Failure("pressing the minimap does not move the view")
         self.check_errors("the canvas")
 
-    def test_pipeline_history_restore(self):
+    def test_pipeline_history_restore_delete_and_clear(self):
         b = self.b
         definition = self.api("GET", "/api/pipelines/review")
         first = definition["steps"][0]["name"]
         definition["steps"][0]["name"] = "Read it"
         saved = self.api("PUT", "/api/pipelines/review", definition)
+        newest = saved["version"]
+        count = len(self.api("GET", "/api/pipelines/review/history")["history"])
         b.goto(self.url("/pipeline?p=review&tab=history"))
-        b.wait(f"document.querySelector('.pl-history-row')?.dataset.version === '{saved['version']}'", "the newest version first")
-        b.click('.pl-history-row[data-version="1"] .btn')
-        b.wait(f"(async () => (await (await fetch('/api/pipelines/review')).json()).version === {saved['version'] + 1})()", "the restore saved")
+        b.wait(f"document.querySelector('.pl-history-row')?.dataset.version === '{newest}'", "the newest version first")
+        b.click('.pl-history-row[data-version="1"] .pl-history-restore')
+        b.wait("(async () => (await (await fetch('/api/pipelines/review')).json()).version === 1)()", "version 1 made current")
         if self.api("GET", "/api/pipelines/review")["steps"][0]["name"] != first:
             raise Failure("restoring version 1 did not bring its step names back")
+        history = self.api("GET", "/api/pipelines/review/history")
+        if len(history["history"]) != count or history["current"] != 1:
+            raise Failure(f"a restore should add no version and make v1 current: {len(history['history'])} versions, current {history['current']}")
+        b.wait("document.querySelector('.pl-history-row[data-version=\"1\"] .pl-current')", "v1 marked Current")
+        if b.js(f"!!document.querySelector('.pl-history-row[data-version=\"{newest}\"] .pl-history-restore')") is not True:
+            raise Failure("the newer version cannot be restored again")
+        b.click(f'.pl-history-row[data-version="{newest}"] .pl-history-delete')
+        b.wait("document.querySelector('dialog.confirm[open]')", "the delete question")
+        b.click("dialog.confirm[open] [data-answer=yes]")
+        b.wait(f"!document.querySelector('.pl-history-row[data-version=\"{newest}\"]')", "the deleted version gone")
+        if b.js("!!document.querySelector('.pl-history-row[data-version=\"1\"] .pl-history-delete')"):
+            raise Failure("the current version offers Delete")
+        if count > 2:
+            b.click("#pl-history-clear")
+            b.wait("document.querySelector('dialog.confirm[open]')", "the clear question")
+            b.click("dialog.confirm[open] [data-answer=yes]")
+            b.wait("document.querySelectorAll('.pl-history-row').length === 1", "only the current version left")
+            if self.api("GET", "/api/pipelines/review/history")["history"][0]["version"] != 1:
+                raise Failure("Clear history did not keep the current version")
 
     def test_pipeline_run_held_for_memory(self):
         b = self.b
