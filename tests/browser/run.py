@@ -4271,7 +4271,7 @@ class Suite:
             shown = b.js("""(() => {
               const dock = document.getElementById('term-dock');
               const keys = document.getElementById('keys');
-              return { on: dock.classList.contains('on'), above: dock.nextElementSibling === keys,
+              return { on: dock.classList.contains('on'), above: dock.getBoundingClientRect().bottom <= keys.getBoundingClientRect().top + 1 && dock.getBoundingClientRect().height > 0,
                        type: Boolean(dock.querySelector('[data-compose]')), sideways: Math.round(dock.querySelector('.agent-row').getBoundingClientRect().right) > innerWidth };
             })()""")
             if not shown["on"] or not shown["above"] or not shown["type"] or shown["sideways"]:
