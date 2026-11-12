@@ -14,6 +14,13 @@ and the project uses [Semantic Versioning](https://semver.org).
   the version you pick the current one instead of saving a copy of it, so the list stays the same
   and a newer version can be restored again. Each version but the current one has a delete button,
   and **Clear history** keeps only the current version.
+- **Dock tabs, panes and sessions by dragging.** In the Workspace, drag a tab along the tab row to
+  reorder it, or onto an edge of a pane to move all its panes beside that pane; a tinted box shows
+  where they will go. The middle of a pane swaps a one-pane tab into its place, or merges a tab of
+  several. Hold a dragged tab over another tab to switch to it first. A pane dragged by its title
+  bar docks the same way or becomes a tab of its own on the tab row, and a session dragged from the
+  sidebar opens beside a pane, in its place or in a new tab, moving rather than opening twice when
+  it is already in the tab. Esc cancels. Desktop only.
 
 ## [0.11.100] - 2026-11-12
 

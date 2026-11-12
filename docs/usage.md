@@ -186,7 +186,23 @@ you switch to always scrolls into view, and a tab's tooltip shows its full name.
 A tab lays its panes out as an even grid: two side by side, three as a pair over a full-width
 pane, four as two by two. Moving panes in or closing one lays the grid out again. To rearrange,
 drag a pane by its title bar onto another pane and they swap places, or pick **Swap with** from
-the pane's **⋯** menu. An empty pane offers to start an
+the pane's **⋯** menu.
+
+Tabs, panes and sessions also dock by dragging, on a desktop:
+
+- **A tab** dragged along the tab row moves there, with a line marking the spot. Dropped near an
+  edge of a pane, every pane in the tab moves next to that pane on that side, and the tab goes away.
+  A tinted box shows the half of the pane it will take. Dropped in the middle of a pane, or on its
+  title bar, a tab with one pane swaps places with that pane, and a tab with several moves them all
+  into the tab. Hold a dragged tab over another tab for a moment to switch to it and drop there.
+- **A pane** dragged by its title bar docks next to another pane the same way, swaps with it in the
+  middle, or becomes a tab of its own when dropped on the tab row.
+- **A session** dragged from the sidebar opens next to a pane or in its place, or in a new tab when
+  dropped on the tab row. An empty pane it lands on is replaced; any other pane takes the session's
+  old place in its tab, or a tab of its own. A session already open in the tab moves instead of
+  opening twice.
+
+Esc cancels a drag. The layout is remembered, like the rest of the Workspace. An empty pane offers to start an
 agent there or to open one of the workspace's sessions. Panes also split right or down and resize by
 dragging the border between them; the split's shape lasts until a pane is added or removed, when
 the grid takes over again. **Keyboard shortcuts** in the sidebar lists the keys. On a phone
