@@ -5,6 +5,11 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **Dictation modes work as named.** Hold now records for as long as the button or shortcut is held, and Toggle
+  until it is pressed again; only Auto stops by itself after a few seconds of quiet. Dictation mode, language,
+  vocabulary and Remove filler words save the moment they change, like the speech model buttons, instead of
+  waiting for **Save** at the foot of the card.
+
 ## [0.11.0] - 2026-11-12
 
 - **Review and commit changes from the Workspace.** The right panel has a third tab, **Changes**, with the

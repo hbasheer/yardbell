@@ -25,6 +25,32 @@ PASSCODE_HASH = "$argon2id$v=19$m=19456,t=2,p=1$W9HtFU6zAJJHfaLZxyoLZw$CowUQvJ7l
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 MACHINE = "hp"
 FAKE_DICTATION = "Fix the flaky checkout test, please."
+
+# A tone that can be switched on and off stands in for the microphone, and /dispatch/transcribe
+# answers from window.__said in order, so a test can speak phrases with pauses between them.
+TONE_MICROPHONE = """(() => {
+              const ctx = new AudioContext();
+              const tone = ctx.createOscillator();
+              const gain = ctx.createGain();
+              gain.gain.value = 0;
+              const out = ctx.createMediaStreamDestination();
+              tone.connect(gain).connect(out);
+              tone.start();
+              ctx.resume();
+              window.__speak = (on) => { gain.gain.value = on ? 0.4 : 0; };
+              navigator.mediaDevices.getUserMedia = async () => out.stream;
+              const said = window.__said || [];
+              window.__sent = [];
+              const real = window.fetch;
+              window.fetch = async (url, init) => {
+                if (String(url) !== "/dispatch/transcribe") return real(url, init);
+                window.__sent.push(init.body.size);
+                await new Promise((r) => setTimeout(r, 150));
+                const text = said[window.__sent.length - 1] || "";
+                return new Response(JSON.stringify({ text }), { status: 200, headers: { "Content-Type": "application/json" } });
+              };
+              return 0;
+            })()"""
 SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
 REVIEW_CHAT = "browserreview001"
@@ -4449,29 +4475,8 @@ class Suite:
         try:
             b.goto(self.url("/dispatch"))
             b.wait("!document.getElementById('mic').hidden && !document.getElementById('mic').classList.contains('voice-off')", "the microphone button, voice on")
-            b.js("""(() => {
-              const ctx = new AudioContext();
-              const tone = ctx.createOscillator();
-              const gain = ctx.createGain();
-              gain.gain.value = 0;
-              const out = ctx.createMediaStreamDestination();
-              tone.connect(gain).connect(out);
-              tone.start();
-              ctx.resume();
-              window.__speak = (on) => { gain.gain.value = on ? 0.4 : 0; };
-              navigator.mediaDevices.getUserMedia = async () => out.stream;
-              const said = ["Fix the login test.", "Then run it again."];
-              window.__sent = [];
-              const real = window.fetch;
-              window.fetch = async (url, init) => {
-                if (String(url) !== "/dispatch/transcribe") return real(url, init);
-                window.__sent.push(init.body.size);
-                await new Promise((r) => setTimeout(r, 150));
-                const text = said[window.__sent.length - 1] || "";
-                return new Response(JSON.stringify({ text }), { status: 200, headers: { "Content-Type": "application/json" } });
-              };
-              return 0;
-            })()""")
+            b.js("window.__said = [\"Fix the login test.\", \"Then run it again.\"]; 0")
+            b.js(TONE_MICROPHONE)
             self.set_field("#dispatch-input", "")
             b.click("#mic")
             b.wait("document.getElementById('mic').classList.contains('recording')", "recording to start")
@@ -4496,6 +4501,72 @@ class Suite:
             self.set_field("#dispatch-input", "")
         finally:
             self.api("POST", "/api/settings/voice", {"input": "off"})
+
+    def test_dictation_stops_on_quiet_only_in_auto(self):
+        b = self.b
+        b.goto(self.url("/dispatch"))
+        b.js("window.__clock = new AudioContext(); window.__clock.resume().catch(() => {}); 0")
+        b.pump(0.5)
+        able = b.js("window.__clock.state === 'running'")
+        b.js("window.__clock.close().catch(() => {}); delete window.__clock; 0")
+        if not able:
+            return
+        recording = "document.getElementById('mic').classList.contains('recording')"
+        press = "document.getElementById('mic').dispatchEvent(new PointerEvent('%s', { bubbles: true, button: 0, pointerId: 1, isPrimary: true })); 0"
+        try:
+            for mode in ("toggle", "hold", "auto"):
+                self.api("POST", "/api/settings/voice", {"input": "local", "whisper_model": self.y.config, "mode": mode})
+                b.goto(self.url("/dispatch"))
+                b.wait("!document.getElementById('mic').hidden && !document.getElementById('mic').classList.contains('voice-off')", "the microphone button, voice on")
+                b.js('window.__said = ["One.", "Two.", "Three."]; 0')
+                b.js(TONE_MICROPHONE)
+                b.js(press % "pointerdown")
+                if mode != "hold":
+                    b.js(press % "pointerup")
+                b.wait(recording, f"recording to start in {mode}")
+                b.js("window.__speak(true)")
+                b.pump(0.6)
+                b.js("window.__speak(false)")
+                b.pump(3.8)
+                if mode == "auto":
+                    if b.js(recording):
+                        raise Failure("Auto kept recording through a long quiet")
+                    continue
+                if not b.js(recording):
+                    raise Failure(f"{mode} stopped by itself in a quiet, before the user stopped it")
+                if mode == "hold":
+                    b.js(press % "pointerup")
+                else:
+                    b.js(press % "pointerdown")
+                    b.js(press % "pointerup")
+                b.wait(f"!({recording})", f"{mode} to stop when the user stops it")
+                self.set_field("#dispatch-input", "")
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off", "mode": "auto"})
+
+    def test_settings_voice_choices_save_at_once(self):
+        b = self.b
+        try:
+            b.goto(self.url("/settings#voice"))
+            b.wait("document.querySelector('#voice-form input[name=mode][value=hold]')", "the dictation mode choices")
+            b.click("#voice-form input[name=mode][value=hold]")
+            deadline = time.time() + 5
+            while self.api("GET", "/api/settings")["voice"].get("mode") != "hold":
+                if time.time() > deadline:
+                    raise Failure("picking Hold was not saved without pressing Save")
+                b.pump(0.2)
+            b.click("#voice-fillers")
+            b.js("const v = document.getElementById('voice-vocabulary'); v.value = 'Yardbell'; v.dispatchEvent(new Event('change', { bubbles: true })); 0")
+            deadline = time.time() + 5
+            while True:
+                v = self.api("GET", "/api/settings")["voice"]
+                if v.get("remove_fillers") and v.get("vocabulary") == "Yardbell":
+                    break
+                if time.time() > deadline:
+                    raise Failure(f"Remove filler words and Vocabulary were not saved at once: {v}")
+                b.pump(0.2)
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off", "mode": "auto", "remove_fillers": False, "vocabulary": ""})
 
     def test_dispatch_speak_toggle_mutes_at_once(self):
         b = self.b

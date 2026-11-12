@@ -1802,7 +1802,7 @@ $("dispatch-form").elements.codex_model.addEventListener("input", codexModelNote
 const QUALITY = ["Poor", "Fair", "Good", "Very good", "Excellent"];
 const MIC_KEY = "yardbell.voice.mic";
 const MODE_HELP = {
-  auto: "Tap Ctrl+Shift+Space or the microphone to start and stop, or hold it while you talk.",
+  auto: "Tap Ctrl+Shift+Space or the microphone to start and stop, or hold it while you talk. It stops by itself after a few seconds of quiet.",
   hold: "Talk while you hold Ctrl+Shift+Space or the microphone.",
   toggle: "Press Ctrl+Shift+Space or the microphone to start, and again to stop.",
 };
@@ -2062,6 +2062,26 @@ $("voice-use-api").addEventListener("click", () => {
 
 $("voice-form").elements.input.addEventListener("change", voiceInputMode);
 $("voice-mode").addEventListener("change", voiceModeHelp);
+
+// How dictation behaves applies the moment it is picked, like the model buttons above it; the
+// engine, paths and API fields still wait for Save, since a half-typed path would fail.
+const VOICE_CHOICES = {
+  mode: "Dictation mode saved. Dispatch uses it within a few seconds.",
+  language: "Dictation language saved.",
+  vocabulary: "Vocabulary saved.",
+  remove_fillers: "Remove filler words saved.",
+};
+$("voice-form").addEventListener("change", async (e) => {
+  const said = VOICE_CHOICES[e.target.name];
+  if (!said) return;
+  try {
+    await api("POST", "/api/settings/voice", voiceValues());
+    data.voice = { ...data.voice, ...voiceValues() };
+    saved(said);
+  } catch (err) {
+    toast(err.message);
+  }
+});
 
 $("voice-form").addEventListener("submit", async (e) => {
   e.preventDefault();

@@ -233,11 +233,11 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
 
   function hint() {
     const how = {
-      auto: "Tap to start and stop, or hold to talk.",
-      hold: "Hold to talk.",
-      toggle: "Press to start, and again to stop.",
+      auto: "Tap to start and stop, or hold to talk. Words appear at each pause, and it stops by itself after a few seconds of quiet.",
+      hold: "Hold to talk, and let go to stop. Words appear at each pause.",
+      toggle: "Press to start, and again to stop. Words appear at each pause.",
     }[mode()] || "";
-    return `Dictate (${SHORTCUT}). ${how} Words appear at each pause, and it stops by itself after a few seconds of quiet.`;
+    return `Dictate (${SHORTCUT}). ${how}`;
   }
 
   function paint() {
@@ -284,7 +284,7 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
       segmentHeard = true;
     }
     if ((segmentHeard && now - heardAt > PAUSE_MS) || now - segmentAt > CHUNK_MS) cut(false);
-    if (heardAt && now - heardAt > SILENCE_MS) {
+    if (heardAt && now - heardAt > SILENCE_MS && mode() === "auto") {
       heardAt = 0;
       stop(true);
     }
