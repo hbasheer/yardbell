@@ -18,8 +18,10 @@ function micProblem(err) {
 // Captures mono PCM through Web Audio and packs it into a 16 kHz WAV blob.
 // WebKitGTK's MediaRecorder reports a supported type and then fails on start,
 // so engines where MediaRecorder never records fall back to this.
-function wavCapture(stream) {
-  const ctx = new (window.AudioContext || window.webkitAudioContext)();
+// Shares the level meter's AudioContext when there is one: a second context on the same
+// microphone can leave this one without samples on some audio servers.
+function wavCapture(stream, shared) {
+  const ctx = shared || new (window.AudioContext || window.webkitAudioContext)();
   const source = ctx.createMediaStreamSource(stream);
   const grab = ctx.createScriptProcessor(4096, 1, 1);
   const mute = ctx.createGain();
@@ -43,7 +45,7 @@ function wavCapture(stream) {
       grab.disconnect();
       mute.disconnect();
       const blob = take();
-      ctx.close();
+      if (!shared) ctx.close();
       for (const track of stream.getTracks()) track.stop();
       return blob;
     },
@@ -145,6 +147,7 @@ function levelMeter(stream, onFrame) {
   };
   frame = requestAnimationFrame(tick);
   return {
+    ctx,
     stop() {
       cancelAnimationFrame(frame);
       source.disconnect();
@@ -306,18 +309,19 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
     queue = [];
     wrote = false;
     queued = false;
+    meter = levelMeter(stream, onFrame);
     try {
       segment = record(stream);
       const first = segment;
       setTimeout(() => {
         if (segment === first && first.rec.state !== "recording") {
           segment = null;
-          wav = wavCapture(stream);
+          wav = wavCapture(stream, meter?.ctx);
         }
       }, 250);
     } catch {
       segment = null;
-      wav = wavCapture(stream);
+      wav = wavCapture(stream, meter?.ctx);
     }
     timer = setTimeout(() => {
       toast(`Recording stops after ${MAX_SECONDS / 60} minutes.`);
@@ -328,7 +332,6 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
     heardAt = 0;
     segmentHeard = false;
     seconds = 0;
-    meter = levelMeter(stream, onFrame);
     ticker = setInterval(() => {
       const now = Math.floor((performance.now() - startedAt) / 1000);
       if (now === seconds) return;
@@ -358,7 +361,7 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
       try {
         segment = record(stream);
       } catch {
-        wav = wavCapture(stream);
+        wav = wavCapture(stream, meter?.ctx);
       }
     }
     closing++;
