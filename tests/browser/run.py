@@ -1039,6 +1039,333 @@ class Suite:
         b.key("Enter")
         b.wait("screenText().split('\\n').some((l) => l.trim() === 'back3')", "the shell to still answer")
 
+    TERM_STORE = ("yardbell.term.keys", "yardbell.term.fontSize")
+
+    # Opens the session's terminal at phone size. With record, input frames are kept in __in and
+    # never reach the shell, so Ctrl-D and friends cannot end it.
+    def phone_term(self, record=False):
+        b = self.b
+        if not self.session:
+            path = os.path.join(self.y.root, "demo-app")
+            self.session = self.api("POST", "/sessions", {"machine": MACHINE, "path": path, "wait": True})["name"]
+        b.viewport(390, 844, 3)
+        b.goto(self.url(f"/term/{MACHINE}/{self.session}"))
+        b.wait("typeof term === 'object' && term.element && socket?.readyState === 1 && screenText().length > 0", "the phone terminal", timeout=15)
+        b.wait("document.documentElement.classList.contains('touch-ui') && getComputedStyle(document.getElementById('keys')).display === 'flex'", "the key bar")
+        if record:
+            b.js("""(() => {
+              window.__in = [];
+              const s = socket;
+              s.send = (d) => { const f = JSON.parse(d); if (f.t === 'in') window.__in.push(f.d); else WebSocket.prototype.send.call(s, d); };
+              return true;
+            })()""")
+        b.click("#term")
+
+    def leave_phone_term(self, before):
+        self.b.viewport(1280, 800)
+        self.put_storage(before)
+
+    def sent(self, clear=True):
+        got = self.b.js("window.__in.slice()")
+        if clear:
+            self.b.js("window.__in.length = 0")
+        return got
+
+    def test_phone_term_key_bar_sends_the_right_bytes(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term(record=True)
+            want = {"esc": "\x1b", "tab": "\t", "stab": "\x1b[Z", "up": "\x1b[A", "down": "\x1b[B", "left": "\x1b[D",
+                    "right": "\x1b[C", "slash": "/", "pipe": "|", "tilde": "~", "dash": "-", "enter": "\r",
+                    "ctrlc": "\x03", "ctrld": "\x04"}
+            for key, data in want.items():
+                b.click(f"#keys-row [data-key={key}]")
+                got = self.sent()
+                if got != [data]:
+                    raise Failure(f"the {key} key sent {got!r}, wanted {[data]!r}")
+            if not b.js("document.activeElement === term.textarea"):
+                raise Failure(f"pressing keys took the focus from the terminal: {b.js('document.activeElement.outerHTML.slice(0, 80)')}")
+            b.click("#keys-more")
+            b.wait("!document.getElementById('more-sheet').hidden", "the More keys sheet")
+            for key, data in {"home": "\x1b[H", "pgdn": "\x1b[6~", "f1": "\x1bOP", "f5": "\x1b[15~", "ctrlr": "\x12", "del": "\x1b[3~"}.items():
+                b.click(f"#more-keys [data-key={key}]")
+                got = self.sent()
+                if got != [data]:
+                    raise Failure(f"the {key} key in More keys sent {got!r}, wanted {[data]!r}")
+            b.click("#more-close")
+            b.wait("document.getElementById('more-sheet').hidden", "the sheet to close")
+            if not b.js("document.activeElement === term.textarea"):
+                raise Failure("the More keys sheet took the focus from the terminal")
+        finally:
+            self.leave_phone_term(before)
+
+    def double_tap(self, selector):
+        p = self.b.centre(selector)
+        tap = [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
+        self.b._actions({"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+            {"type": "pointerMove", "x": int(p["x"]), "y": int(p["y"]), "origin": "viewport"}, *tap,
+            {"type": "pause", "duration": 60}, *tap]})
+        self.b.pump(0.2)
+
+    def test_phone_term_sticky_and_locked_modifiers(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        latch = lambda key: b.js(f"document.querySelector('#keys-row [data-key={key}]').dataset.latch")
+        try:
+            self.phone_term(record=True)
+            b.click("#keys-row [data-key=ctrl]")
+            if latch("ctrl") != "once" or b.js("document.querySelector('#keys-row [data-key=ctrl]').getAttribute('aria-pressed')") != "true":
+                raise Failure(f"one tap on Ctrl should arm it, it is {latch('ctrl')}")
+            b.type("c")
+            b.type("c")
+            got = self.sent()
+            if got != ["\x03", "c"]:
+                raise Failure(f"an armed Ctrl with c typed twice sent {got!r}, wanted Ctrl-C then c")
+            if latch("ctrl") != "off":
+                raise Failure("Ctrl should release after one key")
+            for keys, then, data in ((["ctrl"], "up", "\x1b[1;5A"), (["shift"], "tab", "\x1b[Z"), (["alt"], "left", "\x1b[1;3D"),
+                                     (["ctrl", "alt"], "right", "\x1b[1;7C"), (["shift"], "slash", "/"), (["ctrl"], "pipe", "\x1c")):
+                for k in keys:
+                    b.click(f"#keys-row [data-key={k}]")
+                b.click(f"#keys-row [data-key={then}]")
+                got = self.sent()
+                if got != [data]:
+                    raise Failure(f"{'+'.join(keys)} then {then} sent {got!r}, wanted {[data]!r}")
+            b.click("#keys-row [data-key=alt]")
+            b.type("b")
+            b.key("ArrowUp")
+            got = self.sent()
+            if got not in (["\x1bb", "\x1b[A"], ["\x1bb", "\x1bOA"]):
+                raise Failure(f"Alt then a typed b and an arrow sent {got!r}")
+            b.click("#keys-row [data-key=ctrl]")
+            b.key("ArrowRight")
+            if self.sent() != ["\x1b[1;5C"]:
+                raise Failure("Ctrl then a typed arrow should send Ctrl-Right")
+            b.click("#keys-row [data-key=shift]")
+            b.type("q")
+            if self.sent() != ["Q"]:
+                raise Failure("Shift then a typed q should send Q")
+            self.double_tap("#keys-row [data-key=ctrl]")
+            if latch("ctrl") != "locked":
+                raise Failure(f"a double tap on Ctrl should lock it, it is {latch('ctrl')}")
+            b.type("ab")
+            b.click("#keys-row [data-key=down]")
+            got = self.sent()
+            if got != ["\x01", "\x02", "\x1b[1;5B"]:
+                raise Failure(f"a locked Ctrl sent {got!r}, wanted Ctrl-A, Ctrl-B and Ctrl-Down")
+            if latch("ctrl") != "locked":
+                raise Failure("a locked Ctrl released by itself")
+            b.click("#keys-row [data-key=ctrl]")
+            b.type("a")
+            if latch("ctrl") != "off" or self.sent() != ["a"]:
+                raise Failure("a tap on a locked Ctrl should release it")
+        finally:
+            self.leave_phone_term(before)
+
+    def key_centre(self, key):
+        self.b.js(f"document.querySelector('#keys-row [data-key={key}]').scrollIntoView({{ inline: 'center' }})")
+        return self.b.centre(f"#keys-row [data-key={key}]")
+
+    def test_phone_term_held_keys_repeat(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term(record=True)
+            p = self.key_centre("up")
+            b.drag_path([(p["x"], p["y"]), (p["x"], p["y"], 1000)])
+            held = self.sent()
+            if len(held) < 6 or set(held) != {"\x1b[A"}:
+                raise Failure(f"holding the up arrow for a second sent {held!r}")
+            b.click("#keys-row [data-key=up]")
+            if self.sent() != ["\x1b[A"]:
+                raise Failure("a quick tap on the up arrow should send it once")
+            p = self.key_centre("enter")
+            b.drag_path([(p["x"], p["y"]), (p["x"], p["y"], 900)])
+            if self.sent() != ["\r"]:
+                raise Failure("holding Enter should not repeat it")
+        finally:
+            self.leave_phone_term(before)
+
+    def test_phone_term_more_sheet_edits_the_bar_and_remembers(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        bar = "[...document.querySelectorAll('#keys-row [data-key]')].map((k) => k.dataset.key)"
+        try:
+            self.put_storage({k: None for k in self.TERM_STORE})
+            self.phone_term()
+            default = b.js(bar)
+            if default[:6] != ["esc", "tab", "stab", "ctrl", "alt", "shift"] or default[-3:] != ["ctrlc", "ctrld", "paste"]:
+                raise Failure(f"the key bar starts as {default}")
+            b.click("#keys-more")
+            b.click("#more-edit")
+            b.wait("!document.getElementById('more-editor').hidden && document.getElementById('more-body').hidden", "the bar editor")
+            b.click('#edit-list li[data-id="paste"] [data-edit="up"]')
+            b.click('#edit-list li[data-id="paste"] [data-edit="up"]')
+            b.click('#edit-list li[data-id="alt"] input')
+            b.click('#edit-list li[data-id="home"] input')
+            want = [k for k in default if k not in ("alt", "paste")]
+            want.insert(want.index("ctrlc"), "paste")
+            want.append("home")
+            if b.js(bar) != want:
+                raise Failure(f"after editing, the bar is {b.js(bar)}, wanted {want}")
+            if not b.js("Boolean(document.querySelector('#more-keys [data-key=alt]'))"):
+                raise Failure("a key hidden from the bar should still be in More keys")
+            b.goto(self.url(f"/term/{MACHINE}/{self.session}"))
+            b.wait("document.querySelector('#keys-row [data-key]')", "the key bar again")
+            if b.js(bar) != want:
+                raise Failure(f"the edited bar was not remembered: {b.js(bar)}")
+            b.click("#keys-more")
+            b.click("#more-edit")
+            b.click("#edit-reset")
+            if b.js(bar) != default or b.js("localStorage.getItem('yardbell.term.keys')") is not None:
+                raise Failure("Reset to default should bring the bar back and forget the edit")
+        finally:
+            self.leave_phone_term(before)
+
+    # Firefox here has no touch input, so the pinch is driven through the calls the touch handler
+    # makes: pinchStart, pinchMove with the fingers' scale, and pinchEnd on release.
+    def test_phone_term_pinch_commits_to_a_text_size(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.put_storage({k: None for k in self.TERM_STORE})
+            self.phone_term()
+            start = b.js("({ size: term.options.fontSize, cols: term.cols, rows: term.rows })")
+            b.js("(() => { const r = termEl.getBoundingClientRect(); pinchStart(r.left + 100, r.top + 200); pinchMove(1.37); return true; })()")
+            live = b.js("({ transform: term.element.style.transform, size: term.options.fontSize })")
+            if "scale(1.37)" not in live["transform"] or live["size"] != start["size"]:
+                raise Failure(f"a pinch should scale the terminal live without changing the size yet: {live}")
+            size = b.js("pinchEnd()")
+            want = min([10, 11, 12, 13, 14, 16, 18, 20], key=lambda s: abs(s - start["size"] * 1.37))
+            b.wait(f"term.options.fontSize === {want} && term.cols < {start['cols']} && term.rows < {start['rows']}", f"the grid to refit at {want}px")
+            if size != want or b.js("term.element.style.transform") or b.js("localStorage.getItem('yardbell.term.fontSize')") != str(want):
+                raise Failure(f"the pinch settled on {size}, wanted {want} saved with no scale left")
+            b.click("#keys-more")
+            b.click("#font-down")
+            smaller = b.js("term.options.fontSize")
+            if smaller >= want or b.js("document.getElementById('font-size').textContent") != f"{smaller} px":
+                raise Failure(f"A- should step down from {want}px, it shows {smaller}")
+            b.goto(self.url(f"/term/{MACHINE}/{self.session}"))
+            b.wait(f"typeof term === 'object' && term.options.fontSize === {smaller}", "the text size to be remembered")
+            b.js("(() => { pinchStart(100, 100); pinchMove(40); return true; })()")
+            if b.js("pinchEnd()") != 20:
+                raise Failure("a huge pinch should stop at the largest size")
+        finally:
+            self.leave_phone_term(before)
+
+    def row_of(self, text):
+        return self.b.wait(f"""(() => {{
+          const buf = term.buffer.active;
+          for (let y = buf.length - 1; y >= 0; y--) if (buf.getLine(y).translateToString(true).trim() === {json.dumps(text)}) return {{ y }};
+          return null;
+        }})()""", f"{text!r} on the screen", timeout=10)["y"]
+
+    def cell_centre(self, col, row):
+        return self.b.js(f"(() => {{ const s = screenBox(); return {{ x: s.left + ({col} + 0.5) * s.w, y: s.top + ({row} - term.buffer.active.viewportY + 0.5) * s.h }}; }})()")
+
+    def test_phone_term_selection_mode_copies(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term()
+            b.type("clear; echo sel''word another")
+            b.key("Enter")
+            y = self.row_of("selword another")
+            p = self.cell_centre(2, y)
+            b.js(f"startSelection({p['x']}, {p['y']})")
+            if b.js("term.getSelection()") != "selword":
+                raise Failure(f"a long press should select the word under it, got {b.js('term.getSelection()')!r}")
+            shown = b.js("({ layer: !document.getElementById('sel-layer').hidden, menu: document.getElementById('sel-menu').checkVisibility(), handles: [...document.querySelectorAll('.sel-handle')].filter((h) => !h.hidden).length })")
+            if shown != {"layer": True, "menu": True, "handles": 2}:
+                raise Failure(f"selection mode should show both handles and the menu: {shown}")
+            end = b.centre('.sel-handle[data-end="end"]')
+            to = self.cell_centre(14, y)
+            b.drag((end["x"], end["y"]), (to["x"] + 2, end["y"]))
+            if b.js("term.getSelection()") != "selword another":
+                raise Failure(f"dragging the end handle should extend the selection, got {b.js('term.getSelection()')!r}")
+            b.js("window.__copied = []; navigator.clipboard.writeText = async (t) => { window.__copied.push(t); }; true")
+            b.click('#sel-menu [data-sel="copy"]')
+            b.wait("window.__copied.length === 1", "Copy to copy")
+            if b.js("window.__copied[0]") != "selword another":
+                raise Failure(f"Copy copied {b.js('window.__copied[0]')!r}")
+            if not b.js("document.getElementById('sel-layer').hidden && !term.hasSelection()"):
+                raise Failure("Copy should leave selection mode")
+            b.click("#keys-more")
+            b.click("#more-select")
+            b.wait("sel.on && term.getSelection().trim().length > 0 && document.getElementById('more-sheet').hidden", "Select text to start selection mode")
+            b.click('#sel-menu [data-sel="all"]')
+            if "selword another" not in b.js("term.getSelection()"):
+                raise Failure("Select all should take the whole screen")
+            b.click('#sel-menu [data-sel="done"]')
+            b.wait("!sel.on && !term.hasSelection()", "Done to leave selection mode")
+            b.click("#keys-more")
+            b.click("#more-text")
+            b.wait("document.getElementById('text-view').classList.contains('show')", "the plain Copy text view from More keys")
+            b.click("#text-close")
+        finally:
+            self.leave_phone_term(before)
+
+    def test_phone_term_links_are_tappable(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term()
+            b.type("clear; echo see https://example.com/a?b''=1. now")
+            b.key("Enter")
+            y = self.row_of("see https://example.com/a?b=1. now")
+            links = b.js(f"linksOn({y}).map((l) => [l.url, l.start.x, l.end.x])")
+            if links != [["https://example.com/a?b=1", 4, 28]]:
+                raise Failure(f"the link on the line was found as {links}")
+            b.js("window.__opened = []; window.open = (url, target) => { window.__opened.push([url, target]); return null; }; true")
+            on, off = self.cell_centre(10, y), self.cell_centre(1, y)
+            if b.js(f"tapAt({off['x']}, {off['y']})") or b.js("window.__opened.length"):
+                raise Failure("a tap beside the link should not open anything")
+            if not b.js(f"tapAt({on['x']}, {on['y']})"):
+                raise Failure("a tap on the link should open it")
+            if b.js("window.__opened") != [["https://example.com/a?b=1", "_blank"]]:
+                raise Failure(f"the tap opened {b.js('window.__opened')}")
+        finally:
+            self.leave_phone_term(before)
+
+    def test_phone_term_keyboard_keeps_the_grid(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term()
+            b.type("clear; seq 1 80")
+            b.key("Enter")
+            self.row_of("80")
+            b.pump(0.5)
+            start = b.js("({ rows: term.rows, cols: term.cols })")
+            # Android Chrome makes the page shorter when the keyboard opens.
+            b.viewport(390, 520, 3)
+            b.wait("kept && lift > 0", "the grid kept and lifted while typing", timeout=5)
+            seen = b.js("""({ rows: term.rows, cols: term.cols, kbOpen: document.documentElement.classList.contains('kb-open'),
+              keys: Math.round(document.getElementById('keys').getBoundingClientRect().bottom), height: innerHeight,
+              cursor: Math.round(document.querySelector('.xterm-screen').getBoundingClientRect().top + (term.buffer.active.cursorY + 1) * screenBox().h),
+              above: Math.round(document.getElementById('term-bottom').getBoundingClientRect().top) })""")
+            if seen["rows"] != start["rows"] or seen["cols"] != start["cols"] or not seen["kbOpen"]:
+                raise Failure(f"the keyboard should not resize the grid: {start} then {seen}")
+            if seen["keys"] != seen["height"] or seen["cursor"] > seen["above"]:
+                raise Failure(f"the key bar should sit on the keyboard with the cursor row above it: {seen}")
+            b.viewport(390, 844, 3)
+            b.wait(f"!kept && lift === 0 && term.rows === {start['rows']}", "the keyboard closing to put the terminal back", timeout=5)
+            b.viewport(700, 390, 3)
+            b.wait(f"!kept && term.cols > {start['cols']} && term.rows < {start['rows']}", "turning the phone to refit the grid", timeout=5)
+        finally:
+            self.leave_phone_term(before)
+
+    def test_term_desktop_has_no_key_bar(self):
+        b = self.b
+        if not self.session:
+            path = os.path.join(self.y.root, "demo-app")
+            self.session = self.api("POST", "/sessions", {"machine": MACHINE, "path": path, "wait": True})["name"]
+        b.goto(self.url(f"/term/{MACHINE}/{self.session}"))
+        b.wait("typeof term === 'object' && term.element", "the terminal")
+        if b.js("document.documentElement.classList.contains('touch-ui') || getComputedStyle(document.getElementById('keys')).display !== 'none'"):
+            raise Failure("a desktop terminal shows the key bar")
+
     def test_tree_groups_worktrees_under_their_repo(self):
         b = self.b
         b.goto(self.url("/workspace"))

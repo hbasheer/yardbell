@@ -283,11 +283,39 @@ including the terminal. Several devices can attach to one session. The one you a
 session's size: opening it, clicking in it or typing takes over, and a tab you cannot see or a
 phone in the background never does.
 
-On a phone the pages sit in a tab bar along the bottom, the machines stay on top, sessions become
-cards, and the terminal gets a key row for Esc, Tab, Ctrl, the arrows and Ctrl-C. Yardbell follows the system light or dark setting, or the theme
-you pick with the button in the sidebar, on each device.
+On a phone the pages sit in a tab bar along the bottom, the machines stay on top, and sessions become
+cards. Yardbell follows the system light or dark setting, or the theme you pick with the button in
+the sidebar, on each device.
 
 <br clear="right">
+
+**The terminal on a phone.** A touch screen, or a window as narrow as a phone, gets a key bar under
+the terminal:
+
+- **Keys.** Esc, Tab, Shift-Tab, Ctrl, Alt, Shift, the arrows, `/`, `|`, `~`, `-`, Enter, Ctrl-C,
+  Ctrl-D and Paste. Swipe the bar sideways for the rest. Tapping a key never closes the phone's
+  keyboard. Holding an arrow, Tab, Backspace, Del, PgUp or PgDn repeats it.
+- **Ctrl, Alt and Shift are sticky.** One tap arms the key (it gets a blue ring) for the next key you
+  press, on the bar or on the phone's keyboard: Ctrl then `c` sends Ctrl-C, Alt then Backspace sends
+  Alt-Backspace. A quick double tap locks it (filled blue with a bar under the name) until you tap it again.
+- **More keys.** **⋯** at the end of the bar opens a sheet with Home, End, PgUp, PgDn, Backspace, Del,
+  Ctrl-Z, Ctrl-L, Ctrl-R, F1 to F12 and any key you hid from the bar. It also has the text size
+  (**A-** and **A+**), **Select text** and **Copy text**. **Edit bar** lets you tick the keys to show
+  and move them earlier or later; each device remembers its own bar, and **Reset to default** brings
+  the standard one back.
+- **Text size.** Pinch the terminal to make the text bigger or smaller. When you let go it settles on
+  the nearest size between 10 and 20 px and the screen refits. The device remembers it.
+- **Selecting.** Long-press a word to select it, keep your finger down and drag to select more, or
+  drag the blue handles at either end. The menu above it has **Copy**, **Select all** and **Paste**;
+  tap anywhere else to stop. **Select text** in More keys starts on the line with the cursor.
+- **Links.** Tap a web address on the screen to open it in a new tab. On a desktop, Ctrl-click
+  (Cmd-click on a Mac) does the same.
+- **Paste** reads the clipboard in the Yardbell apps and on `https` pages. Over plain `http` the
+  browser does not allow that, so a box opens: paste into it with your phone's own menu and press
+  **Send to terminal**.
+- **The keyboard.** While the phone's keyboard is up, the key bar sits on top of it and the terminal
+  slides up just enough to keep the line with the cursor in view. The session keeps its size, so the
+  agent's screen is not redrawn every time the keyboard opens; turning the phone does resize it.
 
 **Copying from the terminal.**
 
@@ -296,7 +324,7 @@ you pick with the button in the sidebar, on each device.
 - **Shift-drag** (Option-drag on a Mac) selects in the browser instead, and copies when you let go.
 - **Copy text** in the header shows the screen as plain text. Select any part of it, or press
   **Copy all**, which copies everything and takes you back to the terminal. **Close** or Esc goes
-  back too. On a phone, this is the way to copy.
+  back too. On a phone, it is the fallback when selecting on the terminal is awkward.
 
 Browsers only allow automatic clipboard access on `https` pages or `localhost`. Over
 `http://<host-mesh-ip>` Yardbell copies straight away when it can. If the browser blocks it, a

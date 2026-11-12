@@ -2,13 +2,13 @@
 <html lang="en" data-term-page>
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, interactive-widget=resizes-content">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Yardbell terminal</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/xterm@5.3.0/css/xterm.css" integrity="sha384-LJcOxlx9IMbNXDqJ2axpfEQKkAYbFjJfhXexLfiRJhjDU81mzgkiQq8rkV0j6dVh" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/400.css" integrity="sha384-8X0qYYsBdYZ9bk70hw4HTDsWIeMfYCwYmUcsezfamiqI024ZDkBKbaTx68Kwh6wx" crossorigin="anonymous">
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/jetbrains-mono@5.0.20/700.css" integrity="sha384-HqT7jGkVQOXOJ37tiVsHvCU/RCd8jyWr/gC4WgpIgRn5B8LiIqK8eJRiZOI/DGFQ" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/400.css" integrity="sha384-EfdL97hcnol8T4/i0jMEua2ounMTPBCKaU1QluVPWTv7V8xcTTfxSL1VWdjjpdRl" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/500.css" integrity="sha384-JJ19IMHzOJ2sAC2xNzhH4cnXNAY9idh1hFgmr9ePDd3e68jl+XEPiMVKTwYyGBcc" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist@5.2.6/index.css" integrity="sha384-p+EgvS3+MmUG4ztXXPqzFtb7IwR4h5ljta/AfLhM0vj1rtoFd3fsPDFTy2+m+W5U" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist-mono@5.2.6/index.css" integrity="sha384-+vQW7zp7HknV1Hb+78y01bvnE+c/tci1UJL3SVVr3mh96Ff2muGpGQP/rI6QWmH7" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
 <style>
@@ -25,12 +25,6 @@
   #banner { display: none; color: var(--warn-text); font-size: 13px; }
   #term { flex: 1; min-height: 0; padding: 6px 4px 4px 8px; }
   body.embedded #term { padding-top: 2px; }
-  #keys { display: none; gap: 6px; padding: 8px; padding-bottom: max(8px, env(safe-area-inset-bottom)); background: var(--term-bar); border-top: 1px solid var(--term-line); overflow-x: auto; }
-  #keys .btn { min-width: 52px; min-height: 40px; background: var(--term-raise); color: var(--term-ink); border-color: var(--term-edge); flex: none; }
-  #keys { touch-action: manipulation; user-select: none; -webkit-user-select: none; }
-  #keys .btn.pressed { background: var(--term-edge); }
-  #keys .btn.on { background: #2563eb; color: #ffffff; border-color: #2563eb; }
-  @media (pointer: coarse) { #keys { display: flex; } }
   #notice { position: fixed; left: 50%; bottom: 72px; transform: translateX(-50%); display: none; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border: 1px solid var(--term-edge); border-radius: 8px; background: var(--term-raise); color: var(--term-ink); font-size: 13px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); z-index: 30; }
   #notice.show { display: flex; }
   #notice .btn { height: 30px; background: #2563eb; border-color: #2563eb; color: #ffffff; }
@@ -58,16 +52,59 @@
   </div>
   <pre id="text-body"></pre>
 </div>
-<div id="keys">
-  <button class="btn" type="button" data-key="esc">Esc</button>
-  <button class="btn" type="button" data-key="tab">Tab</button>
-  <button class="btn" type="button" data-key="ctrl" id="ctrl">Ctrl</button>
-  <button class="btn" type="button" data-key="up" aria-label="Arrow up"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 12.5V3.5M4 7.5l4-4 4 4"/></svg></button>
-  <button class="btn" type="button" data-key="down" aria-label="Arrow down"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3.5v9M4 8.5l4 4 4-4"/></svg></button>
-  <button class="btn" type="button" data-key="left" aria-label="Arrow left"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M12.5 8h-9M7.5 4l-4 4 4 4"/></svg></button>
-  <button class="btn" type="button" data-key="right" aria-label="Arrow right"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8h9M8.5 4l4 4-4 4"/></svg></button>
-  <button class="btn" type="button" data-key="enter">Enter</button>
-  <button class="btn" type="button" data-key="ctrlc">Ctrl-C</button>
+<div id="paste-view" role="dialog" aria-label="Paste" hidden>
+  <div class="paste-card">
+    <label class="paste-label" for="paste-text">The browser cannot read the clipboard here. Paste into this box, then send it.</label>
+    <textarea id="paste-text" rows="4" autocomplete="off" autocapitalize="off" spellcheck="false"></textarea>
+    <div class="paste-actions">
+      <button class="btn" type="button" id="paste-cancel">Cancel</button>
+      <button class="btn primary" type="button" id="paste-send">Send to terminal</button>
+    </div>
+  </div>
+</div>
+<div id="sel-layer" hidden>
+  <div class="sel-handle" data-end="start" aria-hidden="true"></div>
+  <div class="sel-handle" data-end="end" aria-hidden="true"></div>
+  <div id="sel-menu" role="toolbar" aria-label="Selection">
+    <button type="button" data-sel="copy">Copy</button>
+    <button type="button" data-sel="all">Select all</button>
+    <button type="button" data-sel="paste">Paste</button>
+    <button type="button" data-sel="done" aria-label="Done selecting"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4.5 4.5l7 7M11.5 4.5l-7 7"/></svg></button>
+  </div>
+</div>
+<div id="term-bottom">
+  <div id="term-dock"></div>
+  <div id="more-sheet" role="dialog" aria-label="More keys" hidden>
+    <div class="more-head">
+      <strong id="more-title">More keys</strong>
+      <button class="more-link" type="button" id="more-edit">Edit bar</button>
+      <button class="more-link" type="button" id="more-close">Done</button>
+    </div>
+    <div id="more-body">
+      <div class="more-grid" id="more-keys"></div>
+      <div class="more-row">
+        <span class="more-label">Text size</span>
+        <div class="more-size">
+          <button type="button" class="tk" id="font-down" aria-label="Smaller text">A-</button>
+          <output id="font-size" aria-live="polite"></output>
+          <button type="button" class="tk" id="font-up" aria-label="Larger text">A+</button>
+        </div>
+      </div>
+      <div class="more-row">
+        <button type="button" class="tk wide" id="more-select">Select text</button>
+        <button type="button" class="tk wide" id="more-text">Copy text</button>
+      </div>
+    </div>
+    <div id="more-editor" hidden>
+      <p class="more-hint">Show the keys you use in the bar and move them into the order you like. This device remembers it.</p>
+      <ol id="edit-list"></ol>
+      <div class="more-row"><button type="button" class="more-link" id="edit-reset">Reset to default</button></div>
+    </div>
+  </div>
+  <div id="keys" role="toolbar" aria-label="Terminal keys">
+    <div id="keys-row"></div>
+    <button type="button" class="tk more" id="keys-more" aria-label="More keys" aria-expanded="false" aria-controls="more-sheet"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="0.9"/><circle cx="8" cy="8" r="0.9"/><circle cx="12.5" cy="8" r="0.9"/></svg></button>
+  </div>
 </div>
 <script src="https://cdn.jsdelivr.net/npm/xterm@5.3.0/lib/xterm.js" integrity="sha384-/nfmYPUzWMS6v2atn8hbljz7NE0EI1iGx34lJaNzyVjWGDzMv+ciUZUeJpKA3Glc" crossorigin="anonymous"></script>
 <script src="https://cdn.jsdelivr.net/npm/xterm-addon-fit@0.8.0/lib/xterm-addon-fit.js" integrity="sha384-AQLWHRKAgdTxkolJcLOELg4E9rE89CPE2xMy3tIRFn08NcGKPTsELdvKomqji+DL" crossorigin="anonymous"></script>

@@ -5,6 +5,18 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **A phone terminal that feels native.** The key bar under the terminal now has Esc, Tab, Shift-Tab,
+  Ctrl, Alt, Shift, the arrows, `/`, `|`, `~`, `-`, Enter, Ctrl-C, Ctrl-D and Paste. Ctrl, Alt and
+  Shift are sticky: one tap arms them for the next key, including keys typed on the phone's keyboard,
+  and a double tap locks them until tapped again. Holding an arrow, Tab or Backspace repeats it, and
+  the keys never close the keyboard. **⋯** opens More keys (Home, End, PgUp, PgDn, F1 to F12, Ctrl-Z,
+  Ctrl-L, Ctrl-R and more), the text size, Select text and Copy text, and **Edit bar** shows, hides
+  and reorders the bar's keys for that device. Pinch the terminal to change the text size; it settles
+  on the nearest size when you let go and the device remembers it. Long-press to select a word, drag
+  the handles, then Copy, Select all or Paste. Tap a web address to open it. While the keyboard is up
+  the key bar and the prompt line stay just above it, and the session keeps its size instead of
+  shrinking every time the keyboard opens.
+
 ## [0.11.101] - 2026-11-12
 
 - **No setup script card.** The Workspace sidebar no longer shows an "Add a setup script" card. Worktree
