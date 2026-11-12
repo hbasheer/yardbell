@@ -464,12 +464,19 @@ voice:
   api_url: https://api.openai.com/v1/audio/transcriptions  # with input: api; empty means OpenAI
   api_model: whisper-1            # empty means whisper-1
   api_key: ${secret:openai}       # with input: api; must be a ${secret:name} reference
-  language: en                    # optional hint; empty lets the engine find it
+  language: auto                  # auto, or a code such as en or ar; empty means whisper.cpp's English
+  vocabulary: Yardbell, Dispatch  # words the model should spell your way, given to it as a prompt
+  remove_fillers: true            # drop um, uh and a pause-filling "like" from the text
+  mode: auto                      # auto (tap or hold), hold or toggle, for the button and the shortcut
 ```
 
 `local` transcribes on the machine Yardbell runs on, with
 [whisper.cpp](https://github.com/ggml-org/whisper.cpp) and `ffmpeg`, so the recording never leaves
-it. `whisper_model` is a Whisper model name such as `tiny`, `base.en`, `small` or `large-v3-turbo`:
+it. **Set up** in Settings, Voice fills in `whisper_command` and `whisper_model` for you: it looks
+for `whisper-cli` on the PATH, then in `~/.local/share/yardbell/whisper-cpp/bin`,
+`/opt/homebrew/bin` and `/usr/local/bin`. Settings offers `tiny.en`, `base.en`, `small.en`,
+`medium.en`, `small` and `large-v3-turbo`, and checks each download against the file's known size.
+The microphone to record with is picked per device in Settings and kept in the browser. `whisper_model` is a Whisper model name such as `tiny`, `base.en`, `small` or `large-v3-turbo`:
 the server downloads it once into `~/.local/share/yardbell/models` on the first dictation and keeps
 it there, across upgrades. A path to a `ggml-*.bin` file you manage yourself also works, and such a
 file is never downloaded. Empty means `small`, which hears most languages well. `api` sends the recording to an OpenAI-compatible transcription endpoint; `api_key` must be a

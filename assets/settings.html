@@ -5,83 +5,44 @@
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="light dark">
 <title>Settings · Yardbell</title>
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/400.css" integrity="sha384-EfdL97hcnol8T4/i0jMEua2ounMTPBCKaU1QluVPWTv7V8xcTTfxSL1VWdjjpdRl" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/500.css" integrity="sha384-JJ19IMHzOJ2sAC2xNzhH4cnXNAY9idh1hFgmr9ePDd3e68jl+XEPiMVKTwYyGBcc" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-sans@5.0.20/600.css" integrity="sha384-NWCWDXFWH0ixL3DXbRVGmMD8PbUKTQZA1n9RtBQEkxKQdln+Ui814nUpfzeU0ws+" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/400.css" integrity="sha384-kTJy0lu/NAzlcHdqtuJe5q6vDA1M8gHcMp6/umVo4Nqoa7La36UBhvWtM112y0i4" crossorigin="anonymous">
-<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource/ibm-plex-mono@5.0.13/500.css" integrity="sha384-Ddvk1ngA7kUJqPAsRbHuZhooNDKcluU0BTRmYku5LWezQzInPKkiH6/z8GGyw5Ow" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist@5.2.6/index.css" integrity="sha384-p+EgvS3+MmUG4ztXXPqzFtb7IwR4h5ljta/AfLhM0vj1rtoFd3fsPDFTy2+m+W5U" crossorigin="anonymous">
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fontsource-variable/geist-mono@5.2.6/index.css" integrity="sha384-+vQW7zp7HknV1Hb+78y01bvnE+c/tci1UJL3SVVr3mh96Ff2muGpGQP/rI6QWmH7" crossorigin="anonymous">
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
-<script src="/side.js"></script>
 <script src="/live.js"></script>
 </head>
-<body data-page="settings">
-<div class="app">
-  <aside class="side">
-    <div class="side-head">
-      <a class="wordmark" href="/">Yardbell</a>
-      <span class="side-summary" id="nav-summary" aria-live="polite"></span>
-    </div>
-    <nav class="machine-nav" aria-label="Machines">
-      <p class="nav-label">Machines</p>
-      <ul id="nav-machines" class="nav-list"></ul>
-      <a class="nav-add" href="/add"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>Add machine</a>
-    </nav>
-    <div class="side-foot">
-      <p class="vpn" id="nav-vpn"></p>
-      <a class="side-link" href="/">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard
-      </a>
-      <a class="side-link" href="/workspace">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="3" width="11" height="10" rx="1.5"/><path d="M8 3v10M8 8h5.5"/></svg>Workspace
-      </a>
-      <a class="side-link" href="/pipeline">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="3.5" cy="8" r="1.5"/><circle cx="8" cy="8" r="1.5"/><circle cx="12.5" cy="8" r="1.5"/><path d="M5 8h1.5M9.5 8H11"/></svg>Pipelines
-      </a>
-      <a class="side-link" href="/diagrams">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="5.5" y="2" width="5" height="3.5" rx="1"/><rect x="1.5" y="10.5" width="5" height="3.5" rx="1"/><rect x="9.5" y="10.5" width="5" height="3.5" rx="1"/><path d="M8 5.5V8M4 10.5V8h8v2.5"/></svg>Diagrams
-      </a>
-      <a class="side-link" href="/dispatch">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h11v6h-6l-3 2.5v-2.5h-2z"/></svg>Dispatch
-      </a>
-      <a class="side-link" href="/proposals">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 9.5 4 3.5h8l1.5 6v3h-11z"/><path d="M2.5 9.5h3.5l.5 1.5h3l.5-1.5h3.5"/></svg>Proposals<span class="side-count" id="nav-proposals-count" hidden></span>
-      </a>
-      <a class="side-link" href="/settings" aria-current="page">
-        <svg class="icon" viewBox="0 0 24 24" aria-hidden="true" style="stroke-width:2.3"><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></svg>Settings
-      </a>
-      <button class="side-link theme-toggle" type="button" data-theme-toggle></button>
-      <button class="side-link" id="logout" type="button">
-        <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M6.5 3H3.5v10h3M10 5l3 3-3 3M13 8H6.5"/></svg>Log out
-      </button>
-    </div>
-  </aside>
+<body data-page="settings" data-column-mode="settings">
 
-  <main class="main">
-    <a class="back-link" href="/"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 7.5 8 3l5.5 4.5M4 6.5V13h3V9.5h2V13h3V6.5"/></svg>Dashboard</a>
-    <header class="main-head"><h1>Settings</h1></header>
 
+  <main class="shell-main shell-page settings-main" id="main">
+
+    <header class="settings-head">
+      <nav class="settings-crumbs" aria-label="Settings breadcrumb"><span>Settings</span><span aria-hidden="true">/</span><span aria-current="page" id="settings-crumb"></span></nav>
+      <a class="btn quiet icon-btn settings-close" href="/workspace" title="Close settings" aria-label="Close settings"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M18 6 6 18M6 6l12 12"/></svg></a>
+    </header>
     <div class="settings-layout">
     <nav class="settings-nav" aria-label="Settings sections">
       <p class="nav-label">Machines</p>
-      <a href="#machines">Machines</a>
-      <a href="#mesh">Mesh VPN</a>
+      <a href="#machines"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="2" y="3" width="20" height="8" rx="2"/><rect x="2" y="13" width="20" height="8" rx="2"/><path d="M6 7h.01M6 17h.01"/></svg><span>Machines</span></a>
+      <a href="#mesh"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="16" y="16" width="6" height="6" rx="1"/><rect x="2" y="16" width="6" height="6" rx="1"/><rect x="9" y="2" width="6" height="6" rx="1"/><path d="M5 16v-3a1 1 0 0 1 1-1h12a1 1 0 0 1 1 1v3M12 12V8"/></svg><span>Mesh VPN</span></a>
       <p class="nav-label">Phone</p>
-      <a href="#pair">Connect a phone</a>
-      <a href="#phone">Notifications</a>
-      <a href="#health">Health checks</a>
+      <a href="#pair"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="2" width="14" height="20" rx="2"/><path d="M12 18h.01"/></svg><span>Connect a phone</span></a>
+      <a href="#phone"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10.27 21a2 2 0 0 0 3.46 0M3.26 15.33A1 1 0 0 0 4 17h16a1 1 0 0 0 .74-1.67C19.41 13.96 18 12.5 18 8A6 6 0 0 0 6 8c0 4.5-1.41 5.96-2.74 7.33"/></svg><span>Notifications</span></a>
+      <a href="#health"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"/></svg><span>Health checks</span></a>
       <p class="nav-label">Agents</p>
-      <a href="#dispatch">Dispatch</a>
-      <a href="#voice">Voice</a>
-      <a href="#triggers">Triggers</a>
-      <a href="#diagrams">Diagrams</a>
-      <a href="#worktree-setup">Worktree setup</a>
-      <a href="#connections">Connections</a>
-      <a href="#mcp">Let agents use Yardbell</a>
+      <a href="#dispatch"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg><span>Dispatch</span></a>
+      <a href="#stats-usage"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3v16a2 2 0 0 0 2 2h16"/><path d="M8 17v-3M13 17V9M18 17v-6"/></svg><span>Stats &amp; Usage</span></a>
+      <a href="#voice"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg><span>Voice</span></a>
+      <a href="#triggers"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M4 14a1 1 0 0 1-.78-1.63l9.9-10.2a.5.5 0 0 1 .86.46l-1.92 6.02A1 1 0 0 0 13 10h7a1 1 0 0 1 .78 1.63l-9.9 10.2a.5.5 0 0 1-.86-.46l1.92-6.02A1 1 0 0 0 11 14z"/></svg><span>Triggers</span></a>
+      <a href="#diagrams"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="3" width="8" height="8" rx="2"/><path d="M7 11v4a2 2 0 0 0 2 2h4"/><rect x="13" y="13" width="8" height="8" rx="2"/></svg><span>Diagrams</span></a>
+      <a href="#worktree-setup"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M6 3v12"/><circle cx="18" cy="6" r="3"/><circle cx="6" cy="18" r="3"/><path d="M18 9a9 9 0 0 1-9 9"/></svg><span>Worktree setup</span></a>
+      <a href="#connections"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22v-5M9 8V2M15 8V2M18 8v5a4 4 0 0 1-4 4h-4a4 4 0 0 1-4-4V8Z"/></svg><span>Connections</span></a>
+      <a href="#mcp"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 8V4H8"/><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M2 14h2M20 14h2M15 13v2M9 13v2"/></svg><span>Let agents use Yardbell</span></a>
       <p class="nav-label">General</p>
-      <a href="#appearance">Appearance</a>
-      <a href="#security">Security</a>
-      <a href="#about">About</a>
+      <a href="#appearance"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 22a1 1 0 0 1 0-20 10 9 0 0 1 10 9 5 5 0 0 1-5 5h-2.25a1.75 1.75 0 0 0-1.4 2.8l.3.4a1.75 1.75 0 0 1-1.4 2.8z"/><circle cx="13.5" cy="6.5" r="1"/><circle cx="17.5" cy="10.5" r="1"/><circle cx="6.5" cy="12.5" r="1"/><circle cx="8.5" cy="7.5" r="1"/></svg><span>Appearance</span></a>
+      <a href="#power"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M10 2v2M14 2v2M16 8a1 1 0 0 1 1 1v8a4 4 0 0 1-4 4H7a4 4 0 0 1-4-4V9a1 1 0 0 1 1-1h14a4 4 0 1 1 0 8h-1"/></svg><span>Power</span></a>
+      <a href="#security"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z"/></svg><span>Security</span></a>
+      <a href="#about"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/></svg><span>About</span></a>
     </nav>
     <div class="page-body">
   <div id="undo-bar" class="banner info" hidden>
@@ -92,26 +53,46 @@
 
   <section id="appearance">
     <div class="section-head"><h2>Appearance</h2></div>
-    <div class="panel theme-choices" role="radiogroup" aria-label="Theme">
-      <label class="choice"><input type="radio" name="theme" value="system">Same as this device</label>
-      <label class="choice"><input type="radio" name="theme" value="light">Light</label>
-      <label class="choice"><input type="radio" name="theme" value="dark">Dark</label>
-      <p class="help">Saved on this device, so your phone and computer can differ.</p>
+    <div class="panel set-card">
+      <div class="set-row">
+        <div class="set-text"><span class="set-label" id="theme-title">Theme</span><span class="set-desc">Saved on this device, so your phone and computer can differ.</span></div>
+        <div class="set-seg" role="radiogroup" aria-labelledby="theme-title">
+          <label title="Same as this device"><input type="radio" name="theme" value="system">System</label>
+          <label><input type="radio" name="theme" value="light">Light</label>
+          <label><input type="radio" name="theme" value="dark">Dark</label>
+        </div>
+      </div>
+      <div class="set-row">
+        <div class="set-text"><span class="set-label" id="term-theme-title">Terminal</span><span class="set-desc">For terminals in Workspace and session tabs. Colours that an agent or tmux sets itself stay as they are, but pale text is darkened on a light terminal so it stays readable.</span></div>
+        <div class="set-seg" role="radiogroup" aria-labelledby="term-theme-title">
+          <label title="Same as the theme"><input type="radio" name="term-theme" value="app">Theme</label>
+          <label><input type="radio" name="term-theme" value="light">Light</label>
+          <label><input type="radio" name="term-theme" value="dark">Dark</label>
+        </div>
+      </div>
     </div>
-    <div class="panel theme-choices" role="radiogroup" aria-labelledby="term-theme-title">
-      <h3 id="term-theme-title">Terminal</h3>
-      <label class="choice"><input type="radio" name="term-theme" value="app">Same as the theme</label>
-      <label class="choice"><input type="radio" name="term-theme" value="light">Light</label>
-      <label class="choice"><input type="radio" name="term-theme" value="dark">Dark</label>
-      <p class="help">For terminals in Workspace and session tabs. Colours that an agent or tmux sets itself stay as they are, but pale text is darkened on a light terminal so it stays readable.</p>
+  </section>
+
+  <section id="power">
+    <div class="section-head"><h2>Power</h2></div>
+    <div class="panel set-card">
+      <div class="set-row">
+        <div class="set-text"><span class="set-label" id="awake-title">Keep computer awake</span><span class="set-desc" id="awake-desc">Stops the computer Yardbell runs on from sleeping, so sessions keep going and stay reachable from your phone.</span></div>
+        <div class="set-seg" role="radiogroup" aria-labelledby="awake-title">
+          <label><input type="radio" name="keep-awake" value="on">On</label>
+          <label title="Only while an agent is working on this computer"><input type="radio" name="keep-awake" value="agent">While agents work</label>
+          <label><input type="radio" name="keep-awake" value="off">Off</label>
+        </div>
+      </div>
     </div>
   </section>
 
   <section id="mesh">
     <div class="section-head"><h2>Mesh VPN</h2><span class="machine-status-inline" id="mesh-current"></span></div>
-    <div class="panel">
-      <div class="inline-form">
-        <label>Provider
+    <div class="panel set-card">
+      <div class="set-row">
+        <div class="set-text"><label class="set-label" for="provider">Provider</label><span class="set-desc">Switching VPN changes every machine's address. Yardbell looks each machine up in the new VPN's peer list so you can confirm the new addresses before anything is saved.</span></div>
+        <div class="set-control">
           <select id="provider">
             <option value="nordvpn">NordVPN Meshnet</option>
             <option value="tailscale">Tailscale</option>
@@ -120,11 +101,10 @@
             <option value="zerotier">ZeroTier</option>
             <option value="none">None (plain network)</option>
           </select>
-        </label>
-        <button class="btn" type="button" id="preview-btn">Check addresses</button>
+          <button class="btn" type="button" id="preview-btn">Check addresses</button>
+        </div>
       </div>
-      <p class="help">Switching VPN changes every machine's address. Yardbell looks each machine up in the new VPN's peer list so you can confirm the new addresses before anything is saved.</p>
-      <div id="mapping" hidden>
+      <div class="set-block" id="mapping" hidden>
         <p class="help" id="mapping-note"></p>
         <div class="table-wrap">
           <table class="map-table">
@@ -147,11 +127,14 @@
 
   <section id="pair">
     <div class="section-head"><h2>Connect a phone</h2></div>
-    <div class="panel pair-panel">
-      <div class="pair-text">
-        <p>Open the Yardbell app on your Android phone, tap <strong>Scan a pairing code</strong> and point it at the code. The phone signs in without the passcode. It must be on the same mesh VPN as this server.</p>
-        <p class="help">Each code works once, for five minutes. Get the app from the <a href="https://github.com/hbasheer/yardbell/releases/latest" target="_blank" rel="noopener">latest release</a>.</p>
-        <p class="help" id="pair-status" role="status"></p>
+    <div class="panel set-card pair-panel">
+      <div class="set-row">
+        <div class="set-text pair-text">
+          <span class="set-label">Pair the Android app</span>
+          <span class="set-desc">Open the Yardbell app on your Android phone, tap <strong>Scan a pairing code</strong> and point it at the code. The phone signs in without the passcode. It must be on the same mesh VPN as this server.</span>
+          <span class="set-desc">Each code works once, for five minutes. Get the app from the <a href="https://github.com/hbasheer/yardbell/releases/latest" target="_blank" rel="noopener">latest release</a>.</span>
+          <span class="set-desc" id="pair-status" role="status"></span>
+        </div>
         <button class="btn primary" type="button" id="pair-show">Show pairing code</button>
       </div>
       <div class="pair-code" id="pair-code" hidden></div>
@@ -161,28 +144,31 @@
   <section id="phone">
     <div class="section-head"><h2>Phone notifications</h2></div>
     <p class="help phone-app">The Yardbell app for Android shows these while it is signed in to this server. Nothing else to install.</p>
-    <form class="panel" id="phone-form">
-      <div class="phone-switches">
-        <div class="phone-switch">
-          <label class="choice"><input type="checkbox" name="agent_waiting">Agent waiting</label>
-          <label class="choice phone-wait">after <input type="number" name="wait_minutes" min="0" max="60" step="1" inputmode="numeric" required> minutes</label>
+    <form class="set-form" id="phone-form">
+      <div class="panel set-card">
+        <div class="set-row">
+          <label class="set-text" for="phone-agent-waiting"><span class="set-label">Agent waiting</span></label>
+          <div class="set-control">
+            <label class="set-inline">after <input type="number" name="wait_minutes" min="0" max="60" step="1" inputmode="numeric" required> minutes</label>
+            <input type="checkbox" class="switch" name="agent_waiting" id="phone-agent-waiting">
+          </div>
         </div>
-        <label class="choice"><input type="checkbox" name="session_ended">Session ended</label>
-        <label class="choice"><input type="checkbox" name="limit_reset">Usage limit reset</label>
-        <label class="choice"><input type="checkbox" name="machines">Machine down or back</label>
-        <label class="choice"><input type="checkbox" name="memory">Memory at 95%</label>
-        <label class="choice"><input type="checkbox" name="pipeline_waiting">Pipeline needs you</label>
-        <label class="choice"><input type="checkbox" name="pipeline_finished">Pipeline finished</label>
-        <label class="choice"><input type="checkbox" name="proposals">Proposals from MCP clients</label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Session ended</span></span><input type="checkbox" class="switch" name="session_ended"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Usage limit reset</span></span><input type="checkbox" class="switch" name="limit_reset"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Machine down or back</span></span><input type="checkbox" class="switch" name="machines"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Memory at 95%</span></span><input type="checkbox" class="switch" name="memory"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Pipeline needs you</span></span><input type="checkbox" class="switch" name="pipeline_waiting"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Pipeline finished</span></span><input type="checkbox" class="switch" name="pipeline_finished"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Proposals from MCP clients</span></span><input type="checkbox" class="switch" name="proposals"></label>
       </div>
-      <fieldset class="phone-switches phone-pulls">
-        <legend>Pull and merge requests of your sessions</legend>
-        <label class="choice"><input type="checkbox" name="pull_ci_failed">CI failed</label>
-        <label class="choice"><input type="checkbox" name="pull_conflicts">Merge conflicts</label>
-        <label class="choice"><input type="checkbox" name="pull_ready">Ready to merge</label>
-        <label class="choice"><input type="checkbox" name="pull_merged">Merged</label>
-        <label class="choice"><input type="checkbox" name="pull_closed">Closed without merging</label>
-      </fieldset>
+      <h3 class="set-group-title">Pull and merge requests of your sessions</h3>
+      <div class="panel set-card">
+        <label class="set-row"><span class="set-text"><span class="set-label">CI failed</span></span><input type="checkbox" class="switch" name="pull_ci_failed"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Merge conflicts</span></span><input type="checkbox" class="switch" name="pull_conflicts"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Ready to merge</span></span><input type="checkbox" class="switch" name="pull_ready"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Merged</span></span><input type="checkbox" class="switch" name="pull_merged"></label>
+        <label class="set-row"><span class="set-text"><span class="set-label">Closed without merging</span></span><input type="checkbox" class="switch" name="pull_closed"></label>
+      </div>
       <div class="form-foot">
         <p class="help" id="phone-status" role="status"></p>
         <button class="btn primary" type="submit">Save</button>
@@ -199,31 +185,31 @@
   <section id="health">
     <div class="section-head"><h2>Health checks</h2></div>
     <p class="help phone-app">Plain checks on what Yardbell already reads, to tell you when automation is quietly stuck. They use no tokens, start nothing and change nothing. A problem shows on the dashboard and notifies your phone once, and again only after it clears and comes back.</p>
-    <form class="panel" id="health-form">
-      <div class="phone-switches">
-        <div class="phone-switch">
-          <label class="choice"><input type="checkbox" name="run_queued">A run stays queued</label>
-          <label class="choice phone-wait">for <input type="number" name="run_queued_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+    <form class="set-form" id="health-form">
+      <div class="panel set-card">
+        <div class="set-row">
+          <label class="set-text" for="health-run-queued"><span class="set-label">A run stays queued</span></label>
+          <div class="set-control"><label class="set-inline">for <input type="number" name="run_queued_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label><input type="checkbox" class="switch" name="run_queued" id="health-run-queued"></div>
         </div>
-        <div class="phone-switch">
-          <label class="choice"><input type="checkbox" name="run_waiting">A run stays waiting for you</label>
-          <label class="choice phone-wait">for <input type="number" name="run_waiting_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        <div class="set-row">
+          <label class="set-text" for="health-run-waiting"><span class="set-label">A run stays waiting for you</span></label>
+          <div class="set-control"><label class="set-inline">for <input type="number" name="run_waiting_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label><input type="checkbox" class="switch" name="run_waiting" id="health-run-waiting"></div>
         </div>
-        <div class="phone-switch">
-          <label class="choice"><input type="checkbox" name="step_quiet">A step near its limit has an unchanged screen</label>
-          <label class="choice phone-wait">for <input type="number" name="step_quiet_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        <div class="set-row">
+          <label class="set-text" for="health-step-quiet"><span class="set-label">A step near its limit has an unchanged screen</span></label>
+          <div class="set-control"><label class="set-inline">for <input type="number" name="step_quiet_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label><input type="checkbox" class="switch" name="step_quiet" id="health-step-quiet"></div>
         </div>
-        <div class="phone-switch">
-          <label class="choice"><input type="checkbox" name="ci_pending">CI stays pending on a pull or merge request</label>
-          <label class="choice phone-wait">for <input type="number" name="ci_pending_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        <div class="set-row">
+          <label class="set-text" for="health-ci-pending"><span class="set-label">CI stays pending on a pull or merge request</span></label>
+          <div class="set-control"><label class="set-inline">for <input type="number" name="ci_pending_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label><input type="checkbox" class="switch" name="ci_pending" id="health-ci-pending"></div>
         </div>
-        <div class="phone-switch">
-          <label class="choice"><input type="checkbox" name="trigger_failing">A trigger keeps failing</label>
-          <label class="choice phone-wait">for <input type="number" name="trigger_failing_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        <div class="set-row">
+          <label class="set-text" for="health-trigger-failing"><span class="set-label">A trigger keeps failing</span></label>
+          <div class="set-control"><label class="set-inline">for <input type="number" name="trigger_failing_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label><input type="checkbox" class="switch" name="trigger_failing" id="health-trigger-failing"></div>
         </div>
-        <div class="phone-switch">
-          <label class="choice"><input type="checkbox" name="memory_short">A machine stays at 90% memory or more</label>
-          <label class="choice phone-wait">for <input type="number" name="memory_short_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label>
+        <div class="set-row">
+          <label class="set-text" for="health-memory-short"><span class="set-label">A machine stays at 90% memory or more</span></label>
+          <div class="set-control"><label class="set-inline">for <input type="number" name="memory_short_minutes" min="5" max="10080" step="1" inputmode="numeric" required> minutes</label><input type="checkbox" class="switch" name="memory_short" id="health-memory-short"></div>
         </div>
       </div>
       <div class="form-foot">
@@ -235,46 +221,52 @@
 
   <section id="dispatch">
     <div class="section-head"><h2>Dispatch</h2><a class="btn small-link" href="/dispatch">Open Dispatch</a></div>
-    <form class="panel" id="dispatch-form">
-      <label>Instructions
-        <textarea name="instructions" rows="5" maxlength="4000" placeholder="acme/web work goes to devbox unless it is down.&#10;Start frontend tasks with codex.&#10;Always create a branch named after the ticket, like eng-1234-short-name."></textarea>
-      </label>
-      <p class="help dispatch-help">Added to Dispatch's prompt for every conversation and followed before its own defaults. Use it for where your repositories live, which machine suits which work, branch naming, and anything you find yourself repeating.</p>
-      <div class="grid2">
-        <label>Dispatch runs on
-          <select name="runs_on"></select>
-        </label>
-        <label data-runs-on="claude">Model
-          <select name="model">
+    <form class="set-form" id="dispatch-form">
+      <div class="panel set-card">
+        <div class="set-row set-stack">
+          <div class="set-text"><label class="set-label" for="dispatch-instructions">Instructions</label><span class="set-desc">Added to Dispatch's prompt for every conversation and followed before its own defaults. Use it for where your repositories live, which machine suits which work, branch naming, and anything you find yourself repeating.</span></div>
+          <textarea name="instructions" id="dispatch-instructions" rows="5" maxlength="4000" placeholder="acme/web work goes to devbox unless it is down.&#10;Start frontend tasks with codex.&#10;Always create a branch named after the ticket, like eng-1234-short-name."></textarea>
+        </div>
+      </div>
+      <h3 class="set-group-title">Agent</h3>
+      <div class="panel set-card">
+        <div class="set-row">
+          <div class="set-text"><label class="set-label" for="dispatch-runs-on">Dispatch runs on</label><span class="set-desc" id="runs-on-help">The agent that reads your messages and proposes steps, with only Yardbell's tools, and the model it runs. Each agent keeps its own model. Your approval setting and rules work the same on both. A conversation stays on the agent it started on, so a new agent applies to new conversations, while a new model applies from the next message.</span></div>
+          <select name="runs_on" id="dispatch-runs-on"></select>
+        </div>
+        <div class="set-row" data-runs-on="claude">
+          <label class="set-text" for="dispatch-model"><span class="set-label">Model</span></label>
+          <select name="model" id="dispatch-model">
             <option value="">Claude Code's default</option>
             <option value="sonnet">Sonnet</option>
             <option value="opus">Opus</option>
             <option value="haiku">Haiku (fastest)</option>
           </select>
-        </label>
-        <label data-runs-on="codex" hidden>Model
-          <input type="text" name="codex_model" list="codex-models" maxlength="64" placeholder="Codex's default" autocomplete="off" autocapitalize="off" spellcheck="false">
+        </div>
+        <div class="set-row" data-runs-on="codex" hidden>
+          <label class="set-text" for="dispatch-codex-model"><span class="set-label">Model</span></label>
+          <input type="text" name="codex_model" id="dispatch-codex-model" list="codex-models" maxlength="64" placeholder="Codex's default" autocomplete="off" autocapitalize="off" spellcheck="false">
           <datalist id="codex-models"></datalist>
-        </label>
+        </div>
+        <p class="set-note warn-note" id="codex-model-note" role="status" hidden></p>
+        <div class="set-row">
+          <label class="set-text" for="dispatch-agent"><span class="set-label">Agent for new sessions</span></label>
+          <select name="agent" id="dispatch-agent"></select>
+        </div>
+        <div class="set-row">
+          <div class="set-text"><label class="set-label" for="dispatch-approval">Before Dispatch starts, stops or types into a session</label><span class="set-desc">Each step shows up in the conversation as a card. When Dispatch asks, you can approve it, edit it first or reject it, and nothing runs until you approve. A change to Dispatch's memory always asks, even when this is set to go ahead, unless a rule for it says otherwise.</span></div>
+          <select name="approval" id="dispatch-approval">
+            <option value="prompt">Ask me to approve each step</option>
+            <option value="allow">Go ahead without asking</option>
+            <option value="deny">Refuse, unless a rule allows it</option>
+          </select>
+        </div>
       </div>
-      <p class="help dispatch-help" id="runs-on-help">The agent that reads your messages and proposes steps, with only Yardbell's tools, and the model it runs. Each agent keeps its own model. Your approval setting and rules work the same on both. A conversation stays on the agent it started on, so a new agent applies to new conversations, while a new model applies from the next message.</p>
-      <p class="help dispatch-help warn-note" id="codex-model-note" role="status" hidden></p>
-      <label>Agent for new sessions
-        <select name="agent"></select>
-      </label>
-      <label>Before Dispatch starts, stops or types into a session
-        <select name="approval">
-          <option value="prompt">Ask me to approve each step</option>
-          <option value="allow">Go ahead without asking</option>
-          <option value="deny">Refuse, unless a rule allows it</option>
-        </select>
-      </label>
-      <p class="help dispatch-help">Each step shows up in the conversation as a card. When Dispatch asks, you can approve it, edit it first or reject it, and nothing runs until you approve. A change to Dispatch's memory always asks, even when this is set to go ahead, unless a rule for it says otherwise.</p>
-      <div class="rules-head">
-        <h3>Rules</h3>
+      <div class="set-group-head rules-head">
+        <h3 class="set-group-title">Rules</h3>
         <button class="btn" type="button" id="rule-add">Add rule</button>
       </div>
-      <p class="help dispatch-help">A rule decides the steps it matches instead of the setting above. Deny always wins. Otherwise the rule that names the most of step, machine and folder wins, so their order does not matter. A folder is a name from the folder list, like acme/web, or a path, and covers the folders inside it. Use * for any part of a name.</p>
+      <p class="help set-group-desc">A rule decides the steps it matches instead of the setting above. Deny always wins. Otherwise the rule that names the most of step, machine and folder wins, so their order does not matter. A folder is a name from the folder list, like acme/web, or a path, and covers the folders inside it. Use * for any part of a name.</p>
       <ul class="rows rule-rows" id="rule-rows"></ul>
       <div class="form-foot">
         <p class="help" id="dispatch-foot">Dispatch runs Claude Code on this machine. The agent it starts can be any of yours.</p>
@@ -304,42 +296,171 @@
     </details>
   </section>
 
+  <section id="stats-usage">
+    <div class="section-head"><h2>Stats &amp; Usage</h2><button class="btn small-link" type="button" id="stats-refresh">Read again</button></div>
+    <p class="help">Tokens, sessions and models from the Claude Code and Codex transcripts on the computer Yardbell runs on. They are read where they are and nothing is sent anywhere.</p>
+    <div class="stats-bar">
+      <div class="stats-tabs" role="tablist" aria-label="Agent">
+        <button type="button" role="tab" data-stats-tab="all" aria-selected="true">Overview</button>
+        <button type="button" role="tab" data-stats-tab="claude" aria-selected="false">Claude</button>
+        <button type="button" role="tab" data-stats-tab="codex" aria-selected="false">Codex</button>
+      </div>
+      <div class="stats-range" role="group" aria-label="Period">
+        <button type="button" data-stats-days="7" aria-pressed="false">7 days</button>
+        <button type="button" data-stats-days="30" aria-pressed="true">30 days</button>
+        <button type="button" data-stats-days="90" aria-pressed="false">90 days</button>
+      </div>
+    </div>
+    <div class="stats-body" id="stats-body" role="tabpanel" aria-live="polite"><p class="help">Reading transcripts…</p></div>
+  </section>
+
   <section id="voice">
     <div class="section-head"><h2>Voice</h2></div>
-    <form class="panel" id="voice-form">
-      <label>Voice input
-        <select name="input">
-          <option value="off">Off</option>
-          <option value="local">Local Whisper (whisper.cpp on this machine)</option>
-          <option value="api">An OpenAI-compatible speech-to-text API</option>
-        </select>
-      </label>
-      <p class="help dispatch-help">A microphone button in Dispatch's message box records what you say and types it out, so you can dictate a task instead of typing it. With Local Whisper the recording never leaves this machine; with an API it is sent to that service.</p>
-      <div data-input="local" hidden>
-        <div class="grid2">
-          <label>Whisper command <input type="text" name="whisper_command" placeholder="whisper-cli" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-          <label>Model <input type="text" name="whisper_model" placeholder="small" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+    <p class="help voice-lede">Talk instead of typing in Dispatch's message box. Speech is recognized on this machine with whisper.cpp unless you pick a cloud API.</p>
+    <form class="set-form" id="voice-form">
+      <div class="panel voice-pane">
+        <div class="voice-setup" id="voice-setup-card" hidden>
+          <span class="voice-setup-icon" aria-hidden="true"><svg class="icon" viewBox="0 0 24 24"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2M12 19v3"/></svg></span>
+          <div class="voice-setup-body">
+            <h3 class="voice-setup-title">Set up dictation</h3>
+            <p class="voice-setup-desc">Talk instead of typing. Speech is recognized on this machine, so your audio stays here.</p>
+            <div class="voice-setup-model" id="voice-setup-model"></div>
+            <div class="voice-setup-foot">
+              <button class="btn voice-setup-btn" type="button" id="voice-setup-btn"><svg class="icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 15V3M7 10l5 5 5-5M5 21h14"/></svg><span>Set up</span></button>
+              <span class="voice-setup-note" id="voice-setup-note" role="status"></span>
+            </div>
+          </div>
         </div>
-        <p class="help dispatch-help">Needs <code>ffmpeg</code> and <a href="https://github.com/ggml-org/whisper.cpp" target="_blank" rel="noopener">whisper.cpp</a> on this machine. The model is a name like <code>base</code> (quick), <code>small</code> or <code>medium</code> (hears more through accents), downloaded automatically on the first dictation, or the path to a ggml file of your own.</p>
-      </div>
-      <div data-input="api" hidden>
-        <div class="grid2">
-          <label>API address <input type="text" name="api_url" placeholder="https://api.openai.com/v1/audio/transcriptions" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-          <label>Model <input type="text" name="api_model" placeholder="whisper-1" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
+
+        <div class="voice-group">
+          <div class="set-row">
+            <div class="set-text"><label class="set-label" for="voice-input">Dictation</label><span class="set-desc" id="voice-state"></span></div>
+            <select name="input" id="voice-input">
+              <option value="off">Off</option>
+              <option value="local">On this machine (whisper.cpp)</option>
+              <option value="api">Cloud API (OpenAI-compatible)</option>
+            </select>
+          </div>
         </div>
-        <label>API key <input type="text" name="api_key" placeholder="${secret:openai}" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
-        <p class="help dispatch-help">Save the key once under Connections, Secrets, and name it here as <code>${secret:name}</code>. The key itself never goes into <code>yardbell.yml</code>.</p>
+
+        <div class="voice-group">
+          <div class="set-text voice-group-head"><h3 class="set-group-title">Speech model</h3><span class="set-desc">Quality is rated for English. Models download into <code id="voice-models-dir">the models folder</code>.</span></div>
+          <div class="voice-models" id="voice-models" role="list" aria-label="Speech models"></div>
+          <div class="set-row voice-cloud-row">
+            <div class="set-text"><span class="set-label">Use a cloud API instead</span><span class="set-desc">Send recordings to OpenAI or another OpenAI-compatible speech-to-text service instead of running a model here.</span></div>
+            <button class="btn" type="button" id="voice-use-api">Use a cloud API</button>
+          </div>
+          <div class="set-rows" data-input="api" hidden>
+            <div class="set-row">
+              <label class="set-text" for="voice-api-url"><span class="set-label">API address</span></label>
+              <input type="text" name="api_url" id="voice-api-url" placeholder="https://api.openai.com/v1/audio/transcriptions" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="set-row">
+              <label class="set-text" for="voice-api-model"><span class="set-label">Model</span></label>
+              <input type="text" name="api_model" id="voice-api-model" placeholder="whisper-1" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="set-row">
+              <div class="set-text"><label class="set-label" for="voice-api-key">API key</label><span class="set-desc">Save the key once under Connections, Secrets, and name it here as <code>${secret:name}</code>. The key itself never goes into <code>yardbell.yml</code>.</span></div>
+              <input type="text" name="api_key" id="voice-api-key" placeholder="${secret:openai}" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+          </div>
+        </div>
+
+        <div class="voice-group">
+          <h3 class="set-group-title">Language</h3>
+          <div class="set-row">
+            <div class="set-text"><label class="set-label" for="voice-language">Dictation language</label><span class="set-desc">The language you speak. Auto-detect lets the model work it out each time. Models marked English only always hear English.</span></div>
+            <select name="language" id="voice-language">
+              <option value="">English</option>
+              <option value="auto">Auto-detect</option>
+              <option value="ar">Arabic</option>
+              <option value="zh">Chinese</option>
+              <option value="nl">Dutch</option>
+              <option value="fi">Finnish</option>
+              <option value="fr">French</option>
+              <option value="de">German</option>
+              <option value="hi">Hindi</option>
+              <option value="it">Italian</option>
+              <option value="ja">Japanese</option>
+              <option value="ko">Korean</option>
+              <option value="pl">Polish</option>
+              <option value="pt">Portuguese</option>
+              <option value="ru">Russian</option>
+              <option value="es">Spanish</option>
+              <option value="sv">Swedish</option>
+              <option value="tr">Turkish</option>
+              <option value="uk">Ukrainian</option>
+            </select>
+          </div>
+        </div>
+
+        <div class="voice-group">
+          <h3 class="set-group-title">Vocabulary</h3>
+          <div class="set-row set-stack">
+            <div class="set-text"><label class="set-label" for="voice-vocabulary">Words to spell your way</label><span class="set-desc">Names and code terms the model keeps getting wrong, separated by commas. The model reads them before each recording.</span></div>
+            <textarea name="vocabulary" id="voice-vocabulary" rows="2" maxlength="800" placeholder="Yardbell, Dispatch, whisper.cpp" autocapitalize="off" spellcheck="false"></textarea>
+          </div>
+        </div>
+
+        <div class="voice-group">
+          <h3 class="set-group-title">Cleanup</h3>
+          <label class="set-row" for="voice-fillers">
+            <span class="set-text"><span class="set-label">Remove filler words</span><span class="set-desc">Drops sounds like "um" and "uh" from dictated text, and "like" where it only fills a pause.</span></span>
+            <input type="checkbox" class="switch" name="remove_fillers" id="voice-fillers">
+          </label>
+        </div>
+
+        <div class="voice-group">
+          <h3 class="set-group-title">Input</h3>
+          <div class="set-rows">
+            <div class="set-row">
+              <div class="set-text"><span class="set-label">Shortcut</span><span class="set-desc">Starts dictation in Dispatch's message box.</span></div>
+              <span class="voice-keys" role="img" aria-label="Control Shift Space"><kbd>Ctrl</kbd><kbd>Shift</kbd><kbd>Space</kbd></span>
+            </div>
+            <div class="set-row">
+              <div class="set-text"><span class="set-label" id="voice-mode-title">Dictation mode</span><span class="set-desc" id="voice-mode-desc"></span></div>
+              <div class="set-seg" role="radiogroup" aria-labelledby="voice-mode-title" id="voice-mode">
+                <label><input type="radio" name="mode" value="auto">Auto</label>
+                <label><input type="radio" name="mode" value="hold">Hold</label>
+                <label><input type="radio" name="mode" value="toggle">Toggle</label>
+              </div>
+            </div>
+            <div class="set-row">
+              <div class="set-text"><label class="set-label" for="voice-mic">Microphone</label><span class="set-desc" id="voice-mic-desc">The input device for dictation, kept on this device. System default follows the system's own setting.</span></div>
+              <div class="set-control">
+                <button class="btn quiet" type="button" id="voice-mic-names" hidden>Show names</button>
+                <select id="voice-mic"><option value="">System default</option></select>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="voice-group" data-input="local" hidden>
+          <h3 class="set-group-title">Advanced</h3>
+          <div class="set-rows">
+            <div class="set-row">
+              <div class="set-text"><label class="set-label" for="voice-whisper-command">Whisper command</label><span class="set-desc">The whisper.cpp program. Set up fills this in when it finds whisper.cpp.</span></div>
+              <input type="text" name="whisper_command" id="voice-whisper-command" placeholder="whisper-cli" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+            <div class="set-row">
+              <div class="set-text"><label class="set-label" for="voice-whisper-model">Model</label><span class="set-desc">A model name from the list above, or the path to a ggml file of your own. Needs <code>ffmpeg</code> on this machine.</span></div>
+              <input type="text" name="whisper_model" id="voice-whisper-model" placeholder="small" autocomplete="off" autocapitalize="off" spellcheck="false">
+            </div>
+          </div>
+        </div>
       </div>
-      <label data-input="local api" hidden>Language <input type="text" name="language" placeholder="found from the recording" maxlength="8" autocomplete="off" autocapitalize="off" spellcheck="false"></label>
       <div class="form-foot">
         <p class="help" id="voice-status" role="status"></p>
         <button class="btn" type="button" id="voice-check" hidden>Test</button>
         <button class="btn primary" type="submit">Save</button>
       </div>
     </form>
-    <div class="panel">
-      <label class="choice"><input type="checkbox" class="switch" id="speak-enable">Read Dispatch's replies and session changes aloud</label>
-      <p class="help" id="speak-help">Spoken by this device's own voice, so nothing is sent anywhere, and saved on this device. The speaker button on the Dispatch page is the same switch and mutes it at once.</p>
+    <h3 class="set-group-title">Spoken replies</h3>
+    <div class="panel set-card">
+      <div class="set-row">
+        <label class="set-text" for="speak-enable"><span class="set-label">Read Dispatch's replies and session changes aloud</span><span class="set-desc" id="speak-help">Spoken by this device's own voice, so nothing is sent anywhere, and saved on this device. The speaker button on the Dispatch page is the same switch and mutes it at once.</span></label>
+        <input type="checkbox" class="switch" id="speak-enable">
+      </div>
     </div>
   </section>
 
@@ -347,7 +468,7 @@
     <div class="section-head"><h2>Triggers</h2><button class="btn small-link" type="button" id="trigger-add">Add trigger</button></div>
     <p class="help">A trigger starts a Dispatch conversation from one of your tasks, on a schedule or when a ticket comes your way. Its steps follow your Dispatch rules like any other conversation. Times are in <strong id="trigger-zone">this server's time zone</strong>, the time zone of the machine Yardbell runs on.</p>
     <ul class="rows trigger-rows" id="trigger-rows" hidden></ul>
-    <p class="help" id="triggers-empty">No triggers yet.</p>
+    <p class="help set-empty" id="triggers-empty">No triggers yet.</p>
     <form class="panel" id="trigger-form" hidden>
       <div class="grid2">
         <label>Name<input type="text" name="name" maxlength="60" placeholder="Morning summary" autocomplete="off" required></label>
@@ -399,9 +520,9 @@
 
   <section id="worktree-setup">
     <div class="section-head"><h2>Worktree setup</h2><button class="btn small-link" type="button" id="setup-add">Add command</button></div>
-    <form class="panel" id="setup-form">
-      <p class="help dispatch-help">A command that runs in each new worktree Yardbell creates for a repository, before the agent starts, such as <code>bin/setup</code>, <code>npm ci</code> or <code>cp "$YARDBELL_MAIN_CHECKOUT/.env" .</code>. The folder is the repository's main checkout, as in the folder list or as a path, and <code>*</code> matches any part of a name. If the command fails or runs past its timeout, the agent starts anyway, the session shows the output, and the agent is told.</p>
-      <p class="help dispatch-help">Only commands saved here run. A repository's own script runs only when you name it here, like <code>.yardbell/setup</code>, because that script comes from whatever branch is checked out.</p>
+    <form class="set-form" id="setup-form">
+      <p class="help set-group-desc">A command that runs in each new worktree Yardbell creates for a repository, before the agent starts, such as <code>bin/setup</code>, <code>npm ci</code> or <code>cp "$YARDBELL_MAIN_CHECKOUT/.env" .</code>. The folder is the repository's main checkout, as in the folder list or as a path, and <code>*</code> matches any part of a name. If the command fails or runs past its timeout, the agent starts anyway, the session shows the output, and the agent is told.</p>
+      <p class="help set-group-desc">Only commands saved here run. A repository's own script runs only when you name it here, like <code>.yardbell/setup</code>, because that script comes from whatever branch is checked out.</p>
       <ul class="rows setup-rows" id="setup-rows"></ul>
       <div class="form-foot">
         <p class="help">The command runs through your login shell in the new worktree, with the main checkout's path in <code>$YARDBELL_MAIN_CHECKOUT</code>.</p>
@@ -409,6 +530,7 @@
       </div>
     </form>
   </section>
+
 
   <datalist id="conn-reply-fields">
     <option value="item_id"><option value="id"><option value="name"><option value="title"><option value="url"><option value="description"><option value="state"><option value="closed">
@@ -637,38 +759,57 @@
     </dialog>
   </section>
 
+
   <section id="mcp">
     <div class="section-head"><h2>Let agents use Yardbell</h2><button class="btn quiet danger small-link" type="button" id="mcp-turn-off" hidden>Turn off</button></div>
-    <div class="panel phone-intro" id="mcp-intro" hidden>
-      <p>Let AI agents see your machines and sessions, and start, read and answer sessions, through an MCP server built into Yardbell.</p>
-      <button class="btn primary" type="button" id="mcp-on">Turn on</button>
+    <div class="panel set-card phone-intro" id="mcp-intro" hidden>
+      <div class="set-row">
+        <div class="set-text"><span class="set-label">Yardbell's MCP server</span><span class="set-desc">Let AI agents see your machines and sessions, and start, read and answer sessions, through an MCP server built into Yardbell.</span></div>
+        <button class="btn primary" type="button" id="mcp-on">Turn on</button>
+      </div>
     </div>
-    <div class="panel mcp-on" id="mcp-panel" hidden>
-      <p>Add Yardbell to Claude Code on any machine on the mesh. Run this command, then paste the token when it asks for it:</p>
-      <p class="phone-field"><code id="mcp-command"></code><button class="btn" type="button" id="mcp-copy">Copy</button></p>
-      <p class="phone-field"><code id="mcp-token"></code><button class="btn" type="button" id="mcp-token-copy">Copy token</button></p>
-      <p class="help">The token is read without showing it, so it stays out of your shell history and off the command you type. Claude Code keeps it in its own config, <code>~/.claude.json</code>. The token lets an agent start and type into sessions on every machine. Keep it secret. Make a new one if it leaks: the old one stops working at once. Changes they ask for wait on the <a href="/proposals">Proposals</a> page.</p>
-      <button class="btn" type="button" id="mcp-rotate">Make a new token</button>
+    <div class="panel set-card mcp-on" id="mcp-panel" hidden>
+      <div class="set-row set-stack">
+        <div class="set-text"><span class="set-label">Add Yardbell to Claude Code</span><span class="set-desc">On any machine on the mesh. Run this command, then paste the token when it asks for it.</span></div>
+        <p class="phone-field"><code id="mcp-command"></code><button class="btn" type="button" id="mcp-copy">Copy</button></p>
+        <p class="phone-field"><code id="mcp-token"></code><button class="btn" type="button" id="mcp-token-copy">Copy token</button></p>
+      </div>
+      <div class="set-row">
+        <div class="set-text"><span class="set-label">Token</span><span class="set-desc">The token is read without showing it, so it stays out of your shell history and off the command you type. Claude Code keeps it in its own config, <code>~/.claude.json</code>. The token lets an agent start and type into sessions on every machine. Keep it secret. Make a new one if it leaks: the old one stops working at once. Changes they ask for wait on the <a href="/proposals">Proposals</a> page.</span></div>
+        <button class="btn" type="button" id="mcp-rotate">Make a new token</button>
+      </div>
     </div>
   </section>
 
 
   <section id="security">
     <div class="section-head"><h2>Security</h2></div>
-    <form class="panel" id="pass-form">
-      <div class="grid3">
-        <label>Current passcode <input type="password" name="current" autocomplete="current-password" required></label>
-        <label>New passcode <input type="password" name="new" autocomplete="new-password" minlength="6" required></label>
-        <label>Repeat new passcode <input type="password" name="repeat" autocomplete="new-password" minlength="6" required></label>
+    <form class="set-form" id="pass-form">
+      <div class="panel set-card">
+        <div class="set-row">
+          <label class="set-text" for="pass-current"><span class="set-label">Current passcode</span></label>
+          <input type="password" name="current" id="pass-current" autocomplete="current-password" required>
+        </div>
+        <div class="set-row">
+          <div class="set-text"><label class="set-label" for="pass-new">New passcode</label><span class="set-desc">At least 6 characters.</span></div>
+          <input type="password" name="new" id="pass-new" autocomplete="new-password" minlength="6" required>
+        </div>
+        <div class="set-row">
+          <label class="set-text" for="pass-repeat"><span class="set-label">Repeat new passcode</span></label>
+          <input type="password" name="repeat" id="pass-repeat" autocomplete="new-password" minlength="6" required>
+        </div>
       </div>
       <div class="form-foot">
-        <p class="help">At least 6 characters. Other devices stay logged in until you log them out below.</p>
+        <p class="help">Other devices stay logged in until you log them out below.</p>
         <button class="btn primary" type="submit">Change passcode</button>
       </div>
     </form>
-    <div class="panel danger-zone">
-      <div class="banner-text"><strong>Log out everywhere</strong><span>Signs out every phone and browser, except this one.</span></div>
-      <button class="btn danger-solid" type="button" id="logout-all">Log out everywhere</button>
+    <h3 class="set-group-title">Devices</h3>
+    <div class="panel set-card danger-zone">
+      <div class="set-row">
+        <div class="set-text banner-text"><strong class="set-label">Log out everywhere</strong><span class="set-desc">Signs out every phone and browser, except this one.</span></div>
+        <button class="btn danger-solid" type="button" id="logout-all">Log out everywhere</button>
+      </div>
     </div>
   </section>
 
@@ -677,7 +818,7 @@
     <div class="banner warn" id="about-mismatch" hidden>
       <div class="banner-text"><strong id="about-mismatch-title"></strong><span id="about-mismatch-text"></span></div>
     </div>
-    <div class="panel about">
+    <div class="panel set-card about">
       <div class="about-head">
         <p class="about-version">Yardbell <span id="about-version"></span></p>
         <p class="about-update" id="about-update" role="status"></p>
@@ -690,9 +831,13 @@
     </div>
     </div>
   </main>
-</div>
 <div id="toast" role="status"></div>
-<script src="/nav.js"></script>
+<script src="/machines.js"></script>
+<script src="/shell.js"></script>
+<script src="/strip.js"></script>
+<script src="/usage.js"></script>
+<script src="/palette.js"></script>
 <script src="/settings.js"></script>
+<script src="/stats.js"></script>
 </body>
 </html>

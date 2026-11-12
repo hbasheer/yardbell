@@ -12,7 +12,8 @@
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
 <style>
-  html, body { height: 100%; }
+  /* xterm measures glyphs in a 50000px wide box; left visible, it adds a scrollbar under the terminal. */
+  html, body { height: 100%; overflow: hidden; }
   body { display: flex; flex-direction: column; background: var(--term-bg); color: var(--term-ink); color-scheme: light dark; }
   .bar { display: flex; align-items: center; gap: 12px; padding: 8px 12px; padding-top: max(8px, env(safe-area-inset-top)); background: var(--term-bar); border-bottom: 1px solid var(--term-line); font-size: 14px; }
   .bar .btn { background: transparent; color: var(--term-ink); border-color: var(--term-edge); }

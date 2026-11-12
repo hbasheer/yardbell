@@ -75,6 +75,7 @@ pub struct AppState {
     pub settings: Arc<Settings>,
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
+    pub usage: Arc<crate::usage::Usage>,
     pub triggers: Arc<crate::triggers::Triggers>,
     pub insights: Arc<crate::insights::Insights>,
     pub pipelines: Arc<crate::pipeline::Pipelines>,
@@ -86,6 +87,7 @@ pub struct AppState {
     pub viewers: Viewers,
     pub worktrees: crate::worktrees::Worktrees,
     pub pulls: Arc<crate::pulls::Pulls>,
+    pub awake: Arc<crate::awake::Awake>,
     tasks: std::sync::Mutex<HashMap<(String, String), String>>,
     installed: std::sync::Mutex<HashMap<String, (Instant, Vec<String>)>>,
     servers: tokio::sync::Mutex<Option<(Instant, Vec<crate::discover::Found>)>>,
@@ -110,12 +112,14 @@ pub struct Services {
     pub settings: Arc<Settings>,
     pub phone: Arc<Phone>,
     pub dispatch: Arc<Dispatch>,
+    pub usage: Arc<crate::usage::Usage>,
     pub triggers: Arc<crate::triggers::Triggers>,
     pub insights: Arc<crate::insights::Insights>,
     pub pipelines: Arc<crate::pipeline::Pipelines>,
     pub proposals: Arc<crate::proposals::Proposals>,
     pub worktrees: crate::worktrees::Worktrees,
     pub pulls: Arc<crate::pulls::Pulls>,
+    pub awake: Arc<crate::awake::Awake>,
     pub refresh: Refresh,
     pub releases: crate::about::Fetch,
 }
@@ -132,12 +136,14 @@ impl AppState {
             settings,
             phone,
             dispatch,
+            usage,
             triggers,
             insights,
             pipelines,
             proposals,
             worktrees,
             pulls,
+            awake,
             refresh,
             releases,
         } = services;
@@ -159,6 +165,7 @@ impl AppState {
             settings,
             phone,
             dispatch,
+            usage,
             triggers,
             insights,
             pipelines,
@@ -170,6 +177,7 @@ impl AppState {
             viewers: Viewers::default(),
             worktrees,
             pulls,
+            awake,
             tasks: std::sync::Mutex::new(HashMap::new()),
             installed: std::sync::Mutex::new(HashMap::new()),
             servers: tokio::sync::Mutex::new(None),
@@ -421,12 +429,28 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(|| async { asset("vendor/lit-html/directives/repeat.js") }),
         )
         .route("/nav.js", get(|| async { asset("nav.js") }))
+        .route("/machines.js", get(|| async { asset("machines.js") }))
+        .route("/shell.js", get(|| async { asset("shell.js") }))
+        .route("/strip.js", get(|| async { asset("strip.js") }))
+        .route("/stats.js", get(|| async { asset("stats.js") }))
+        .route("/usage.js", get(|| async { asset("usage.js") }))
+        .route("/palette.js", get(|| async { asset("palette.js") }))
+        .route("/tree.js", get(|| async { asset("tree.js") }))
         .route("/live.js", get(|| async { asset("live.js") }))
         .route("/newsession.js", get(|| async { asset("newsession.js") }))
         .route("/state", get(state_json))
         .route("/state/live", get(state_live))
         .route("/workspace", get(|| async { asset("workspace.html") }))
         .route("/workspace.js", get(|| async { asset("workspace.js") }))
+        .route(
+            "/workspace-side.js",
+            get(|| async { asset("workspace-side.js") }),
+        )
+        .route(
+            "/workspace-changes.js",
+            get(|| async { asset("workspace-changes.js") }),
+        )
+        .route("/highlight.js", get(|| async { asset("highlight.js") }))
         .route("/dispatch", get(|| async { asset("dispatch.html") }))
         .route("/pipeline", get(|| async { asset("pipeline.html") }))
         .route("/dispatch.js", get(|| async { asset("dispatch.js") }))
@@ -473,6 +497,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/dispatch/usage", get(dispatch_usage))
         .route("/dispatch/runs-on", get(dispatch_runs_on))
         .route("/dispatch/usage/refresh", post(dispatch_usage_refresh))
+        .route("/api/usage/stats", get(usage_stats))
         .route(
             "/dispatch/conversations/{id}/actions",
             post(dispatch_decide_all),
@@ -507,6 +532,10 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(|| async { asset("dispatch-group.js") }),
         )
         .route("/sessions/{machine}/{name}/keys", post(session_keys))
+        .route(
+            "/sessions/{machine}/{name}/text",
+            post(session_text).layer(DefaultBodyLimit::max(TEXT_LIMIT)),
+        )
         .route(
             "/dispatch/ask",
             post(dispatch_ask).layer(DefaultBodyLimit::max(ASK_LIMIT)),
@@ -550,7 +579,9 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/settings", get(|| async { asset("settings.html") }))
         .route("/settings.js", get(|| async { asset("settings.js") }))
         .merge(settings_api::routes())
+        .merge(voice_api::routes())
         .merge(review_api::routes())
+        .merge(changes_api::routes())
         .merge(scan_api::routes())
         .merge(pulls_api::routes())
         .merge(triggers_api::routes())
@@ -561,6 +592,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(connectors_api::routes())
         .merge(mcp_auth_api::routes())
         .merge(proposals_api::routes())
+        .merge(files_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -698,6 +730,7 @@ struct StateReply {
     #[serde(flatten)]
     view: crate::state::StateView,
     problems: Vec<crate::health::Problem>,
+    keep_awake: crate::awake::Status,
 }
 
 async fn state_json(
@@ -715,6 +748,7 @@ async fn state_json(
     let reply = StateReply {
         view,
         problems: app.state.problems(),
+        keep_awake: app.awake.status(),
     };
     Ok(([(BUILD_HEADER, page_build())], Json(reply)).into_response())
 }
@@ -894,12 +928,14 @@ async fn dispatch_runs_on(AxState(app): AxState<Arc<AppState>>) -> Response {
     let voice_input = cfg
         .as_ref()
         .is_some_and(|c| c.voice.input != crate::config::VoiceInput::Off);
+    let voice_mode = cfg.as_ref().map(|c| c.voice.mode).unwrap_or_default();
     Json(json!({
         "runs_on": runs_on,
         "label": label(runs_on),
         "model": settings.model_for(runs_on),
         "agents": agents,
         "voice_input": voice_input,
+        "voice_mode": voice_mode,
     }))
     .into_response()
 }
@@ -929,18 +965,43 @@ async fn dispatch_transcribe(
     Ok(Json(json!({ "text": text })).into_response())
 }
 
+// The Claude figures and Dispatch's Codex figures as before, with every agent on this machine in
+// `providers`, each saying why it has no figures when it has none.
+fn usage_card(app: &AppState) -> Value {
+    let mut card = app.dispatch.usage_card(runs_on(app));
+    card["providers"] = json!(app.usage.providers(&app.dispatch));
+    card
+}
+
 async fn dispatch_usage(AxState(app): AxState<Arc<AppState>>) -> Response {
-    Json(app.dispatch.usage_card(runs_on(&app))).into_response()
+    Json(usage_card(&app)).into_response()
 }
 
 async fn dispatch_usage_refresh(AxState(app): AxState<Arc<AppState>>) -> Response {
-    match app
-        .dispatch
-        .refresh_usage_now(&reqwest::Client::new())
-        .await
+    app.usage.refresh_now(&app.dispatch).await;
+    Json(usage_card(&app)).into_response()
+}
+
+#[derive(Deserialize)]
+struct UsageStatsQuery {
+    #[serde(default)]
+    provider: String,
+    days: Option<u32>,
+}
+
+async fn usage_stats(
+    AxState(app): AxState<Arc<AppState>>,
+    axum::extract::Query(q): axum::extract::Query<UsageStatsQuery>,
+) -> Response {
+    let Some(only) = crate::usage::stats::Provider::parse(&q.provider) else {
+        return error(StatusCode::BAD_REQUEST, "provider is all, claude or codex");
+    };
+    let days = q.days.unwrap_or(30).clamp(1, 365);
+    let stats = app.usage.stats();
+    match tokio::task::spawn_blocking(move || stats.report(only, days, chrono::Local::now())).await
     {
-        Ok(_) => Json(app.dispatch.usage_card(runs_on(&app))).into_response(),
-        Err(message) => error(StatusCode::BAD_GATEWAY, &message),
+        Ok(report) => Json(report).into_response(),
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e.to_string()),
     }
 }
 
@@ -1085,6 +1146,52 @@ async fn session_keys(
         .map_err(ApiError::gateway)?;
     app.recheck(&m.name);
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+const TEXT_LIMIT: usize = 256 * 1024;
+
+#[derive(Deserialize)]
+struct TextInput {
+    text: String,
+    #[serde(default)]
+    enter: bool,
+}
+
+async fn session_text(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((machine, name)): UrlPath<(String, String)>,
+    Json(req): Json<TextInput>,
+) -> Result<Response, ApiError> {
+    if req.text.trim().is_empty() || req.text.contains('\0') {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "there is no text to send".into(),
+        ));
+    }
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &machine)?;
+    let known = app
+        .state
+        .snapshot(&m.name)
+        .unwrap_or_default()
+        .sessions
+        .iter()
+        .any(|s| s.tmux.as_deref() == Some(name.as_str()));
+    if !known {
+        return Err(ApiError(
+            StatusCode::NOT_FOUND,
+            format!(
+                "{name} is not a session Yardbell can type into on {}",
+                m.name
+            ),
+        ));
+    }
+    app.sessions
+        .paste(&m, &name, &req.text, req.enter)
+        .await
+        .map_err(|e| ApiError::gateway(format!("could not send to {name}: {e}")))?;
+    app.recheck(&m.name);
+    Ok(Json(json!({ "ok": true, "entered": req.enter })).into_response())
 }
 
 async fn dispatch_list(AxState(app): AxState<Arc<AppState>>) -> Response {
@@ -1748,6 +1855,9 @@ pub struct NewSession {
     base: String,
     #[serde(default)]
     resume: bool,
+    // A Claude Code session to pick up by its id, from the Workspace's session history.
+    #[serde(default)]
+    resume_id: String,
     #[serde(default)]
     agent: String,
     #[serde(default)]
@@ -1820,6 +1930,23 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
             format!("no agent named {agent_name}"),
         )
     })?;
+    if !req.resume_id.is_empty() {
+        if !crate::history::valid_id(&req.resume_id) {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "that is not a session id".into(),
+            ));
+        }
+        if agent.process_name() != "claude" {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                format!(
+                    "only Claude Code sessions can be resumed by id, not {}",
+                    agent.display()
+                ),
+            ));
+        }
+    }
     let mcp_config = mcp_config(&cfg, &m, &agent, &app.secrets()?)?;
     let snap = app.state.snapshot(&m.name).unwrap_or_default();
     let repo = if req.path.trim().is_empty() {
@@ -1876,13 +2003,15 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
         (task, Some(note)) => format!("{task}\n\n{note}"),
         (task, None) => task.to_string(),
     };
-    let start = match (req.resume, prompt.as_str()) {
-        (true, _) => Start::Resume,
-        (false, "") => Start::New,
-        (false, prompt) => Start::Task(prompt),
+    let resuming = req.resume || !req.resume_id.is_empty();
+    let start = match (req.resume_id.as_str(), req.resume, prompt.as_str()) {
+        ("", true, _) => Start::Resume,
+        ("", false, "") => Start::New,
+        ("", false, prompt) => Start::Task(prompt),
+        (id, _, _) => Start::ResumeId(id),
     };
     let read_only =
-        req.read_only || req.resume && app.dispatch.last_was_read_only(&m.name, &path, &agent.name);
+        req.read_only || resuming && app.dispatch.last_was_read_only(&m.name, &path, &agent.name);
     let name = app
         .sessions
         .create(
@@ -1899,7 +2028,7 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
         )
         .await
         .map_err(ApiError::gateway)?;
-    if !req.resume {
+    if !resuming {
         app.dispatch
             .started_in(&m.name, &path, &agent.name, read_only);
         app.remember_task(&m.name, &name, req.prompt.trim());
@@ -2400,8 +2529,10 @@ async fn remove_machine(
     Json(app.onboarding.remove(&name).await).into_response()
 }
 
+mod changes_api;
 mod connectors_api;
 pub(crate) mod diagrams_api;
+mod files_api;
 mod insights_api;
 pub mod limits;
 mod mcp_auth_api;
@@ -2414,6 +2545,7 @@ mod scan_api;
 mod settings_api;
 mod transcript_api;
 mod triggers_api;
+mod voice_api;
 pub mod worktrees_api;
 
 #[cfg(test)]

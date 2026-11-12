@@ -661,6 +661,13 @@ impl Settings {
         self.save(&cfg, backup, None)
     }
 
+    pub fn set_keep_awake(&self, mode: crate::awake::Mode) -> Result<(), String> {
+        let mut cfg = self.load()?;
+        cfg.keep_awake = mode;
+        let backup = self.backup_config()?;
+        self.save(&cfg, backup, None)
+    }
+
     pub fn set_mcp_servers(&self, servers: Vec<crate::config::McpServer>) -> Result<(), String> {
         let mut cfg = self.load()?;
         cfg.mcp_servers = servers;

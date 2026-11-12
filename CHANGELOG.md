@@ -5,6 +5,80 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.0] - 2026-11-12
+
+- **Review and commit changes from the Workspace.** The right panel has a third tab, **Changes**, with the
+  folder's changed files under Staged, Changes and Untracked and a count on its icon. A file opens as a diff
+  tab, unified or split, with colours, both line numbers and unchanged runs folded. Hover a line and click
+  **+** to leave a note; **Send notes to agent** pastes the notes, each with its file, line and the quoted
+  code, into the prompt of the session in that folder. The commit box at the foot drafts a message from the
+  file names and commits with **Ctrl+Enter**. Nothing is pushed. Desktop only.
+- **Dispatch has the same sidebar as every page.** Its conversations and tasks now sit in the sidebar under
+  the pages, instead of in a panel of their own beside a folded rail. Folding the sidebar puts them back beside
+  the chat. The sidebar's right edge drags it wider or narrower on every page, and the width carries across pages.
+- **Usage for every agent on the machine.** Codex's plan limits now come from the machine running
+  Yardbell, not only after a Dispatch reply on Codex, and Gemini CLI's quota shows when it is signed
+  in, next to Claude's, each with its plan name. Every limit an agent reports is shown: weekly limits
+  for one model, Claude's extra usage, Codex's credits, and the weekly limit alone when the 5-hour one
+  is missing. An agent that is not set up is left out, and one that cannot be checked says why.
+- **A Usage card in the sidebar.** Usage moved out of the status bar into a small card at the foot of
+  the sidebar: one line per agent with its tightest limit (such as **wk 16%** or **Fable wk 30%**), a
+  segmented meter and its reset. Clicking it opens a sheet beside the sidebar with every limit, credits
+  and errors, and a **Machines** part with each machine's memory. A folded sidebar shows a ring in the
+  rail, and a phone has **Usage** under **More**.
+- **No more bottom bar.** Keep computer awake, live ports and the connection moved to the right of the
+  sidebar's foot (to the bottom of the rail when it is folded, and to **More** on a phone), with a
+  green or amber dot for the connection and a **Reconnecting to Yardbell…** banner after 3 seconds
+  without one. Machine memory stays in the sidebar's machine list, and the usage card warns when a
+  machine is down or short of memory.
+- **Stats & Usage in Settings.** Tokens, sessions, active days, a daily chart, the share of each model
+  and the recent sessions from the Claude Code and Codex transcripts on the machine, for 7, 30 or 90
+  days, per agent or together. The usage sheet links to it. Transcripts are read in place and only
+  changed ones are read again.
+
+- **Set up dictation in one click.** Settings, Voice now opens with a **Set up dictation** card that recommends a
+  Whisper model, downloads it from the official whisper.cpp repository with its progress shown, finds the installed
+  whisper.cpp and turns voice input on. It says at once if whisper.cpp or ffmpeg is missing and how to get it. A
+  **Speech model** list shows each model with its quality, size and **Download**, **Use** or **Delete**, and a broken
+  download carries on where it stopped. The cloud API stays one row away.
+- **Words appear while you talk.** Dictation sends each phrase to be transcribed as soon as you pause, so the text
+  lands in the message box while you are still speaking. **✓** sends the last phrase, and **Esc** drops what has not
+  landed yet and keeps what has.
+- **More voice settings.** **Dictation language** (or Auto-detect), a **Vocabulary** of names the model should spell
+  your way, **Remove filler words** for "um" and "uh", **Dictation mode** (Auto, Hold or Toggle) and a
+  **Microphone** picker saved on each device.
+- **Files and history beside the terminals.** A panel on the right of the Workspace, shown or hidden from the end
+  of the tab row, browses the focused session's folder over ssh. Find files by name or by what they contain, and
+  open one read-only in a tab with line numbers and colours. Its **History** tab lists past Claude Code sessions
+  for the folder, or every folder on the machine, with their title, last reply and size, and **Resume** picks one
+  up in a new session.
+- **New session reads top to bottom.** **Project** and **Run on** sit side by side, the folder browser opens under
+  Project, and a git folder offers **Create from** as tabs: **Current**, **Branch** or **Name** for a new branch. The
+  agent comes next, **Continue the last conversation** moves under **Advanced**, and **Ctrl+Enter** (**⌘↵** on a Mac)
+  starts the session.
+- **Add a project from the sidebar.** The folder button beside **+** over the machines opens **Add a project**: pick
+  the machine, browse to a folder, and it stays in the Workspace sidebar in this browser, selected, even with no
+  session in it yet.
+- **Keep the computer awake.** A cup in the status bar, and Settings, **Power**, hold the computer Yardbell runs on
+  awake: **On**, **While agents work** (only while an agent on that computer is working) or **Off**. Yardbell uses
+  `systemd-inhibit` on Linux and `caffeinate` on a Mac, lets go when it is turned off or Yardbell stops, and says so
+  when neither is there.
+- **Live ports in the status bar.** The plug and count open the ports Yardbell forwards, grouped by machine, each
+  with its service and a link that opens it on this computer.
+- **A reminder to add a setup script.** While no worktree setup command is configured, a small card at the foot of
+  the Workspace sidebar links to Settings, **Worktree setup**. **×** hides it in this browser.
+- **Pipeline settings look like Settings.** The Pipelines Settings view, the builder's side panel and Run now show
+  headed cards of rows, with the label and its note on the left and the control on the right. Yes or no choices
+  are switches, the pipeline's summary opens its trigger or first step in one click, and Delete step stays at the
+  foot of the panel.
+- **A richer message box in Dispatch.** Machines, sessions and folders picked with **@** show as pills that
+  **Backspace** removes whole, a long paste folds into a **Pasted text** pill you can open again, and text in
+  backticks shows as code as you type. Attached images show as thumbnails. **+** holds Attach files, Save as task
+  and the send key, and the chip beside the microphone says what Dispatch runs on. Messages are sent as before.
+- **Dictation shows what it hears.** A pill over the message box has a level meter, the time, **×** to discard and
+  **✓** to finish. **Ctrl+Shift+Space** starts and stops dictation, or records while held, and a few seconds of quiet
+  finish it. A failed transcription keeps the recording for **Retry**, and the words go in where the cursor was.
+
 ## [0.10.414] - 2026-11-10
 
 - **See what each step did.** Click a step of any run, finished or not, for its outcome, times, rounds, machine,

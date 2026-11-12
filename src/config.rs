@@ -560,6 +560,27 @@ pub struct VoiceSettings {
     pub api_key: String,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub language: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub vocabulary: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub remove_fillers: bool,
+    #[serde(default, skip_serializing_if = "DictationMode::is_auto")]
+    pub mode: DictationMode,
+}
+
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum DictationMode {
+    #[default]
+    Auto,
+    Hold,
+    Toggle,
+}
+
+impl DictationMode {
+    fn is_auto(&self) -> bool {
+        *self == DictationMode::Auto
+    }
 }
 
 impl VoiceSettings {
@@ -709,6 +730,8 @@ pub struct Config {
     pub dispatch: DispatchSettings,
     #[serde(default, skip_serializing_if = "VoiceSettings::is_default")]
     pub voice: VoiceSettings,
+    #[serde(default, skip_serializing_if = "crate::awake::Mode::is_off")]
+    pub keep_awake: crate::awake::Mode,
     #[serde(default, skip_serializing_if = "PullRequests::is_default")]
     pub pull_requests: PullRequests,
     #[serde(default, skip_serializing_if = "Pipelines::is_default")]

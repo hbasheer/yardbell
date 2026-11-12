@@ -73,14 +73,14 @@ fn owners(run: &Run) -> Vec<(String, String)> {
     all
 }
 
-fn cut(text: &str, max: usize) -> String {
+pub(crate) fn cut(text: &str, max: usize) -> String {
     match text.char_indices().nth(max) {
         Some((at, _)) => format!("{}…", &text[..at]),
         None => text.to_string(),
     }
 }
 
-fn text_of(content: &Value) -> String {
+pub(crate) fn text_of(content: &Value) -> String {
     match content {
         Value::String(s) => s.clone(),
         Value::Array(parts) => parts

@@ -11,8 +11,9 @@ import { markdown } from "/markdown.js";
 import { dictation, speaker, spoken } from "/voice.js";
 
 const $ = (id) => document.getElementById(id);
-const Nav = window.YardbellNav;
+const Nav = window.YardbellShell;
 const form = $("dispatch-form");
+const input = $("dispatch-input");
 const log = $("dispatch-log");
 const narrow = window.matchMedia("(max-width: 900px)");
 let current = new URLSearchParams(location.search).get("c");
@@ -371,12 +372,133 @@ function backendNote() {
 function renderRunsOn() {
   const chip = $("runs-on");
   chip.hidden = !runsOn;
-  $("mic").hidden = !runsOn?.voice_input;
+  $("mic").hidden = !runsOn;
+  $("mic").classList.toggle("voice-off", !runsOn?.voice_input);
   if (!runsOn) return;
   const { label, model } = agentOf(backend);
-  chip.textContent = `${label} · ${model}`;
-  chip.title = `${current ? "This conversation runs" : "New conversations run"} on ${label} with ${model === "default model" ? "its default model" : model}. Change it in Settings.`;
+  chip.querySelector(".runs-on-label").textContent = `${label} · ${model}`;
+  chip.title = `${current ? "This conversation runs" : "New conversations run"} on ${label} with ${model === "default model" ? "its default model" : model}. Click to change.`;
+  chip.setAttribute("aria-haspopup", "menu");
 }
+
+// The model stays a click away in the message box, so the chip opens a picker instead of Settings.
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);
+const modelMenu = document.createElement("div");
+modelMenu.className = "menu model-menu";
+modelMenu.id = "model-menu";
+modelMenu.setAttribute("role", "menu");
+modelMenu.hidden = true;
+document.body.append(modelMenu);
+let codexModels = null;
+
+function modelChoices(agent) {
+  if (agent === "claude") return [["", "Claude Code's default"], ...Object.entries(CLAUDE_MODELS)];
+  return [["", "Codex's default"], ...(codexModels || []).map((m) => [m, m])];
+}
+
+function paintModelMenu() {
+  const agents = Object.keys(runsOn?.agents || {});
+  const chosen = runsOn?.agents?.[backend]?.model || "";
+  const tick = (on) => (on ? '<svg class="icon menu-tick" viewBox="0 0 16 16" aria-hidden="true"><path d="M3.5 8.5l3 3 6-7"/></svg>' : '<span class="menu-tick"></span>');
+  const agentRows = agents.length > 1
+    ? `<p class="menu-label">${current ? `This conversation stays on ${esc(agentOf(backend).label)}` : "Agent for new conversations"}</p>
+       ${agents.map((a) => `<button type="button" role="menuitemradio" aria-checked="${a === backend}" data-agent="${a}"${current ? " disabled" : ""}>${tick(a === backend)}<span class="menu-text">${esc(agentOf(a).label)}</span></button>`).join("")}<hr>`
+    : "";
+  modelMenu.innerHTML = `${agentRows}<p class="menu-label">Model</p>
+    ${modelChoices(backend).map(([value, name]) => `<button type="button" role="menuitemradio" aria-checked="${value === chosen}" data-model="${esc(value)}">${tick(value === chosen)}<span class="menu-text">${esc(name)}</span></button>`).join("")}
+    <hr><a role="menuitem" href="/settings#dispatch"><span class="menu-tick"></span><span class="menu-text">Dispatch settings</span></a>`;
+}
+
+async function openModelMenu() {
+  if (backend === "codex" && codexModels === null) {
+    codexModels = (await api("GET", "/api/settings").catch(() => ({}))).codex_models || [];
+  }
+  paintModelMenu();
+  modelMenu.hidden = false;
+  const r = $("runs-on").getBoundingClientRect();
+  modelMenu.style.left = `${Math.max(8, Math.min(r.right - modelMenu.offsetWidth, innerWidth - modelMenu.offsetWidth - 8))}px`;
+  modelMenu.style.top = `${Math.max(8, r.top - modelMenu.offsetHeight - 6)}px`;
+  modelMenu.querySelector('[aria-checked="true"]:not(:disabled), button:not(:disabled)')?.focus();
+}
+
+function closeModelMenu(refocus) {
+  if (modelMenu.hidden) return;
+  modelMenu.hidden = true;
+  if (refocus) $("runs-on").focus();
+}
+
+async function saveRunsOn(change) {
+  const settings = await api("GET", "/api/settings");
+  const d = settings.dispatch || {};
+  await api("POST", "/api/settings/dispatch", {
+    instructions: d.instructions || "",
+    agent: d.agent || "",
+    runs_on: d.runs_on || "claude",
+    model: d.model || "",
+    codex_model: d.codex_model || "",
+    ...(d.approval ? { approval: d.approval } : {}),
+    rules: d.rules || [],
+    ...change,
+  });
+  await loadRunsOn();
+}
+
+$("runs-on").addEventListener("click", (e) => {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  if (modelMenu.hidden) openModelMenu();
+  else closeModelMenu(false);
+});
+modelMenu.addEventListener("click", async (e) => {
+  const agent = e.target.closest("[data-agent]");
+  const model = e.target.closest("[data-model]");
+  if (!agent && !model) return;
+  closeModelMenu(true);
+  try {
+    if (agent) await saveRunsOn({ runs_on: agent.dataset.agent });
+    else await saveRunsOn({ [backend === "codex" ? "codex_model" : "model"]: model.dataset.model });
+    toast(agent ? `New conversations start on ${agentOf(agent.dataset.agent).label}` : `Dispatch now uses ${agentOf(backend).model}`, "ok");
+  } catch (err) {
+    toast(err.message);
+  }
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!modelMenu.hidden && !modelMenu.contains(e.target) && !$("runs-on").contains(e.target)) closeModelMenu(false);
+}, true);
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !modelMenu.hidden) closeModelMenu(true);
+});
+
+// With voice input off, the mic offers setup in place, rather than vanishing.
+document.addEventListener("keydown", (e) => {
+  if (!runsOn || runsOn.voice_input || !(e.code === "Space" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey)) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  $("mic").click();
+}, true);
+for (const type of ["pointerdown", "pointerup", "keydown"]) {
+  $("mic").addEventListener(type, (e) => {
+    if (runsOn?.voice_input || (type === "keydown" && e.key !== "Enter" && e.key !== " ")) return;
+    e.stopImmediatePropagation();
+  }, true);
+}
+$("mic").addEventListener("click", (e) => {
+  if (runsOn?.voice_input) return;
+  e.preventDefault();
+  e.stopImmediatePropagation();
+  let pill = $("voice-setup");
+  if (!pill) {
+    pill = document.createElement("div");
+    pill.id = "voice-setup";
+    pill.className = "dictation-pill setup";
+    pill.setAttribute("role", "group");
+    pill.setAttribute("aria-label", "Voice setup");
+    pill.innerHTML = `<span class="dictation-setup-text">Voice input is off.</span><a class="btn primary" href="/settings#voice">Set up voice</a><button class="dictation-x" type="button" aria-label="Close" title="Close"><svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></button>`;
+    pill.querySelector(".dictation-x").addEventListener("click", () => { pill.hidden = true; });
+    $("dictation-pill").after(pill);
+  }
+  pill.hidden = false;
+}, true);
 
 function draw() {
   renderRunsOn();
@@ -530,7 +652,7 @@ $("insert-scan").addEventListener("click", async () => {
 
 function setBusy(on) {
   busy = on;
-  if (document.activeElement === $(on ? "dispatch-send" : "dispatch-stop")) form.text.focus();
+  if (document.activeElement === $(on ? "dispatch-send" : "dispatch-stop")) input.focus();
   $("dispatch-send").hidden = on;
   $("dispatch-stop").hidden = !on;
   $("dispatch-thinking").hidden = !on;
@@ -540,6 +662,7 @@ function setBusy(on) {
 
 function setUrl() {
   history.replaceState(null, "", current ? `/dispatch?c=${encodeURIComponent(current)}` : "/dispatch");
+  if (window.top !== window.self) window.parent.postMessage({ yardbell: "dispatch", action: "conversation", id: current || "" }, location.origin);
 }
 
 async function open(id) {
@@ -564,7 +687,7 @@ async function open(id) {
   renderTracked();
   compose.show(id);
   if (!id) {
-    if (document.hasFocus()) form.text.focus();
+    if (document.hasFocus()) input.focus();
     return;
   }
   try {
@@ -663,7 +786,7 @@ async function ask(text, marks = {}, files = []) {
   } finally {
     setBusy(false);
     loadList().catch(() => {});
-    window.YardbellNav.loadUsage();
+    window.YardbellUsage?.load();
     catchUp(false);
   }
 }
@@ -946,8 +1069,8 @@ $("task-restore").addEventListener("click", async () => {
 });
 
 $("save-as-task").addEventListener("click", () => {
-  const text = form.text.value.trim();
-  if (!text) { toast("Type the task first, then save it."); form.text.focus(); return; }
+  const text = input.value.trim();
+  if (!text) { toast("Type the task first, then save it."); input.focus(); return; }
   editTask(null, text);
 });
 
@@ -985,7 +1108,7 @@ const compose = composer(form, {
   scrollDown,
 });
 
-dictation({ button: $("mic"), input: form.text, toast });
+dictation({ button: $("mic"), pill: $("dictation-pill"), insert: (text) => compose.insert(text), toast, mode: () => runsOn?.voice_mode || "auto" });
 
 $("dispatch-stop").addEventListener("click", () => {
   if (!current) return;
@@ -1010,56 +1133,23 @@ $("clear-all").addEventListener("click", async (e) => {
   }
 });
 
-const WIDTH_KEY = "yardbell.dispatch.width";
-const SIDE_WIDTH = { min: 220, normal: 260, max: 560 };
-
-function remembered(key) {
-  try { return localStorage.getItem(key); } catch { return null; }
+// Wide, the conversation and task lists live in the shared sidebar like every other page's list,
+// so the sidebar's own resize and collapse apply. Narrow, or with the sidebar folded to the rail,
+// they go back into the page under the Chat, Chats and Tasks tabs.
+const listParts = [$("dispatch-tabs"), $("dispatch-side")];
+const listHome = $("dispatch");
+function placeLists() {
+  const column = Nav?.column;
+  if (!column) return;
+  const inColumn = !narrow.matches && !Nav.collapsed();
+  column.classList.toggle("dispatch-col", inColumn);
+  if (inColumn && listParts[0].parentElement !== column) column.append(...listParts);
+  if (!inColumn && listParts[0].parentElement === column) {
+    listHome.before(listParts[0]);
+    listHome.prepend(listParts[1]);
+  }
+  document.body.classList.toggle("dispatch-lists-in-col", inColumn);
 }
-
-function remember(key, value) {
-  try {
-    if (value === null) localStorage.removeItem(key);
-    else localStorage.setItem(key, value);
-  } catch {}
-}
-
-function setSideWidth(px, save) {
-  const width = Math.round(Math.min(SIDE_WIDTH.max, Math.max(SIDE_WIDTH.min, px)));
-  document.querySelector(".dispatch").style.setProperty("--dispatch-side", `${width}px`);
-  $("dispatch-resize").setAttribute("aria-valuenow", width);
-  if (save) remember(WIDTH_KEY, width === SIDE_WIDTH.normal ? null : String(width));
-}
-
-const resizer = $("dispatch-resize");
-resizer.setAttribute("aria-valuemin", SIDE_WIDTH.min);
-resizer.setAttribute("aria-valuemax", SIDE_WIDTH.max);
-resizer.addEventListener("pointerdown", (e) => {
-  if (e.button !== 0) return;
-  e.preventDefault();
-  const start = e.clientX;
-  const from = $("dispatch-side").getBoundingClientRect().width;
-  resizer.setPointerCapture(e.pointerId);
-  document.body.classList.add("resizing");
-  const move = (ev) => setSideWidth(from + ev.clientX - start, false);
-  const done = () => {
-    resizer.removeEventListener("pointermove", move);
-    document.body.classList.remove("resizing");
-    setSideWidth($("dispatch-side").getBoundingClientRect().width, true);
-  };
-  resizer.addEventListener("pointermove", move);
-  resizer.addEventListener("pointerup", done, { once: true });
-  resizer.addEventListener("pointercancel", done, { once: true });
-});
-resizer.addEventListener("dblclick", () => setSideWidth(SIDE_WIDTH.normal, true));
-resizer.addEventListener("keydown", (e) => {
-  const step = { ArrowLeft: -20, ArrowRight: 20 }[e.key];
-  if (!step) return;
-  e.preventDefault();
-  setSideWidth($("dispatch-side").getBoundingClientRect().width + step, true);
-});
-
-setSideWidth(Number(remembered(WIDTH_KEY)) || SIDE_WIDTH.normal, false);
 
 // The tabs pick what shows: narrow, the chat or one list; wide, which list sits beside the chat.
 // Either way a list is always open, so its heading does not fold it.
@@ -1077,13 +1167,16 @@ function tabList() {
 function showTab(name, focus = false) {
   const d = $("dispatch");
   d.dataset.tab = name;
-  if (name !== "chat") d.dataset.list = name;
+  if (name !== "chat") {
+    d.dataset.list = name;
+    if (Nav?.column) Nav.column.dataset.list = name;
+  }
   paintTabs(focus ? name : "");
 }
 
 function paintTabs(focus = "") {
   const d = $("dispatch");
-  const on = narrow.matches ? d.dataset.tab : d.dataset.list;
+  const on = narrow.matches || document.documentElement.classList.contains("embedded") ? d.dataset.tab : d.dataset.list;
   for (const t of tabList()) {
     const picked = t.dataset.tab === on;
     t.setAttribute("aria-selected", String(picked));
@@ -1106,8 +1199,14 @@ $("dispatch-tabs").addEventListener("keydown", (e) => {
   showTab(tabs[(at + step + tabs.length) % tabs.length].dataset.tab, true);
 });
 $("tab-new").addEventListener("click", () => $("new-chat").click());
-narrow.addEventListener("change", () => paintTabs());
+narrow.addEventListener("change", () => {
+  placeLists();
+  paintTabs();
+});
+window.addEventListener("yardbell-shell", placeLists);
 $("dispatch").dataset.list = "convos";
+if (Nav?.column) Nav.column.dataset.list = "convos";
+placeLists();
 showTab("chat");
 const handedOver = window.YardbellInsights.takeOver();
 loadRunsOn();
@@ -1117,29 +1216,34 @@ loadState().then(() => draw());
 const asked = new URLSearchParams(location.search).get("ask");
 if (asked !== null) history.replaceState(null, "", location.pathname);
 
-function startWith(text) {
-  form.text.value = text;
-  form.text.dispatchEvent(new Event("input", { bubbles: true }));
-  form.text.focus();
-  form.text.setSelectionRange(text.length, text.length);
-}
 
 loadList()
   .then(() => open(!handedOver && asked === null && current && conversations.some((c) => c.id === current) ? current : null))
   .then(() => {
     if (handedOver) suggestFor(handedOver.machine, handedOver.name);
-    if (asked) startWith(asked);
+    if (asked) compose.fill(asked);
   })
   .catch((err) => toast(err.message));
 
 // Inside the Workspace, Dispatch opens sessions as Workspace panes and other pages in the whole window.
 if (window.top !== window.self) {
   const tell = (message) => window.parent.postMessage({ yardbell: "dispatch", ...message }, location.origin);
-  $("hide-panel").addEventListener("click", () => tell({ action: "hide" }));
   window.addEventListener("message", (e) => {
-    if (e.origin !== location.origin || e.source !== window.parent || e.data?.yardbell !== "suggest") return;
+    if (e.origin !== location.origin || e.source !== window.parent) return;
+    if (e.data?.yardbell === "focus") input.focus();
+    if (e.data?.yardbell !== "suggest") return;
     if (typeof e.data.machine === "string" && typeof e.data.name === "string") suggestFor(e.data.machine, e.data.name);
   });
+  const mac = /Mac/.test(navigator.platform);
+  document.addEventListener("keydown", (e) => {
+    if (!((mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey && !e.shiftKey && e.code === "KeyK")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    window.parent.postMessage({ yardbell: "palette" }, location.origin);
+  }, true);
+  const focused = () => window.parent.postMessage({ yardbell: "focused" }, location.origin);
+  document.addEventListener("focusin", focused);
+  document.addEventListener("pointerdown", focused);
   document.addEventListener("click", (e) => {
     const link = e.target.closest("a[href]");
     if (!link || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
@@ -1150,4 +1254,10 @@ if (window.top !== window.self) {
     if (first === "term" && machine && name) tell({ action: "open", key: `${machine}/${name}` });
     else window.top.location.href = url.href;
   });
+}
+
+if (window.top === window.self) {
+  const refreshShell = () => window.YardbellShell.loadState().catch(() => {});
+  refreshShell();
+  window.YardbellLive.follow(refreshShell, 10000);
 }

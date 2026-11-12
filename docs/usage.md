@@ -140,12 +140,14 @@ as the task's next version.
 
 ![New session dialog with branch picker](screenshots/new-session.png)
 
-1. Pick a machine and an agent. The list holds the agents installed on that machine, and the one you
-   used last is preselected. **Other agent…** shows the rest, marked as not found there, and
-   **Add an agent…** saves a new one by its name and command.
-2. Pick a folder from **Recent** or browse the machine. Git repositories show their branch.
-3. For a git repository, stay on the current branch, pick another branch, or create a new one from
-   a base. Any branch other than the current one opens in its own worktree at
+1. Pick the folder under **Project**, from **Recent** or by browsing the machine, and the machine
+   under **Run on**. Git repositories show their branch. **Project** folds the browser away and
+   opens it again.
+2. Pick an agent. The list holds the agents installed on that machine, and the one you used last is
+   preselected. **Other agent…** shows the rest, marked as not found there, and **Add an agent…**
+   saves a new one by its name and command.
+3. For a git repository, **Create from** stays on the current branch (**Current**), picks another
+   branch (**Branch**), or creates a new one from a base (**Name**). Any branch other than the current one opens in its own worktree at
    `<repo>-worktrees/<branch>`; an existing worktree for that branch is reused. A branch with a
    worktree has **Remove** in the list, and a folder that is a worktree says so above its
    subfolders with **Remove worktree**, both with the same checks as on the dashboard.
@@ -162,7 +164,7 @@ Yardbell restarts; the log stays until the worktree is removed. A reused worktre
 setup again. [Worktree setup](automation.md#worktree-setup) has examples, such as a Rails app that
 needs `.env` and `bundle install`.
 
-The footer always says where the session will start. Yardbell starts the agent inside a new tmux
+**Start session**, or **Ctrl+Enter** (**⌘↵** on a Mac), starts it. The footer always says where the session will start. Yardbell starts the agent inside a new tmux
 session through your login shell, so your PATH and environment apply, then opens its terminal.
 **Continue the last conversation** and **Resume** on an ended session use the agent's own resume
 command, listed below. Starting an agent in a folder that already has a session starts a second
@@ -200,8 +202,61 @@ the lists beside the chat, so it shows one at a time under three tabs, **Chat**,
 **Chat**. The Dispatch page does the same on a phone.
 
 Click a machine's name in the sidebar to fold its folders and sessions away. Drag the right edge of
-the sidebar or of the Dispatch panel to resize it, and double-click the edge to reset it. The
+the sidebar to resize it, and double-click the edge to reset it. On the Dispatch page the sidebar
+holds the conversations and tasks, under the **Chats** and **Tasks** switch. The
 sidebar keeps the same width on every page.
+
+The button at the right end of the tab row shows or hides a panel on the right, for the folder of
+the focused session or of the workspace picked in the sidebar. Drag its left edge to resize it; the
+Workspace remembers whether it was open, its width and its tab. It is not shown on a phone.
+
+- **Files** browses the folder on its machine. **Names** finds files whose name has what you type,
+  and **Contents** finds files that contain it (both skip `.git`, `node_modules` and `target`, and
+  stop at 200 matches). Click a file to open it read-only in a tab of its own, with line numbers and
+  colours for common languages. Files over 1 MB and binary files are not shown. Nothing outside the
+  folder can be opened, through `..` or a link.
+- **History** lists past Claude Code sessions, read from the machine's own transcripts: **Workspace**
+  for this folder, **All** for every folder on that machine, newest first, with Claude Code's title
+  or the first prompt, the last reply and the number of messages. Search filters the list. **Resume**
+  starts a new tmux session in that session's folder running `claude --resume` with its id, and
+  opens it in a pane.
+- **Changes** lists what git sees as changed in the folder, under **Staged**, **Changes** and
+  **Untracked**, each file with its status letter, its folder and the lines added and removed. The
+  branch sits at the top, with how far it is ahead of or behind its upstream. The count on the tab
+  icon is the number of changed files. The list reads git again every 5 seconds while the tab is
+  open and the page is in front, and **Refresh** reads it at once.
+  - Click a file to open its diff in a tab of its own: against the index for a working tree change,
+    against the last commit for a staged one, and all lines added for a new file. **Unified** or
+    **Split** is remembered in this browser. Unchanged runs fold away behind **Show N lines**.
+    Binary files say so instead of showing a diff.
+  - Hover a line and click **+** to leave a note for the agent under it. Notes can be edited or
+    removed, and stay in this browser until they are sent. **Send notes to agent** (in the diff tab
+    for that file, or **Send notes** in the Changes tab for every file in the folder) puts each note
+    as `path:line`, the line quoted, then the note, into the prompt of the session running in the
+    folder. When more than one session runs there, it asks which. Tick **Send now** to press Enter as
+    well; otherwise the text waits in the prompt for you to finish. Sent notes are cleared.
+  - The box at the foot commits every listed file with the message as written. **Draft message**
+    writes a first line from the file names ("Update a.rs, add b.md"), to edit before committing.
+    **Commit N files** (or **Ctrl+Enter**, **⌘↵** on a Mac) stages and commits, then shows the
+    short commit id. Nothing is pushed.
+
+The folder button over the machines opens **Add a project**: pick the machine under **Host**, then
+**Browse folder** to the folder and **Add project**. The folder stays in the sidebar in this browser,
+selected, so **+** starts a session there even before it has one. While no worktree setup command
+is configured, a card at the foot of the sidebar offers **Configure**, which opens Settings,
+**Worktree setup**; **×** hides it in this browser.
+
+There is no bar along the bottom. The right of the sidebar's foot, beside Settings, theme and log
+out, has a cup for **Keep computer awake** (**On**, **While agents work** or **Off**, see Settings,
+**Power**; blue while it holds the computer awake, struck through when the tool it needs is
+missing), a plug with the number of live ports when there are any, and a dot for the connection:
+green while live, amber and pulsing while reconnecting. The plug lists the ports Yardbell forwards,
+grouped by machine, each with its service and a link that opens it on this computer. After 3
+seconds without a connection a **Reconnecting to Yardbell…** banner shows at the top of the page
+until it is back. With the sidebar folded the same three sit at the bottom of the rail; on a phone,
+**More** has **Keep computer awake** and **Live ports** rows. Each machine's memory is in the
+sidebar's machine list and in the **Machines** part of the usage sheet, and the usage card adds a
+line only for a machine that is down or short of memory.
 
 ### Terminal and phone
 
@@ -279,6 +334,10 @@ Settings shows one section at a time; pick it from the section list (a row of bu
   itself, **Move to secrets** moves them, see [Secrets](configuration.md#secrets).
 - **Appearance:** same as the device, light or dark, like the theme button in the sidebar.
   **Terminal** picks light or dark for terminals on its own, or follows the theme.
+- **Power:** **Keep computer awake** stops the computer Yardbell runs on from sleeping: **On**,
+  **While agents work** (while an agent on that computer is working) or **Off**, the same choice as
+  the cup in the sidebar's foot. Yardbell holds `systemd-inhibit` on Linux or `caffeinate` on a Mac,
+  lets go when it is off or Yardbell stops, and says so when neither is installed.
 - **Security:** change the passcode (takes effect immediately) and log out every other device.
 - **About:** which Yardbell the server runs: its version and build, the machine, system and
   architecture it runs on, how long it has been running, and where its config and state live, with
@@ -445,17 +504,25 @@ starting the default agent there with your task. Follow-up messages continue the
 conversation, for example "what is that session doing now?" or "tell it yes".
 
 To show Dispatch a screenshot, a log or a PDF, drop the files on the conversation, paste them into
-the message box, or pick them with the paperclip. Each one sits above the box until you send, with
-**×** to take it back, and a message can be only files. Dispatch reads images, PDFs and text files
+the message box, or pick them with **+**, **Attach files**. Each one sits above the text as a thumbnail
+or a file chip until you send, with **×** to take it back, and a message can be only files. Dispatch reads images, PDFs and text files
 (anything that is UTF-8 text: logs, code, JSON, CSV). A message takes up to 10 files, images up to
 5 MB each, PDFs up to 32 MB, text files up to 256 KB, and 40 MB in all. Codex cannot read PDFs, so
 a conversation on Codex refuses them. Files stay with their conversation, open from the message
 they came with, and go when the conversation is deleted. They are not passed on to the sessions
 Dispatch starts.
 
-You can also talk instead of typing. Once **Settings, Voice** turns voice input on, a microphone
-button sits in the message box: tap to record and tap again to stop, or hold it and speak while it
-is held. What you said is typed into the box for you to check and send. The recording is
+You can also talk instead of typing. **Settings, Voice** sets it up in one click: **Set up**
+downloads the recommended Whisper model, finds whisper.cpp on the machine Yardbell runs on and
+turns voice input on, and the **Speech model** list below it downloads, switches and deletes the
+others. Then a microphone button sits in the message box: tap to record and tap again to stop, or
+hold it and speak while it is held. **Ctrl+Shift+Space** does the same from the keyboard. Under
+**Dictation mode**, **Hold** records only while held and **Toggle** only starts and stops. Words
+appear while you talk: each time you pause, what you just said is transcribed and typed in. While it records, a pill over the box shows how loud the
+microphone hears you and for how long, with **×** to throw the recording away (so does **Esc**) and
+**✓** to finish. **×** and **Esc** keep the words already typed in. A few seconds of quiet after you
+speak finishes it too. What you said is typed in where the cursor was, for you to check and send.
+If a transcription fails, the pill keeps the recording and offers **Retry**. The recording is
 transcribed on the machine Yardbell runs on with [whisper.cpp](https://github.com/ggml-org/whisper.cpp),
 or by the speech-to-text API the same section names, see
 [`voice`](configuration.md#voice-optional). In the Yardbell apps the microphone just works; a
@@ -775,19 +842,41 @@ folder, agent and branch for each) and starts nothing until you agree. Dispatch 
 servers listed under **Connections** in Settings, so with Linear added there,
 **Plan my Linear tickets** reads your open tickets and plans them.
 
-The **Claude usage** card at the bottom of the main sidebar shows how much of your Claude plan's
-5-hour and weekly limits is used, and when each resets. Every 5 minutes Yardbell asks Anthropic for
-the same figures Claude Code's `/usage` shows, using the Claude Code sign-in on the machine running
-Yardbell (`~/.claude/.credentials.json`, or the Keychain on macOS), so every session on that account
-counts. It only reads the sign-in and never renews it; when the sign-in has expired because Claude
-Code has not run for a while, the card keeps the figures from Dispatch's last reply and says how old
-they are. A limit whose reset time has passed shows as reset until the next check. The circular
-arrow on the card checks right away; when it cannot, the card's tooltip says why.
+The **Usage** card at the foot of the sidebar has a line for every agent signed in on the machine
+running Yardbell: Claude, Codex and Gemini CLI. Each line names the limit closest to running out with
+its short name and percentage (for example **wk 16%**, **5h 4%** or **Fable wk 30%**), with a small
+meter that turns amber over 70% and red over 90%, and when that limit resets. A limit the plan does not
+have, such as a 5-hour window Anthropic leaves empty, is skipped rather than shown as 0%. An agent whose
+CLI and sign-in are both missing is left out, and the card is hidden when no agent has figures. With the
+sidebar folded, a small ring in the rail shows the tightest percentage; on a phone, **More** has a
+**Usage** row. Every 5 minutes Yardbell asks each agent for its plan limits:
 
-When Dispatch runs on Codex, or has run on it, the card also shows **Codex usage**: Codex's 5-hour
-and weekly limits as Codex recorded them after Dispatch's last reply on it, read from its own
-session files under `~/.codex/sessions`. Codex has no way to ask for them in between, so there is no
-refresh arrow, and when the figures cannot be read the card says they are not available.
+- **Claude**: the same figures Claude Code's `/usage` shows, using the Claude Code sign-in
+  (`~/.claude/.credentials.json`, or the Keychain on macOS), with the plan (for example **Max 20x**), the
+  5-hour and weekly limits, any weekly limit for one model and extra usage when it is turned on. It only
+  reads the sign-in and never renews it; when the check fails the figures from Dispatch's last reply stay,
+  with what went wrong.
+- **Codex**: ChatGPT's usage figures for the account in `~/.codex/auth.json`, with the plan, the 5-hour
+  and weekly limits, any limit for one model and any credits. When the saved sign-in has expired,
+  Yardbell asks `codex app-server` (read-only) instead, which lets Codex renew its own sign-in; Yardbell
+  never writes Codex's files. When neither answers, the figures from Dispatch's last reply on Codex stand
+  in.
+- **Gemini**: the quota per model for the Gemini CLI sign-in in `~/.gemini/oauth_creds.json`, only read,
+  shown only when that sign-in or the `gemini` command exists.
+
+Click the card, the ring or the **Usage** row for a sheet beside the sidebar with every agent, its plan,
+every limit as a meter with its percentage and **Resets in**, credits, and what went wrong when a check
+failed. The circular arrow checks again (a check within 30 seconds of the last one reuses it), **Esc**
+or a click outside closes it, and **Stats & Usage** at its foot opens the Settings section below.
+
+**Stats & Usage** in Settings reads the Claude Code transcripts under `~/.claude/projects` and the Codex
+session files under `~/.codex/sessions` on the machine running Yardbell, in place, and sends nothing
+anywhere. **Overview**, **Claude** and **Codex** each show the tokens, input and output, sessions and
+active days for the last 7, 30 or 90 days, a chart of tokens per day (input and output, and prompt-cache
+reads) with sessions per day under it, the share of each model, and the recent sessions with their
+folder, model, tokens, start and length. What each transcript held is kept in Yardbell's state folder
+(`usage-stats.json`) with the file's size and time, so after the first look only new or longer files are
+read again.
 
 On a wide screen the Dispatch page keeps a column beside the chat with two tabs, **Chats** for your
 conversations and **Tasks** for your saved tasks, and **+** for a new conversation. The open
@@ -805,7 +894,7 @@ gap scan** propose a scan of each repository, once per repository. Name folders 
 to scan only those. **New task** adds one of your own, which you can edit, rename or delete;
 the copy button next to a default starts a task of your own from its text. Deleting a default
 only hides it, and **Restore default tasks** brings the defaults back. **Save as task** in the
-message box keeps whatever you typed.
+message box's **+** menu keeps whatever you typed.
 
 Every save of a task keeps the text it had as a version with its date, whether you edit it in the
 sidebar or save a suggested prompt. Edit a task to see its version, and **History** lists them,
@@ -818,12 +907,16 @@ version, and a triggered conversation says which version it ran, as does a messa
 list.
 
 In the message box, **Enter** sends and **Shift+Enter** starts a new line; **Ctrl+Enter**
-(**⌘+Enter** on a Mac) sends too. In a wide window, click the hint beside the Send button to send
-with Ctrl+Enter instead, so Enter starts a new line; the browser remembers the choice. On a phone,
+(**⌘+Enter** on a Mac) sends too. To send with Ctrl+Enter instead, so Enter starts a new line,
+pick the send key in the **+** menu; the browser remembers the choice. On a phone,
 Enter starts a new line and the Send button sends. Type **/** to pick one of your tasks, or **@** to
 name a machine, session or folder, or use the **Tasks** and **@** buttons in the box: the arrow keys
-move through the list, **Enter** or **Tab** picks, and **Esc** closes it. A picked task's text goes
-into the box, so you can change it before sending. What you type is kept for each conversation
+move through the list, **Enter** or **Tab** picks, and **Esc** closes it. A picked machine, session
+or folder shows as a pill, which **Backspace** takes away whole, and Dispatch gets its name as text.
+A picked task's text goes into the box, so you can change it before sending. A long paste (over 800
+characters or 15 lines) shows as a **Pasted text** pill and is sent in full; click it to edit it as
+text. Text in backticks shows as code while you type. The chip beside the microphone says what
+Dispatch runs on and opens Settings to change it. What you type is kept for each conversation
 until you send it, also after a reload, and **Arrow Up** in an empty box brings back your earlier
 messages. While Dispatch is working, **Stop** takes the place of Send; it stops Dispatch's reply,
 and the sessions it started keep running.

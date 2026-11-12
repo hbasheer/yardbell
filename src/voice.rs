@@ -1,6 +1,7 @@
 use crate::config::{expand_tilde, VoiceInput, VoiceSettings};
 use crate::secrets::Secrets;
 use crate::shell::{Output, Runner};
+pub use crate::voice_models::ModelStore;
 use rand::Rng;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
@@ -8,31 +9,13 @@ use std::time::Duration;
 pub const AUDIO_MAX: usize = 25 * 1024 * 1024;
 pub const DEFAULT_WHISPER_COMMAND: &str = "whisper-cli";
 pub const DEFAULT_MODEL: &str = "small";
-const MODELS_DIR: &str = "~/.local/share/yardbell/models";
-const MODEL_URL_BASE: &str = "https://huggingface.co/ggerganov/whisper.cpp/resolve/main";
 pub const DEFAULT_API_URL: &str = "https://api.openai.com/v1/audio/transcriptions";
 pub const DEFAULT_API_MODEL: &str = "whisper-1";
 const CONVERT_TIMEOUT: Duration = Duration::from_secs(60);
-const DOWNLOAD_TIMEOUT: Duration = Duration::from_secs(30 * 60);
-const GGML_MAGIC: &[u8] = b"lmgg";
 const WHISPER_TIMEOUT: Duration = Duration::from_secs(300);
 const API_TIMEOUT: Duration = Duration::from_secs(120);
 
 pub const OFF_MESSAGE: &str = "Voice input is off. Turn it on under Settings, Voice.";
-
-pub struct ModelStore {
-    pub dir: PathBuf,
-    pub url_base: String,
-}
-
-impl Default for ModelStore {
-    fn default() -> ModelStore {
-        ModelStore {
-            dir: expand_tilde(MODELS_DIR),
-            url_base: MODEL_URL_BASE.to_string(),
-        }
-    }
-}
 
 enum Model {
     File(PathBuf),
@@ -64,7 +47,7 @@ impl ModelStore {
     pub fn resolve(&self, setting: &str) -> Result<PathBuf, String> {
         Ok(match model(setting)? {
             Model::File(path) => path,
-            Model::Name(name) => self.dir.join(format!("ggml-{name}.bin")),
+            Model::Name(name) => self.file(&name),
         })
     }
 
@@ -73,71 +56,11 @@ impl ModelStore {
             Model::File(path) => return Ok(path),
             Model::Name(name) => name,
         };
-        let path = self.dir.join(format!("ggml-{name}.bin"));
+        let path = self.file(&name);
         if path.is_file() {
             return Ok(path);
         }
-        let part = self.dir.join(format!(
-            ".ggml-{name}.bin.part-{}-{:08x}",
-            std::process::id(),
-            rand::thread_rng().gen::<u32>()
-        ));
-        let fetched = self.fetch(&name, &part).await;
-        match fetched {
-            Ok(()) => std::fs::rename(&part, &path).map_err(|e| {
-                let _ = std::fs::remove_file(&part);
-                format!("the downloaded model cannot be moved into place: {e}")
-            })?,
-            Err(e) => {
-                let _ = std::fs::remove_file(&part);
-                return Err(e);
-            }
-        }
-        Ok(path)
-    }
-
-    async fn fetch(&self, name: &str, into: &Path) -> Result<(), String> {
-        let url = format!("{}/ggml-{name}.bin", self.url_base);
-        std::fs::create_dir_all(&self.dir)
-            .map_err(|e| format!("cannot make the models folder {}: {e}", self.dir.display()))?;
-        let client = reqwest::Client::builder()
-            .connect_timeout(Duration::from_secs(30))
-            .timeout(DOWNLOAD_TIMEOUT)
-            .build()
-            .map_err(|e| e.to_string())?;
-        let mut res = client
-            .get(&url)
-            .send()
-            .await
-            .map_err(|e| format!("the {name} model could not be downloaded from {url}: {e}"))?;
-        if !res.status().is_success() {
-            return Err(format!(
-                "the {name} model could not be downloaded from {url}: the server said {}",
-                res.status()
-            ));
-        }
-        let mut file = std::fs::File::create(into)
-            .map_err(|e| format!("cannot write the model to {}: {e}", into.display()))?;
-        let mut head: Vec<u8> = Vec::with_capacity(GGML_MAGIC.len());
-        use std::io::Write;
-        while let Some(chunk) = res
-            .chunk()
-            .await
-            .map_err(|e| format!("the {name} model download from {url} broke off: {e}"))?
-        {
-            if head.len() < GGML_MAGIC.len() {
-                head.extend_from_slice(&chunk[..chunk.len().min(GGML_MAGIC.len() - head.len())]);
-                if head.len() == GGML_MAGIC.len() && head != GGML_MAGIC {
-                    return Err(format!("what {url} sends is not a ggml model file"));
-                }
-            }
-            file.write_all(&chunk)
-                .map_err(|e| format!("cannot write the model to {}: {e}", into.display()))?;
-        }
-        if head.len() < GGML_MAGIC.len() {
-            return Err(format!("what {url} sends is not a ggml model file"));
-        }
-        Ok(())
+        self.download(&name).await
     }
 }
 
@@ -220,11 +143,84 @@ pub async fn transcribe(
     if audio.is_empty() {
         return Err("the recording is empty".into());
     }
-    match voice.input {
-        VoiceInput::Off => Err(OFF_MESSAGE.into()),
-        VoiceInput::Local => local(runner, voice, store, audio, mime).await,
-        VoiceInput::Api => api(voice, secrets, audio, mime).await,
+    let text = match voice.input {
+        VoiceInput::Off => return Err(OFF_MESSAGE.into()),
+        VoiceInput::Local => local(runner, voice, store, audio, mime).await?,
+        VoiceInput::Api => api(voice, secrets, audio, mime).await?,
+    };
+    Ok(if voice.remove_fillers {
+        without_fillers(&text)
+    } else {
+        text
+    })
+}
+
+pub const VOCABULARY_MAX: usize = 800;
+
+// Whisper takes the words as the text that came before, which steers its spelling of names.
+fn prompt(vocabulary: &str) -> Option<String> {
+    let words: Vec<&str> = vocabulary
+        .split([',', '\n'])
+        .map(str::trim)
+        .filter(|w| !w.is_empty())
+        .collect();
+    (!words.is_empty()).then(|| words.join(", "))
+}
+
+const FILLERS: &[&str] = &[
+    "um", "umm", "uh", "uhh", "uhm", "erm", "er", "hmm", "mm", "ah",
+];
+
+// "Like" is a filler only where a clause starts or a comma sets it apart; "I like it" keeps it.
+pub fn without_fillers(text: &str) -> String {
+    let mut kept: Vec<String> = Vec::new();
+    let mut capital = false;
+    let words: Vec<&str> = text.split_whitespace().collect();
+    for (i, word) in words.iter().enumerate() {
+        let core = word.trim_matches(|c: char| !c.is_alphanumeric());
+        let tail: String = word
+            .chars()
+            .rev()
+            .take_while(|c| !c.is_alphanumeric())
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        let lower = core.to_lowercase();
+        let starts_clause = kept
+            .last()
+            .is_none_or(|w| w.ends_with([',', '.', '?', '!', ';', ':']));
+        let filler = FILLERS.contains(&lower.as_str())
+            || (lower == "like" && (starts_clause || tail.starts_with(',')) && i + 1 < words.len());
+        if !filler {
+            let mut word = word.to_string();
+            if capital {
+                let mut chars = word.chars();
+                if let Some(first) = chars.next() {
+                    word = first.to_uppercase().chain(chars).collect();
+                }
+                capital = false;
+            }
+            kept.push(word);
+            continue;
+        }
+        let ends_sentence = tail.contains(['.', '?', '!']);
+        match kept.last_mut() {
+            Some(last) if ends_sentence => {
+                let trimmed = last.trim_end_matches([',', ';', ':']).to_string();
+                *last = format!("{trimmed}{}", tail.trim_start_matches(','));
+            }
+            Some(last) if tail.starts_with(',') && last.ends_with(',') => {
+                last.pop();
+            }
+            None => capital = core.chars().next().is_some_and(char::is_uppercase),
+            _ => {}
+        }
+        if ends_sentence {
+            capital = true;
+        }
     }
+    kept.join(" ")
 }
 
 async fn local(
@@ -283,6 +279,10 @@ async fn local(
         argv.push("-l".into());
         argv.push(language.into());
     }
+    if let Some(words) = prompt(&voice.vocabulary) {
+        argv.push("--prompt".into());
+        argv.push(words);
+    }
     let out = runner.run(argv, None, WHISPER_TIMEOUT).await;
     if !out.ok() {
         return Err(failure(&format!("{command} could not transcribe"), &out));
@@ -316,8 +316,11 @@ async fn api(
         .text("model", model.to_string())
         .part("file", file);
     let language = voice.language.trim();
-    if !language.is_empty() {
+    if !language.is_empty() && language != "auto" {
         form = form.text("language", language.to_string());
+    }
+    if let Some(words) = prompt(&voice.vocabulary) {
+        form = form.text("prompt", words);
     }
     let client = reqwest::Client::builder()
         .timeout(API_TIMEOUT)
@@ -666,6 +669,7 @@ mod tests {
         ModelStore {
             dir: dir.to_path_buf(),
             url_base: url_base.to_string(),
+            catalog: &[],
         }
     }
 
@@ -849,5 +853,61 @@ mod tests {
         .await;
         assert!(ok, "{message}");
         assert!(message.contains("all in place"), "{message}");
+    }
+
+    #[test]
+    fn filler_words_are_dropped_and_the_rest_reads_on() {
+        let cases = [
+            (
+                "Um, so we should fix the login test.",
+                "So we should fix the login test.",
+            ),
+            ("So, uh, we should fix it.", "So we should fix it."),
+            ("Run it again, um.", "Run it again."),
+            ("It was, like, huge.", "It was huge."),
+            ("Like I said, run the tests.", "I said, run the tests."),
+            ("I like it.", "I like it."),
+            ("Make it look like this", "Make it look like this"),
+            ("Hmm. Uh, okay then.", "Okay then."),
+            (
+                "Fix the umbrella and the uh error",
+                "Fix the umbrella and the error",
+            ),
+        ];
+        for (said, cleaned) in cases {
+            assert_eq!(without_fillers(said), cleaned, "for {said:?}");
+        }
+    }
+
+    #[tokio::test]
+    async fn the_vocabulary_and_filler_setting_reach_whisper() {
+        let fake = FakeRunner::default();
+        fake.stub("ffmpeg", Output::ok_with(""));
+        fake.stub(
+            "whisper-cli",
+            Output::ok_with("Um, ask Yardbell to, uh, merge it."),
+        );
+        let voice = VoiceSettings {
+            vocabulary: "Yardbell, Dispatch\nwhisper.cpp, ".into(),
+            remove_fillers: true,
+            language: "auto".into(),
+            ..local_settings()
+        };
+        let text = transcribe(
+            &fake,
+            &voice,
+            &ModelStore::default(),
+            &secrets(),
+            b"x",
+            "audio/webm",
+        )
+        .await
+        .unwrap();
+        assert_eq!(text, "Ask Yardbell to merge it.");
+        let calls = fake.calls();
+        assert!(calls[1]
+            .windows(2)
+            .any(|w| w == ["--prompt", "Yardbell, Dispatch, whisper.cpp"]));
+        assert!(calls[1].windows(2).any(|w| w == ["-l", "auto"]));
     }
 }

@@ -18,7 +18,30 @@ document.body.classList.toggle("embedded", embedded);
 
 const FONT = '"JetBrains Mono", ui-monospace, Menlo, Consolas, monospace';
 const THEMES = {
-  dark: { background: "#0a0a0b", foreground: "#ededef", cursor: "#93c5fd", selectionBackground: "#172554" },
+  dark: {
+    background: "#2a2c33",
+    foreground: "#f2f2f2",
+    cursor: "#ffffff",
+    cursorAccent: "#2a2c33",
+    selectionBackground: "#5a7898",
+    selectionForeground: "#ffffff",
+    black: "#1d1f21",
+    red: "#e06c75",
+    green: "#b5bd68",
+    yellow: "#f0c674",
+    blue: "#81a2be",
+    magenta: "#b294bb",
+    cyan: "#8abeb7",
+    white: "#c5c8c6",
+    brightBlack: "#7f848e",
+    brightRed: "#ef7a7f",
+    brightGreen: "#b9ca4a",
+    brightYellow: "#e7c547",
+    brightBlue: "#7aa6da",
+    brightMagenta: "#c397d8",
+    brightCyan: "#70c0b1",
+    brightWhite: "#eaeaea",
+  },
   light: {
     background: "#ffffff",
     foreground: "#1f2328",
@@ -417,6 +440,12 @@ if (embedded) {
     e.preventDefault();
     e.stopPropagation();
     parent.postMessage({ yardbell: "key", code: e.code }, location.origin);
+  }, true);
+  document.addEventListener("keydown", (e) => {
+    if (!((mac ? e.metaKey && !e.ctrlKey : e.ctrlKey && !e.metaKey) && !e.altKey && !e.shiftKey && e.code === "KeyK")) return;
+    e.preventDefault();
+    e.stopPropagation();
+    parent.postMessage({ yardbell: "palette" }, location.origin);
   }, true);
 }
 function pressKey(b) {

@@ -143,15 +143,14 @@ pub async fn serve(
         runner.clone(),
         dir.join("dispatch"),
     ));
+    let usage = Arc::new(crate::usage::Usage::new(crate::usage::Config::system(&dir)));
     let usage_dispatch = dispatch.clone();
+    let usage_check = usage.clone();
     tokio::spawn(async move {
-        let http = reqwest::Client::new();
         let mut every = tokio::time::interval(USAGE_EVERY);
         loop {
             every.tick().await;
-            if let Err(e) = usage_dispatch.refresh_usage(&http).await {
-                tracing::debug!(error = %e, "Claude usage not refreshed from the account");
-            }
+            usage_check.refresh(&usage_dispatch).await;
         }
     });
     let after_dispatch = dispatch.clone();
@@ -161,6 +160,9 @@ pub async fn serve(
     let after_tunnels = tunnels.clone();
     let after_phone = phone.clone();
     let after_path = path.clone();
+    let awake = Arc::new(crate::awake::Awake::system());
+    awake.set_mode(cfg.keep_awake);
+    let after_awake = awake.clone();
     let after: AfterTick = Arc::new(move |cfg: &Config| {
         let base = base_url(cfg);
         let host = base
@@ -169,6 +171,11 @@ pub async fn serve(
             .and_then(|url| url.host_str().map(str::to_string))
             .unwrap_or_else(|| "localhost".into());
         let view = after_state.view(cfg, after_tunnels.as_ref(), &host);
+        let working = view.sessions.iter().any(|s| {
+            s.activity == crate::snapshot::Activity::Active
+                && cfg.machine(&s.machine).is_some_and(|m| m.is_local())
+        });
+        after_awake.observe(cfg.keep_awake, working);
         let pushes = after_phone.observe(
             &cfg.phone_notifications,
             &view,
@@ -307,6 +314,7 @@ pub async fn serve(
         )),
         phone,
         dispatch,
+        usage,
         triggers,
         insights,
         proposals: Arc::new(crate::proposals::Proposals::load(
@@ -314,6 +322,7 @@ pub async fn serve(
         )),
         pipelines: pipelines.clone(),
         pulls: pulls.clone(),
+        awake: awake.clone(),
         releases: crate::about::github(),
         refresh: Arc::new(move |machine: Option<String>| {
             let poller = poller.clone();
@@ -365,6 +374,7 @@ pub async fn serve(
     }
     shutdown.await;
     tunnels.shutdown();
+    awake.stop();
     for s in servers {
         s.abort();
     }

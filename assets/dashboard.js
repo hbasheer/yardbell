@@ -3,7 +3,9 @@ import { repeat } from "/vendor/lit-html/directives/repeat.js";
 
 const $ = (id) => document.getElementById(id);
 const onHost = ["localhost", "127.0.0.1"].includes(location.hostname);
-const Nav = window.YardbellNav;
+const Shell = window.YardbellShell;
+const M = window.YardbellMachines;
+const Tree = window.YardbellTree;
 const Live = window.YardbellLive;
 const NewSession = window.YardbellNewSession;
 const Worktree = window.YardbellWorktree;
@@ -115,15 +117,17 @@ function renderHealthBanner(problems) {
   banner.hidden = !list.length;
   if (banner.hidden) return;
   const outside = (link) => /^https?:/.test(link);
-  litRender(html`<div class="banner-text">
+  litRender(html`<div class="banner-head">
     <strong>${list.length === 1 ? "1 thing looks stuck" : `${list.length} things look stuck`}</strong>
-    <ul class="health-list">${repeat(list, (p) => p.key, (p) => html`<li>
-      <a href=${p.link} target=${outside(p.link) ? "_blank" : "_self"} rel="noopener">${p.title}</a>
-      <span class="health-lasted">${lasted(p.since)}</span>
-      <span class="health-detail">${p.detail}</span>
-    </li>`)}</ul>
+    <a class="btn" href="/settings#health">Change checks</a>
   </div>
-  <a class="btn" href="/settings#health">Change checks</a>`, banner);
+  <ul class="health-list">${repeat(list, (p) => p.key, (p) => html`<li>
+    <span class="health-main">
+      <a href=${p.link} target=${outside(p.link) ? "_blank" : "_self"} rel="noopener">${p.title}</a>
+      <span class="health-detail">${p.detail}</span>
+    </span>
+    <span class="health-lasted">${lasted(p.since)}</span>
+  </li>`)}</ul>`, banner);
 }
 
 function renderMeshBanner(mesh) {
@@ -150,8 +154,8 @@ function memory(m) {
   const othersKb = usedKb - mineKb;
   const freeKb = Math.max(h.mem_total_kb - usedKb, 0);
   const share = (kb) => ((kb / h.mem_total_kb) * 100).toFixed(1);
-  const pct = Nav.memPct(m);
-  const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
+  const pct = M.memPct(m);
+  const level = pct >= 95 ? " full" : pct >= M.RATED ? " hot" : "";
   const parts = [["agents", "Agents", agentKb]];
   if (split) parts.push(["mine", "Your other processes", yoursKb]);
   if (!split || othersKb > 0) parts.push(["other", split ? "Other accounts" : "Other", othersKb]);
@@ -182,9 +186,9 @@ function accounts(m) {
 
 function limit(m) {
   const h = m.health;
-  const pct = Nav.limitPct(m);
+  const pct = M.limitPct(m);
   if (pct === null) return "";
-  const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
+  const level = pct >= 95 ? " full" : pct >= M.RATED ? " hot" : "";
   return html`<div class="mem-limit${level}">Your account's limit: <b>${gb(h.limit_used_kb)} of ${gb(h.limit_kb)} GB</b>, ${pct}%</div>`;
 }
 
@@ -193,7 +197,7 @@ function disk(m) {
   if (!m.up || !h || !h.disk_total_kb) return "";
   const pct = Math.round((h.disk_used_kb / h.disk_total_kb) * 100);
   const freeKb = Math.max(h.disk_total_kb - h.disk_used_kb, 0);
-  const level = pct >= 95 ? " full" : pct >= Nav.RATED ? " hot" : "";
+  const level = pct >= 95 ? " full" : pct >= M.RATED ? " hot" : "";
   const label = `Disk ${pct}% used of ${gb(h.disk_total_kb)} GB, ${gb(freeKb)} GB free`;
   return html`<div class="mem disk${level}">
     <div class="mem-head"><span>Disk <span class="mem-pct">${pct}% used</span> of ${gb(h.disk_total_kb)} GB</span><span>${gb(freeKb)} GB free</span></div>
@@ -386,7 +390,7 @@ function group(state, m) {
     ? html`<div class="mg-foot">${outside.toggle}${gone.toggle}</div>${outside.panel}${gone.panel}` : "";
   const bodyId = `mg-body-${m.name.replace(/[^a-z0-9-]/gi, "-")}`;
   const body = collapsed ? "" : html`<div id=${bodyId}><ul class="s-list">${rows.length ? repeat(rows, (s) => s.id, sessionRow) : empty}</ul>${foot}</div>`;
-  const state_ = m.up ? (Nav.memPct(m) >= Nav.RATED ? " hot" : "") : " down";
+  const state_ = m.up ? (M.memPct(m) >= M.RATED ? " hot" : "") : " down";
   const dot = m.up ? (state_ === " hot" ? "warn" : "ok") : "bad";
   const fold = filtering()
     ? html`<span class="mg-fold" aria-hidden="true"></span>`
@@ -441,7 +445,7 @@ function renderCounts(state) {
 
 function renderGroups(state) {
   const machine = state.machines.find((m) => m.name === selected);
-  const machines = Nav.order(state.machines).filter((m) => !selected || m.name === selected);
+  const machines = M.order(state.machines).filter((m) => !selected || m.name === selected);
   $("title").textContent = machine ? machine.name : "Sessions";
   renderCounts(state);
   const visible = state.sessions.filter((s) => (!selected || s.machine === selected) && (s.attachable || s.stale) && matches(s));
@@ -467,9 +471,46 @@ function renderGroups(state) {
   followMenuTrigger();
 }
 
+const ALL_ICON = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>';
+Shell.column.innerHTML = `<nav class="col-list dash-all" aria-label="Machines"><a class="col-row" href="/" data-all>${ALL_ICON}<span class="col-row-name">All machines</span></a></nav><div class="col-tree"></div>`;
+const allRow = Shell.column.querySelector("[data-all]");
+const treeEl = Shell.column.querySelector(".col-tree");
+
+function sessionState(s) {
+  if (s.stale) return "";
+  if (s.activity === "blocked") return "blocked";
+  if (s.activity === "active") return "working";
+  if (s.stopped) return "error";
+  return "idle";
+}
+
+function renderChips(state) {
+  const chip = (name, label, dot = "") => html`<button type="button" class="dash-chip" data-chip=${name} aria-pressed=${String(selected === name)}>${dot}${label}</button>`;
+  litRender(html`${chip("", "All machines")}${repeat(M.order(state.machines), (m) => m.name, (m) => chip(m.name, m.name, html`<span class="dot ${M.tone(m)}" title=${M.word(m)}></span>`))}<a class="dash-chip" href="/add">${ICONS.plus}Add machine</a>`, $("chips"));
+}
+
+function renderColumn(state) {
+  renderChips(state);
+  if (selected) allRow.removeAttribute("aria-current");
+  else allRow.setAttribute("aria-current", "true");
+  Tree.render(treeEl, state, {
+    stateOf: sessionState,
+    selected: selected ? { machine: selected } : null,
+    onMachine: pickMachine,
+    onSession: (key) => { location.href = `/workspace?open=${encodeURIComponent(key)}`; },
+    onFolder: ({ machine, folder }) => { location.href = `/workspace?folder=${encodeURIComponent(`${machine}/${folder}`)}`; },
+  });
+}
+
+function pickMachine(name) {
+  selected = name;
+  syncAddress();
+  if (current) render(current);
+}
+
 function render(state) {
   if (selected && !state.machines.some((m) => m.name === selected)) selected = "";
-  Nav.render(state, selected);
+  renderColumn(state);
   renderMeshBanner(state.mesh);
   renderHealthBanner(state.problems);
   renderGroups(state);
@@ -499,7 +540,7 @@ async function refresh() {
     const res = await fetch("/state", { headers: { Accept: "application/json" } });
     if (res.status === 401) { location.href = "/login"; return; }
     if (!res.ok) throw new Error(`status ${res.status}`);
-    Nav.checkBuild(res);
+    Shell.checkBuild(res);
     const text = await res.text();
     lastOk = Date.now();
     $("offline").hidden = true;
@@ -507,6 +548,7 @@ async function refresh() {
       lastJson = text;
       lastRender = Date.now();
       fetched = JSON.parse(text);
+      Shell.update(fetched);
       current = withoutLeaving(fetched);
       render(current);
     }
@@ -570,7 +612,7 @@ $("groups").addEventListener("focusin", (e) => {
 });
 
 document.addEventListener("keydown", (e) => {
-  if (e.metaKey || e.ctrlKey || e.altKey) return;
+  if (e.defaultPrevented || e.metaKey || e.ctrlKey || e.altKey) return;
   if (e.key === "Escape" && !$("menu").hidden) { closeMenu(true); return; }
   if (e.target.closest("input, select, textarea, dialog[open]")) return;
   if (e.key === "/") { e.preventDefault(); $("search").focus(); return; }
@@ -580,13 +622,15 @@ document.addEventListener("keydown", (e) => {
   else if (e.key === "n") { e.preventDefault(); openNew(); }
 });
 
-$("nav-machines").addEventListener("click", (e) => {
-  const link = e.target.closest("a[data-machine]");
-  if (!link) return;
+$("chips").addEventListener("click", (e) => {
+  const chip = e.target.closest("[data-chip]");
+  if (chip) pickMachine(chip.dataset.chip);
+});
+
+allRow.addEventListener("click", (e) => {
+  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
   e.preventDefault();
-  selected = link.dataset.machine;
-  syncAddress();
-  if (current) render(current);
+  pickMachine("");
 });
 
 function syncAddress() {
@@ -718,16 +762,12 @@ function followMenuTrigger() {
 async function mergePull(s, b) {
   const p = s.pull;
   const ref = window.YardbellPull.ref(p);
-  const noun = window.YardbellPull.noun(p).toLowerCase();
-  const sure = await ask(
-    `Merge ${ref}?`,
-    `${p.title ? `${p.title}. ` : ""}It merges into ${p.base || "its base branch"} on ${p.forge === "gitlab" ? "GitLab" : "GitHub"}, the way Settings says, and only if nothing was pushed to the ${noun} since this page showed it. The branch is kept.`,
-    { confirm: "Merge" },
-  );
+  const text = window.YardbellPull.mergeText(p);
+  const sure = await ask(text.title, text.body, { confirm: "Merge" });
   if (!sure) return;
   b.disabled = true;
   try {
-    await api("POST", `/sessions/${encodeURIComponent(s.machine)}/${encodeURIComponent(s.tmux)}/merge`, { head: p.head });
+    await window.YardbellPull.merge(s);
     toast(`Merged ${ref}`, "ok");
     Live.soon();
   } catch (err) {
@@ -739,7 +779,7 @@ async function mergePull(s, b) {
 async function ask(title, body, options) {
   const back = document.activeElement;
   const visible = back?.matches(":focus-visible");
-  const yes = await Nav.confirm(title, body, options);
+  const yes = await Shell.confirm(title, body, options);
   const lost = !document.activeElement || document.activeElement === document.body;
   if (lost && back?.isConnected) back.focus({ preventScroll: true, focusVisible: visible });
   return yes;
@@ -956,7 +996,7 @@ function openNewIfClosed() {
 if (window.__TAURI__) {
   window.__TAURI__.event.listen("new-session", () => openNewIfClosed()).catch(() => {});
   document.addEventListener("keydown", (e) => {
-    if (Nav.appKey(e) !== "n") return;
+    if (Shell.appKey(e) !== "n") return;
     e.preventDefault();
     openNewIfClosed();
   });

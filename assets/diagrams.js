@@ -1,8 +1,10 @@
 import { html, nothing, render } from "/vendor/lit-html/lit-html.js";
 
 const $ = (id) => document.getElementById(id);
-const Nav = window.YardbellNav;
+const Shell = window.YardbellShell;
+const M = window.YardbellMachines;
 let data = null;
+let machines = null;
 let loadError = "";
 let busy = "";
 let draw = null;
@@ -71,7 +73,7 @@ function install(m) {
 }
 
 async function removeDiagram(d) {
-  const sure = await Nav.confirm(`Delete ${title(d)}?`, `This removes its folder from .archify in ${d.folder} on ${d.machine}.`, { confirm: "Delete", danger: true });
+  const sure = await Shell.confirm(`Delete ${title(d)}?`, `This removes its folder from .archify in ${d.folder} on ${d.machine}.`, { confirm: "Delete", danger: true });
   if (!sure) return;
   if (opened === d) closeViewer();
   await act(`delete:${d.machine}/${d.folder}/${d.dir}`, () => api("POST", "/api/diagrams/delete", { machine: d.machine, folder: d.folder, dir: d.dir }));
@@ -192,11 +194,11 @@ function closeViewer() {
   draw_();
 }
 
-function setupRows() {
-  const machines = data.machines.filter((m) => m.state !== "installed");
-  if (!machines.length) return nothing;
-  return html`<ul class="rows dg-setup">${machines.map((m) => html`<li class="row">
-    <span class="dg-where"><strong>${m.name}</strong>
+const sectionId = (name) => `dg-machine-${name}`;
+
+function setupRow(m) {
+  return html`<ul class="rows dg-setup"><li class="row">
+    <span class="dg-where"><strong>Archify</strong>
       ${m.state === "needs_node" ? html`<small>Install Node 18 or later on ${m.name}, then check again. Yardbell does not install it.</small>` : nothing}
       ${m.state === "offline" ? html`<small class="wt-error">${m.problem}</small>` : nothing}
     </span>
@@ -204,18 +206,35 @@ function setupRows() {
     ${m.state === "not_installed"
       ? html`<button class="btn" type="button" ?disabled=${busy === `install:${m.name}`} @click=${() => install(m)}>${busy === `install:${m.name}` ? "Installing…" : "Install"}</button>`
       : html`<button class="btn quiet" type="button" @click=${load}>Check again</button>`}
-  </li>`)}</ul>`;
+  </li></ul>`;
 }
 
-function list() {
-  const rows = [...data.diagrams].sort((a, b) => b.modified - a.modified);
-  if (!rows.length) {
-    return html`<div class="dg-empty"><p class="dg-empty-title">No diagrams yet</p>
-      <p>${ready().length ? "Draw one, and an agent maps the repository with Archify. It uses that agent's tokens." : "Install Archify on a machine to draw one."}</p></div>`;
+// Sections follow the column's order, which comes from /state; until it arrives, the server's.
+function byColumn(items) {
+  if (!machines) return items;
+  const at = new Map(M.order(machines).map((m, i) => [m.name, i]));
+  return [...items].sort((a, b) => (at.get(a.name) ?? at.size) - (at.get(b.name) ?? at.size));
+}
+
+function sections() {
+  if (!data.machines.length) {
+    return html`<div class="dg-empty"><p class="dg-empty-title">No machines yet</p><p><a href="/add">Add a machine</a> to draw its repositories.</p></div>`;
   }
+  return byColumn(data.machines).map((m) => {
+    const rows = data.diagrams.filter((d) => d.machine === m.name).sort((a, b) => b.modified - a.modified);
+    const installed = m.state === "installed";
+    return html`<section class="dg-section" id=${sectionId(m.name)} aria-labelledby=${`${sectionId(m.name)}-head`}>
+      <h2 class="dg-section-head" id=${`${sectionId(m.name)}-head`}>${m.name}</h2>
+      ${installed ? nothing : setupRow(m)}
+      ${rows.length ? list(rows) : installed ? html`<p class="dg-none">No diagrams yet. Draw one, and an agent maps a repository with Archify.</p>` : nothing}
+    </section>`;
+  });
+}
+
+function list(rows) {
   return html`<ul class="rows dg-list">${rows.map((d) => html`<li class="row">
     <span class="dg-where"><button class="link-btn dg-open" type="button" @click=${() => openViewer(d)}>${title(d)}</button>
-      <small>${d.folder} on ${d.machine}, ${when(d.modified)}</small></span>
+      <small>${d.folder}, ${when(d.modified)}</small></span>
     <button class="btn" type="button" @click=${() => openBuild(d).catch((err) => toast(err.message))}>Build from this</button>
     <button class="btn" type="button" ?disabled=${!ready().some((m) => m.name === d.machine)} @click=${() => openDraw(d.machine, d.folder)}>Draw again</button>
     <button class="btn quiet danger" type="button" ?disabled=${busy === `delete:${d.machine}/${d.folder}/${d.dir}`} @click=${() => removeDiagram(d)}>Delete</button>
@@ -281,16 +300,44 @@ function viewer(d) {
 
 function page() {
   if (opened) return viewer(opened);
-  if (loadError && !data) return html`<header class="main-head"><h1>Diagrams</h1></header><p class="wt-error" role="alert">${loadError}</p>`;
-  if (!data) return html`<header class="main-head"><h1>Diagrams</h1></header><p class="help">Asking your machines…</p>`;
-  return html`<header class="main-head"><h1>Diagrams</h1>
+  if (loadError && !data) return html`<header class="main-head col-dup"><h1>Diagrams</h1></header><p class="wt-error" role="alert">${loadError}</p>`;
+  if (!data) return html`<header class="main-head col-dup"><h1>Diagrams</h1></header><p class="help">Asking your machines…</p>`;
+  return html`<header class="main-head page-bar dg-head"><h1 class="col-dup">Diagrams</h1>
+      <a class="pg-chip" href="https://github.com/tt-a1i/archify" target="_blank" rel="noopener">Archify ${data.version}</a>
+      <p class="help dg-intro">Interactive maps of your repositories. They are saved in each folder's <code>.archify</code>, kept out of git.</p>
       <button class="btn primary" type="button" id="draw-new" ?disabled=${!ready().length} @click=${() => openDraw()}>Draw architecture</button></header>
-    <p class="help dg-intro">Interactive maps of your repositories, drawn with <a href="https://github.com/tt-a1i/archify" target="_blank" rel="noopener">Archify</a> ${data.version}. They are saved in each folder's <code>.archify</code>, kept out of git.</p>
-    ${setupRows()}${list()}${drawDialog()}${buildDialog()}`;
+    ${sections()}${drawDialog()}${buildDialog()}`;
 }
 
 function draw_() {
   render(page(), $("diagrams-root"));
+  mark();
+}
+
+const editing = () => document.getElementById("draw-dialog")?.open || document.getElementById("build-dialog")?.open;
+
+Shell.column.innerHTML = '<nav class="col-list" aria-label="Machines"></nav>';
+const mark = Shell.spy();
+
+function machineRow(m) {
+  const down = m.up ? "" : m.reason ? "unreachable" : "offline";
+  const mem = M.memPct(m);
+  const tone = M.tone(m);
+  return html`<a class="col-row" href=${`#${sectionId(m.name)}`} title=${down ? m.reason || "offline" : M.word(m)}>
+    <span class="dot ${tone}"></span><span class="col-row-name">${m.name}</span><span class="col-row-meta ${tone === "ok" ? "" : tone}">${down || (mem === null ? "" : `${mem}%`)}</span></a>`;
+}
+
+function column() {
+  render(machines.length ? M.order(machines).map(machineRow) : html`<p class="col-empty">No machines yet.</p>`, Shell.column.firstElementChild);
+  mark();
+}
+
+async function loadState() {
+  const state = await Shell.loadState();
+  if (!state) return;
+  machines = state.machines || [];
+  column();
+  if (data && !editing()) draw_();
 }
 
 async function load() {
@@ -304,7 +351,7 @@ async function load() {
   } catch (err) {
     loadError = err.message;
   }
-  if (!document.getElementById("draw-dialog")?.open && !document.getElementById("build-dialog")?.open) draw_();
+  if (!editing()) draw_();
 }
 
 addEventListener("popstate", () => {
@@ -315,3 +362,5 @@ document.addEventListener("visibilitychange", () => {
 });
 draw_();
 load();
+loadState().catch(() => {});
+window.YardbellLive.follow(loadState, 10000);

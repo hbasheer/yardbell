@@ -2,16 +2,18 @@
 name: Yardbell
 description: One page for a developer's machines, agent sessions and app ports.
 colors:
-  app: "#f1f1f1"
+  app: "#f2f2f2"
   bg: "#ffffff"
-  side: "#f7f7f7"
+  side: "#f2f2f2"
+  rail: "#f2f2f2"
+  col: "#fafafa"
   surface: "#ffffff"
-  hover: "#f4f4f4"
-  selected: "#ebebeb"
-  ink: "#303030"
+  hover: "#f2f2f2"
+  selected: "#ececec"
+  ink: "#2a2a2a"
   ink-2: "#4a4a4a"
-  muted: "#616161"
-  line: "#e3e3e3"
+  muted: "#6b6b6b"
+  line: "#e6e6e6"
   line-strong: "#cccccc"
   field-line: "#b5b5b5"
   brand: "#303030"
@@ -21,85 +23,102 @@ colors:
   accent-soft: "#e0f0ff"
   accent-text: "#0e5399"
   ok: "#16a34a"
-  ok-text: "#15803d"
+  ok-text: "#1b7a49"
   warn: "#d97706"
-  warn-text: "#b45309"
+  warn-text: "#9a6200"
   bad: "#dc2626"
-  bad-text: "#b91c1c"
+  bad-text: "#b23329"
   mem: "#8a8a8a"
   mem-track: "#ffffff"
-  app-dark: "#151718"
-  bg-dark: "#1c1f21"
-  side-dark: "#212426"
-  hover-dark: "#26292c"
-  selected-dark: "#2c3033"
-  ink-dark: "#e3e3e3"
+  app-dark: "#121314"
+  bg-dark: "#18191b"
+  side-dark: "#121314"
+  rail-dark: "#121314"
+  col-dark: "#18191b"
+  hover-dark: "#202124"
+  selected-dark: "#26282b"
+  ink-dark: "#dcdcdc"
   ink-2-dark: "#c4c4c4"
-  muted-dark: "#a0a0a0"
-  line-dark: "#2c3033"
-  line-strong-dark: "#3d4246"
+  muted-dark: "#8e9196"
+  line-dark: "#27292c"
+  line-strong-dark: "#2e3034"
   field-line-dark: "#4a4a4a"
   brand-dark: "#e3e3e3"
-  brand-ink-dark: "#1c1f21"
+  brand-ink-dark: "#18191b"
   accent-soft-dark: "#0f2a44"
   accent-text-dark: "#7cc0ff"
   ok-dark: "#22c55e"
-  ok-text-dark: "#4ade80"
+  ok-text-dark: "#5fd396"
   warn-dark: "#f59e0b"
-  warn-text-dark: "#fbbf24"
+  warn-text-dark: "#f5b955"
   bad-dark: "#ef4444"
-  bad-text-dark: "#f87171"
+  bad-text-dark: "#f07c73"
   mem-dark: "#8a8a8a"
   terminal: "#0a0a0b"
   terminal-bar: "#151718"
 typography:
   headline:
-    fontFamily: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
     fontSize: "18px"
     fontWeight: 600
     lineHeight: 1.5
     letterSpacing: "-0.01em"
   title:
-    fontFamily: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
     fontSize: "16px"
     fontWeight: 600
     lineHeight: 1.5
   section:
-    fontFamily: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
     fontSize: "15px"
     fontWeight: 600
     lineHeight: 1.5
   body:
-    fontFamily: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
     fontSize: "14px"
     fontWeight: 400
     lineHeight: 1.5
     fontFeature: "\"cv11\", \"ss01\", \"tnum\""
   body-strong:
-    fontFamily: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
     fontSize: "14px"
     fontWeight: 550
     lineHeight: 1.5
   label:
-    fontFamily: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
     fontSize: "13px"
     fontWeight: 500
     lineHeight: 1
   caption:
-    fontFamily: "IBM Plex Sans, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
     fontSize: "12px"
     fontWeight: 400
     lineHeight: 1.5
   mono:
-    fontFamily: "IBM Plex Mono, ui-monospace, SF Mono, Menlo, Consolas, monospace"
+    fontFamily: "Geist Mono Variable, Geist Mono, ui-monospace, SF Mono, Menlo, Consolas, monospace"
     fontSize: "12px"
     fontWeight: 400
     lineHeight: 1.5
   mono-block:
-    fontFamily: "IBM Plex Mono, ui-monospace, SF Mono, Menlo, Consolas, monospace"
+    fontFamily: "Geist Mono Variable, Geist Mono, ui-monospace, SF Mono, Menlo, Consolas, monospace"
     fontSize: "12.5px"
     fontWeight: 400
     lineHeight: 1.6
+  row:
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontSize: "13px"
+    fontWeight: 400
+    lineHeight: 1.5
+  small:
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontSize: "11.5px"
+    fontWeight: 400
+    lineHeight: 1.5
+  group-label:
+    fontFamily: "Geist Variable, Geist, system-ui, -apple-system, Segoe UI, Roboto, sans-serif"
+    fontSize: "11px"
+    fontWeight: 600
+    lineHeight: 1.5
 rounded:
   bar: "4px"
   control: "8px"
@@ -119,6 +138,9 @@ spacing:
   3xl: "24px"
   4xl: "32px"
   page-end: "64px"
+  row-h: "26px"
+  row-h-touch: "44px"
+  strip-h: "22px"
 components:
   button:
     backgroundColor: "{colors.surface}"
@@ -226,51 +248,51 @@ In October 2026 the product owner asked for this Commslayer-style shell, which r
 
 **Key Characteristics:**
 - Gray rail (App) behind a white canvas (Paper); machine sections, peers and lists are cards with a hairline ring and a very soft stacked shadow.
-- Primary actions are near-black (Brand) with a bevel; blue is for focus, links, selection edges and the agents' share of memory.
+- Primary actions are near-black (Brand) with a bevel; blue is for focus, links and the agents' share of memory.
 - Green, amber and red carry state only, always paired with words.
-- IBM Plex Sans for interface text with tabular numerals; IBM Plex Mono for branches, ports and code.
+- Geist for interface text with tabular numerals; Geist Mono for branches, ports and code. Terminals keep IBM Plex Mono so their character grid stays put.
 - Light and dark are both first-class, switched by `prefers-color-scheme`.
 
 ## Colors
 
-A neutral gray field (no blue cast), a near-black brand fill for primary actions, one blue for focus and selection, and a restrained semantic trio.
+A neutral gray field (no blue cast), a near-black brand fill for primary actions, one blue for focus, links and agents, and a restrained semantic trio.
 
 ### Primary
-- **Brand** (#303030 light, #e3e3e3 dark, text #ffffff / #1c1f21): primary buttons (New session, Start and open, Send, Log in), the toast and the wordmark's mark. Hover to #1a1a1a (light) or #ffffff (dark).
-- **Signal Blue** (#1f93ff): focus outlines, the keyboard row's left edge, the pressed peer's ring, switches when on, the agents' share inside the memory bar, checkbox accents.
-- **Blue Wash** (#e0f0ff light, #0f2a44 dark) with **Blue Ink** (#0e5399 light, #7cc0ff dark): the Working badge, the pressed peer and links in help text.
+- **Brand** (#303030 light, #e3e3e3 dark, text #ffffff / #18191b): primary buttons (New session, Start and open, Send, Log in), the toast and the wordmark's mark. Hover to #1a1a1a (light) or #ffffff (dark).
+- **Signal Blue** (#1f93ff): focus outlines, switches when on, the agents' share inside the memory bar, checkbox accents.
+- **Blue Wash** (#e0f0ff light, #0f2a44 dark) with **Blue Ink** (#0e5399 light, #7cc0ff dark): the Working badge and links in help text.
 
 ### Neutral
-- **App** (#f1f1f1 light, #151718 dark): the rail. The page background, the sidebar (flush, no border), the tab bar, the login backdrop, the inside of segmented controls.
-- **Paper** (#ffffff light, #1c1f21 dark): the main canvas, cards, buttons, inputs, dialogs, the selected nav pill.
-- **Side** (#f7f7f7 light, #212426 dark): card header rows, dialog footers, code blocks, tool steps in Dispatch.
-- **Hover** (#f4f4f4 light, #26292c dark) on Paper, and **Rail Hover** (5% black, 6% white) on the rail.
-- **Ink** (#303030 / #e3e3e3), **Ink 2** (#4a4a4a / #c4c4c4), **Muted** (#616161 / #a0a0a0): text tiers.
-- **Rule** (#e3e3e3 / #2c3033): dividers. **Strong Rule** (#cccccc / #3d4246): scrollbars and frames. **Field Line** (#b5b5b5 / #4a4a4a): input borders, darkening to Muted on hover.
+- **App** (#f2f2f2 light, #121314 dark): the rail. The page background, the sidebar (flush, no border), the tab bar, the login backdrop, the inside of segmented controls.
+- **Paper** (#ffffff light, #18191b dark): the main canvas, cards, buttons, inputs, dialogs, the selected nav pill.
+- **Side** and **Rail** (#f2f2f2 light, #121314 dark): card header rows, dialog footers, code blocks, tool steps in Dispatch, and the rail. **Column** (#fafafa light, #18191b dark): the list column beside the canvas.
+- **Hover** (#f2f2f2 light, #202124 dark) on Paper, and **Rail Hover** (5% black, 6% white) on the rail.
+- **Ink** (#2a2a2a / #dcdcdc), **Ink 2** (#4a4a4a / #c4c4c4), **Muted** (#6b6b6b / #8e9196): text tiers. **Selected** (#ececec / #26282b) marks the current row.
+- **Rule** (#e6e6e6 / #27292c): dividers. **Strong Rule** (#cccccc / #2e3034): scrollbars and frames. **Field Line** (#b5b5b5 / #4a4a4a): input borders, darkening to Muted on hover.
 - **Memory Gray** (#8a8a8a) on **Memory Track** (Paper): the non-agent share of used memory.
 - **Terminal** (#0a0a0b) and **Terminal Bar** (#151718): the always-dark terminal page and the selected session tab.
 
 ### Semantic
-- **Healthy Green** (#16a34a / #22c55e dark; text #15803d / #4ade80): connected dots, running tunnels, completed checklist steps.
-- **Caution Amber** (#d97706 / #f59e0b dark; text #b45309 / #fbbf24): ports whose app is not running, and a memory bar past the 85% rated line.
-- **Fault Red** (#dc2626 / #ef4444 dark; text #b91c1c / #f87171): unreachable machines, tunnels down, failed steps, error text, the Stop button on hover.
+- **Healthy Green** (#16a34a / #22c55e dark; text #1b7a49 / #5fd396): connected dots, running tunnels, completed checklist steps.
+- **Caution Amber** (#d97706 / #f59e0b dark; text #9a6200 / #f5b955): ports whose app is not running, and a memory bar past the 85% rated line.
+- **Fault Red** (#dc2626 / #ef4444 dark; text #b23329 / #f07c73): unreachable machines, tunnels down, failed steps, error text, the Stop button on hover.
 
 Each semantic color has a fill value (dots, bars, tinted marks) and a darker text value tuned for contrast. Use the text value whenever the color sits on words.
 
 ### Named Rules
 **The Brand Acts Rule.** Near-black means "the main action here". One per view region, placed last in its row.
 
-**The One Blue Rule.** Blue means focus, selection or an agent. It never fills a button or a section, and no second accent hue joins it.
+**The One Blue Rule.** Blue means focus or an agent. Selection is grey (Selected fill, Strong Rule ring), never blue. It never fills a button or a section, and no second accent hue joins it.
 
 **The State Has Words Rule.** A semantic color never appears alone: every dot or tinted bar is paired with text that names the state (SSH timeout, tunnel down, app not running).
 
 ## Typography
 
 **Display Font:** none; the system has no display tier.
-**Body Font:** IBM Plex Sans (with system-ui, Segoe UI, Roboto)
-**Label/Mono Font:** IBM Plex Mono (with ui-monospace, SF Mono, Menlo, Consolas)
+**Body Font:** Geist (with system-ui, Segoe UI, Roboto)
+**Label/Mono Font:** Geist Mono (with ui-monospace, SF Mono, Menlo, Consolas). Terminals use IBM Plex Mono.
 
-**Character:** IBM Plex Sans with tabular numerals for figures, so counts, GB figures and load averages align in columns. IBM Plex Mono marks text that came from a machine: branch names, port numbers, commands.
+**Character:** Geist with tabular numerals for figures, so counts, GB figures and load averages align in columns. Geist Mono marks text that came from a machine: branch names, port numbers, commands.
 
 ### Hierarchy
 - **Headline** (600, 18px, -0.01em): the page title in the main header ("Sessions" or a machine name).
@@ -279,10 +301,11 @@ Each semantic color has a fill value (dots, bars, tinted marks) and a darker tex
 - **Body** (400, 13px, 1.5): table cells, form inputs, step messages. Emphasis inside body uses 550 (machine names, folders, checklist labels) and 600 for ticket ids.
 - **Label** (500, 13px): form labels, sidebar links, notes and toasts. Buttons are 500 at 12px.
 - **Caption** (400 or 500, 12px): column headers, badges, connection status, memory text, counts.
+- **Row** (400, 13px): list rows in the dense shell. **Small** (400, 11.5px): secondary text on a row. **Group label** (600, 11px, uppercase): group headers.
 - **Mono** (400, 12px for branches; 12.5px for port numbers and code blocks at 1.6 line height).
 
 ### Named Rules
-**The Machine Text Rule.** If the string came from a shell (branch, port, command, path in a code block), it is set in IBM Plex Mono. Human labels and names stay in IBM Plex Sans.
+**The Machine Text Rule.** If the string came from a shell (branch, port, command, path in a code block), it is set in Geist Mono. Human labels and names stay in Geist.
 
 **The Tabular Rule.** Numbers are always tabular: counts, memory figures, load, ports and timestamps carry `tabular-nums`. Names and paths stay proportional, because the tabular feature also widens hyphens ("mac-mini", "ENG-158").
 
@@ -290,7 +313,7 @@ Each semantic color has a fill value (dots, bars, tinted marks) and a darker tex
 
 Every signed-in page shares one shell: a sticky sidebar on the App rail, 256px by default and the same width on every page: its right edge drags it from 220 to 480px, and it folds to a 60px icon rail and a fluid main column (`minmax(0, 1fr)`). The main column is a Paper canvas inset 8px from the top, right and bottom, with a 12px radius and the card ring, padded 20px top, 32px sides, 64px bottom. The main header is a row at least 36px tall: title, "Updated" time, a flexible spacer, then actions with the page's one Brand button last (on the dashboard: Refresh as a 28px icon button, Add machine, New session). Below it the dashboard has a toolbar row 16px above the sections: a 340px search field (16px icon inside, a `/` key hint that hides on focus or once typed) and an All / Working / Idle segmented control with counts. The dashboard stacks machine cards 16px apart; settings and add machine put their sections in a 760px column with 32px between sections. Login centers a 360px panel on the App rail.
 
-Spacing is a small, mostly even rhythm: 2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 32, 64px. Table cells use 12px by 14 to 16px; list rows use 10px by 14px; gaps inside controls are 6 to 8px.
+Spacing is a small, mostly even rhythm: 2, 4, 6, 8, 10, 12, 14, 16, 20, 24, 32, 64px. Table cells use 12px by 14 to 16px; list rows use 10px by 14px; gaps inside controls are 6 to 8px. Dense list rows are 26px tall on desktop (`--row-h`) and at least 44px on phones (`--row-h-touch`); the status strip is 22px (`--strip-h`).
 
 At 760px and below: the sidebar becomes a non-sticky header with the wordmark and compact Settings and Log out at top right, and on the dashboard a horizontally scrolling strip of 34px machine pills (All, each machine with dot and count, Add machine). The canvas goes flush with no radius or ring. Machine section headers stack the memory block under the name. Session rows put folder and status on top, branch and agent on their own lines, ports and actions full width with a wide Open and a compact Stop beside it. Two-column forms collapse to one. Safe-area insets are respected at top and bottom.
 
@@ -337,7 +360,7 @@ Compact and bevelled; the Brand button is the only filled one in a region.
 - **Internal Padding:** 12px by 16px headers, 12px by 14px rows, 20px panels, 20px dialogs.
 
 ### Inputs / Fields
-- **Style:** 36px tall, 10px horizontal padding, 1px Strong Rule border, 6px radius, Paper fill, 14px IBM Plex Sans. Labels sit above at 13px/500 Ink 2 with a 6px gap; fields stack 14px apart.
+- **Style:** 36px tall, 10px horizontal padding, 1px Strong Rule border, 6px radius, Paper fill, 14px Geist. Labels sit above at 13px/500 Ink 2 with a 6px gap; fields stack 14px apart.
 - **Focus:** border turns Signal Blue, outline flush (offset 0).
 - **Checkboxes:** 16px, tinted with the accent; the label runs inline at 400 weight.
 - **Error:** a 13px Fault Red text line below the form, reserved at one line height so the layout does not jump.
@@ -353,12 +376,12 @@ The answer to "where is there room" without reading. It sits in the right column
 ### Machine Sections
 The main view: one 12px card per machine with the Card ring, ordered down first, then memory-hot, then the rest in config order, 16px apart. No column headers and no Machine column; the section is the machine.
 - **Header** (Side, 12px by 16px, 1px bottom rule): left, a 22px fold chevron (pointing down when open, right when folded; folded sections keep only the header, remembered per machine; replaced by an empty spacer while searching), the state dot, the machine name (14px/600), a muted "n sessions" count while up, and below it the connection line (12px Muted, Fault Red with the reason and last-seen time when down; a down section's ring tints red). Middle, the memory block (see Memory Bar). Right, quiet 28px icon buttons with tooltips: **+** New session here and the terminal glyph Open a shell (only while up), and **⋯** which opens the machine menu.
-- **Session row** (12px by 14px, 1px rules between rows): a grid that lines up across sections: session, a 104px status column, a ports column (dropped when no visible session has ports), and right-aligned actions. Line one: folder at 550 and the ticket chip (12px/600 Ink, 1px Strong Rule border, 4px radius). Line two in 12px Muted: the branch in mono and the agent's label, joined by a "·". Status is the Working or Idle chip ("Last known" for stale rows, which dim). Ports list one line per service: state dot, service in Ink 2, mono port (linked with an external icon when tunnelled), state word in the matching text color. Actions: Open (default with a terminal icon), optional Terminal app, and a quiet Stop that appears on row hover or focus with a fine pointer and is always visible on touch. The whole row opens the terminal; hover fills Hover; the keyboard row (j/k) fills Hover with a 2px Signal Blue edge.
+- **Session row** (12px by 14px, 1px rules between rows): a grid that lines up across sections: session, a 104px status column, a ports column (dropped when no visible session has ports), and right-aligned actions. Line one: folder at 550 and the ticket chip (12px/600 Ink, 1px Strong Rule border, 4px radius). Line two in 12px Muted: the branch in mono and the agent's label, joined by a "·". Status is the Working or Idle chip ("Last known" for stale rows, which dim). Ports list one line per service: state dot, service in Ink 2, mono port (linked with an external icon when tunnelled), state word in the matching text color. Actions: Open (default with a terminal icon), optional Terminal app, and a quiet Stop that appears on row hover or focus with a fine pointer and is always visible on touch. The whole row opens the terminal; hover fills Hover; the keyboard row (j/k) fills Selected with a 1px Strong Rule ring.
 - **Empty:** "No open sessions" with a quiet Start one button that preselects the machine; a down machine says its sessions reappear when it reconnects.
 - **Footer** (1px top rule, 4px by 6px): toggles for "n outside tmux" and "n ended", 30px tall, 12.5px/500 Muted with the count at 600 Ink 2 and a 14px chevron that turns 90 degrees when open (160ms ease-out). Each opens a panel on a light Side wash: outside tmux shows a one-sentence help line (one Blue Ink link) and a bordered list of rows with **Move to tmux** (a Working chip only when busy); ended shows rows with Resume and a quiet Forget. Open state is remembered per machine and per browser.
 
 ### Board
-The dashboard's other layout, picked by a two-button Segmented Control (Machines, Board) at the right end of the toolbar, which stretches to its own full-width row on a phone. Five lanes in a fixed order: Needs you, Working, In review, Ready to merge, Idle. Each lane is a 12px card on the Side wash with the Card ring: a 13px/600 Ink head row (10px by 12px, 1px bottom rule) with a 6px state dot (Caution Amber for Needs you, Healthy Green for Working and Ready to merge, Strong Rule for the rest), the lane name and a muted tabular count at the right; then the session cards 8px apart inside 8px padding, or a 13px Muted "None". A session card is Paper with a 1px Rule and an 8px radius, 10px by 12px: folder at 550 and the ticket chip, the branch in mono, a line with the pull request badge and setup flag, and a 12px Muted foot with "machine · agent" on the left and the status chip on the right. It opens like a session row, with the same Hover fill and Signal Blue keyboard edge, and on touch the whole card is the target since it has no other buttons. The lanes sit side by side once the canvas is at least 820px wide (a container query, so the sidebar's width counts) and stack in one column below that, so the page never scrolls sideways.
+The dashboard's other layout, picked by a two-button Segmented Control (Machines, Board) at the right end of the toolbar, which stretches to its own full-width row on a phone. Five lanes in a fixed order: Needs you, Working, In review, Ready to merge, Idle. Each lane is a 12px card on the Side wash with the Card ring: a 13px/600 Ink head row (10px by 12px, 1px bottom rule) with a 6px state dot (Caution Amber for Needs you, Healthy Green for Working and Ready to merge, Strong Rule for the rest), the lane name and a muted tabular count at the right; then the session cards 8px apart inside 8px padding, or a 13px Muted "None". A session card is Paper with a 1px Rule and an 8px radius, 10px by 12px: folder at 550 and the ticket chip, the branch in mono, a line with the pull request badge and setup flag, and a 12px Muted foot with "machine · agent" on the left and the status chip on the right. It opens like a session row, with the same Hover fill and grey keyboard ring, and on touch the whole card is the target since it has no other buttons. The lanes sit side by side once the canvas is at least 820px wide (a container query, so the sidebar's width counts) and stack in one column below that, so the page never scrolls sideways.
 
 ### Menu
 A fixed popover under its trigger, right-aligned to it and kept 8px inside the viewport: 200px minimum, 4px padding, 12px radius, Paper, and the Popover shadow (it floats). Items are 30px rows of 13px/500 Ink with an 8px radius and a Hover fill on hover or focus; a destructive item uses Fault Red text. Arrow keys move between items, Esc closes and returns focus to the trigger, an outside click closes it. The machine menu holds Machine settings (links to that machine's form on Settings), Copy ssh command and Remove machine… (the last two only for machines other than the host; Remove asks first).
@@ -376,13 +399,13 @@ Inline SVG on a 16px box, no fill, `currentColor` stroke at 1.6, round caps and 
 The terminal page draws its own light or dark theme (Settings, Appearance): a slim bar with a **Dashboard** button (home icon) first, the session name and a Copy text button; xterm.js fills the rest, and on coarse pointers a scrolling row of 40px key buttons (Esc, Tab, Ctrl, arrows, Enter, Ctrl-C). Inside a Workspace pane the page drops its bar and the pane head takes its place.
 
 ### Tab Bar
-The desktop app's one row above the content: 36px tall, full width, on Rail with a 1px Rule along the bottom, light or dark with the system. Tabs are 13px/500, at most 220px wide each, and share the width as more open, never wrapping; a 1px Rule separates them, and a long name ends in an ellipsis with the full name in the tooltip. Dashboard comes first and keeps its natural width; session tabs read "folder · machine". An inactive tab is Muted Slate; hover fills Hover Slate and raises the text to Ink 2. The selected tab has no bottom rule and a 2px Signal Blue top edge, so it joins the page below it and stays marked in both themes: the Dashboard tab is Paper with Ink text, and a session tab takes the terminal's fixed top bar colors in either theme (#0f1012 fill, #ededef text), since the terminal page is always dark. A selected session tab keeps at least 112px so its name stays readable. Session tabs end in a 20px close button (a 12px cross, 6px radius, Rule fill on hover, #2e3137 on the dark selected tab) that shows on the selected tab, on hover and on keyboard focus, and otherwise keeps its space so names do not shift; an inactive tab narrower than 96px gives that space to its name. A click selects; the close button or a middle click closes. Overflowing names are clipped to their tab. No shadow.
+The desktop app's one row above the content: 36px tall, full width, on Rail with a 1px Rule along the bottom, light or dark with the system. Tabs are 13px/500, at most 220px wide each, and share the width as more open, never wrapping; a 1px Rule separates them, and a long name ends in an ellipsis with the full name in the tooltip. Dashboard comes first and keeps its natural width; session tabs read "folder · machine". An inactive tab is Muted Slate; hover fills Hover Slate and raises the text to Ink 2. The selected tab has no bottom rule and a 2px Ink top edge (the bar's own text color on a session tab), so it joins the page below it and stays marked in both themes: the Dashboard tab is Paper with Ink text, and a session tab takes the terminal's fixed top bar colors in either theme (#0f1012 fill, #ededef text), since the terminal page is always dark. A selected session tab keeps at least 112px so its name stays readable. Session tabs end in a 20px close button (a 12px cross, 6px radius, Rule fill on hover, #2e3137 on the dark selected tab) that shows on the selected tab, on hover and on keyboard focus, and otherwise keeps its space so names do not shift; an inactive tab narrower than 96px gives that space to its name. A click selects; the close button or a middle click closes. Overflowing names are clipped to their tab. No shadow.
 
 ### Workspace and Dispatch
 The Workspace fills the window with three columns: the sidebar (the shared sidebar width, folding to the 60px rail) holding the session tree and the page menu, a Dispatch panel, and the tab row with its panes taking the rest. In the tree each machine is a 28px fold button (chevron, monitor glyph, name, session count) that hides its folders and sessions, remembered per browser; long names end in an ellipsis and the tree only scrolls vertically. The tab row never wraps. Tabs are 140 to 220px wide and a long name ends in an ellipsis, with the full name in the tooltip. When they do not fit, the row scrolls sideways (a vertical wheel scrolls it too, with no visible scrollbar), a 24px fade marks each edge that has tabs behind it, and a quiet 28px chevron button before **+** opens the Menu listing every tab with its state dot and word, the current one at 600. The current tab always scrolls into view, clear of the fades. Dispatch is 380px wide by default (300 to 640px from its right edge, remembered) on Paper with a 1px Rule on its right edge, open unless it was closed. It is the regular Dispatch page in an embedded mode: no sidebar or back link, a 15px "Dispatch" title with Settings and a Hide button, its conversations and tasks, and the composer pinned to the panel's bottom while the conversation scrolls above it. The speech bubble button at the start of the tab row shows and hides it, with a white pill when pressed. **Dispatch** in the sidebar menu always opens the full Dispatch page, and is marked current only there. Sessions Dispatch links to open as Workspace panes; other links open in the whole window. On a phone the panel is not shown and Dispatch opens as its own page. The panel never calls `focus()` while it does not have focus, so typing in a terminal is not interrupted. Resize edges are 8px wide with a 2px accent line on hover, focus or drag, and take arrow keys and a double-click to reset. A tab's panes sit in an even grid, rebuilt whenever a pane arrives or leaves; a pane head shows a grab cursor when the tab has more than one, dragging it dims the pane to 65%, marks the pane under the pointer with the accent ring, and dropping swaps the two in place.
 
 ### Review Cards
-A Dispatch step card (Paper, 1px Rule, a 3px left edge: Caution Amber while it waits, Healthy Green once ready or decided) for a reviewer's report. The head row holds the review glyph in a 28px tile, "Review of `branch`", who reviewed it where, and the verdict badge. Findings are 7px by 10px rows with a checkbox, the severity pill (High in Fault Red, Medium in Caution Amber, Low in Muted, each named) and the text; a finding's `file:line` sits above the text in 12px IBM Plex Mono, a Blue Ink link when the file is in the diff and Muted code when it is not. Screenshots follow the text as 120 by 76px thumbnails (6px radius, a 1px Rule ring, cropped from the top left, a zoom cursor); a screenshot that was not kept is a 12px Muted line saying why. Clicking a thumbnail opens a viewer dialog as wide as the image (at least 320px, 16px inside the window) with the name in mono, its size in Muted and a Close button over the image fitted to the window; clicking the image switches to its actual size, scrolling inside the dialog.
+A Dispatch step card (Paper, 1px Rule, a 3px left edge: Caution Amber while it waits, Healthy Green once ready or decided) for a reviewer's report. The head row holds the review glyph in a 28px tile, "Review of `branch`", who reviewed it where, and the verdict badge. Findings are 7px by 10px rows with a checkbox, the severity pill (High in Fault Red, Medium in Caution Amber, Low in Muted, each named) and the text; a finding's `file:line` sits above the text in 12px Geist Mono, a Blue Ink link when the file is in the diff and Muted code when it is not. Screenshots follow the text as 120 by 76px thumbnails (6px radius, a 1px Rule ring, cropped from the top left, a zoom cursor); a screenshot that was not kept is a 12px Muted line saying why. Clicking a thumbnail opens a viewer dialog as wide as the image (at least 320px, 16px inside the window) with the name in mono, its size in Muted and a Close button over the image fitted to the window; clicking the image switches to its actual size, scrolling inside the dialog.
 
 Below the findings, **Changes** is a 30px quiet toggle with a 14px chevron that turns 90 degrees when open and, once read, "n files" with the added count in Healthy Green text and the removed count in Fault Red text, each after its + or − sign. Open, a 12.5px Muted line names the base and the merge base commit in mono, says the folder is read as it is now, and says so in 600 Ink 2 when the branch has new commits since the review. The files are one bordered list (8px radius, 1px Rule between rows) of 34px buttons: chevron, an 18px mono status letter in a 1px Strong Rule square (M, A, D, R, ? for not committed, with the word for screen readers and in the tooltip), the path in 12px mono (a rename shows the old path in Muted and an arrow), and the counts or "binary". An open file's head takes the Side fill and its diff sits below in a 6px-radius frame that scrolls inside itself past 520px: 12px/1.6 mono rows with right-aligned Muted line numbers (only the new file's on a phone), added rows on an 11% green wash and removed rows on a 10% red wash with their + and − marks in the text colors, hunk headers on Side in Muted. The line a finding links to gets a 14% Blue Wash and a 2px Signal Blue left edge. **Show more** is a Blue Ink link button with the count left.
 
@@ -397,7 +420,7 @@ A Dispatch step card for one step that starts several sessions, with the group g
 A **Results** card uses the same frame and list with the checklist glyph: "Results of title", "All 3 sessions are done" or "Gathered after 1 hour, 1 of 2 sessions finished", and an "All done" (Healthy Green) or "Timed out" (Caution Amber) badge. Each row has the label, the session and branch in mono, a badge (Done, Partly done, Failed, Needs you, Still working, No result, Did not start), the summary at 13px and the details as a 13px Ink 2 list; a child without a result block shows the end of its screen in a closed disclosure, open when it needs an answer. Rows that started end with **Open** while the session runs and **Review branch**. A message Yardbell sent on the conversation's behalf is a user bubble on Side with a 1px dashed Strong Rule edge and a 12px Muted "Sent by Yardbell once the results were in" above the text.
 
 ### Insights
-An 880px dialog (16px inside the window on each side) with no padding of its own, at least 560px and at most 920px tall, never taller than the window less 32px: a head with "Insights for `name`" and a 12.5px Muted line saying what it shows above a 1px Rule; a body that scrolls on its own; and the Side footer with a 12.5px Muted hint, a quiet **Close** and the Brand **Suggest a better prompt**. The body opens with the session's title at 14px/550 Ink and its facts as a grid of 12px Muted labels over 13px Ink values: Status (Running with the current state, Ended, or No longer running), Started (or Watched since, with a Muted line that the figures start there), Ended, Machine, Folder, Branch and Agent. Sections have a 14px/600 Ink title and a 12.5px Muted line explaining them. **Time spent** says the total and the span, then four tiles (Paper, 1px Rule, 8px radius, 12px by 14px) in a row, two per row under 900px: Working (Healthy Green dot), Waiting for you (Caution Amber, with the count of waits or "Never waited"), Idle (Muted) and Test results (the 13px flask). Each tile has its label at 12.5px/500 Ink 2, the figure at 20px/600 with its unit ("25 min", "<1 min", "0 min", "2 runs", "None"), its share of the time as whole percentages that add up to 100 (or passed and failed counts, failed in Fault Red), and a 12px Muted sentence on what the state means. Below them an 8px bar draws every period to scale in the same three colors on Rule, 1px apart, over a 12px Muted axis with the first time and the end time or "Now". The **Timeline** is a bordered list (8px radius, 1px Rule between rows) grouped under Side day rows ("Today", "Yesterday" or the date, 12px/600 Ink 2), of 34px rows on a 64px time, 18px mark, text, end grid: a period has its dot, the state word at 550 (Waiting in Caution Amber text) and "for 19 min" (or "4 min so far") in Muted, and, when the transcript can be read, lines under it on a 76px 12px Muted label and 13px Ink text clamped to three lines: You said, It asked, Stopped at, Did and It said, then a 12.5px Blue Ink **Show 23 steps** that opens every step and the full text; a tool call, shown only when there is no transcript, has a 14px prompt glyph and a test run a 14px flask, both named in the section's line and with the command in 12px IBM Plex Mono and a **Passed** or **Failed** pill washed in Healthy Green or Fault Red. An agent whose transcript Yardbell cannot read gets **End of its terminal** in a code block below it. **Earlier, from the scrollback** repeats the list without times under a Muted line saying so, and **Task** shows the task in a Side mono block with the saved task and version it came from. A session with no timeline yet has a Side panel titled "Nothing recorded yet" saying the next check of the machine starts it. On a phone the dialog fills the screen with 16px gutters, the time column widens to 68px with the length and pill below the text, and the footer drops its hint for two 40px buttons. A Workspace pane's head has a 24px **⋯** button for its Menu: Insights, Suggest a better prompt, then a **Swap with** entry per other pane, each with that pane's number and title.
+An 880px dialog (16px inside the window on each side) with no padding of its own, at least 560px and at most 920px tall, never taller than the window less 32px: a head with "Insights for `name`" and a 12.5px Muted line saying what it shows above a 1px Rule; a body that scrolls on its own; and the Side footer with a 12.5px Muted hint, a quiet **Close** and the Brand **Suggest a better prompt**. The body opens with the session's title at 14px/550 Ink and its facts as a grid of 12px Muted labels over 13px Ink values: Status (Running with the current state, Ended, or No longer running), Started (or Watched since, with a Muted line that the figures start there), Ended, Machine, Folder, Branch and Agent. Sections have a 14px/600 Ink title and a 12.5px Muted line explaining them. **Time spent** says the total and the span, then four tiles (Paper, 1px Rule, 8px radius, 12px by 14px) in a row, two per row under 900px: Working (Healthy Green dot), Waiting for you (Caution Amber, with the count of waits or "Never waited"), Idle (Muted) and Test results (the 13px flask). Each tile has its label at 12.5px/500 Ink 2, the figure at 20px/600 with its unit ("25 min", "<1 min", "0 min", "2 runs", "None"), its share of the time as whole percentages that add up to 100 (or passed and failed counts, failed in Fault Red), and a 12px Muted sentence on what the state means. Below them an 8px bar draws every period to scale in the same three colors on Rule, 1px apart, over a 12px Muted axis with the first time and the end time or "Now". The **Timeline** is a bordered list (8px radius, 1px Rule between rows) grouped under Side day rows ("Today", "Yesterday" or the date, 12px/600 Ink 2), of 34px rows on a 64px time, 18px mark, text, end grid: a period has its dot, the state word at 550 (Waiting in Caution Amber text) and "for 19 min" (or "4 min so far") in Muted, and, when the transcript can be read, lines under it on a 76px 12px Muted label and 13px Ink text clamped to three lines: You said, It asked, Stopped at, Did and It said, then a 12.5px Blue Ink **Show 23 steps** that opens every step and the full text; a tool call, shown only when there is no transcript, has a 14px prompt glyph and a test run a 14px flask, both named in the section's line and with the command in 12px Geist Mono and a **Passed** or **Failed** pill washed in Healthy Green or Fault Red. An agent whose transcript Yardbell cannot read gets **End of its terminal** in a code block below it. **Earlier, from the scrollback** repeats the list without times under a Muted line saying so, and **Task** shows the task in a Side mono block with the saved task and version it came from. A session with no timeline yet has a Side panel titled "Nothing recorded yet" saying the next check of the machine starts it. On a phone the dialog fills the screen with 16px gutters, the time column widens to 68px with the length and pill below the text, and the footer drops its hint for two 40px buttons. A Workspace pane's head has a 24px **⋯** button for its Menu: Insights, Suggest a better prompt, then a **Swap with** entry per other pane, each with that pane's number and title.
 
 ### Diagrams
 A page in the main menu, after Pipelines. The head has the title and the Brand **Draw architecture**, disabled until a machine is ready. Machines that are not ready come first as hairline rows with a status word and **Install** or **Check again**, then the diagrams as rows of a Blue Ink name with a 12.5px Muted folder, machine and time, a **Build from this**, a **Draw again** and a quiet danger **Delete**. An empty list has a Side panel. Opening a diagram replaces the list with a head of **Back**, its name and place, over a sandboxed frame filling the window, with a 1px Rule and 8px radius. **Draw architecture** is a wide dialog with a two-part Segmented choice of A folder's code or A description, a line on tokens and sharing, Machine, then either Folder and an optional focus or a description box and where to save it, with a name box for a new folder, and Agent. **Draw** waits until the choice is complete.
@@ -409,7 +432,7 @@ Files wait in a row above the composer's text, 10px in from its edges: 32px chip
 A wide dialog: "History of `name`" with a quiet Close, a 12.5px Muted line on what restoring does, then **Compare** and **with**, two 32px version selects, over a Side frame (8px radius, 1px Rule, 12.5px/1.6 mono, scrolling past 240px) where added words have a 16% Healthy Green wash in Healthy Green text and removed words a 13% Fault Red wash in Fault Red text, struck through. The versions are one bordered list, newest first: "Version 3" at 600, the date (or "Comes with Yardbell") and a note like "Restored from version 1" in 12px Muted, a **Current** pill on the current one and a quiet **Restore** on the others, and the text below in 12px mono, scrolling past 120px. The Side footer counts the versions kept and holds **Reset to the default** for a changed default and the Brand **Done**. The task editor in Dispatch's sidebar shows "Version 3" in 12px Muted with a **History** Blue Ink link. A message sent from a task, or asking for a better prompt, is a user bubble with a 12px Muted line above it naming the task and version, or the session; a reply with a proposed prompt ends with **Save as a new task** and the Brand **Save as version n of** the task.
 
 ### About
-The last Settings section. A panel whose head row holds "Yardbell 0.6.9" (15px/600, tabular) and the update state in 13px: "Up to date" in Healthy Green text after an 8px green dot, "0.7.1 is available" as a 500-weight Blue Ink link to that release, "Checking for updates…" in Muted, or "Couldn't check for updates" in Muted with the reason in its tooltip and a quiet **Try again** button at the row's end. Below a 1px Rule, a facts list: a 112px Muted label column and an Ink value column at 13px, 8px by 16px gaps, with build ids and paths in IBM Plex Mono and long values wrapping anywhere; on a phone each label sits above its value. A last row of Blue Ink links with the 13px external icon (release notes, changelog, docs) sits above another 1px Rule. When the desktop app's version differs from the server's, a warn banner above the panel names both versions and which one to update. The sidebar's "Running on" line ends with the server version ("v0.6.9", Muted, underlined on hover) linking to this section.
+The last Settings section. A panel whose head row holds "Yardbell 0.6.9" (15px/600, tabular) and the update state in 13px: "Up to date" in Healthy Green text after an 8px green dot, "0.7.1 is available" as a 500-weight Blue Ink link to that release, "Checking for updates…" in Muted, or "Couldn't check for updates" in Muted with the reason in its tooltip and a quiet **Try again** button at the row's end. Below a 1px Rule, a facts list: a 112px Muted label column and an Ink value column at 13px, 8px by 16px gaps, with build ids and paths in Geist Mono and long values wrapping anywhere; on a phone each label sits above its value. A last row of Blue Ink links with the 13px external icon (release notes, changelog, docs) sits above another 1px Rule. When the desktop app's version differs from the server's, a warn banner above the panel names both versions and which one to update. The sidebar's "Running on" line ends with the server version ("v0.6.9", Muted, underlined on hover) linking to this section.
 
 ### Menu Bar Panel
 The macOS app's left click on the menu bar icon: a 340px borderless window under the icon, kept 8px inside the screen, on Paper with a 1px Strong Rule edge and 12px padding, light or dark with the system. The main view stacks three blocks 12px apart. **Machines** (12px/600 Muted title) is a Side card with a 1px Rule and 8px radius holding one button row per machine: the state dot, the name at 600, "up" or the red down reason on the right, then a Memory line and a CPU line on a 52px label, bar, 96px value grid. Memory uses the Memory Bar drawing; CPU is a single Memory Gray fill of the 1-minute load per core, capped at 100%, with the raw load in its tooltip; both turn Caution Amber at 85% and Fault Red at 95%. **Sessions** lists the openable sessions as 32px rows named like their tabs, with the Working chip on busy ones; the list scrolls past 288px. The bottom row, under a 1px Rule, holds New session, Open Yardbell (primary) and a 32px gear button. The gear swaps in the settings view: a back arrow beside a 14px/600 "Settings" heading, Side cards of 32px switch rows (28 by 16px, Brand when on) under **Notifications on this Mac** and **Startup**, and a bottom row with Disconnect and Quit Yardbell in Fault Red text. Esc goes back, then closes; the panel closes when it loses focus and reopens on the main view. Linux keeps the native menu, since its tray reports no clicks.
@@ -421,7 +444,7 @@ The macOS app's left click on the menu bar icon: a 340px borderless window under
 - **Do** use cards with the hairline Card ring for machines, peers, lists and panels.
 - **Do** keep exactly one Brand button per view region, placed last in its row.
 - **Do** pair every status dot or tinted bar with a word naming the state, set in the matching text color.
-- **Do** set branches, ports and commands in IBM Plex Mono and keep all numbers tabular.
+- **Do** set branches, ports and commands in Geist Mono and keep all numbers tabular.
 - **Do** draw resource figures to scale (the memory bar) instead of reporting them as percentages alone.
 - **Do** design every state a machine or session can be in: connected, timed out, last known, outside tmux, tunnel down, empty.
 - **Do** define both light and dark values for any new color token, in all three theme blocks of `style.css`.

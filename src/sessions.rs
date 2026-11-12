@@ -187,6 +187,7 @@ pub fn work_lines_command(path: &str) -> String {
 pub enum Start<'a> {
     New,
     Resume,
+    ResumeId(&'a str),
     Task(&'a str),
 }
 
@@ -328,13 +329,20 @@ fn mcp_config_script(config: &str) -> String {
 // keys as commands, so it is left first. The paste is bracketed when the program asked for that,
 // so its lines arrive as one input, and -r keeps them as typed; Enter then sends it.
 fn send_script(name: &str) -> String {
+    paste_script(name, true)
+}
+
+fn paste_script(name: &str, enter: bool) -> String {
     let target = quote(&format!("{}:", exact(name)));
-    format!(
+    let paste = format!(
         "tmux send-keys -X -t {target} cancel </dev/null 2>/dev/null; b=yardbell-send-$$; \
          tmux load-buffer -b \"$b\" - && tmux paste-buffer -d -p -r -b \"$b\" -t {target} </dev/null \
-         || {{ tmux delete-buffer -b \"$b\" </dev/null 2>/dev/null; exit 1; }}; \
-         sleep 0.2; tmux send-keys -t {target} Enter </dev/null"
-    )
+         || {{ tmux delete-buffer -b \"$b\" </dev/null 2>/dev/null; exit 1; }}"
+    );
+    if !enter {
+        return paste;
+    }
+    format!("{paste}; sleep 0.2; tmux send-keys -t {target} Enter </dev/null")
 }
 
 pub struct Sessions {
@@ -361,6 +369,7 @@ impl Sessions {
         let mut run = match start {
             Start::New => agent.command.clone(),
             Start::Resume => agent.resume.clone(),
+            Start::ResumeId(id) => format!("{} --resume {}", agent.command, quote(id)),
             Start::Task(prompt) => agent.with_prompt(prompt)?,
         };
         // --disallowed-tools and --mcp-config take several values, so they go after the task or
@@ -489,6 +498,19 @@ impl Sessions {
 
     pub async fn send(&self, m: &Machine, name: &str, text: &str) -> Result<(), String> {
         self.output_with_input(m, &send_script(name), Some(text.to_string()))
+            .await
+            .map(|_| ())
+    }
+
+    // Text pasted into the prompt, left there for the user to finish unless `enter` sends it.
+    pub async fn paste(
+        &self,
+        m: &Machine,
+        name: &str,
+        text: &str,
+        enter: bool,
+    ) -> Result<(), String> {
+        self.output_with_input(m, &paste_script(name, enter), Some(text.to_string()))
             .await
             .map(|_| ())
     }
@@ -1355,6 +1377,27 @@ mod tests {
         assert_eq!(
             fake.inputs().last().unwrap().as_deref(),
             Some("yes, it's fine")
+        );
+    }
+
+    #[tokio::test]
+    async fn pasted_text_presses_enter_only_when_asked() {
+        let fake = Arc::new(FakeRunner::default());
+        fake.stub("load-buffer", Output::ok_with(""));
+        let s = sessions(fake.clone());
+        s.paste(&machine(false), "hp-app", "a note\nsecond", false)
+            .await
+            .unwrap();
+        let held = last_command(&fake);
+        assert!(held.ends_with(&paste_script("hp-app", false)), "{held}");
+        assert!(!held.contains("Enter"), "{held}");
+        s.paste(&machine(false), "hp-app", "go", true)
+            .await
+            .unwrap();
+        assert!(last_command(&fake).ends_with(&send_script("hp-app")));
+        assert_eq!(
+            fake.inputs(),
+            vec![Some("a note\nsecond".to_string()), Some("go".to_string())]
         );
     }
 

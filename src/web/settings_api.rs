@@ -36,6 +36,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/dispatch", post(dispatch))
         .route("/api/settings/voice", post(voice))
         .route("/api/settings/voice/check", post(voice_check))
+        .route("/api/settings/keep-awake", post(keep_awake))
         .route("/api/settings/pair", post(pair))
         .route("/api/settings/passcode", post(passcode))
         .route("/api/settings/logout-all", post(logout_all))
@@ -114,6 +115,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "secrets": secrets,
         "dispatch": cfg.dispatch,
         "voice": cfg.voice,
+        "keep_awake": app.awake.status(),
         "codex_models": app.dispatch.codex_models(),
         "dispatch_runs_on": crate::config::RunsOn::ALL.map(|r| r.name()),
         "agents": cfg
@@ -437,6 +439,9 @@ fn trimmed_voice(req: crate::config::VoiceSettings) -> crate::config::VoiceSetti
         api_model: req.api_model.trim().to_string(),
         api_key: req.api_key.trim().to_string(),
         language: req.language.trim().to_string(),
+        vocabulary: req.vocabulary.trim().to_string(),
+        remove_fillers: req.remove_fillers,
+        mode: req.mode,
     }
 }
 
@@ -444,8 +449,30 @@ async fn voice(
     AxState(app): AxState<Arc<AppState>>,
     Json(req): Json<crate::config::VoiceSettings>,
 ) -> Result<Response, ApiError> {
-    app.settings.set_voice(trimmed_voice(req)).map_err(bad)?;
+    let req = trimmed_voice(req);
+    if req.vocabulary.chars().count() > crate::voice::VOCABULARY_MAX {
+        return Err(bad(format!(
+            "The vocabulary is longer than {} characters. Whisper reads only so much, so keep it to the words it gets wrong.",
+            crate::voice::VOCABULARY_MAX
+        )));
+    }
+    app.settings.set_voice(req).map_err(bad)?;
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+#[derive(Deserialize)]
+struct KeepAwakeReq {
+    mode: crate::awake::Mode,
+}
+
+async fn keep_awake(
+    AxState(app): AxState<Arc<AppState>>,
+    Json(req): Json<KeepAwakeReq>,
+) -> Result<Response, ApiError> {
+    app.settings.set_keep_awake(req.mode).map_err(bad)?;
+    let status = app.awake.set_mode(req.mode);
+    app.state.touch();
+    Ok(Json(status).into_response())
 }
 
 // The settings as typed are checked, saved or not, so Test works before Save.

@@ -87,6 +87,79 @@ impl Runner for FakeRunner {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct Asked {
+    pub method: String,
+    pub path: String,
+    pub headers: Vec<(String, String)>,
+    pub body: String,
+}
+
+impl Asked {
+    pub fn header(&self, name: &str) -> Option<String> {
+        self.headers
+            .iter()
+            .find(|(n, _)| n.eq_ignore_ascii_case(name))
+            .map(|(_, v)| v.clone())
+    }
+}
+
+// A stand-in HTTP service on a free local port: it answers every request with the next reply
+// given (the last one repeats) and records what it was asked.
+pub struct FakeHttp {
+    pub url: String,
+    asked: std::sync::Arc<Mutex<Vec<Asked>>>,
+}
+
+impl FakeHttp {
+    pub async fn json(body: serde_json::Value) -> FakeHttp {
+        FakeHttp::replies(vec![(200, body)]).await
+    }
+
+    pub async fn replies(replies: Vec<(u16, serde_json::Value)>) -> FakeHttp {
+        use axum::http::StatusCode;
+        let asked = std::sync::Arc::new(Mutex::new(Vec::new()));
+        let seen = asked.clone();
+        let replies = std::sync::Arc::new(replies);
+        let app = axum::Router::new().fallback(move |req: axum::extract::Request| {
+            let seen = seen.clone();
+            let replies = replies.clone();
+            async move {
+                let method = req.method().to_string();
+                let path = req.uri().path().to_string();
+                let headers = req
+                    .headers()
+                    .iter()
+                    .map(|(n, v)| (n.to_string(), v.to_str().unwrap_or("").to_string()))
+                    .collect();
+                let bytes = axum::body::to_bytes(req.into_body(), 1 << 20)
+                    .await
+                    .unwrap_or_default();
+                let n = {
+                    let mut seen = seen.lock().unwrap();
+                    seen.push(Asked {
+                        method,
+                        path,
+                        headers,
+                        body: String::from_utf8_lossy(&bytes).into_owned(),
+                    });
+                    seen.len() - 1
+                };
+                let (status, body) = replies[n.min(replies.len() - 1)].clone();
+                (StatusCode::from_u16(status).unwrap(), axum::Json(body))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        FakeHttp { url, asked }
+    }
+
+    pub fn asked(&self) -> Vec<Asked> {
+        self.asked.lock().unwrap().clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
