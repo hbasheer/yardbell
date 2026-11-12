@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.102] - 2026-11-12
+
 - **A phone terminal that feels native.** The key bar under the terminal now has Esc, Tab, Shift-Tab,
   Ctrl, Alt, Shift, the arrows, `/`, `|`, `~`, `-`, Enter, Ctrl-C, Ctrl-D and Paste. Ctrl, Alt and
   Shift are sticky: one tap arms them for the next key, including keys typed on the phone's keyboard,
