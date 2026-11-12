@@ -100,7 +100,8 @@ const SILENCE_MS = 3000;
 const PAUSE_MS = 600;
 const CHUNK_MS = 20000;
 const MIC_KEY = "yardbell.voice.mic";
-const SHORTCUT = "Ctrl+Shift+Space";
+const keys = () => window.YardbellVoiceKeys;
+const shortcutLabel = () => keys()?.label() || "Ctrl+Shift+Space";
 // Dot sizes and how far each moves with the voice.
 const GRAPES = [
   [0.64, 0.45, 1], [0.76, 0.75, -1], [0.9, 1, 1], [1, 1.25, -1], [0.86, 0.9, 1],
@@ -228,16 +229,16 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
       <span class="dict-time" aria-hidden="true">${clock(seconds)}</span>
       ${waiting
         ? html`<span class="dict-wait" aria-hidden="true">${SPIN_ICON}</span>`
-        : html`<button type="button" class="dict-btn finish" aria-label="Finish" title=${`Finish and type it in (${SHORTCUT})`} @click=${() => stop(true)}>${CHECK_ICON}</button>`}`;
+        : html`<button type="button" class="dict-btn finish" aria-label="Finish" title=${`Finish and type it in (${shortcutLabel()})`} @click=${() => stop(true)}>${CHECK_ICON}</button>`}`;
   }
 
   function hint() {
     const how = {
-      auto: "Tap to start and stop, or hold to talk.",
-      hold: "Hold to talk.",
-      toggle: "Press to start, and again to stop.",
+      auto: "Tap to start and stop, or hold to talk. Words appear at each pause, and it stops by itself after a few seconds of quiet.",
+      hold: "Hold to talk, and let go to stop. Words appear at each pause.",
+      toggle: "Press to start, and again to stop. Words appear at each pause.",
     }[mode()] || "";
-    return `Dictate (${SHORTCUT}). ${how} Words appear at each pause, and it stops by itself after a few seconds of quiet.`;
+    return `Dictate (${shortcutLabel()}). ${how}`;
   }
 
   function paint() {
@@ -251,7 +252,7 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
     button.title = busy
       ? "Transcribing…"
       : recording
-        ? `Stop recording and type what was said (${SHORTCUT}). Esc cancels what has not been typed yet.`
+        ? `Stop recording and type what was said (${shortcutLabel()}). Esc cancels what has not been typed yet.`
         : hint();
     pill.hidden = phase === "idle";
     pill.classList.toggle("failed", phase === "failed");
@@ -284,7 +285,7 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
       segmentHeard = true;
     }
     if ((segmentHeard && now - heardAt > PAUSE_MS) || now - segmentAt > CHUNK_MS) cut(false);
-    if (heardAt && now - heardAt > SILENCE_MS) {
+    if (heardAt && now - heardAt > SILENCE_MS && mode() === "auto") {
       heardAt = 0;
       stop(true);
     }
@@ -490,6 +491,12 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
     if (stopping || how === "hold" || (how === "auto" && Date.now() - since >= HOLD_MS)) stop(true);
   }
 
+  // The mode and shortcut can change after the first paint, so the hint is redone on approach.
+  const freshHint = () => {
+    if (phase === "idle") button.title = hint();
+  };
+  button.addEventListener("pointerenter", freshHint);
+  button.addEventListener("focus", freshHint);
   pill.addEventListener("mousedown", (e) => e.preventDefault());
   button.addEventListener("pointerdown", (e) => {
     if (e.button) return;
@@ -510,7 +517,7 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
     if (live()) stop(true);
     else start();
   });
-  const shortcut = (e) => e.code === "Space" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey;
+  const shortcut = (e) => (keys() ? keys().matches(e) : e.code === "Space" && e.ctrlKey && e.shiftKey && !e.altKey && !e.metaKey);
   document.addEventListener("keydown", (e) => {
     if (e.key === "Escape" && (live() || phase !== "idle")) {
       e.preventDefault();
@@ -525,7 +532,7 @@ export function dictation({ button, pill, insert, toast, mode = () => "auto" }) 
     if (!keyStop) start();
   });
   document.addEventListener("keyup", (e) => {
-    if (!keyAt || !["Space", "ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"].includes(e.code)) return;
+    if (!keyAt || !(keys() ? keys().releases(e) : ["Space", "ControlLeft", "ControlRight", "ShiftLeft", "ShiftRight"].includes(e.code))) return;
     const since = keyAt;
     keyAt = 0;
     released(keyStop, since);

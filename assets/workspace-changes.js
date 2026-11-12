@@ -28,7 +28,14 @@
   let seq = 0;
   let timer = 0;
   let busy = false;
+  let following = false;
+  const watchers = [];
   const bodies = new Map();
+
+  // The Files tree marks what changed from the same list, so it hears every new one.
+  function notify() {
+    for (const fn of watchers) fn(list && list.files ? list : null);
+  }
 
   function stored(key, fallback) {
     try {
@@ -202,12 +209,13 @@
       list = { error: err.message };
     }
     paintList();
+    notify();
   }
 
   function poll() {
     clearInterval(timer);
     timer = 0;
-    if (!active || document.hidden || !place) return;
+    if ((!active && !following) || document.hidden || !place) return;
     timer = setInterval(() => { if (!busy) load(); }, POLL_MS);
   }
 
@@ -216,6 +224,17 @@
     active = on;
     if (on && !was) load();
     poll();
+  }
+
+  function follow(on) {
+    const was = following;
+    following = on;
+    if (on && !was && !active) load();
+    poll();
+  }
+
+  function watch(fn) {
+    watchers.push(fn);
   }
 
   function setPlace(next, open) {
@@ -230,7 +249,8 @@
     seq++;
     $("chg-message").value = "";
     paintList();
-    if (open || active) load();
+    notify();
+    if (open || active || following) load();
     poll();
   }
 
@@ -678,10 +698,10 @@
     document.getElementById("panes").addEventListener("click", onDiffClick);
     document.getElementById("panes").addEventListener("keydown", onDiffKey);
     document.addEventListener("visibilitychange", () => {
-      if (!document.hidden && active) load();
+      if (!document.hidden && (active || following)) load();
       poll();
     });
   }
 
-  window.YardbellChanges = { init, show, place: setPlace, fillDiff, refresh: load, compose };
+  window.YardbellChanges = { init, show, follow, watch, place: setPlace, fillDiff, refresh: load, compose };
 })();

@@ -25,6 +25,32 @@ PASSCODE_HASH = "$argon2id$v=19$m=19456,t=2,p=1$W9HtFU6zAJJHfaLZxyoLZw$CowUQvJ7l
 SYSTEM_PATH = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 MACHINE = "hp"
 FAKE_DICTATION = "Fix the flaky checkout test, please."
+
+# A tone that can be switched on and off stands in for the microphone, and /dispatch/transcribe
+# answers from window.__said in order, so a test can speak phrases with pauses between them.
+TONE_MICROPHONE = """(() => {
+              const ctx = new AudioContext();
+              const tone = ctx.createOscillator();
+              const gain = ctx.createGain();
+              gain.gain.value = 0;
+              const out = ctx.createMediaStreamDestination();
+              tone.connect(gain).connect(out);
+              tone.start();
+              ctx.resume();
+              window.__speak = (on) => { gain.gain.value = on ? 0.4 : 0; };
+              navigator.mediaDevices.getUserMedia = async () => out.stream;
+              const said = window.__said || [];
+              window.__sent = [];
+              const real = window.fetch;
+              window.fetch = async (url, init) => {
+                if (String(url) !== "/dispatch/transcribe") return real(url, init);
+                window.__sent.push(init.body.size);
+                await new Promise((r) => setTimeout(r, 150));
+                const text = said[window.__sent.length - 1] || "";
+                return new Response(JSON.stringify({ text }), { status: 200, headers: { "Content-Type": "application/json" } });
+              };
+              return 0;
+            })()"""
 SHORT_CHAT = "browsertestshort"
 LONG_CHAT = "browsertestlong0"
 REVIEW_CHAT = "browserreview001"
@@ -3345,6 +3371,33 @@ class Suite:
             if repo:
                 self.drop_changes(repo, head)
 
+    def test_workspace_files_tree_marks_changed_files_and_folders(self):
+        b = self.b
+        before = self.storage(self.CHANGES)
+        repo = head = None
+        try:
+            repo, head = self.changes_on_demo_api(tab="files")
+            b.wait("document.querySelector('#side-tree [data-file=\"long.txt\"].chg-modified')", "long.txt marked as changed in the file tree", timeout=15)
+            marks = b.js("""(() => {
+              const row = (sel) => document.querySelector('#side-tree ' + sel);
+              const mark = (sel) => { const r = row(sel); return r ? [[...r.classList].filter((c) => c.startsWith('chg-')).join(' '), r.querySelector('.side-mark')?.textContent || ''] : null; };
+              return { long: mark('[data-file="long.txt"]'), notes: mark('[data-file="notes.txt"]'), src: mark('[data-dir="src"]') };
+            })()""")
+            want = {"long": ["chg-modified", "M"], "notes": ["chg-untracked", "U"], "src": ["chg-inside", ""]}
+            if marks != want:
+                raise Failure(f"the file tree marks changes as {marks}, not {want}")
+            b.click("#side-tree [data-dir=\"src\"]")
+            b.wait("document.querySelector('#side-tree [data-file=\"src/app.js\"].chg-modified .side-mark')?.textContent === 'M'", "src/app.js marked inside its folder")
+            write(os.path.join(repo, "later.txt"), "made while the tree is open\n")
+            b.wait("document.querySelector('#side-tree [data-file=\"later.txt\"].chg-untracked')", "a new file to appear, marked, without a refresh", timeout=15)
+            if b.js("document.querySelector('#side-tree [data-file=\"README.md\"]')?.className.includes('chg-')"):
+                raise Failure("an unchanged file is marked")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            if repo:
+                self.drop_changes(repo, head)
+
     def test_workspace_changes_diff_tab_unified_split_survives_reload(self):
         b = self.b
         before = self.storage(self.CHANGES)
@@ -4449,29 +4502,8 @@ class Suite:
         try:
             b.goto(self.url("/dispatch"))
             b.wait("!document.getElementById('mic').hidden && !document.getElementById('mic').classList.contains('voice-off')", "the microphone button, voice on")
-            b.js("""(() => {
-              const ctx = new AudioContext();
-              const tone = ctx.createOscillator();
-              const gain = ctx.createGain();
-              gain.gain.value = 0;
-              const out = ctx.createMediaStreamDestination();
-              tone.connect(gain).connect(out);
-              tone.start();
-              ctx.resume();
-              window.__speak = (on) => { gain.gain.value = on ? 0.4 : 0; };
-              navigator.mediaDevices.getUserMedia = async () => out.stream;
-              const said = ["Fix the login test.", "Then run it again."];
-              window.__sent = [];
-              const real = window.fetch;
-              window.fetch = async (url, init) => {
-                if (String(url) !== "/dispatch/transcribe") return real(url, init);
-                window.__sent.push(init.body.size);
-                await new Promise((r) => setTimeout(r, 150));
-                const text = said[window.__sent.length - 1] || "";
-                return new Response(JSON.stringify({ text }), { status: 200, headers: { "Content-Type": "application/json" } });
-              };
-              return 0;
-            })()""")
+            b.js("window.__said = [\"Fix the login test.\", \"Then run it again.\"]; 0")
+            b.js(TONE_MICROPHONE)
             self.set_field("#dispatch-input", "")
             b.click("#mic")
             b.wait("document.getElementById('mic').classList.contains('recording')", "recording to start")
@@ -4495,6 +4527,120 @@ class Suite:
                 raise Failure(f"{b.js('window.__sent.length')} pieces were sent for two phrases")
             self.set_field("#dispatch-input", "")
         finally:
+            self.api("POST", "/api/settings/voice", {"input": "off"})
+
+    def test_dictation_stops_on_quiet_only_in_auto(self):
+        b = self.b
+        b.goto(self.url("/dispatch"))
+        b.js("window.__clock = new AudioContext(); window.__clock.resume().catch(() => {}); 0")
+        b.pump(0.5)
+        able = b.js("window.__clock.state === 'running'")
+        b.js("window.__clock.close().catch(() => {}); delete window.__clock; 0")
+        if not able:
+            return
+        recording = "document.getElementById('mic').classList.contains('recording')"
+        press = "document.getElementById('mic').dispatchEvent(new PointerEvent('%s', { bubbles: true, button: 0, pointerId: 1, isPrimary: true })); 0"
+        try:
+            for mode in ("toggle", "hold", "auto"):
+                self.api("POST", "/api/settings/voice", {"input": "local", "whisper_model": self.y.config, "mode": mode})
+                b.goto(self.url("/dispatch"))
+                b.wait("!document.getElementById('mic').hidden && !document.getElementById('mic').classList.contains('voice-off')", "the microphone button, voice on")
+                b.js('window.__said = ["One.", "Two.", "Three."]; 0')
+                b.js(TONE_MICROPHONE)
+                b.js(press % "pointerdown")
+                if mode != "hold":
+                    b.js(press % "pointerup")
+                b.wait(recording, f"recording to start in {mode}")
+                b.js("window.__speak(true)")
+                b.pump(0.6)
+                b.js("window.__speak(false)")
+                b.pump(3.8)
+                if mode == "auto":
+                    if b.js(recording):
+                        raise Failure("Auto kept recording through a long quiet")
+                    continue
+                if not b.js(recording):
+                    raise Failure(f"{mode} stopped by itself in a quiet, before the user stopped it")
+                if mode == "hold":
+                    b.js(press % "pointerup")
+                else:
+                    b.js(press % "pointerdown")
+                    b.js(press % "pointerup")
+                b.wait(f"!({recording})", f"{mode} to stop when the user stops it")
+                self.set_field("#dispatch-input", "")
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off", "mode": "auto"})
+
+    def test_settings_voice_choices_save_at_once(self):
+        b = self.b
+        try:
+            b.goto(self.url("/settings#voice"))
+            b.wait("document.querySelector('#voice-form input[name=mode][value=hold]')", "the dictation mode choices")
+            b.click("#voice-form input[name=mode][value=hold]")
+            deadline = time.time() + 5
+            while self.api("GET", "/api/settings")["voice"].get("mode") != "hold":
+                if time.time() > deadline:
+                    raise Failure("picking Hold was not saved without pressing Save")
+                b.pump(0.2)
+            b.click("#voice-fillers")
+            b.js("const v = document.getElementById('voice-vocabulary'); v.value = 'Yardbell'; v.dispatchEvent(new Event('change', { bubbles: true })); 0")
+            deadline = time.time() + 5
+            while True:
+                v = self.api("GET", "/api/settings")["voice"]
+                if v.get("remove_fillers") and v.get("vocabulary") == "Yardbell":
+                    break
+                if time.time() > deadline:
+                    raise Failure(f"Remove filler words and Vocabulary were not saved at once: {v}")
+                b.pump(0.2)
+        finally:
+            self.api("POST", "/api/settings/voice", {"input": "off", "mode": "auto", "remove_fillers": False, "vocabulary": ""})
+
+    def test_dictation_shortcut_defaults_per_platform_and_can_be_changed(self):
+        b = self.b
+        recording = "document.getElementById('mic').classList.contains('recording')"
+        b.goto(self.url("/settings#voice"))
+        b.wait("window.YardbellVoiceKeys && document.getElementById('voice-shortcut')", "the dictation shortcut row")
+        mac = b.js("JSON.stringify(YardbellVoiceKeys.defaults(true))")
+        other = b.js("JSON.stringify(YardbellVoiceKeys.defaults(false))")
+        if json.loads(mac) != {"code": "KeyE", "ctrl": False, "shift": False, "alt": False, "meta": True}:
+            raise Failure(f"a Mac's default dictation shortcut is {mac}, not Command+E")
+        if json.loads(other) != {"code": "Space", "ctrl": True, "shift": True, "alt": False, "meta": False}:
+            raise Failure(f"the default elsewhere is {other}, not Ctrl+Shift+Space")
+        if b.js("YardbellVoiceKeys.label(YardbellVoiceKeys.defaults(true), true)") != "\u2318E":
+            raise Failure("the Mac shortcut is not written as \u2318E")
+        try:
+            b.click("#voice-shortcut-change")
+            b.wait("document.getElementById('voice-shortcut').classList.contains('listening')", "the shortcut row to listen for keys")
+            b.key("d", "Alt")
+            b.wait("!document.getElementById('voice-shortcut').classList.contains('listening')", "the new shortcut to be taken")
+            kept = json.loads(b.js("localStorage.getItem('yardbell.voice.shortcut')") or "null")
+            if not kept or kept.get("code") != "KeyD" or not kept.get("alt") or kept.get("ctrl"):
+                raise Failure(f"Alt+D was stored as {kept}")
+            if "D" not in b.js("document.getElementById('voice-shortcut').textContent"):
+                raise Failure("the row does not show the new shortcut")
+            self.api("POST", "/api/settings/voice", {"input": "local", "whisper_model": self.y.config})
+            b.goto(self.url("/dispatch"))
+            b.wait("!document.getElementById('mic').hidden && !document.getElementById('mic').classList.contains('voice-off')", "the microphone button, voice on")
+            b.js("document.getElementById('mic').dispatchEvent(new PointerEvent('pointerenter')); 0")
+            title = b.js("document.getElementById('mic').title")
+            if "Alt+D" not in title:
+                raise Failure(f"the microphone's hint does not name the new shortcut: {title!r}")
+            b.click("#dispatch-input")
+            b.key(" ", "Control", "Shift")
+            b.pump(0.6)
+            if b.js(recording):
+                raise Failure("the old Ctrl+Shift+Space still starts dictation after the shortcut changed")
+            b.key("d", "Alt")
+            b.wait(recording, "Alt+D to start recording")
+            b.click("#dictation-pill .dict-btn")
+            b.wait(f"!({recording})", "Cancel to stop it")
+            b.goto(self.url("/settings#voice"))
+            b.wait("document.getElementById('voice-shortcut-reset')", "the reset button")
+            b.click("#voice-shortcut-reset")
+            if b.js("localStorage.getItem('yardbell.voice.shortcut')") is not None:
+                raise Failure("Reset did not go back to the default shortcut")
+        finally:
+            b.js("localStorage.removeItem('yardbell.voice.shortcut')")
             self.api("POST", "/api/settings/voice", {"input": "off"})
 
     def test_dispatch_speak_toggle_mutes_at_once(self):

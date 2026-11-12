@@ -6591,7 +6591,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell"
-version = "0.11.0"
+version = "0.11.100"
 dependencies = [
  "anyhow",
  "argon2",
@@ -6624,7 +6624,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell-desktop"
-version = "0.11.0"
+version = "0.11.100"
 dependencies = [
  "axum",
  "gtk",

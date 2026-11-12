@@ -516,8 +516,11 @@ You can also talk instead of typing. **Settings, Voice** sets it up in one click
 downloads the recommended Whisper model, finds whisper.cpp on the machine Yardbell runs on and
 turns voice input on, and the **Speech model** list below it downloads, switches and deletes the
 others. Then a microphone button sits in the message box: tap to record and tap again to stop, or
-hold it and speak while it is held. **Ctrl+Shift+Space** does the same from the keyboard. Under
-**Dictation mode**, **Hold** records only while held and **Toggle** only starts and stops. Words
+hold it and speak while it is held. **⌘E** on a Mac, or **Ctrl+Shift+Space** elsewhere, does the same
+from the keyboard; macOS keeps Control+Space for switching keyboards, which is why a Mac differs.
+**Shortcut** under **Input** sets your own on each device: click **Change** and press it. Under
+**Dictation mode**, **Hold** records only while held and **Toggle** only starts and stops, and only
+**Auto** stops by itself after a few seconds of quiet. Words
 appear while you talk: each time you pause, what you just said is transcribed and typed in. While it records, a pill over the box shows how loud the
 microphone hears you and for how long, with **×** to throw the recording away (so does **Esc**) and
 **✓** to finish. **×** and **Esc** keep the words already typed in. A few seconds of quiet after you

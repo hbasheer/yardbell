@@ -451,6 +451,7 @@ pub fn router(app: Arc<AppState>) -> Router {
             get(|| async { asset("workspace-changes.js") }),
         )
         .route("/highlight.js", get(|| async { asset("highlight.js") }))
+        .route("/voice-keys.js", get(|| async { asset("voice-keys.js") }))
         .route("/dispatch", get(|| async { asset("dispatch.html") }))
         .route("/pipeline", get(|| async { asset("pipeline.html") }))
         .route("/dispatch.js", get(|| async { asset("dispatch.js") }))
