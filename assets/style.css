@@ -1878,10 +1878,6 @@ body.resizing iframe { pointer-events: none; }
 .ws-panes.dragging { cursor: col-resize; user-select: none; }
 .ws-panes.dragging iframe { pointer-events: none; }
 .ws-panes.many .ws-pane-head { cursor: grab; }
-.ws-panes.moving, .ws-panes.moving .ws-pane-head { cursor: grabbing; user-select: none; }
-.ws-panes.moving iframe { pointer-events: none; }
-.ws-pane.ws-move-src { opacity: 0.65; }
-.ws-pane.ws-move-into::after { content: ""; position: absolute; inset: 0; z-index: 1; border: 2px solid var(--accent); pointer-events: none; }
 .ws-pane { position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0; overflow: hidden; background: var(--term-bg); color: var(--term-ink); container-type: inline-size; }
 .ws-pane.edge-right { border-right: 1px solid var(--line); }
 .ws-pane.edge-bottom { border-bottom: 1px solid var(--line); }
@@ -3088,7 +3084,6 @@ svg.ws-agent.claude { color: var(--agent-claude); stroke-width: 1.7; }
   .ws-divider.col::after { left: 0; right: 0; top: 50%; height: 3px; transform: translateY(-50%); }
   .ws-divider:hover, .ws-panes.dragging .ws-divider { background: transparent; }
   .ws-divider:hover::after, .ws-panes.dragging .ws-divider::after { background: var(--split-divider-hover); }
-  .ws-pane.ws-move-into::after { border: 2px solid var(--ink); border-radius: 0; opacity: 0.35; }
 }
 
 .ws-pane-body:has(> .ws-pane-empty) { background: var(--bg); color: var(--ink); overflow: auto; }
@@ -4578,3 +4573,20 @@ tr.dnote-row td { padding: 6px 16px 8px 116px; font: 13px/1.45 var(--sans); }
 .side-dot { flex: none; width: 6px; height: 6px; margin-left: auto; margin-right: 3px; border-radius: 50%; background: var(--chg-modified); }
 .side-row.found .side-mark { margin-left: 6px; }
 .chg-st.untracked { color: var(--chg-added); }
+
+/* Docking in the Workspace: a tab, a pane by its title bar or a session from the tree is dragged
+   with a tab-shaped ghost under the pointer. A line between tabs marks where it lands in the strip,
+   and a tinted box shows the half of a pane it will take, or the whole pane for its centre. */
+body.ws-docking, body.ws-docking * { cursor: grabbing !important; user-select: none; }
+body.ws-docking iframe { pointer-events: none; }
+.ws-tab.ws-dock-src, .ws-pane.ws-dock-src, .tree-session.ws-dock-src { opacity: 0.5; }
+.ws-dock-ghost { position: fixed; top: 0; left: 0; z-index: 80; pointer-events: none; will-change: transform; animation: ws-dock-in 120ms ease-out; }
+.ws-dock-ghost .ws-tab { width: auto; min-width: 0; max-width: 240px; height: 28px; padding: 0 12px 0 10px; border: 1px solid var(--line-strong); border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 12px; opacity: 0.94; box-shadow: 0 6px 16px rgb(0 0 0 / 0.16); }
+.ws-dock-ghost .ws-tab::after { display: none; }
+.ws-dock-preview { position: fixed; z-index: 79; border: 1px solid var(--accent); border-radius: 6px; background: color-mix(in srgb, var(--accent) 14%, transparent); pointer-events: none; transition: left 90ms ease-out, top 90ms ease-out, width 90ms ease-out, height 90ms ease-out; }
+.ws-dock-mark { position: fixed; z-index: 79; width: 2px; border-radius: 1px; background: var(--accent); pointer-events: none; }
+@keyframes ws-dock-in { from { opacity: 0; } }
+@media (prefers-reduced-motion: reduce) {
+  .ws-dock-ghost { animation: none; }
+  .ws-dock-preview { transition: none; }
+}
