@@ -4591,3 +4591,15 @@ tr.dnote-row td { padding: 6px 16px 8px 116px; font: 13px/1.45 var(--sans); }
 @media (max-width: 760px) {
   .pl-history-view .pl-history-list { border-right: 0; border-bottom: 1px solid var(--line); }
 }
+
+/* A page open as a pane is marked with a dot rather than the current page's fill, and machine rows
+   in the sidebar stay plain until hovered or picked. */
+.col-nav-link[aria-pressed="true"]:not([aria-current="page"]) { background: transparent; }
+.col-nav-link[aria-pressed="true"]:not([aria-current="page"]):hover { background: var(--hover); }
+.col-nav-link[aria-pressed="true"]::after { content: ""; flex: none; width: 6px; height: 6px; margin-left: auto; border-radius: 50%; background: var(--accent); }
+.rail-link[aria-pressed="true"]:not([aria-current="page"]) { position: relative; background: transparent; box-shadow: none; }
+.rail-link[aria-pressed="true"]:not([aria-current="page"])::after { content: ""; position: absolute; top: 6px; right: 6px; width: 6px; height: 6px; border-radius: 50%; background: var(--accent); }
+.tree-head { border-color: transparent; background: transparent; }
+.tree-head:hover { background: var(--hover); }
+.tree-head.down { background: transparent; }
+.tree-head.split.current { background: var(--selected); border-color: transparent; }

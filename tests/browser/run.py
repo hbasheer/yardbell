@@ -1801,12 +1801,34 @@ class Suite:
                 raise Failure("the icon made more than one Dispatch pane")
             if b.js(f"{icon}.getAttribute('aria-pressed')") != "true":
                 raise Failure("the Dispatch icon is not pressed while its pane shows")
+            looks = b.js(f"""(() => {{
+              const bg = (el) => getComputedStyle(el).backgroundColor;
+              const here = document.querySelector('.col-nav [aria-current=page]');
+              const open = {icon};
+              return {{ here: bg(here), open: bg(open), dot: getComputedStyle(open, '::after').content, title: open.title }};
+            }})()""")
+            if looks["open"] == looks["here"]:
+                raise Failure(f"an open Dispatch pane makes its link look like a second current page: {looks}")
+            if looks["dot"] in ("none", "normal", "") or "close" not in looks["title"].lower():
+                raise Failure(f"the open Dispatch link shows no dot or says nothing about closing: {looks}")
             b.click(".col-nav [data-page=dispatch]")
             b.wait("!document.querySelector('iframe[data-dispatch]')", "the Dispatch pane to close")
             if b.js(f"{icon}.getAttribute('aria-pressed')") != "false":
                 raise Failure("the Dispatch icon is still pressed after closing the pane")
         finally:
             self.put_storage(before)
+
+    def test_sidebar_machine_rows_are_quiet_unless_picked(self):
+        b = self.b
+        b.goto(self.url("/"))
+        b.wait("document.querySelector('#col-body .tree-machine')", "the machines in the sidebar")
+        seen = b.js("""(() => {
+          const rows = [...document.querySelectorAll('#col-body .tree-machine')].filter((r) => !r.classList.contains('current'));
+          return rows.map((r) => [getComputedStyle(r).backgroundColor, getComputedStyle(r).borderTopColor]);
+        })()""")
+        clear = ("rgba(0, 0, 0, 0)", "transparent")
+        if not seen or any(bg not in clear or line not in clear for bg, line in seen):
+            raise Failure(f"machine rows that are not picked still look picked: {seen}")
 
     def test_dispatch_opens_as_a_pane_and_survives_a_reload(self):
         b = self.b

@@ -5,6 +5,9 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **One page highlighted at a time.** With Dispatch open as a pane in the Workspace, its sidebar link shows
+  a small dot (and says a click closes it) instead of the current page's highlight. Machine rows in the
+  sidebar are plain until hovered or picked, so they no longer all look selected.
 - **Pipeline history: restore without a new version, and delete old ones.** **Restore** now makes
   the version you pick the current one instead of saving a copy of it, so the list stays the same
   and a newer version can be restored again. Each version but the current one has a delete button,
