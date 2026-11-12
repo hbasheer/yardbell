@@ -4564,3 +4564,17 @@ tr.dnote-row td { padding: 6px 16px 8px 116px; font: 13px/1.45 var(--sans); }
 .voice-keys.listening { padding: 0 8px; min-height: 22px; align-items: center; border: 1px dashed var(--line-strong); border-radius: 6px; }
 .voice-keys-wait { color: var(--muted); font: 500 12px var(--sans); white-space: nowrap; }
 @media (max-width: 760px) { .voice-shortcut-ctl { margin-left: auto; flex-wrap: wrap; justify-content: flex-end; } }
+
+/* Changes marked in the Files tree, in the Changes tab's colours: a changed file's name takes its
+   status colour with the letter at the right, and a folder holding changes gets a dot. */
+.side-row.chg-modified .side-name { color: var(--chg-modified); }
+.side-row.chg-added .side-name, .side-row.chg-untracked .side-name { color: var(--chg-added); }
+.side-row.chg-renamed .side-name { color: var(--chg-renamed); }
+.side-row.chg-inside .side-name { color: var(--chg-modified); }
+.side-mark { flex: none; margin-left: auto; padding-left: 8px; font: 600 11px/1 var(--mono); }
+.side-row.chg-modified .side-mark { color: var(--chg-modified); }
+.side-row.chg-added .side-mark, .side-row.chg-untracked .side-mark { color: var(--chg-added); }
+.side-row.chg-renamed .side-mark { color: var(--chg-renamed); }
+.side-dot { flex: none; width: 6px; height: 6px; margin-left: auto; margin-right: 3px; border-radius: 50%; background: var(--chg-modified); }
+.side-row.found .side-mark { margin-left: 6px; }
+.chg-st.untracked { color: var(--chg-added); }

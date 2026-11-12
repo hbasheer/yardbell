@@ -3371,6 +3371,33 @@ class Suite:
             if repo:
                 self.drop_changes(repo, head)
 
+    def test_workspace_files_tree_marks_changed_files_and_folders(self):
+        b = self.b
+        before = self.storage(self.CHANGES)
+        repo = head = None
+        try:
+            repo, head = self.changes_on_demo_api(tab="files")
+            b.wait("document.querySelector('#side-tree [data-file=\"long.txt\"].chg-modified')", "long.txt marked as changed in the file tree", timeout=15)
+            marks = b.js("""(() => {
+              const row = (sel) => document.querySelector('#side-tree ' + sel);
+              const mark = (sel) => { const r = row(sel); return r ? [[...r.classList].filter((c) => c.startsWith('chg-')).join(' '), r.querySelector('.side-mark')?.textContent || ''] : null; };
+              return { long: mark('[data-file="long.txt"]'), notes: mark('[data-file="notes.txt"]'), src: mark('[data-dir="src"]') };
+            })()""")
+            want = {"long": ["chg-modified", "M"], "notes": ["chg-untracked", "U"], "src": ["chg-inside", ""]}
+            if marks != want:
+                raise Failure(f"the file tree marks changes as {marks}, not {want}")
+            b.click("#side-tree [data-dir=\"src\"]")
+            b.wait("document.querySelector('#side-tree [data-file=\"src/app.js\"].chg-modified .side-mark')?.textContent === 'M'", "src/app.js marked inside its folder")
+            write(os.path.join(repo, "later.txt"), "made while the tree is open\n")
+            b.wait("document.querySelector('#side-tree [data-file=\"later.txt\"].chg-untracked')", "a new file to appear, marked, without a refresh", timeout=15)
+            if b.js("document.querySelector('#side-tree [data-file=\"README.md\"]')?.className.includes('chg-')"):
+                raise Failure("an unchanged file is marked")
+        finally:
+            self.settle()
+            self.put_storage(before)
+            if repo:
+                self.drop_changes(repo, head)
+
     def test_workspace_changes_diff_tab_unified_split_survives_reload(self):
         b = self.b
         before = self.storage(self.CHANGES)

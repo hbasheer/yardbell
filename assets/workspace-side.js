@@ -37,6 +37,10 @@
   let placeKey = "";
   const dirs = new Map();
   const expanded = new Set();
+  const marks = new Map();
+  const markedDirs = new Set();
+  let markedFiles = "";
+  const LETTER = { modified: "M", added: "A", renamed: "R", untracked: "U" };
   let findMode = "names";
   let findText = "";
   let findTimer = 0;
@@ -77,6 +81,7 @@
     });
     panel.querySelectorAll("[data-side]").forEach((s) => { s.hidden = s.dataset.side !== prefs.tab; });
     window.YardbellChanges.show(open && prefs.tab === "changes");
+    window.YardbellChanges.follow(open && prefs.tab === "files");
     if (open) refresh();
   }
 
@@ -119,6 +124,28 @@
     paintTree();
   }
 
+  // What git reports as changed, as file and folder marks for the tree; when the set of files
+  // changes, the open folders are listed again so new files show up.
+  function onChanges(list) {
+    marks.clear();
+    markedDirs.clear();
+    for (const f of list?.files || []) {
+      if (f.status !== "deleted") marks.set(f.path, f.status);
+      const parts = f.path.split("/");
+      for (let i = 1; i < parts.length; i++) markedDirs.add(parts.slice(0, i).join("/"));
+    }
+    const names = [...marks.keys()].sort().join("\n");
+    const grew = markedFiles !== "" && names !== markedFiles;
+    markedFiles = names;
+    if (grew) for (const [path, d] of dirs) if (d.entries) loadDir(path);
+    paintTree();
+  }
+
+  function fileMark(rel) {
+    const status = marks.get(rel);
+    return status ? { cls: ` chg-${status}`, tag: `<span class="side-mark" aria-label="${status}">${LETTER[status] || ""}</span>` } : { cls: "", tag: "" };
+  }
+
   function rowsOf(path, depth, out) {
     const d = dirEntry(path);
     if (!d || d.loading) {
@@ -134,10 +161,12 @@
       const rel = path ? `${path}/${e.name}` : e.name;
       if (e.kind === "dir") {
         const open = expanded.has(rel);
-        out.push(`<button type="button" class="side-row dir" role="treeitem" aria-expanded="${open}" data-dir="${esc(rel)}" style="--depth:${depth}" title="${esc(rel)}">${svg("chevron", "icon side-chev")}${svg("folder")}<span class="side-name">${esc(e.name)}</span></button>`);
+        const inside = markedDirs.has(rel) ? " chg-inside" : "";
+        out.push(`<button type="button" class="side-row dir${inside}" role="treeitem" aria-expanded="${open}" data-dir="${esc(rel)}" style="--depth:${depth}" title="${esc(rel)}">${svg("chevron", "icon side-chev")}${svg("folder")}<span class="side-name">${esc(e.name)}</span>${inside ? '<span class="side-dot" aria-label="has changes"></span>' : ""}</button>`);
         if (open) rowsOf(rel, depth + 1, out);
       } else {
-        out.push(`<button type="button" class="side-row file" role="treeitem" data-file="${esc(rel)}" style="--depth:${depth}" title="${esc(rel)}"><span class="side-chev-gap"></span>${svg("file")}<span class="side-name">${esc(e.name)}</span></button>`);
+        const m = fileMark(rel);
+        out.push(`<button type="button" class="side-row file${m.cls}" role="treeitem" data-file="${esc(rel)}" style="--depth:${depth}" title="${esc(rel)}"><span class="side-chev-gap"></span>${svg("file")}<span class="side-name">${esc(e.name)}</span>${m.tag}</button>`);
       }
     }
     if (d.more) out.push(`<div class="side-note" style="--depth:${depth}">Only the first ${d.entries.length} entries are shown.</div>`);
@@ -173,7 +202,8 @@
     }
     tree.innerHTML = found.matches.map((rel) => {
       const dir = rel.includes("/") ? rel.slice(0, rel.lastIndexOf("/")) : "";
-      return `<button type="button" class="side-row file found" data-file="${esc(rel)}" title="${esc(rel)}">${svg("file")}<span class="side-name">${esc(base(rel))}</span><span class="side-dir">&lrm;${esc(dir)}&lrm;</span></button>`;
+      const m = fileMark(rel);
+      return `<button type="button" class="side-row file found${m.cls}" data-file="${esc(rel)}" title="${esc(rel)}">${svg("file")}<span class="side-name">${esc(base(rel))}</span><span class="side-dir">&lrm;${esc(dir)}&lrm;</span>${m.tag}</button>`;
     }).join("") + (found.more ? `<div class="side-note">Only the first ${found.matches.length} matches are shown.</div>` : "");
   }
 
@@ -207,6 +237,9 @@
   function resetFiles() {
     dirs.clear();
     expanded.clear();
+    marks.clear();
+    markedDirs.clear();
+    markedFiles = "";
     found = null;
     findSeq++;
     paintPath();
@@ -372,6 +405,7 @@
   function init(context) {
     ctx = context;
     window.YardbellChanges.init(context);
+    window.YardbellChanges.watch(onChanges);
     applyOpen();
     update();
   }
