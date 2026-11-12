@@ -16,6 +16,19 @@ and the project uses [Semantic Versioning](https://semver.org).
   the handles, then Copy, Select all or Paste. Tap a web address to open it. While the keyboard is up
   the key bar and the prompt line stay just above it, and the session keeps its size instead of
   shrinking every time the keyboard opens.
+- **Drive an agent from a phone.** The phone terminal has a row of agent keys above its key row
+  that follows what the session's screen shows: Stop and Send now while Claude Code works; Yes,
+  Always and No on a permission prompt; one button per choice on a numbered question; Mode, History
+  and Clear line while it waits. Codex gets Stop, History and its own letters for Yes, Always and
+  No. When the screen says nothing clear, or right after an answer, only Stop shows. Each button
+  shows the keys it sends.
+- **Message box on the phone terminal.** **Type** opens a box for a message of several lines, sent
+  into the session with Enter. It has the dictation microphone, with Dispatch's voice settings, and
+  attaches images, PDFs and text files: each is copied to the session's machine under
+  `/tmp/yardbell-uploads/<session>/` and its path goes into the message, with the upload's progress
+  shown on the file.
+- **Session switcher on the phone Workspace.** A full-screen session's name at the top shows its
+  state and opens a list of the running sessions; swipe it sideways for the next or previous one.
 
 ## [0.11.101] - 2026-11-12
 

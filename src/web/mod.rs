@@ -566,6 +566,11 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/machines/{machine}/recent/forget", post(forget_recent))
         .route("/machines/{machine}/branches", get(branches))
         .route("/term.js", get(|| async { asset("term.js") }))
+        .route("/term-agent.js", get(|| async { asset("term-agent.js") }))
+        .route(
+            "/term-compose.js",
+            get(|| async { asset("term-compose.js") }),
+        )
         .route("/add", get(|| async { asset("add.html") }))
         .route("/add.js", get(|| async { asset("add.js") }))
         .route("/onboarding/peers", get(onboarding_peers))
@@ -594,6 +599,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(mcp_auth_api::routes())
         .merge(proposals_api::routes())
         .merge(files_api::routes())
+        .merge(term_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
         .with_state(app)
 }
@@ -2544,6 +2550,7 @@ mod review_api;
 pub mod review_pulls;
 mod scan_api;
 mod settings_api;
+mod term_api;
 mod transcript_api;
 mod triggers_api;
 mod voice_api;

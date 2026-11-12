@@ -208,7 +208,9 @@ Esc cancels a drag. The layout is remembered, like the rest of the Workspace. An
 agent there or to open one of the workspace's sessions. Panes also split right or down and resize by
 dragging the border between them; the split's shape lasts until a pane is added or removed, when
 the grid takes over again. **Keyboard shortcuts** in the sidebar lists the keys. On a phone
-the sidebar comes first and a session opens full screen.
+the sidebar comes first and a session opens full screen. Its name at the top, with its state, is a
+switcher: tap it to list the running sessions and pick another, or swipe it sideways for the next or
+previous one. The back arrow still returns to the list.
 
 **Dispatch** sits in the Workspace too, as a panel between the sidebar and the terminals. Sessions
 it starts or links to open in a pane. Hide or show it with the speech bubble before the tabs or the
@@ -316,6 +318,24 @@ the terminal:
 - **The keyboard.** While the phone's keyboard is up, the key bar sits on top of it and the terminal
   slides up just enough to keep the line with the cursor in view. The session keeps its size, so the
   agent's screen is not redrawn every time the keyboard opens; turning the phone does resize it.
+
+**Driving an agent from a phone.** On a phone or a touch screen, a row of agent keys sits above
+the key row, and its buttons follow what the session's screen shows. While Claude Code works:
+**Stop** (Esc) and **Send now** (Ctrl-X Ctrl-S, which sends a queued message right away). When it
+asks for permission: **Yes**, **Always** (the "don't ask again" choice, when it offers one) and
+**No**. When it asks a question with numbered choices: one button per choice and **Cancel**. When
+it waits for you: **Mode** (Shift-Tab), **History** (Up) and **Clear line** (Ctrl-U). Codex gets
+**Stop**, **History**, and Yes, Always and No by the letters it prints beside them. Each button
+shows the keys it sends. When Yardbell cannot tell what the screen asks, or right after you answer
+and before it has read the screen again, only **Stop** shows, so an old answer never lands on a new
+question. Other agents and plain shells get only **Type**.
+
+**Type** opens a message box: write as many lines as you like and **Send** types them into the
+session and presses Enter (several lines go in as one paste). The microphone dictates into the box
+with the same voice setup, mode and shortcut as Dispatch. The paper clip attaches images, PDFs and
+text files up to 10 MB: each one is copied to the session's machine, into
+`/tmp/yardbell-uploads/<session>/`, and its path goes into the message for the agent to read. The
+file's chip shows the upload's progress, and says why when a file is refused.
 
 **Copying from the terminal.**
 

@@ -4211,6 +4211,232 @@ class Suite:
             self.put_storage(before)
             self.drop_demo_api_session(key, made)
 
+    PERMISSION_STATE = {"agent": "claude", "state": "permission", "screen": "aaaa", "choices": [
+        {"number": 1, "label": "Yes", "keys": "1", "role": "yes"},
+        {"number": 2, "label": "Yes, and don't ask again for rm commands in /r/app", "keys": "2", "role": "always"},
+        {"number": 3, "label": "No, and tell Claude what to do differently (esc)", "keys": "3", "role": "no"},
+    ]}
+    QUESTION_STATE = {"agent": "claude", "state": "question", "screen": "bbbb", "choices": [
+        {"number": 1, "label": "Postgres", "keys": "1"},
+        {"number": 2, "label": "SQLite", "keys": "2"},
+        {"number": 3, "label": "Type something.", "keys": "3"},
+    ]}
+
+    def term_session(self):
+        if not self.session:
+            path = os.path.join(self.y.root, "demo-app")
+            self.session = self.api("POST", "/sessions", {"machine": MACHINE, "path": path, "wait": True})["name"]
+        return self.session
+
+    # The page's own /agent reads answer from window.__agent, and every frame the terminal's socket
+    # sends is kept in window.__frames. Typing still reaches the shell unless swallow is set, since
+    # keys meant for an agent, like Ctrl-S, would stop the shell's output.
+    def open_phone_term(self, swallow=False):
+        b = self.b
+        name = self.term_session()
+        b.viewport(390, 844, 3)
+        b.goto(self.url(f"/term/{MACHINE}/{name}"))
+        b.wait("typeof term === 'object' && term.element && window.YardbellAgentKeys && window.YardbellCompose", "the phone terminal and its dock")
+        b.wait("screenText().length > 0", "the shell prompt", timeout=15)
+        b.js("""(() => {
+          window.__frames = [];
+          const swallow = SWALLOW;
+          const send = WebSocket.prototype.send;
+          WebSocket.prototype.send = function (data) {
+            let frame = null;
+            try { frame = JSON.parse(data); window.__frames.push(frame); } catch {}
+            if (swallow && frame?.t === 'in') return;
+            return send.call(this, data);
+          };
+          const real = window.fetch;
+          window.fetch = (url, init) => {
+            if (window.__agent && String(url).endsWith('/agent') && !(init && init.method === 'POST')) {
+              return Promise.resolve(new Response(JSON.stringify(window.__agent), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+            }
+            return real(url, init);
+          };
+          return 0;
+        })()""".replace("SWALLOW", "true" if swallow else "false"))
+        return name
+
+    def agent_keys(self, state):
+        b = self.b
+        b.js(f"window.__agent = {json.dumps(state)}; YardbellAgentKeys.load().then(() => 0)")
+        return b.js("""[...document.querySelectorAll('#term-dock .agent-keys .agent-key')].map((k) => k.getAttribute('aria-label'))""")
+
+    def test_phone_term_agent_keys_follow_the_prompt(self):
+        b = self.b
+        try:
+            self.open_phone_term(swallow=True)
+            shown = b.js("""(() => {
+              const dock = document.getElementById('term-dock');
+              const keys = document.getElementById('keys');
+              return { on: dock.classList.contains('on'), above: dock.nextElementSibling === keys,
+                       type: Boolean(dock.querySelector('[data-compose]')), sideways: Math.round(dock.querySelector('.agent-row').getBoundingClientRect().right) > innerWidth };
+            })()""")
+            if not shown["on"] or not shown["above"] or not shown["type"] or shown["sideways"]:
+                raise Failure(f"the agent row should show above the key bar with a Type key: {shown}")
+            got = self.agent_keys(self.PERMISSION_STATE)
+            if got != ["Yes, sends 1", "Always, sends 2", "No, sends 3"]:
+                raise Failure(f"a permission prompt shows {got}")
+            if not b.js("document.querySelector('#term-dock .agent-key.primary')?.getAttribute('aria-label') === 'Yes, sends 1'"):
+                raise Failure("Yes is not the primary key")
+            b.js("window.__frames.length = 0")
+            b.click('#term-dock [aria-label="Always, sends 2"]')
+            b.wait("window.__frames.some((f) => f.t === 'in' && f.d === '2')", "Always to send 2 on the terminal's socket")
+            if b.js("window.__frames.filter((f) => f.t === 'in').map((f) => f.d).join('|')") != "2":
+                raise Failure(f"Always sent more than its key: {b.js('JSON.stringify(window.__frames)')}")
+            got = b.js("[...document.querySelectorAll('#term-dock .agent-keys .agent-key')].map((k) => k.getAttribute('aria-label'))")
+            if got != ["Stop, sends Esc"]:
+                raise Failure(f"right after answering, only Stop should show until the screen is read again: {got}")
+            got = self.agent_keys(self.QUESTION_STATE)
+            if got != ["1. Postgres, sends 1", "2. SQLite, sends 2", "3. Type something., sends 3", "Cancel, sends Esc"]:
+                raise Failure(f"a numbered question shows {got}")
+            got = self.agent_keys({"agent": "claude", "state": "working", "screen": "cccc", "choices": []})
+            if got != ["Stop, sends Esc", "Send now, sends ⌃X ⌃S"]:
+                raise Failure(f"a working agent shows {got}")
+            b.js("window.__frames.length = 0")
+            b.click('#term-dock [aria-label="Send now, sends ⌃X ⌃S"]')
+            b.wait("window.__frames.some((f) => f.t === 'in' && f.d === '\\x18\\x13')", "Send now to send Ctrl-X Ctrl-S")
+            got = self.agent_keys({"agent": "claude", "state": "idle", "screen": "dddd", "choices": []})
+            if got != ["Mode, sends ⇧Tab", "History, sends ↑", "Clear line, sends ⌃U"]:
+                raise Failure(f"an idle agent shows {got}")
+            got = self.agent_keys({"agent": "claude", "state": "blocked", "screen": "eeee", "choices": []})
+            if got != ["Stop, sends Esc"]:
+                raise Failure(f"a wait the screen does not explain should show only Stop: {got}")
+            got = self.agent_keys({"agent": "aider", "state": "working", "screen": "ffff", "choices": []})
+            if got != [] or not b.js("Boolean(document.querySelector('#term-dock [data-compose]'))"):
+                raise Failure(f"an agent without a key map should show only Type: {got}")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_phone_term_agent_row_reads_the_server(self):
+        b = self.b
+        name = self.term_session()
+        b.goto(self.url("/"))
+        got = self.api("GET", f"/sessions/{MACHINE}/{name}/agent")
+        if got.get("agent") != "shell" or got.get("state") not in ("idle", "working"):
+            raise Failure(f"the agent state of a shell session reads {got}")
+        b.viewport(1280, 800)
+        b.goto(self.url(f"/term/{MACHINE}/{name}"))
+        b.wait("typeof term === 'object' && term.element && window.YardbellAgentKeys", "the desktop terminal")
+        if b.js("document.getElementById('term-dock').classList.contains('on')"):
+            raise Failure("the agent row shows on a desktop-sized terminal")
+
+    def test_phone_term_compose_sends_text_and_enter(self):
+        b = self.b
+        try:
+            self.open_phone_term()
+            b.click("#term-dock [data-compose]")
+            b.wait("!document.querySelector('.term-compose').hidden && document.activeElement?.classList.contains('term-compose-text')", "the message box, focused")
+            mic = b.js("(() => { const m = document.querySelector('.term-compose .mic'); return Boolean(m) && !m.hidden && Boolean(document.querySelector('.term-compose .dictation-pill')); })()")
+            if not mic:
+                raise Failure("the message box has no dictation button and pill")
+            b.type("echo composed''-ok")
+            b.js("window.__frames.length = 0")
+            b.click(".term-compose .compose-send")
+            b.wait("window.__frames.some((f) => f.t === 'in' && f.d === '\\r')", "Enter after the text")
+            sent = b.js("window.__frames.filter((f) => f.t === 'in').map((f) => f.d)")
+            if len(sent) != 2 or "echo composed''-ok" not in sent[0] or sent[1] != "\r":
+                raise Failure(f"the message box should type the text, then Enter: {sent}")
+            b.wait("screenText().split('\\n').some((l) => l.trim() === 'composed-ok')", "the shell to run the message")
+            if not b.js("document.querySelector('.term-compose').hidden"):
+                raise Failure("the message box stays open after sending")
+            b.click("#term-dock [data-compose]")
+            b.js("""(() => { const t = document.querySelector('.term-compose-text'); t.value = 'one\\ntwo'; t.dispatchEvent(new Event('input')); return 0; })()""")
+            b.js("window.__frames.length = 0")
+            b.js("""(() => { window.__pasted = []; term.paste = (t) => { window.__pasted.push(t); }; return 0; })()""")
+            b.click(".term-compose .compose-send")
+            b.wait("window.__frames.some((f) => f.t === 'in' && f.d === '\\r')", "Enter after a two-line message")
+            if b.js("window.__pasted") != ["one\ntwo"]:
+                raise Failure(f"a two-line message should go as one paste: {b.js('window.__pasted')}")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_phone_term_attach_uploads_a_file(self):
+        b = self.b
+        made = None
+        try:
+            name = self.open_phone_term()
+            b.click("#term-dock [data-compose]")
+            b.js("YardbellCompose.attach([new File(['hello from the phone\\n'], 'phone notes.txt', { type: 'text/plain' })]); 0")
+            path = b.wait(f"""(() => {{
+              const m = document.querySelector('.term-compose-text').value.match(/\\/tmp\\/yardbell-uploads\\/{re.escape(name)}\\/\\d+-phone_notes\\.txt/);
+              return m && m[0];
+            }})()""", "the uploaded file's path in the message", timeout=15)
+            made = path
+            with open(path) as f:
+                if f.read() != "hello from the phone\n":
+                    raise Failure(f"{path} does not hold the attached file")
+            chip = b.js("(() => { const c = document.querySelector('.term-file'); return c && [c.dataset.state, c.textContent]; })()")
+            if not chip or chip[0] != "done":
+                raise Failure(f"the file chip does not say it was added: {chip}")
+            b.js("YardbellCompose.attach([new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.png')]); 0")
+            b.wait("[...document.querySelectorAll('.term-file')].some((c) => c.dataset.state === 'failed' && c.textContent.includes('over 10 MB'))", "a file over the cap refused")
+            b.js("YardbellCompose.attach([new File([new Uint8Array([0, 1, 2, 3, 255])], 'blob.bin')]); 0")
+            b.wait("document.querySelector('.term-compose-status').textContent.includes('only images, PDFs and text files')", "a binary file refused with the reason")
+        finally:
+            if made and os.path.exists(made):
+                os.remove(made)
+                for folder in (os.path.dirname(made), os.path.dirname(os.path.dirname(made))):
+                    try:
+                        os.rmdir(folder)
+                    except OSError:
+                        break
+            b.viewport(1280, 800)
+
+    def test_phone_session_switcher_picks_and_swipes(self):
+        b = self.b
+        self.term_session()
+        key, made = self.demo_api_session()
+        first = f"{MACHINE}/{self.session}"
+        before = self.storage(self.LAYOUT)
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            row = f"#col-body [data-key={json.dumps(key)}]"
+            b.wait(f"state !== null && document.querySelector({json.dumps(row)}) && document.querySelector('#col-body [data-key={json.dumps(first)}]')", "both sessions in the list", timeout=15)
+            b.click(row)
+            b.wait(f"document.body.classList.contains('ws-session') && focusedLeaf().key === {json.dumps(key)}", "the session full screen")
+            shown = b.js("""(() => {
+              const s = document.getElementById('ws-switch');
+              return { visible: s.getClientRects().length > 0, state: Boolean(s.querySelector('.ws-tab-state')), label: s.getAttribute('aria-label') };
+            })()""")
+            if not shown["visible"] or not shown["state"] or "demo-api" not in shown["label"]:
+                raise Failure(f"the switcher should name the session with its state: {shown}")
+            b.click("#ws-switch")
+            b.wait("!document.getElementById('ws-switcher').hidden", "the session picker")
+            rows = b.js("[...document.querySelectorAll('#ws-switcher .ws-switch-row')].map((r) => [r.dataset.switch, r.hasAttribute('aria-current'), Boolean(r.querySelector('.ws-tab-state svg'))])")
+            if [r[0] for r in rows if r[1]] != [key] or first not in [r[0] for r in rows] or not all(r[2] for r in rows):
+                raise Failure(f"the picker should list the sessions with state icons and mark this one: {rows}")
+            b.click(f"#ws-switcher [data-switch={json.dumps(first)}]")
+            b.wait(f"document.getElementById('ws-switcher').hidden && focusedLeaf().key === {json.dumps(first)} && document.querySelector('.ws-pane:not([hidden]) iframe[data-key={json.dumps(first)}]')",
+                   "the picked session full screen")
+            order = b.js("switchList().map(keyOf)")
+            at = order.index(first)
+            swipe = """((dx) => {
+              const s = document.getElementById('ws-switch');
+              const box = s.getBoundingClientRect();
+              const y = box.top + box.height / 2;
+              const x = box.left + box.width / 2;
+              s.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 7, clientX: x, clientY: y }));
+              s.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 7, clientX: x + dx, clientY: y + 4 }));
+              s.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x + dx, clientY: y + 4 }));
+              return 0;
+            })"""
+            b.js(f"{swipe}(-120)")
+            want = order[(at + 1) % len(order)]
+            b.wait(f"focusedLeaf().key === {json.dumps(want)} && document.getElementById('ws-switcher').hidden", "a swipe left to open the next session")
+            b.js(f"{swipe}(120)")
+            b.wait(f"focusedLeaf().key === {json.dumps(first)}", "a swipe right to come back")
+            b.click("#back")
+            b.wait("document.body.classList.contains('ws-list')", "Back to still return to the list")
+        finally:
+            b.viewport(1280, 800)
+            self.settle()
+            self.put_storage(before)
+            self.drop_demo_api_session(key, made)
+
     def test_workspace_sidebar_matches_the_other_pages(self):
         dashboard = self.menu("/")
         workspace = self.menu("/workspace")

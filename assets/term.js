@@ -1433,3 +1433,9 @@ Promise.all([
     term.focus();
   }
 });
+
+window.YardbellTerm = {
+  send: (data) => send({ t: "in", d: data }),
+  paste: (text) => term.paste(text),
+  focus: () => term.focus(),
+};

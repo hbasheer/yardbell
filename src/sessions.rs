@@ -345,6 +345,24 @@ fn paste_script(name: &str, enter: bool) -> String {
     format!("{paste}; sleep 0.2; tmux send-keys -t {target} Enter </dev/null")
 }
 
+pub const UPLOAD_ROOT: &str = "/tmp/yardbell-uploads";
+
+// /tmp is shared by every account on the machine, so a folder there that someone else made, or
+// a link planted in its place, is refused rather than written into.
+pub fn upload_script(folder: &str, file: &str) -> String {
+    let base = quote(UPLOAD_ROOT);
+    let dir = quote(&format!("{UPLOAD_ROOT}/{folder}"));
+    let file = quote(file);
+    format!(
+        "umask 077; b={base}; d={dir}; mkdir -p \"$d\" || exit 1; \
+         for p in \"$b\" \"$d\"; do if [ -L \"$p\" ] || [ ! -O \"$p\" ]; then echo \"$p belongs to someone else\" >&2; exit 1; fi; done; \
+         f=\"$d\"/$(date +%s)-{file}; t=\"$f.part\"; \
+         cat >\"$t.b64\" && {{ base64 -d <\"$t.b64\" >\"$t\" 2>/dev/null || base64 -D <\"$t.b64\" >\"$t\"; }} \
+         && mv \"$t\" \"$f\" && rm -f \"$t.b64\" && printf '%s\\n' \"$f\" \
+         || {{ rm -f \"$t\" \"$t.b64\"; echo 'the file could not be written' >&2; exit 1; }}"
+    )
+}
+
 pub struct Sessions {
     runner: Arc<dyn Runner>,
     ssh: Ssh,
@@ -520,6 +538,25 @@ impl Sessions {
         let target = quote(&format!("{}:", exact(name)));
         self.exec(m, &format!("tmux send-keys -t {target} -l {}", quote(keys)))
             .await
+    }
+
+    // The file arrives as base64 on stdin and is written on the session's machine; the path it
+    // landed at comes back.
+    pub async fn upload(
+        &self,
+        m: &Machine,
+        folder: &str,
+        file: &str,
+        base64: String,
+    ) -> Result<String, String> {
+        let out = self
+            .output_with_input(m, &upload_script(folder, file), Some(base64))
+            .await?;
+        out.lines()
+            .rev()
+            .find(|l| l.starts_with('/'))
+            .map(str::to_string)
+            .ok_or_else(|| format!("{} did not say where the file went", m.name))
     }
 
     pub async fn scroll(&self, m: &Machine, name: &str, lines: i32) -> Result<(), String> {
