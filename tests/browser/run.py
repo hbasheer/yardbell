@@ -1039,6 +1039,333 @@ class Suite:
         b.key("Enter")
         b.wait("screenText().split('\\n').some((l) => l.trim() === 'back3')", "the shell to still answer")
 
+    TERM_STORE = ("yardbell.term.keys", "yardbell.term.fontSize")
+
+    # Opens the session's terminal at phone size. With record, input frames are kept in __in and
+    # never reach the shell, so Ctrl-D and friends cannot end it.
+    def phone_term(self, record=False):
+        b = self.b
+        if not self.session:
+            path = os.path.join(self.y.root, "demo-app")
+            self.session = self.api("POST", "/sessions", {"machine": MACHINE, "path": path, "wait": True})["name"]
+        b.viewport(390, 844, 3)
+        b.goto(self.url(f"/term/{MACHINE}/{self.session}"))
+        b.wait("typeof term === 'object' && term.element && socket?.readyState === 1 && screenText().length > 0", "the phone terminal", timeout=15)
+        b.wait("document.documentElement.classList.contains('touch-ui') && getComputedStyle(document.getElementById('keys')).display === 'flex'", "the key bar")
+        if record:
+            b.js("""(() => {
+              window.__in = [];
+              const s = socket;
+              s.send = (d) => { const f = JSON.parse(d); if (f.t === 'in') window.__in.push(f.d); else WebSocket.prototype.send.call(s, d); };
+              return true;
+            })()""")
+        b.click("#term")
+
+    def leave_phone_term(self, before):
+        self.b.viewport(1280, 800)
+        self.put_storage(before)
+
+    def sent(self, clear=True):
+        got = self.b.js("window.__in.slice()")
+        if clear:
+            self.b.js("window.__in.length = 0")
+        return got
+
+    def test_phone_term_key_bar_sends_the_right_bytes(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term(record=True)
+            want = {"esc": "\x1b", "tab": "\t", "stab": "\x1b[Z", "up": "\x1b[A", "down": "\x1b[B", "left": "\x1b[D",
+                    "right": "\x1b[C", "slash": "/", "pipe": "|", "tilde": "~", "dash": "-", "enter": "\r",
+                    "ctrlc": "\x03", "ctrld": "\x04"}
+            for key, data in want.items():
+                b.click(f"#keys-row [data-key={key}]")
+                got = self.sent()
+                if got != [data]:
+                    raise Failure(f"the {key} key sent {got!r}, wanted {[data]!r}")
+            if not b.js("document.activeElement === term.textarea"):
+                raise Failure(f"pressing keys took the focus from the terminal: {b.js('document.activeElement.outerHTML.slice(0, 80)')}")
+            b.click("#keys-more")
+            b.wait("!document.getElementById('more-sheet').hidden", "the More keys sheet")
+            for key, data in {"home": "\x1b[H", "pgdn": "\x1b[6~", "f1": "\x1bOP", "f5": "\x1b[15~", "ctrlr": "\x12", "del": "\x1b[3~"}.items():
+                b.click(f"#more-keys [data-key={key}]")
+                got = self.sent()
+                if got != [data]:
+                    raise Failure(f"the {key} key in More keys sent {got!r}, wanted {[data]!r}")
+            b.click("#more-close")
+            b.wait("document.getElementById('more-sheet').hidden", "the sheet to close")
+            if not b.js("document.activeElement === term.textarea"):
+                raise Failure("the More keys sheet took the focus from the terminal")
+        finally:
+            self.leave_phone_term(before)
+
+    def double_tap(self, selector):
+        p = self.b.centre(selector)
+        tap = [{"type": "pointerDown", "button": 0}, {"type": "pointerUp", "button": 0}]
+        self.b._actions({"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+            {"type": "pointerMove", "x": int(p["x"]), "y": int(p["y"]), "origin": "viewport"}, *tap,
+            {"type": "pause", "duration": 60}, *tap]})
+        self.b.pump(0.2)
+
+    def test_phone_term_sticky_and_locked_modifiers(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        latch = lambda key: b.js(f"document.querySelector('#keys-row [data-key={key}]').dataset.latch")
+        try:
+            self.phone_term(record=True)
+            b.click("#keys-row [data-key=ctrl]")
+            if latch("ctrl") != "once" or b.js("document.querySelector('#keys-row [data-key=ctrl]').getAttribute('aria-pressed')") != "true":
+                raise Failure(f"one tap on Ctrl should arm it, it is {latch('ctrl')}")
+            b.type("c")
+            b.type("c")
+            got = self.sent()
+            if got != ["\x03", "c"]:
+                raise Failure(f"an armed Ctrl with c typed twice sent {got!r}, wanted Ctrl-C then c")
+            if latch("ctrl") != "off":
+                raise Failure("Ctrl should release after one key")
+            for keys, then, data in ((["ctrl"], "up", "\x1b[1;5A"), (["shift"], "tab", "\x1b[Z"), (["alt"], "left", "\x1b[1;3D"),
+                                     (["ctrl", "alt"], "right", "\x1b[1;7C"), (["shift"], "slash", "/"), (["ctrl"], "pipe", "\x1c")):
+                for k in keys:
+                    b.click(f"#keys-row [data-key={k}]")
+                b.click(f"#keys-row [data-key={then}]")
+                got = self.sent()
+                if got != [data]:
+                    raise Failure(f"{'+'.join(keys)} then {then} sent {got!r}, wanted {[data]!r}")
+            b.click("#keys-row [data-key=alt]")
+            b.type("b")
+            b.key("ArrowUp")
+            got = self.sent()
+            if got not in (["\x1bb", "\x1b[A"], ["\x1bb", "\x1bOA"]):
+                raise Failure(f"Alt then a typed b and an arrow sent {got!r}")
+            b.click("#keys-row [data-key=ctrl]")
+            b.key("ArrowRight")
+            if self.sent() != ["\x1b[1;5C"]:
+                raise Failure("Ctrl then a typed arrow should send Ctrl-Right")
+            b.click("#keys-row [data-key=shift]")
+            b.type("q")
+            if self.sent() != ["Q"]:
+                raise Failure("Shift then a typed q should send Q")
+            self.double_tap("#keys-row [data-key=ctrl]")
+            if latch("ctrl") != "locked":
+                raise Failure(f"a double tap on Ctrl should lock it, it is {latch('ctrl')}")
+            b.type("ab")
+            b.click("#keys-row [data-key=down]")
+            got = self.sent()
+            if got != ["\x01", "\x02", "\x1b[1;5B"]:
+                raise Failure(f"a locked Ctrl sent {got!r}, wanted Ctrl-A, Ctrl-B and Ctrl-Down")
+            if latch("ctrl") != "locked":
+                raise Failure("a locked Ctrl released by itself")
+            b.click("#keys-row [data-key=ctrl]")
+            b.type("a")
+            if latch("ctrl") != "off" or self.sent() != ["a"]:
+                raise Failure("a tap on a locked Ctrl should release it")
+        finally:
+            self.leave_phone_term(before)
+
+    def key_centre(self, key):
+        self.b.js(f"document.querySelector('#keys-row [data-key={key}]').scrollIntoView({{ inline: 'center' }})")
+        return self.b.centre(f"#keys-row [data-key={key}]")
+
+    def test_phone_term_held_keys_repeat(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term(record=True)
+            p = self.key_centre("up")
+            b.drag_path([(p["x"], p["y"]), (p["x"], p["y"], 1000)])
+            held = self.sent()
+            if len(held) < 6 or set(held) != {"\x1b[A"}:
+                raise Failure(f"holding the up arrow for a second sent {held!r}")
+            b.click("#keys-row [data-key=up]")
+            if self.sent() != ["\x1b[A"]:
+                raise Failure("a quick tap on the up arrow should send it once")
+            p = self.key_centre("enter")
+            b.drag_path([(p["x"], p["y"]), (p["x"], p["y"], 900)])
+            if self.sent() != ["\r"]:
+                raise Failure("holding Enter should not repeat it")
+        finally:
+            self.leave_phone_term(before)
+
+    def test_phone_term_more_sheet_edits_the_bar_and_remembers(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        bar = "[...document.querySelectorAll('#keys-row [data-key]')].map((k) => k.dataset.key)"
+        try:
+            self.put_storage({k: None for k in self.TERM_STORE})
+            self.phone_term()
+            default = b.js(bar)
+            if default[:6] != ["esc", "tab", "stab", "ctrl", "alt", "shift"] or default[-3:] != ["ctrlc", "ctrld", "paste"]:
+                raise Failure(f"the key bar starts as {default}")
+            b.click("#keys-more")
+            b.click("#more-edit")
+            b.wait("!document.getElementById('more-editor').hidden && document.getElementById('more-body').hidden", "the bar editor")
+            b.click('#edit-list li[data-id="paste"] [data-edit="up"]')
+            b.click('#edit-list li[data-id="paste"] [data-edit="up"]')
+            b.click('#edit-list li[data-id="alt"] input')
+            b.click('#edit-list li[data-id="home"] input')
+            want = [k for k in default if k not in ("alt", "paste")]
+            want.insert(want.index("ctrlc"), "paste")
+            want.append("home")
+            if b.js(bar) != want:
+                raise Failure(f"after editing, the bar is {b.js(bar)}, wanted {want}")
+            if not b.js("Boolean(document.querySelector('#more-keys [data-key=alt]'))"):
+                raise Failure("a key hidden from the bar should still be in More keys")
+            b.goto(self.url(f"/term/{MACHINE}/{self.session}"))
+            b.wait("document.querySelector('#keys-row [data-key]')", "the key bar again")
+            if b.js(bar) != want:
+                raise Failure(f"the edited bar was not remembered: {b.js(bar)}")
+            b.click("#keys-more")
+            b.click("#more-edit")
+            b.click("#edit-reset")
+            if b.js(bar) != default or b.js("localStorage.getItem('yardbell.term.keys')") is not None:
+                raise Failure("Reset to default should bring the bar back and forget the edit")
+        finally:
+            self.leave_phone_term(before)
+
+    # Firefox here has no touch input, so the pinch is driven through the calls the touch handler
+    # makes: pinchStart, pinchMove with the fingers' scale, and pinchEnd on release.
+    def test_phone_term_pinch_commits_to_a_text_size(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.put_storage({k: None for k in self.TERM_STORE})
+            self.phone_term()
+            start = b.js("({ size: term.options.fontSize, cols: term.cols, rows: term.rows })")
+            b.js("(() => { const r = termEl.getBoundingClientRect(); pinchStart(r.left + 100, r.top + 200); pinchMove(1.37); return true; })()")
+            live = b.js("({ transform: term.element.style.transform, size: term.options.fontSize })")
+            if "scale(1.37)" not in live["transform"] or live["size"] != start["size"]:
+                raise Failure(f"a pinch should scale the terminal live without changing the size yet: {live}")
+            size = b.js("pinchEnd()")
+            want = min([10, 11, 12, 13, 14, 16, 18, 20], key=lambda s: abs(s - start["size"] * 1.37))
+            b.wait(f"term.options.fontSize === {want} && term.cols < {start['cols']} && term.rows < {start['rows']}", f"the grid to refit at {want}px")
+            if size != want or b.js("term.element.style.transform") or b.js("localStorage.getItem('yardbell.term.fontSize')") != str(want):
+                raise Failure(f"the pinch settled on {size}, wanted {want} saved with no scale left")
+            b.click("#keys-more")
+            b.click("#font-down")
+            smaller = b.js("term.options.fontSize")
+            if smaller >= want or b.js("document.getElementById('font-size').textContent") != f"{smaller} px":
+                raise Failure(f"A- should step down from {want}px, it shows {smaller}")
+            b.goto(self.url(f"/term/{MACHINE}/{self.session}"))
+            b.wait(f"typeof term === 'object' && term.options.fontSize === {smaller}", "the text size to be remembered")
+            b.js("(() => { pinchStart(100, 100); pinchMove(40); return true; })()")
+            if b.js("pinchEnd()") != 20:
+                raise Failure("a huge pinch should stop at the largest size")
+        finally:
+            self.leave_phone_term(before)
+
+    def row_of(self, text):
+        return self.b.wait(f"""(() => {{
+          const buf = term.buffer.active;
+          for (let y = buf.length - 1; y >= 0; y--) if (buf.getLine(y).translateToString(true).trim() === {json.dumps(text)}) return {{ y }};
+          return null;
+        }})()""", f"{text!r} on the screen", timeout=10)["y"]
+
+    def cell_centre(self, col, row):
+        return self.b.js(f"(() => {{ const s = screenBox(); return {{ x: s.left + ({col} + 0.5) * s.w, y: s.top + ({row} - term.buffer.active.viewportY + 0.5) * s.h }}; }})()")
+
+    def test_phone_term_selection_mode_copies(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term()
+            b.type("clear; echo sel''word another")
+            b.key("Enter")
+            y = self.row_of("selword another")
+            p = self.cell_centre(2, y)
+            b.js(f"startSelection({p['x']}, {p['y']})")
+            if b.js("term.getSelection()") != "selword":
+                raise Failure(f"a long press should select the word under it, got {b.js('term.getSelection()')!r}")
+            shown = b.js("({ layer: !document.getElementById('sel-layer').hidden, menu: document.getElementById('sel-menu').checkVisibility(), handles: [...document.querySelectorAll('.sel-handle')].filter((h) => !h.hidden).length })")
+            if shown != {"layer": True, "menu": True, "handles": 2}:
+                raise Failure(f"selection mode should show both handles and the menu: {shown}")
+            end = b.centre('.sel-handle[data-end="end"]')
+            to = self.cell_centre(14, y)
+            b.drag((end["x"], end["y"]), (to["x"] + 2, end["y"]))
+            if b.js("term.getSelection()") != "selword another":
+                raise Failure(f"dragging the end handle should extend the selection, got {b.js('term.getSelection()')!r}")
+            b.js("window.__copied = []; navigator.clipboard.writeText = async (t) => { window.__copied.push(t); }; true")
+            b.click('#sel-menu [data-sel="copy"]')
+            b.wait("window.__copied.length === 1", "Copy to copy")
+            if b.js("window.__copied[0]") != "selword another":
+                raise Failure(f"Copy copied {b.js('window.__copied[0]')!r}")
+            if not b.js("document.getElementById('sel-layer').hidden && !term.hasSelection()"):
+                raise Failure("Copy should leave selection mode")
+            b.click("#keys-more")
+            b.click("#more-select")
+            b.wait("sel.on && term.getSelection().trim().length > 0 && document.getElementById('more-sheet').hidden", "Select text to start selection mode")
+            b.click('#sel-menu [data-sel="all"]')
+            if "selword another" not in b.js("term.getSelection()"):
+                raise Failure("Select all should take the whole screen")
+            b.click('#sel-menu [data-sel="done"]')
+            b.wait("!sel.on && !term.hasSelection()", "Done to leave selection mode")
+            b.click("#keys-more")
+            b.click("#more-text")
+            b.wait("document.getElementById('text-view').classList.contains('show')", "the plain Copy text view from More keys")
+            b.click("#text-close")
+        finally:
+            self.leave_phone_term(before)
+
+    def test_phone_term_links_are_tappable(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term()
+            b.type("clear; echo see https://example.com/a?b''=1. now")
+            b.key("Enter")
+            y = self.row_of("see https://example.com/a?b=1. now")
+            links = b.js(f"linksOn({y}).map((l) => [l.url, l.start.x, l.end.x])")
+            if links != [["https://example.com/a?b=1", 4, 28]]:
+                raise Failure(f"the link on the line was found as {links}")
+            b.js("window.__opened = []; window.open = (url, target) => { window.__opened.push([url, target]); return null; }; true")
+            on, off = self.cell_centre(10, y), self.cell_centre(1, y)
+            if b.js(f"tapAt({off['x']}, {off['y']})") or b.js("window.__opened.length"):
+                raise Failure("a tap beside the link should not open anything")
+            if not b.js(f"tapAt({on['x']}, {on['y']})"):
+                raise Failure("a tap on the link should open it")
+            if b.js("window.__opened") != [["https://example.com/a?b=1", "_blank"]]:
+                raise Failure(f"the tap opened {b.js('window.__opened')}")
+        finally:
+            self.leave_phone_term(before)
+
+    def test_phone_term_keyboard_keeps_the_grid(self):
+        b = self.b
+        before = self.storage(self.TERM_STORE)
+        try:
+            self.phone_term()
+            b.type("clear; seq 1 80")
+            b.key("Enter")
+            self.row_of("80")
+            b.pump(0.5)
+            start = b.js("({ rows: term.rows, cols: term.cols })")
+            # Android Chrome makes the page shorter when the keyboard opens.
+            b.viewport(390, 520, 3)
+            b.wait("kept && lift > 0", "the grid kept and lifted while typing", timeout=5)
+            seen = b.js("""({ rows: term.rows, cols: term.cols, kbOpen: document.documentElement.classList.contains('kb-open'),
+              keys: Math.round(document.getElementById('keys').getBoundingClientRect().bottom), height: innerHeight,
+              cursor: Math.round(document.querySelector('.xterm-screen').getBoundingClientRect().top + (term.buffer.active.cursorY + 1) * screenBox().h),
+              above: Math.round(document.getElementById('term-bottom').getBoundingClientRect().top) })""")
+            if seen["rows"] != start["rows"] or seen["cols"] != start["cols"] or not seen["kbOpen"]:
+                raise Failure(f"the keyboard should not resize the grid: {start} then {seen}")
+            if seen["keys"] != seen["height"] or seen["cursor"] > seen["above"]:
+                raise Failure(f"the key bar should sit on the keyboard with the cursor row above it: {seen}")
+            b.viewport(390, 844, 3)
+            b.wait(f"!kept && lift === 0 && term.rows === {start['rows']}", "the keyboard closing to put the terminal back", timeout=5)
+            b.viewport(700, 390, 3)
+            b.wait(f"!kept && term.cols > {start['cols']} && term.rows < {start['rows']}", "turning the phone to refit the grid", timeout=5)
+        finally:
+            self.leave_phone_term(before)
+
+    def test_term_desktop_has_no_key_bar(self):
+        b = self.b
+        if not self.session:
+            path = os.path.join(self.y.root, "demo-app")
+            self.session = self.api("POST", "/sessions", {"machine": MACHINE, "path": path, "wait": True})["name"]
+        b.goto(self.url(f"/term/{MACHINE}/{self.session}"))
+        b.wait("typeof term === 'object' && term.element", "the terminal")
+        if b.js("document.documentElement.classList.contains('touch-ui') || getComputedStyle(document.getElementById('keys')).display !== 'none'"):
+            raise Failure("a desktop terminal shows the key bar")
+
     def test_tree_groups_worktrees_under_their_repo(self):
         b = self.b
         b.goto(self.url("/workspace"))
@@ -3878,6 +4205,232 @@ class Suite:
             b.viewport(390, 844, 3)
             b.wait(f"phone.matches && document.body.classList.contains('ws-session') && focusedLeaf().key === {json.dumps(key)} && document.querySelector('.ws-pane:not([hidden]) iframe[data-key={json.dumps(key)}]')",
                    "the same session full screen again")
+        finally:
+            b.viewport(1280, 800)
+            self.settle()
+            self.put_storage(before)
+            self.drop_demo_api_session(key, made)
+
+    PERMISSION_STATE = {"agent": "claude", "state": "permission", "screen": "aaaa", "choices": [
+        {"number": 1, "label": "Yes", "keys": "1", "role": "yes"},
+        {"number": 2, "label": "Yes, and don't ask again for rm commands in /r/app", "keys": "2", "role": "always"},
+        {"number": 3, "label": "No, and tell Claude what to do differently (esc)", "keys": "3", "role": "no"},
+    ]}
+    QUESTION_STATE = {"agent": "claude", "state": "question", "screen": "bbbb", "choices": [
+        {"number": 1, "label": "Postgres", "keys": "1"},
+        {"number": 2, "label": "SQLite", "keys": "2"},
+        {"number": 3, "label": "Type something.", "keys": "3"},
+    ]}
+
+    def term_session(self):
+        if not self.session:
+            path = os.path.join(self.y.root, "demo-app")
+            self.session = self.api("POST", "/sessions", {"machine": MACHINE, "path": path, "wait": True})["name"]
+        return self.session
+
+    # The page's own /agent reads answer from window.__agent, and every frame the terminal's socket
+    # sends is kept in window.__frames. Typing still reaches the shell unless swallow is set, since
+    # keys meant for an agent, like Ctrl-S, would stop the shell's output.
+    def open_phone_term(self, swallow=False):
+        b = self.b
+        name = self.term_session()
+        b.viewport(390, 844, 3)
+        b.goto(self.url(f"/term/{MACHINE}/{name}"))
+        b.wait("typeof term === 'object' && term.element && window.YardbellAgentKeys && window.YardbellCompose", "the phone terminal and its dock")
+        b.wait("screenText().length > 0", "the shell prompt", timeout=15)
+        b.js("""(() => {
+          window.__frames = [];
+          const swallow = SWALLOW;
+          const send = WebSocket.prototype.send;
+          WebSocket.prototype.send = function (data) {
+            let frame = null;
+            try { frame = JSON.parse(data); window.__frames.push(frame); } catch {}
+            if (swallow && frame?.t === 'in') return;
+            return send.call(this, data);
+          };
+          const real = window.fetch;
+          window.fetch = (url, init) => {
+            if (window.__agent && String(url).endsWith('/agent') && !(init && init.method === 'POST')) {
+              return Promise.resolve(new Response(JSON.stringify(window.__agent), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+            }
+            return real(url, init);
+          };
+          return 0;
+        })()""".replace("SWALLOW", "true" if swallow else "false"))
+        return name
+
+    def agent_keys(self, state):
+        b = self.b
+        b.js(f"window.__agent = {json.dumps(state)}; YardbellAgentKeys.load().then(() => 0)")
+        return b.js("""[...document.querySelectorAll('#term-dock .agent-keys .agent-key')].map((k) => k.getAttribute('aria-label'))""")
+
+    def test_phone_term_agent_keys_follow_the_prompt(self):
+        b = self.b
+        try:
+            self.open_phone_term(swallow=True)
+            shown = b.js("""(() => {
+              const dock = document.getElementById('term-dock');
+              const keys = document.getElementById('keys');
+              return { on: dock.classList.contains('on'), above: dock.getBoundingClientRect().bottom <= keys.getBoundingClientRect().top + 1 && dock.getBoundingClientRect().height > 0,
+                       type: Boolean(dock.querySelector('[data-compose]')), sideways: Math.round(dock.querySelector('.agent-row').getBoundingClientRect().right) > innerWidth };
+            })()""")
+            if not shown["on"] or not shown["above"] or not shown["type"] or shown["sideways"]:
+                raise Failure(f"the agent row should show above the key bar with a Type key: {shown}")
+            got = self.agent_keys(self.PERMISSION_STATE)
+            if got != ["Yes, sends 1", "Always, sends 2", "No, sends 3"]:
+                raise Failure(f"a permission prompt shows {got}")
+            if not b.js("document.querySelector('#term-dock .agent-key.primary')?.getAttribute('aria-label') === 'Yes, sends 1'"):
+                raise Failure("Yes is not the primary key")
+            b.js("window.__frames.length = 0")
+            b.click('#term-dock [aria-label="Always, sends 2"]')
+            b.wait("window.__frames.some((f) => f.t === 'in' && f.d === '2')", "Always to send 2 on the terminal's socket")
+            if b.js("window.__frames.filter((f) => f.t === 'in').map((f) => f.d).join('|')") != "2":
+                raise Failure(f"Always sent more than its key: {b.js('JSON.stringify(window.__frames)')}")
+            got = b.js("[...document.querySelectorAll('#term-dock .agent-keys .agent-key')].map((k) => k.getAttribute('aria-label'))")
+            if got != ["Stop, sends Esc"]:
+                raise Failure(f"right after answering, only Stop should show until the screen is read again: {got}")
+            got = self.agent_keys(self.QUESTION_STATE)
+            if got != ["1. Postgres, sends 1", "2. SQLite, sends 2", "3. Type something., sends 3", "Cancel, sends Esc"]:
+                raise Failure(f"a numbered question shows {got}")
+            got = self.agent_keys({"agent": "claude", "state": "working", "screen": "cccc", "choices": []})
+            if got != ["Stop, sends Esc", "Send now, sends ⌃X ⌃S"]:
+                raise Failure(f"a working agent shows {got}")
+            b.js("window.__frames.length = 0")
+            b.click('#term-dock [aria-label="Send now, sends ⌃X ⌃S"]')
+            b.wait("window.__frames.some((f) => f.t === 'in' && f.d === '\\x18\\x13')", "Send now to send Ctrl-X Ctrl-S")
+            got = self.agent_keys({"agent": "claude", "state": "idle", "screen": "dddd", "choices": []})
+            if got != ["Mode, sends ⇧Tab", "History, sends ↑", "Clear line, sends ⌃U"]:
+                raise Failure(f"an idle agent shows {got}")
+            got = self.agent_keys({"agent": "claude", "state": "blocked", "screen": "eeee", "choices": []})
+            if got != ["Stop, sends Esc"]:
+                raise Failure(f"a wait the screen does not explain should show only Stop: {got}")
+            got = self.agent_keys({"agent": "aider", "state": "working", "screen": "ffff", "choices": []})
+            if got != [] or not b.js("Boolean(document.querySelector('#term-dock [data-compose]'))"):
+                raise Failure(f"an agent without a key map should show only Type: {got}")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_phone_term_agent_row_reads_the_server(self):
+        b = self.b
+        name = self.term_session()
+        b.goto(self.url("/"))
+        got = self.api("GET", f"/sessions/{MACHINE}/{name}/agent")
+        if got.get("agent") != "shell" or got.get("state") not in ("idle", "working"):
+            raise Failure(f"the agent state of a shell session reads {got}")
+        b.viewport(1280, 800)
+        b.goto(self.url(f"/term/{MACHINE}/{name}"))
+        b.wait("typeof term === 'object' && term.element && window.YardbellAgentKeys", "the desktop terminal")
+        if b.js("document.getElementById('term-dock').classList.contains('on')"):
+            raise Failure("the agent row shows on a desktop-sized terminal")
+
+    def test_phone_term_compose_sends_text_and_enter(self):
+        b = self.b
+        try:
+            self.open_phone_term()
+            b.click("#term-dock [data-compose]")
+            b.wait("!document.querySelector('.term-compose').hidden && document.activeElement?.classList.contains('term-compose-text')", "the message box, focused")
+            mic = b.js("(() => { const m = document.querySelector('.term-compose .mic'); return Boolean(m) && !m.hidden && Boolean(document.querySelector('.term-compose .dictation-pill')); })()")
+            if not mic:
+                raise Failure("the message box has no dictation button and pill")
+            b.type("echo composed''-ok")
+            b.js("window.__frames.length = 0")
+            b.click(".term-compose .compose-send")
+            b.wait("window.__frames.some((f) => f.t === 'in' && f.d === '\\r')", "Enter after the text")
+            sent = b.js("window.__frames.filter((f) => f.t === 'in').map((f) => f.d)")
+            if len(sent) != 2 or "echo composed''-ok" not in sent[0] or sent[1] != "\r":
+                raise Failure(f"the message box should type the text, then Enter: {sent}")
+            b.wait("screenText().split('\\n').some((l) => l.trim() === 'composed-ok')", "the shell to run the message")
+            if not b.js("document.querySelector('.term-compose').hidden"):
+                raise Failure("the message box stays open after sending")
+            b.click("#term-dock [data-compose]")
+            b.js("""(() => { const t = document.querySelector('.term-compose-text'); t.value = 'one\\ntwo'; t.dispatchEvent(new Event('input')); return 0; })()""")
+            b.js("window.__frames.length = 0")
+            b.js("""(() => { window.__pasted = []; term.paste = (t) => { window.__pasted.push(t); }; return 0; })()""")
+            b.click(".term-compose .compose-send")
+            b.wait("window.__frames.some((f) => f.t === 'in' && f.d === '\\r')", "Enter after a two-line message")
+            if b.js("window.__pasted") != ["one\ntwo"]:
+                raise Failure(f"a two-line message should go as one paste: {b.js('window.__pasted')}")
+        finally:
+            b.viewport(1280, 800)
+
+    def test_phone_term_attach_uploads_a_file(self):
+        b = self.b
+        made = None
+        try:
+            name = self.open_phone_term()
+            b.click("#term-dock [data-compose]")
+            b.js("YardbellCompose.attach([new File(['hello from the phone\\n'], 'phone notes.txt', { type: 'text/plain' })]); 0")
+            path = b.wait(f"""(() => {{
+              const m = document.querySelector('.term-compose-text').value.match(/\\/tmp\\/yardbell-uploads\\/{re.escape(name)}\\/\\d+-phone_notes\\.txt/);
+              return m && m[0];
+            }})()""", "the uploaded file's path in the message", timeout=15)
+            made = path
+            with open(path) as f:
+                if f.read() != "hello from the phone\n":
+                    raise Failure(f"{path} does not hold the attached file")
+            chip = b.js("(() => { const c = document.querySelector('.term-file'); return c && [c.dataset.state, c.textContent]; })()")
+            if not chip or chip[0] != "done":
+                raise Failure(f"the file chip does not say it was added: {chip}")
+            b.js("YardbellCompose.attach([new File([new Uint8Array(10 * 1024 * 1024 + 1)], 'huge.png')]); 0")
+            b.wait("[...document.querySelectorAll('.term-file')].some((c) => c.dataset.state === 'failed' && c.textContent.includes('over 10 MB'))", "a file over the cap refused")
+            b.js("YardbellCompose.attach([new File([new Uint8Array([0, 1, 2, 3, 255])], 'blob.bin')]); 0")
+            b.wait("document.querySelector('.term-compose-status').textContent.includes('only images, PDFs and text files')", "a binary file refused with the reason")
+        finally:
+            if made and os.path.exists(made):
+                os.remove(made)
+                for folder in (os.path.dirname(made), os.path.dirname(os.path.dirname(made))):
+                    try:
+                        os.rmdir(folder)
+                    except OSError:
+                        break
+            b.viewport(1280, 800)
+
+    def test_phone_session_switcher_picks_and_swipes(self):
+        b = self.b
+        self.term_session()
+        key, made = self.demo_api_session()
+        first = f"{MACHINE}/{self.session}"
+        before = self.storage(self.LAYOUT)
+        b.viewport(390, 844, 3)
+        try:
+            b.goto(self.url("/workspace"))
+            row = f"#col-body [data-key={json.dumps(key)}]"
+            b.wait(f"state !== null && document.querySelector({json.dumps(row)}) && document.querySelector('#col-body [data-key={json.dumps(first)}]')", "both sessions in the list", timeout=15)
+            b.click(row)
+            b.wait(f"document.body.classList.contains('ws-session') && focusedLeaf().key === {json.dumps(key)}", "the session full screen")
+            shown = b.js("""(() => {
+              const s = document.getElementById('ws-switch');
+              return { visible: s.getClientRects().length > 0, state: Boolean(s.querySelector('.ws-tab-state')), label: s.getAttribute('aria-label') };
+            })()""")
+            if not shown["visible"] or not shown["state"] or "demo-api" not in shown["label"]:
+                raise Failure(f"the switcher should name the session with its state: {shown}")
+            b.click("#ws-switch")
+            b.wait("!document.getElementById('ws-switcher').hidden", "the session picker")
+            rows = b.js("[...document.querySelectorAll('#ws-switcher .ws-switch-row')].map((r) => [r.dataset.switch, r.hasAttribute('aria-current'), Boolean(r.querySelector('.ws-tab-state svg'))])")
+            if [r[0] for r in rows if r[1]] != [key] or first not in [r[0] for r in rows] or not all(r[2] for r in rows):
+                raise Failure(f"the picker should list the sessions with state icons and mark this one: {rows}")
+            b.click(f"#ws-switcher [data-switch={json.dumps(first)}]")
+            b.wait(f"document.getElementById('ws-switcher').hidden && focusedLeaf().key === {json.dumps(first)} && document.querySelector('.ws-pane:not([hidden]) iframe[data-key={json.dumps(first)}]')",
+                   "the picked session full screen")
+            order = b.js("switchList().map(keyOf)")
+            at = order.index(first)
+            swipe = """((dx) => {
+              const s = document.getElementById('ws-switch');
+              const box = s.getBoundingClientRect();
+              const y = box.top + box.height / 2;
+              const x = box.left + box.width / 2;
+              s.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 7, clientX: x, clientY: y }));
+              s.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 7, clientX: x + dx, clientY: y + 4 }));
+              s.dispatchEvent(new MouseEvent('click', { bubbles: true, clientX: x + dx, clientY: y + 4 }));
+              return 0;
+            })"""
+            b.js(f"{swipe}(-120)")
+            want = order[(at + 1) % len(order)]
+            b.wait(f"focusedLeaf().key === {json.dumps(want)} && document.getElementById('ws-switcher').hidden", "a swipe left to open the next session")
+            b.js(f"{swipe}(120)")
+            b.wait(f"focusedLeaf().key === {json.dumps(first)}", "a swipe right to come back")
+            b.click("#back")
+            b.wait("document.body.classList.contains('ws-list')", "Back to still return to the list")
         finally:
             b.viewport(1280, 800)
             self.settle()

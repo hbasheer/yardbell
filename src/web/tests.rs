@@ -24,6 +24,7 @@ mod mcp_read;
 mod memory;
 mod pipeline;
 mod proposals;
+mod term;
 mod transcript;
 mod worktrees;
 

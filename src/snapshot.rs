@@ -135,6 +135,8 @@ pub struct Snapshot {
     pub runs: BTreeMap<String, Vec<crate::insights::runs::Run>>,
     // A fingerprint of each session's screen, by session id.
     pub screens: BTreeMap<String, String>,
+    // The choices each waiting session's screen offers, by session id.
+    pub prompts: BTreeMap<String, crate::detect::Prompt>,
 }
 
 #[derive(Deserialize)]
@@ -325,6 +327,10 @@ pub fn parse(
             .as_deref()
             .map(crate::insights::runs::runs)
             .unwrap_or_default();
+        let prompt = match (activity, c.screen.as_deref()) {
+            (Activity::Blocked, Some(screen)) => crate::detect::prompt(&c.agent, screen),
+            _ => None,
+        };
         let screen = c.screen.as_deref().map(fingerprint);
         let session = Session {
             machine: machine.name.clone(),
@@ -344,6 +350,9 @@ pub fn parse(
         }
         if let Some(screen) = screen {
             snap.screens.insert(session.id(), screen);
+        }
+        if let Some(prompt) = prompt {
+            snap.prompts.insert(session.id(), prompt);
         }
         snap.sessions.push(session);
     }
@@ -660,6 +669,37 @@ mod tests {
         assert_eq!(activity("claude", 40.0, "❯ \n"), Activity::Idle);
         assert_eq!(activity("aider", 40.0, prompt), Activity::Active);
         assert_eq!(activity("aider", 0.0, prompt), Activity::Idle);
+    }
+
+    #[test]
+    fn a_waiting_session_keeps_the_choices_its_screen_offers() {
+        let snap = |agent: &str, screen: &str| {
+            let json = serde_json::json!({
+                "agents": [{"agent": agent, "pid": 1, "cwd": "/w", "cpu": 0.0, "tmux": "t", "title": "", "screen": screen}],
+                "tmux": [], "folders": [], "ports": []
+            });
+            parse(
+                &json.to_string(),
+                &machine("hp", "/w"),
+                Path::new("/w"),
+                None,
+            )
+            .unwrap()
+        };
+        let asking =
+            " Do you want to proceed?\n ❯ 1. Yes\n   2. No\n\n Esc to cancel · Tab to amend";
+        let got = snap("claude", asking);
+        let prompt = &got.prompts["hp:t"];
+        assert_eq!(prompt.kind, crate::detect::PromptKind::Permission);
+        assert_eq!(prompt.choices.len(), 2);
+        assert!(
+            snap("claude", "❯ \n").prompts.is_empty(),
+            "an idle prompt offers nothing"
+        );
+        assert!(
+            snap("aider", asking).prompts.is_empty(),
+            "an agent without rules offers nothing"
+        );
     }
 
     #[test]

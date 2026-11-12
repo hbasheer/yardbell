@@ -4601,3 +4601,155 @@ body.ws-docking iframe { pointer-events: none; }
   .ws-dock-ghost { animation: none; }
   .ws-dock-preview { transition: none; }
 }
+
+/* Phone terminal: the key bar under the terminal (touch screens and phone widths), with sticky
+   Ctrl, Alt and Shift shown armed (an accent ring) or locked (accent fill with a bar), the More keys
+   sheet and its bar editor, the paste box, and the selection handles with their menu. While the
+   on-screen keyboard is up, term.js pins the page to the visible part with --vis-top and --vis-h
+   and lifts the grid inside #term rather than resizing it. The body clips xterm's 50000px wide
+   glyph measuring box, which would otherwise let a scroll into view shift the page sideways. */
+html.touch-ui body { position: relative; overflow: clip; }
+html.touch-ui #term { overflow: hidden; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+html.touch-ui #term .xterm { transition: transform 120ms ease-out; }
+html.touch-ui.pinching #term .xterm { transition: none; }
+html.touch-ui #term .xterm-viewport { scrollbar-width: none; }
+html.kb-fixed body { position: fixed; left: 0; right: 0; top: var(--vis-top, 0px); height: var(--vis-h, 100%); }
+#term-bottom { position: relative; z-index: 10; flex: none; display: flex; flex-direction: column; background: var(--term-bar); }
+#keys { display: none; align-items: center; gap: 6px; padding: 6px max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid var(--term-line); background: var(--term-bar); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+html.touch-ui #keys { display: flex; }
+html.kb-open #keys { padding-bottom: 6px; }
+#keys-row { flex: 1; min-width: 0; display: flex; gap: 6px; padding-right: 12px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; touch-action: pan-x; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
+#keys-row::-webkit-scrollbar { display: none; }
+.tk { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 40px; padding: 0 11px; border: 0; border-radius: 8px; background: var(--term-raise); box-shadow: inset 0 0 0 1px var(--term-edge), 0 1px 0 rgb(0 0 0 / 0.14); color: var(--term-ink); font: 500 13px/1 var(--sans); cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: background-color 90ms ease-out, box-shadow 90ms ease-out, color 90ms ease-out; }
+.tk .icon { width: 17px; height: 17px; }
+.tk.sym { min-width: 40px; font: 500 16px/1 var(--mono); }
+.tk.pressed { background: var(--term-edge); box-shadow: inset 0 0 0 1px var(--term-edge); }
+.tk:disabled { opacity: 0.4; cursor: default; }
+.tk[data-latch="once"] { background: color-mix(in srgb, var(--accent) 20%, var(--term-raise)); box-shadow: inset 0 0 0 1.5px var(--accent); }
+.tk[data-latch="locked"] { background: var(--accent); box-shadow: none; color: var(--accent-ink); }
+.tk[data-latch="locked"]::after { content: ""; position: absolute; left: 50%; bottom: 6px; width: 14px; height: 2px; margin-left: -7px; border-radius: 1px; background: currentColor; }
+.tk.more { min-width: 40px; padding: 0; background: transparent; box-shadow: none; color: var(--term-ink-2); }
+.tk.more .icon { stroke-width: 2.4; }
+.tk.more[aria-expanded="true"] { background: var(--term-raise); color: var(--term-ink); }
+
+#more-sheet { position: absolute; left: 0; right: 0; bottom: 100%; max-height: min(62vh, 460px); overflow-y: auto; overscroll-behavior: contain; padding: 0 max(12px, env(safe-area-inset-right)) 12px max(12px, env(safe-area-inset-left)); border-top: 1px solid var(--term-line); border-radius: 14px 14px 0 0; background: var(--term-bar); color: var(--term-ink); box-shadow: 0 -16px 40px rgb(0 0 0 / 0.28); font-family: var(--sans); animation: more-up 140ms ease-out; }
+@keyframes more-up { from { transform: translateY(12px); opacity: 0; } }
+.more-head { position: sticky; top: 0; z-index: 1; display: flex; align-items: center; gap: 4px; height: 48px; background: var(--term-bar); }
+.more-head strong { flex: 1; font-size: 14px; font-weight: 600; }
+.more-link { height: 32px; padding: 0 10px; border: 0; border-radius: 6px; background: transparent; color: var(--accent-text); font: 500 13px/1 var(--sans); cursor: pointer; }
+.more-link:hover { background: var(--term-raise); }
+.more-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(62px, 1fr)); gap: 6px; }
+.more-grid .tk { min-width: 0; padding: 0 6px; }
+.more-row { display: flex; align-items: center; gap: 8px; margin-top: 12px; }
+.more-label { flex: 1; color: var(--term-ink-2); font-size: 13px; }
+.more-size { display: flex; align-items: center; gap: 6px; }
+#font-size { min-width: 56px; color: var(--term-ink); font: 500 13px/1 var(--mono); text-align: center; }
+.tk.wide { flex: 1; }
+.more-hint { margin: 0 0 8px; color: var(--term-muted); font-size: 12.5px; line-height: 1.45; }
+#edit-list { display: grid; gap: 2px; margin: 0; padding: 0; list-style: none; }
+#edit-list li { display: flex; align-items: center; gap: 2px; min-height: 44px; padding: 0 2px 0 6px; border-radius: 8px; }
+#edit-list li:nth-child(odd) { background: color-mix(in srgb, var(--term-raise) 55%, transparent); }
+#edit-list li.off { color: var(--term-muted); }
+#edit-list label { flex: 1; min-width: 0; display: flex; align-items: center; gap: 10px; margin: 0; color: inherit; font-size: 13px; font-weight: 500; cursor: pointer; }
+#edit-list input { width: 18px; height: 18px; margin: 0; accent-color: var(--accent); }
+.edit-key { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 26px; padding: 0 6px; border-radius: 6px; background: var(--term-raise); box-shadow: inset 0 0 0 1px var(--term-edge); color: var(--term-ink); font: 500 12px/1 var(--sans); }
+.edit-key .icon { width: 14px; height: 14px; }
+#edit-list li.off .edit-key { opacity: 0.6; }
+.edit-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.edit-move { display: inline-flex; align-items: center; justify-content: center; width: 40px; height: 40px; border: 0; border-radius: 6px; background: transparent; color: var(--term-ink-2); cursor: pointer; }
+.edit-move:hover:not(:disabled) { background: var(--term-raise); }
+.edit-move:disabled { opacity: 0.25; cursor: default; }
+
+#paste-view { position: fixed; inset: 0; z-index: 40; display: flex; align-items: flex-end; background: rgb(0 0 0 / 0.4); }
+.paste-card { display: grid; gap: 10px; width: 100%; padding: 14px max(14px, env(safe-area-inset-right)) max(14px, env(safe-area-inset-bottom)) max(14px, env(safe-area-inset-left)); border-radius: 14px 14px 0 0; background: var(--term-bar); color: var(--term-ink); font-family: var(--sans); }
+.paste-label { display: block; margin: 0; color: var(--term-ink-2); font-size: 13px; font-weight: 400; line-height: 1.45; }
+#paste-text { width: 100%; padding: 10px; border: 1px solid var(--term-edge); border-radius: 8px; background: var(--term-bg); color: var(--term-ink); font: 13px/1.45 var(--mono); resize: vertical; }
+.paste-actions { display: flex; justify-content: flex-end; gap: 8px; }
+.paste-actions .btn { height: 40px; }
+.paste-actions .btn:not(.primary) { border-color: var(--term-edge); background: transparent; color: var(--term-ink); }
+
+#sel-layer { position: fixed; inset: 0; z-index: 15; pointer-events: none; }
+.sel-handle { position: absolute; width: 36px; height: 30px; margin-left: -18px; pointer-events: auto; touch-action: none; cursor: grab; }
+.sel-handle::before { content: ""; position: absolute; left: 17px; bottom: 100%; width: 2px; height: var(--sel-row, 16px); background: var(--accent); }
+.sel-handle::after { content: ""; position: absolute; left: 11px; top: 0; width: 14px; height: 14px; border-radius: 50%; background: var(--accent); box-shadow: 0 0 0 2px var(--term-bg); }
+#sel-menu { position: absolute; display: flex; overflow: hidden; border-radius: 10px; background: var(--surface); box-shadow: 0 0 0 1px var(--line-strong), 0 10px 28px rgb(0 0 0 / 0.3); pointer-events: auto; }
+#sel-menu button { display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 40px; padding: 0 14px; border: 0; background: transparent; color: var(--ink); font: 500 13px/1 var(--sans); cursor: pointer; -webkit-tap-highlight-color: transparent; }
+#sel-menu button + button { box-shadow: inset 1px 0 0 var(--line); }
+#sel-menu button:active, #sel-menu button:hover { background: var(--hover); }
+#sel-menu button[data-sel="done"] { padding: 0 12px; color: var(--muted); }
+@media (prefers-reduced-motion: reduce) {
+  html.touch-ui #term .xterm { transition: none; }
+  #more-sheet { animation: none; }
+}
+
+/* Driving an agent from a phone. The terminal page's #term-dock sits above its key bar and holds
+   the agent keys, which follow what the session's screen shows, and a message box with dictation
+   and attachments. It shows on touch screens and phone widths only. The phone Workspace names the
+   open session in a switcher at the top: a tap lists the running sessions, a sideways swipe goes
+   to the next one. */
+#term-dock { position: relative; z-index: 5; display: none; flex: none; flex-direction: column; background: var(--term-bar); border-top: 1px solid var(--term-line); font-family: var(--sans); }
+#term-dock.on, #term-dock.composing { display: flex; }
+.agent-row { display: flex; align-items: center; gap: 8px; min-height: 48px; padding: 6px 8px; }
+.agent-keys { display: flex; flex: 1; align-items: center; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+.agent-keys::-webkit-scrollbar { display: none; }
+.agent-keys:has(> .agent-key:nth-child(4)) { padding-right: 24px; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
+.agent-key.numbered { max-width: 168px; }
+.agent-key { display: inline-flex; flex: none; align-items: center; gap: 7px; height: 36px; max-width: 70vw; padding: 0 12px; border: 1px solid var(--term-edge); border-radius: 8px; background: var(--term-raise); color: var(--term-ink); font: 500 13px/1 var(--sans); white-space: nowrap; cursor: pointer; touch-action: manipulation; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; transition: background-color 120ms ease-out; }
+.agent-key:active, .agent-key.pressed { background: var(--term-edge); }
+.agent-key:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+.agent-key .icon { width: 16px; height: 16px; }
+.agent-key-word { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.agent-key-combo { flex: none; color: var(--term-muted); font: 500 11px/1 var(--mono); }
+.agent-key-num { display: inline-grid; flex: none; place-items: center; min-width: 20px; height: 20px; padding: 0 5px; border-radius: 5px; background: var(--term-edge); color: var(--term-ink); font: 600 11.5px/1 var(--mono); }
+.agent-key.primary { border-color: var(--accent); background: var(--accent); color: var(--accent-ink); }
+.agent-key.primary:active, .agent-key.primary.pressed { background: var(--accent-hover); }
+.agent-key.primary .agent-key-combo { color: color-mix(in srgb, var(--accent-ink) 75%, transparent); }
+.agent-type { padding: 0 12px 0 10px; color: var(--term-ink-2); }
+#term-dock.composing .agent-type { display: none; }
+.term-compose { position: relative; display: flex; flex-direction: column; gap: 6px; padding: 8px 8px 0; }
+.term-compose[hidden] { display: none; }
+.term-compose-text { display: block; box-sizing: border-box; width: 100%; min-height: 42px; max-height: 160px; padding: 10px 12px; border: 1px solid var(--term-edge); border-radius: 10px; background: var(--term-bg); color: var(--term-ink); font: 16px/1.4 var(--sans); resize: none; }
+.term-compose-text::placeholder { color: var(--term-muted); opacity: 1; }
+.term-compose-text:focus { outline: none; border-color: color-mix(in srgb, var(--accent) 70%, var(--term-edge)); box-shadow: 0 0 0 3px var(--focus-ring); }
+.term-compose-bar { display: flex; align-items: center; gap: 4px; }
+.term-compose-gap { flex: 1; }
+.term-compose .compose-tool { display: inline-grid; place-items: center; width: 40px; height: 40px; padding: 0; border-radius: 8px; color: var(--term-muted); }
+.term-compose .compose-tool:hover, .term-compose .compose-tool:active { background: var(--term-raise); color: var(--term-ink); }
+.term-compose .compose-tool.mic.recording { background: var(--term-raise); color: var(--term-ink); }
+.term-compose .compose-tool.voice-off { opacity: 0.6; }
+.term-compose .compose-send { width: 40px; height: 40px; }
+.term-compose .dictation-pill { bottom: calc(100% + 8px); }
+.term-compose-status { margin: 0; color: var(--term-muted); font: 12.5px/1.4 var(--sans); }
+.term-compose-status.error { color: var(--bad-text); }
+.term-compose-status[hidden], .term-compose-files[hidden] { display: none; }
+.term-compose-files { display: flex; flex-wrap: wrap; gap: 6px; }
+.term-file { display: inline-flex; align-items: center; gap: 8px; max-width: 100%; height: 32px; padding: 0 4px 0 10px; border: 1px solid var(--term-edge); border-radius: 8px; background: var(--term-raise); color: var(--term-ink); font: 12.5px/1 var(--sans); }
+.term-file-name { min-width: 0; max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.term-file-state { flex: none; color: var(--term-muted); font-variant-numeric: tabular-nums; }
+.term-file[data-state="done"] .term-file-state { color: var(--ok-text); }
+.term-file[data-state="failed"] { border-color: color-mix(in srgb, var(--bad) 45%, var(--term-edge)); }
+.term-file[data-state="failed"] .term-file-state { color: var(--bad-text); }
+.term-file .dict-btn { color: var(--term-muted); }
+.term-file .dict-btn:hover { background: var(--term-edge); color: var(--term-ink); }
+.ws-switch, .ws-switcher { display: none; }
+@media (max-width: 760px) {
+  .ws-switch { display: flex; flex: 1; align-items: center; gap: 8px; min-width: 0; height: 40px; padding: 0 10px; border: 0; border-radius: 999px; background: transparent; color: var(--ink); font: inherit; text-align: left; cursor: pointer; touch-action: pan-y; user-select: none; -webkit-user-select: none; -webkit-tap-highlight-color: transparent; }
+  .ws-switch:active, .ws-switch[aria-expanded="true"] { background: var(--hover); }
+  .ws-switch:focus-visible { outline: none; box-shadow: 0 0 0 3px var(--focus-ring); }
+  .ws-switch-state:empty { display: none; }
+  .ws-switch .ws-top-title { flex: 0 1 auto; }
+  .ws-switch-more { flex: none; width: 14px; height: 14px; color: var(--muted); }
+  .ws-main { position: relative; }
+  .ws-switcher:not([hidden]) { position: absolute; top: calc(48px + env(safe-area-inset-top)); left: 8px; right: 8px; z-index: 40; display: flex; flex-direction: column; max-height: min(60vh, 420px); padding: 4px; overflow-y: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--surface); box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 10px 24px -6px rgb(0 0 0 / 0.2); animation: ws-switch-in 140ms ease-out; }
+  .ws-switch-row { display: grid; grid-template-columns: 16px minmax(0, 1fr); column-gap: 10px; align-items: center; min-height: 52px; padding: 6px 10px; border: 0; border-radius: 8px; background: none; color: var(--ink); font: inherit; text-align: left; cursor: pointer; }
+  .ws-switch-row .ws-tab-state { grid-row: span 2; }
+  .ws-switch-row:active, .ws-switch-row[aria-current] { background: var(--selected); }
+  .ws-switch-name { overflow: hidden; font: 500 var(--text-row)/1.3 var(--sans); text-overflow: ellipsis; white-space: nowrap; }
+  .ws-switch-sub { overflow: hidden; color: var(--muted); font: var(--text-small)/1.3 var(--sans); text-overflow: ellipsis; white-space: nowrap; }
+  .ws-switch-empty { margin: 0; padding: 14px 10px; color: var(--muted); font-size: var(--text-row); }
+}
+@keyframes ws-switch-in { from { opacity: 0; transform: translateY(-4px); } }
+@media (prefers-reduced-motion: reduce) {
+  .ws-switcher:not([hidden]) { animation: none; }
+  .agent-key { transition: none; }
+}

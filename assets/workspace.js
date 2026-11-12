@@ -825,6 +825,7 @@ function showSession() {
 }
 
 function showList() {
+  toggleSwitcher(false);
   setMode("list");
   render();
 }
@@ -836,6 +837,7 @@ function renderTop() {
   const heading = $("ws-title");
   heading.textContent = name;
   heading.title = name;
+  renderSwitch();
   const strip = $("pr-strip");
   const s = phone.matches && leaf.key ? sessionFor(leaf.key) : null;
   strip.hidden = !s?.pull;
@@ -847,6 +849,47 @@ function renderTop() {
   ref.title = why;
   strip.querySelector('[data-pr="merge"]').hidden = !canMerge(s);
   strip.querySelector('[data-pr="review"]').hidden = !asksReview(s);
+}
+
+function switchList() {
+  return sessions()
+    .filter((s) => !s.stale)
+    .sort((a, b) => a.machine.localeCompare(b.machine) || String(a.folder).localeCompare(String(b.folder)) || a.tmux.localeCompare(b.tmux));
+}
+
+function renderSwitch() {
+  const leaf = focusedLeaf();
+  const s = leaf?.key ? sessionFor(leaf.key) : null;
+  const st = s ? stateOf(s) : "";
+  $("ws-switch-state").innerHTML = stateIcon(st);
+  $("ws-switch").setAttribute("aria-label", s ? `${title(s)}, ${WORD[st] || "last known"}. Switch session` : "Switch session");
+  if (!$("ws-switcher").hidden) renderSwitcher();
+}
+
+function renderSwitcher() {
+  const here = focusedLeaf()?.key;
+  const list = switchList();
+  $("ws-switcher").innerHTML = list.length
+    ? list.map((s) => {
+      const key = keyOf(s);
+      return `<button type="button" class="ws-switch-row" data-switch="${esc(key)}"${key === here ? ' aria-current="true"' : ""}>${stateIcon(stateOf(s)) || '<span class="ws-tab-state"></span>'}<span class="ws-switch-name">${esc(title(s))}</span><span class="ws-switch-sub">${esc(agentLabel(s.agent))} on ${esc(s.machine)}</span></button>`;
+    }).join("")
+    : '<p class="ws-switch-empty">No sessions are running.</p>';
+}
+
+function toggleSwitcher(show = $("ws-switcher").hidden) {
+  $("ws-switcher").hidden = !show;
+  $("ws-switch").setAttribute("aria-expanded", String(show));
+  if (!show) return;
+  renderSwitcher();
+  $("ws-switcher").querySelector("[aria-current]")?.scrollIntoView({ block: "nearest" });
+}
+
+function stepSession(by) {
+  const list = switchList();
+  const at = list.findIndex((s) => keyOf(s) === focusedLeaf()?.key);
+  if (list.length < 2 || at < 0) return;
+  open(keyOf(list[(at + by + list.length) % list.length]));
 }
 
 function focusPane(id, { into = true } = {}) {
@@ -1945,6 +1988,41 @@ $("panes").addEventListener("change", (e) => {
 });
 
 $("back").addEventListener("click", showList);
+
+// A sideways swipe on the session's name goes to the next or previous session; a tap lists them.
+const swipe = { x: 0, y: 0, id: null, moved: false };
+$("ws-switch").addEventListener("pointerdown", (e) => {
+  Object.assign(swipe, { x: e.clientX, y: e.clientY, id: e.pointerId, moved: false });
+});
+$("ws-switch").addEventListener("pointerup", (e) => {
+  if (e.pointerId !== swipe.id) return;
+  swipe.id = null;
+  const dx = e.clientX - swipe.x;
+  if (Math.abs(dx) < 48 || Math.abs(e.clientY - swipe.y) > Math.abs(dx) / 2) return;
+  swipe.moved = true;
+  toggleSwitcher(false);
+  stepSession(dx < 0 ? 1 : -1);
+});
+$("ws-switch").addEventListener("pointercancel", () => { swipe.id = null; });
+$("ws-switch").addEventListener("click", () => {
+  if (swipe.moved) {
+    swipe.moved = false;
+    return;
+  }
+  toggleSwitcher();
+});
+$("ws-switcher").addEventListener("click", (e) => {
+  const key = e.target.closest("[data-switch]")?.dataset.switch;
+  if (!key) return;
+  toggleSwitcher(false);
+  if (key !== focusedLeaf()?.key) open(key);
+});
+document.addEventListener("pointerdown", (e) => {
+  if (!$("ws-switcher").hidden && !e.target.closest("#ws-switcher, #ws-switch")) toggleSwitcher(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("ws-switcher").hidden) toggleSwitcher(false);
+});
 $("ws-more").addEventListener("click", (e) => paneMenu(e.currentTarget, focusedLeaf()));
 
 $("pr-strip").addEventListener("click", (e) => {
@@ -1978,6 +2056,7 @@ document.addEventListener("keydown", (e) => {
 });
 
 phone.addEventListener("change", () => {
+  toggleSwitcher(false);
   if (!phone.matches) setMode(null);
   else setMode(focusedLeaf()?.key ? "session" : "list");
   render();

@@ -208,7 +208,9 @@ Esc cancels a drag. The layout is remembered, like the rest of the Workspace. An
 agent there or to open one of the workspace's sessions. Panes also split right or down and resize by
 dragging the border between them; the split's shape lasts until a pane is added or removed, when
 the grid takes over again. **Keyboard shortcuts** in the sidebar lists the keys. On a phone
-the sidebar comes first and a session opens full screen.
+the sidebar comes first and a session opens full screen. Its name at the top, with its state, is a
+switcher: tap it to list the running sessions and pick another, or swipe it sideways for the next or
+previous one. The back arrow still returns to the list.
 
 **Dispatch** sits in the Workspace too, as a panel between the sidebar and the terminals. Sessions
 it starts or links to open in a pane. Hide or show it with the speech bubble before the tabs or the
@@ -283,11 +285,57 @@ including the terminal. Several devices can attach to one session. The one you a
 session's size: opening it, clicking in it or typing takes over, and a tab you cannot see or a
 phone in the background never does.
 
-On a phone the pages sit in a tab bar along the bottom, the machines stay on top, sessions become
-cards, and the terminal gets a key row for Esc, Tab, Ctrl, the arrows and Ctrl-C. Yardbell follows the system light or dark setting, or the theme
-you pick with the button in the sidebar, on each device.
+On a phone the pages sit in a tab bar along the bottom, the machines stay on top, and sessions become
+cards. Yardbell follows the system light or dark setting, or the theme you pick with the button in
+the sidebar, on each device.
 
 <br clear="right">
+
+**The terminal on a phone.** A touch screen, or a window as narrow as a phone, gets a key bar under
+the terminal:
+
+- **Keys.** Esc, Tab, Shift-Tab, Ctrl, Alt, Shift, the arrows, `/`, `|`, `~`, `-`, Enter, Ctrl-C,
+  Ctrl-D and Paste. Swipe the bar sideways for the rest. Tapping a key never closes the phone's
+  keyboard. Holding an arrow, Tab, Backspace, Del, PgUp or PgDn repeats it.
+- **Ctrl, Alt and Shift are sticky.** One tap arms the key (it gets a blue ring) for the next key you
+  press, on the bar or on the phone's keyboard: Ctrl then `c` sends Ctrl-C, Alt then Backspace sends
+  Alt-Backspace. A quick double tap locks it (filled blue with a bar under the name) until you tap it again.
+- **More keys.** **⋯** at the end of the bar opens a sheet with Home, End, PgUp, PgDn, Backspace, Del,
+  Ctrl-Z, Ctrl-L, Ctrl-R, F1 to F12 and any key you hid from the bar. It also has the text size
+  (**A-** and **A+**), **Select text** and **Copy text**. **Edit bar** lets you tick the keys to show
+  and move them earlier or later; each device remembers its own bar, and **Reset to default** brings
+  the standard one back.
+- **Text size.** Pinch the terminal to make the text bigger or smaller. When you let go it settles on
+  the nearest size between 10 and 20 px and the screen refits. The device remembers it.
+- **Selecting.** Long-press a word to select it, keep your finger down and drag to select more, or
+  drag the blue handles at either end. The menu above it has **Copy**, **Select all** and **Paste**;
+  tap anywhere else to stop. **Select text** in More keys starts on the line with the cursor.
+- **Links.** Tap a web address on the screen to open it in a new tab. On a desktop, Ctrl-click
+  (Cmd-click on a Mac) does the same.
+- **Paste** reads the clipboard in the Yardbell apps and on `https` pages. Over plain `http` the
+  browser does not allow that, so a box opens: paste into it with your phone's own menu and press
+  **Send to terminal**.
+- **The keyboard.** While the phone's keyboard is up, the key bar sits on top of it and the terminal
+  slides up just enough to keep the line with the cursor in view. The session keeps its size, so the
+  agent's screen is not redrawn every time the keyboard opens; turning the phone does resize it.
+
+**Driving an agent from a phone.** On a phone or a touch screen, a row of agent keys sits above
+the key row, and its buttons follow what the session's screen shows. While Claude Code works:
+**Stop** (Esc) and **Send now** (Ctrl-X Ctrl-S, which sends a queued message right away). When it
+asks for permission: **Yes**, **Always** (the "don't ask again" choice, when it offers one) and
+**No**. When it asks a question with numbered choices: one button per choice and **Cancel**. When
+it waits for you: **Mode** (Shift-Tab), **History** (Up) and **Clear line** (Ctrl-U). Codex gets
+**Stop**, **History**, and Yes, Always and No by the letters it prints beside them. Each button
+shows the keys it sends. When Yardbell cannot tell what the screen asks, or right after you answer
+and before it has read the screen again, only **Stop** shows, so an old answer never lands on a new
+question. Other agents and plain shells get only **Type**.
+
+**Type** opens a message box: write as many lines as you like and **Send** types them into the
+session and presses Enter (several lines go in as one paste). The microphone dictates into the box
+with the same voice setup, mode and shortcut as Dispatch. The paper clip attaches images, PDFs and
+text files up to 10 MB: each one is copied to the session's machine, into
+`/tmp/yardbell-uploads/<session>/`, and its path goes into the message for the agent to read. The
+file's chip shows the upload's progress, and says why when a file is refused.
 
 **Copying from the terminal.**
 
@@ -296,7 +344,7 @@ you pick with the button in the sidebar, on each device.
 - **Shift-drag** (Option-drag on a Mac) selects in the browser instead, and copies when you let go.
 - **Copy text** in the header shows the screen as plain text. Select any part of it, or press
   **Copy all**, which copies everything and takes you back to the terminal. **Close** or Esc goes
-  back too. On a phone, this is the way to copy.
+  back too. On a phone, it is the fallback when selecting on the terminal is awkward.
 
 Browsers only allow automatic clipboard access on `https` pages or `localhost`. Over
 `http://<host-mesh-ip>` Yardbell copies straight away when it can. If the browser blocks it, a
