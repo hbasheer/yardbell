@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.101] - 2026-11-12
+
 - **No setup script card.** The Workspace sidebar no longer shows an "Add a setup script" card. Worktree
   setup is one setting for every workspace, and it stays in Settings, **Worktree setup**.
 - **One page highlighted at a time.** With Dispatch open as a pane in the Workspace, its sidebar link shows
@@ -21,6 +23,8 @@ and the project uses [Semantic Versioning](https://semver.org).
   bar docks the same way or becomes a tab of its own on the tab row, and a session dragged from the
   sidebar opens beside a pane, in its place or in a new tab, moving rather than opening twice when
   it is already in the tab. Esc cancels. Desktop only.
+- **Add machine checks the short name again.** Its pattern was invalid in current browsers, which skipped
+  the check and logged an error.
 
 ## [0.11.100] - 2026-11-12
 
