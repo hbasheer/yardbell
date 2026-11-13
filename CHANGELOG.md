@@ -5,6 +5,24 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.104] - 2026-11-13
+
+- **The sidebar is grouped by machine again, with your projects inside.** Each machine is a quiet
+  header with its memory in use (amber when it runs short, **offline** when it is down) that folds
+  open to the projects you added on it. A project lists only the branches and worktrees that have
+  sessions, with their pull request, and the sessions under them; one with no sessions offers **No
+  sessions, start one**. Every other session on the machine is under **Other** at the end, one line
+  each with its folder, so a session started in `~/Desktop` no longer turns Desktop into a project.
+  Folds are remembered per machine and per project.
+- **Projects are only the ones you add.** The **+** at the top of the sidebar adds a project: pick
+  the machine and browse to its folder, and it shows on every device. A project is one folder on one
+  machine; sessions in it, below it or in its worktrees belong to it. Its **⋯** has **New session**,
+  **Rename** and **Delete**, which takes it off the sidebar and leaves the folder alone. Projects
+  are no longer found by the workspace scan or grouped across machines, and the hidden list is gone;
+  projects you added before stay, with the names you gave them.
+- **On the Dashboard, a machine header filters the page** to that machine, and **All machines** is
+  back at the top of the sidebar. The machine chips and the project filter are gone.
+
 ## [0.11.103] - 2026-11-13
 
 - **The Workspace's keyboard shortcuts open again.** Since 0.11.102 the shortcuts button opened an

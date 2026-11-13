@@ -514,6 +514,7 @@ mod tests {
 
     fn session(id: &str, machine: &str, activity: Activity) -> SessionView {
         SessionView {
+            cwd: String::new(),
             pull_why: None,
             id: id.into(),
             machine: machine.into(),
@@ -539,6 +540,7 @@ mod tests {
 
     fn stale(id: &str, machine: &str) -> SessionView {
         SessionView {
+            cwd: String::new(),
             stale: true,
             ..session(id, machine, Activity::Idle)
         }
@@ -955,6 +957,7 @@ mod tests {
         let mut t = Tracker::new();
         let t0 = Instant::now();
         let outside = SessionView {
+            cwd: String::new(),
             id: "hp:4242".into(),
             pid: 4242,
             attachable: false,
@@ -1004,8 +1007,6 @@ mod tests {
             path: "/r/api".into(),
             branch: "main".into(),
             worktree: false,
-            remote: String::new(),
-            by_agent: false,
         }];
         v.mesh = Some(MeshView {
             provider: crate::config::MeshProvider::Tailscale,
@@ -1068,6 +1069,7 @@ mod tests {
         let active = one_machine(vec![session("s1", "hp", Activity::Active)]);
         let stopped = || {
             let mut v = one_machine(vec![SessionView {
+                cwd: String::new(),
                 stopped: Some("API Error: 529 overloaded".into()),
                 resets: None,
                 ..session("s1", "hp", Activity::Idle)
@@ -1088,6 +1090,7 @@ mod tests {
         let mut t = Tracker::new();
         let limited = |resets: &str| {
             let mut v = one_machine(vec![SessionView {
+                cwd: String::new(),
                 stopped: Some("You've hit your limit · resets 3pm".into()),
                 resets: Some(resets.into()),
                 ..session("s1", "hp", Activity::Idle)
@@ -1133,6 +1136,7 @@ mod tests {
     fn an_error_without_a_reset_time_is_never_told_as_reset() {
         let mut t = Tracker::new();
         let mut v = one_machine(vec![SessionView {
+            cwd: String::new(),
             stopped: Some("API Error: 529 overloaded".into()),
             resets: None,
             ..session("s1", "hp", Activity::Idle)
@@ -1169,6 +1173,7 @@ mod tests {
 
     fn with_pull(pull: PullView) -> StateView {
         one_machine(vec![SessionView {
+            cwd: String::new(),
             pull: Some(pull),
             ..session("s1", "hp", Activity::Idle)
         }])
@@ -1216,10 +1221,12 @@ mod tests {
         other.url = "https://github.com/acme/api/pull/13".into();
         let both = one_machine(vec![
             SessionView {
+                cwd: String::new(),
                 pull: Some(pr("open", Ci::Pending, "a")),
                 ..session("s1", "hp", Activity::Idle)
             },
             SessionView {
+                cwd: String::new(),
                 pull: Some(other),
                 ..session("s2", "hp", Activity::Idle)
             },
@@ -1317,10 +1324,12 @@ mod tests {
         let (mut t, t0) = primed(pr("open", Ci::Pending, "a"));
         let twice = one_machine(vec![
             SessionView {
+                cwd: String::new(),
                 pull: Some(pr("open", Ci::Failing, "a")),
                 ..session("s1", "hp", Activity::Idle)
             },
             SessionView {
+                cwd: String::new(),
                 pull: Some(pr("open", Ci::Failing, "a")),
                 ..session("s2", "hp", Activity::Idle)
             },

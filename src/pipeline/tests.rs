@@ -149,6 +149,7 @@ impl World for Fake {
                 .unwrap()
                 .iter()
                 .map(|(machine, name, branch, activity)| SessionView {
+                    cwd: String::new(),
                     pull_why: None,
                     id: name.clone(),
                     machine: machine.clone(),

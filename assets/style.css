@@ -4682,38 +4682,37 @@ html.kb-open #term-bottom > #keys { padding-bottom: 6px; }
   .agent-key { transition: none; }
 }
 
-/* Sidebar tree, shared by the Workspace and the Dashboard. A one-line strip of machine chips (a
-   status dot, the name, memory in use; hollow when down) filters the projects below it. A project
-   row folds open to its branches and worktrees in mono, each tagged with its machine, and their
-   sessions, hung off a thin guide line. Only the picked chip or row is filled. */
-.tree { display: flex; flex-direction: column; padding: 2px 8px 16px; }
-.tree-label { flex: none; color: var(--muted); font: 600 10.5px/1 var(--sans); letter-spacing: 0.06em; text-transform: uppercase; }
-.tree-chips { display: flex; gap: 4px; min-width: 0; padding: 2px 0 4px 8px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
-.tree-chips::-webkit-scrollbar { display: none; }
-.tree-chips.more { -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent); }
-.tree-chip { flex: none; display: inline-flex; align-items: center; gap: 5px; height: 22px; padding: 0 7px 0 6px; border: 0; border-radius: 999px; background: color-mix(in srgb, var(--ink) 5%, transparent); color: var(--ink); font: 500 12px/1 var(--sans); white-space: nowrap; cursor: pointer; -webkit-tap-highlight-color: transparent; }
-.tree-chip:hover { background: var(--hover); }
-.tree-chip[aria-pressed="true"] { background: var(--selected); box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--ink) 38%, transparent); }
-.tree-dot { flex: none; width: 7px; height: 7px; border-radius: 50%; background: var(--ok); }
-.tree-chip.warn .tree-dot { background: var(--warn); }
-.tree-chip-mem { color: var(--muted); font: 500 11px/1 var(--mono); font-variant-numeric: tabular-nums; }
-.tree-chip.warn .tree-chip-mem { color: var(--warn-text); }
-.tree-chip.down { background: transparent; box-shadow: inset 0 0 0 1px var(--line-strong); color: var(--muted); }
-.tree-chip.down[aria-pressed="true"] { background: var(--selected); }
-.tree-chip.down .tree-dot { background: transparent; box-shadow: inset 0 0 0 1.5px var(--muted); }
-.tree-head { display: flex; align-items: center; justify-content: space-between; min-height: 30px; padding: 4px 2px 2px 8px; }
-.tree-head.projects { margin-top: 6px; padding-top: 6px; border-top: 1px solid var(--line); }
-.tree-add { display: grid; place-items: center; width: 22px; height: 22px; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); cursor: pointer; }
-.tree-add:hover { background: var(--hover); color: var(--ink); }
-.tree-add .icon { width: 14px; height: 14px; }
-.tree-projects { display: flex; flex-direction: column; gap: 1px; }
+/* Sidebar tree, shared by the Workspace and the Dashboard. A quiet header per machine (its memory
+   in use, amber when it runs short, "offline" when down) folds open to the projects added on it.
+   A project row folds open to the branches and worktrees that have sessions, in mono, and the
+   sessions under them, hung off a thin guide line; Other holds the sessions outside every project.
+   Only the picked header or row is filled, the rest shade on hover. */
+.tree { display: flex; flex-direction: column; gap: 2px; padding: 2px 8px 16px; }
+.tree-group + .tree-group { margin-top: 2px; }
+.tree-machine { display: flex; align-items: center; gap: 6px; width: 100%; min-height: 30px; padding: 0 8px 0 4px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink); font: 600 var(--text-row)/20px var(--sans); text-align: left; cursor: pointer; }
+button.tree-machine:hover, .tree-machine.split:hover { background: var(--hover); }
+.tree-machine.split { padding: 0; gap: 0; cursor: default; }
+.tree-machine.split.current { background: var(--selected); }
+.tree-fold, .tree-pick { align-self: stretch; display: flex; align-items: center; min-width: 0; padding: 0; border: 0; border-radius: var(--radius-sm); background: none; color: inherit; font: inherit; text-align: left; cursor: pointer; }
+.tree-fold { flex: none; width: 24px; justify-content: center; }
+.tree-pick { flex: 1; gap: 6px; padding-right: 8px; }
+.tree-machine .chevron { flex: none; width: 14px; height: 14px; color: var(--muted); transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1); }
+:is(.tree-machine, .tree-fold)[aria-expanded="true"] .chevron { transform: rotate(90deg); }
+.tree-machine.empty .chevron { visibility: hidden; }
+.tree-meta { flex: none; color: var(--muted); font: 500 11.5px/1 var(--sans); font-variant-numeric: tabular-nums; }
+.tree-machine.warn .tree-meta { color: var(--warn-text); }
+.tree-machine.down { color: var(--muted); }
+.tree-machine.down .tree-meta { color: var(--bad-text); }
+.tree-machine-body { display: flex; flex-direction: column; gap: 1px; margin-bottom: 4px; padding-left: 6px; }
+.tree-other-label { padding: 0 8px 0 22px; color: var(--muted); font: 500 12px/24px var(--sans); }
+.tree-session.other .tree-name { flex: none; max-width: 60%; }
+.tree-session.other .tree-word { flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
 .tree-row { display: flex; align-items: center; gap: 6px; width: 100%; min-width: 0; min-height: var(--row-h); padding: 0 8px; border: 0; border-radius: var(--radius-sm); background: transparent; color: var(--ink); font: 400 var(--text-row)/20px var(--sans); text-align: left; cursor: pointer; }
 button.tree-row:hover { background: var(--hover); }
 .tree-row.current, .tree-row.current:hover { background: var(--selected); }
-:is(.tree-row, .tree-chip, .tree-more, .tree-add, .tree-hidden-toggle):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+:is(.tree-row, .tree-machine, .tree-fold, .tree-pick, .tree-more):focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .tree-prow { position: relative; display: flex; align-items: center; border-radius: var(--radius-sm); }
 .tree-prow:hover { background: var(--hover); }
-.tree-prow.current { background: var(--selected); }
 .tree-prow button.tree-proj:hover { background: transparent; }
 .tree-proj { flex: 1; padding-left: 4px; font-weight: 550; }
 .tree-proj .chevron { flex: none; width: 14px; height: 14px; color: var(--muted); transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1); }
@@ -4735,7 +4734,6 @@ button.tree-row:hover { background: var(--hover); }
 .tree-branch { gap: 7px; min-height: 24px; padding-left: 6px; }
 .tree-branch-name { flex: 0 1 auto; min-width: 0; overflow: hidden; color: var(--ink-2); font: 500 12px/18px var(--mono); text-overflow: ellipsis; white-space: nowrap; }
 .tree-branch.current .tree-branch-name { color: var(--ink); }
-.tree-tag { flex: none; padding: 0 5px; border-radius: 4px; background: color-mix(in srgb, var(--ink) 6%, transparent); color: var(--muted); font: 500 10.5px/16px var(--sans); }
 .tree-branch .tree-pr { margin-left: auto; }
 .tree-session { min-height: 24px; padding-left: 18px; color: var(--muted); font-size: 12.5px; }
 .tree-session .tree-name { flex: 0 1 auto; color: var(--ink-2); }
@@ -4760,13 +4758,6 @@ button.tree-start:hover { color: var(--ink); }
 .tree .ws-state.blocked { background: var(--warn); --state-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='1.4' stroke-linecap='round'%3E%3Ccircle cx='6' cy='6' r='5'/%3E%3Cpath d='M6 3.4v3.1M6 8.5v.1'/%3E%3C/svg%3E"); }
 .tree .ws-state.error { background: var(--bad); --state-icon: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 12 12' fill='none' stroke='black' stroke-width='1.3' stroke-linecap='round'%3E%3Ccircle cx='6' cy='6' r='5'/%3E%3Cpath d='M4.3 4.3l3.4 3.4M7.7 4.3 4.3 7.7'/%3E%3C/svg%3E"); }
 .tree-empty { margin: 6px 8px 4px; color: var(--muted); font-size: 12.5px; line-height: 1.5; }
-.tree-hidden { margin-top: 8px; padding-top: 6px; border-top: 1px solid var(--line); }
-.tree-hidden-toggle { display: flex; align-items: center; gap: 6px; height: 24px; padding: 0 8px 0 4px; border: 0; border-radius: var(--radius-sm); background: none; color: var(--muted); font: 500 12px var(--sans); cursor: pointer; }
-.tree-hidden-toggle:hover { background: var(--hover); color: var(--ink); }
-.tree-hidden-toggle .chevron { width: 14px; height: 14px; transition: transform 160ms cubic-bezier(0.22, 1, 0.36, 1); }
-.tree-hidden-toggle[aria-expanded="true"] .chevron { transform: rotate(90deg); }
-.tree-hidden-row { display: flex; align-items: center; gap: 8px; min-height: 28px; padding-left: 24px; color: var(--muted); font-size: 12.5px; }
-.tree-show { flex: none; height: 24px; padding: 0 8px; font-size: 12px; }
 .tree-menu { min-width: 180px; }
 @media (hover: none) {
   .tree-more { opacity: 1; }
@@ -4775,19 +4766,15 @@ button.tree-start:hover { color: var(--ink); }
 }
 @media (max-width: 760px) {
   .tree { padding: 4px 12px 20px; }
-  .tree-chips { gap: 6px; padding-bottom: 8px; }
-  .tree-chip { height: 34px; padding: 0 12px 0 10px; font-size: 13px; }
-  .tree-row { min-height: var(--row-h-touch); }
+  .tree-row, .tree-machine { min-height: var(--row-h-touch); }
+  .tree-fold { width: 40px; }
+  .tree-other-label { line-height: 32px; }
   .tree-session, .tree-start { padding-left: 20px; font-size: 13.5px; }
   .tree-more { width: 40px; height: 40px; opacity: 1; }
   .tree-proj { padding-right: 46px; }
   .tree-prow :is(.tree-count, .tree-pdot) { opacity: 1 !important; }
-  .tree-add { width: 40px; height: 40px; }
-  .tree-hidden-toggle { height: 40px; }
-  .tree-hidden-row { min-height: 44px; }
-  .tree-show { height: 36px; }
 }
 @media (prefers-reduced-motion: reduce) {
-  .tree-proj .chevron, .tree-hidden-toggle .chevron { transition: none; }
+  .tree-proj .chevron, .tree-machine .chevron { transition: none; }
   .tree .ws-state.working { animation: none; }
 }

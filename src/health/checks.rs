@@ -320,6 +320,7 @@ mod tests {
 
     fn session(name: &str, stale: bool) -> SessionView {
         SessionView {
+            cwd: String::new(),
             pull_why: None,
             id: format!("hp:{name}"),
             machine: "hp".into(),

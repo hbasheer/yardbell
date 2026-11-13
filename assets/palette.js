@@ -71,7 +71,7 @@
     const live = (state.sessions || []).filter((s) => s.tmux && s.attachable && !s.stale);
     const T = window.YardbellTree;
     if (!T || !Array.isArray(state.projects)) return live;
-    const ordered = T.build(state, { stateOf }).flatMap((p) => p.sessions);
+    const ordered = T.build(state, { stateOf }).flatMap((m) => m.sessions);
     return ordered.filter((s) => live.includes(s));
   }
 

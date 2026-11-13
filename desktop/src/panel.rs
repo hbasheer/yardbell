@@ -388,6 +388,7 @@ mod tests {
 
     fn session(machine: &str, tmux: &str, activity: Activity) -> SessionView {
         SessionView {
+            cwd: String::new(),
             pull_why: None,
             id: format!("{machine}-{tmux}"),
             machine: machine.into(),

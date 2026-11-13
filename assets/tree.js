@@ -4,6 +4,7 @@
   const SAY = { blocked: "needs you", error: "stopped", done: "done", working: "working", idle: "idle" };
   const SEEN_KEY = "yardbell.tree.seen";
   const OPEN_KEY = "yardbell.tree.open";
+  const FOLDED_KEY = "yardbell.tree.folded";
   const KEPT_KEY = "yardbell.ws.kept";
   const LONG_PRESS = 500;
 
@@ -33,33 +34,64 @@
     return (state?.sessions || []).filter((s) => s.tmux && (s.attachable || s.stale));
   }
 
-  // The strip keeps the config's order, with machines that are down at the end.
+  // The config's order, with machines that are down at the end.
   function machinesOf(state) {
     const list = [...(state?.machines || [])];
     for (const s of liveSessions(state)) if (!list.some((m) => m.name === s.machine)) list.push({ name: s.machine, up: true });
     return list.map((m, i) => ({ m, i })).sort((a, b) => (b.m.up - a.m.up) || a.i - b.i).map(({ m }) => m);
   }
 
-  function build(state, { stateOf, machine = "" }) {
+  // A project's own checkout comes first, then its worktrees and other folders by name.
+  function linesOf(p, mine, stateOf) {
+    const lines = new Map();
+    for (const s of mine) {
+      const folder = s.folder || "";
+      if (!lines.has(folder)) lines.set(folder, { machine: s.machine, folder, path: s.path || "", branch: "", pull: null, sessions: [] });
+      const line = lines.get(folder);
+      line.sessions.push(s);
+      line.branch ||= s.branch || "";
+      line.pull ||= s.pull || null;
+    }
+    const label = (l) => l.branch || tail(l.folder);
+    return [...lines.values()]
+      .map((l) => ({ ...l, state: worst(l.sessions.map(stateOf)) }))
+      .sort((a, b) => ((b.path === p.path) - (a.path === p.path)) || label(a).localeCompare(label(b)));
+  }
+
+  function build(state, { stateOf }) {
     const sessions = liveSessions(state);
+    const byId = new Map(sessions.map((s) => [s.id, s]));
+    const taken = new Set();
     const projects = (state?.projects || []).map((p) => {
-      const checkouts = p.checkouts.filter((c) => !machine || c.machine === machine).map((c) => {
-        const mine = sessions.filter((s) => s.machine === c.machine && (s.folder || "") === c.folder);
-        return { ...c, sessions: mine, pull: mine.find((s) => s.pull)?.pull || null, state: worst(mine.map(stateOf)) };
-      });
-      const all = checkouts.flatMap((c) => c.sessions);
+      const mine = (p.sessions || []).map((id) => byId.get(id)).filter((s) => s && !taken.has(s));
+      for (const s of mine) taken.add(s);
       return {
         id: p.id,
+        machine: p.machine,
+        path: p.path,
         name: p.name,
         repo: p.repo,
-        added: p.checkouts.every((c) => c.added),
-        checkouts,
-        sessions: all,
-        count: all.filter((s) => !s.stale).length,
-        state: worst(all.map(stateOf)),
+        lines: linesOf(p, mine, stateOf),
+        sessions: mine,
+        count: mine.filter((s) => !s.stale).length,
+        state: worst(mine.map(stateOf)),
       };
-    }).filter((p) => p.checkouts.length);
-    return projects.map((p, i) => ({ p, i })).sort((a, b) => (Boolean(b.p.sessions.length) - Boolean(a.p.sessions.length)) || a.i - b.i).map(({ p }) => p);
+    });
+    return machinesOf(state).map((m) => {
+      const own = projects.filter((p) => p.machine === m.name);
+      const other = sessions.filter((s) => s.machine === m.name && !taken.has(s));
+      return {
+        name: m.name,
+        up: Boolean(m.up),
+        reason: m.reason || "",
+        mem: window.YardbellMachines.memPct(m),
+        tone: m.up ? window.YardbellMachines.tone(m) : "down",
+        word: m.up ? window.YardbellMachines.word(m) : m.reason || "offline",
+        projects: own,
+        other,
+        sessions: [...own.flatMap((p) => p.sessions), ...other],
+      };
+    });
   }
 
   function readSeen() {
@@ -108,7 +140,6 @@
   const PROMPT = svg("tree-agent", '<path d="M3 4.5 6.5 8 3 11.5M8 11.5h5"/>');
   const CHEVRON = svg("icon chevron", '<path d="M6 4l4 4-4 4"/>');
   const MORE = svg("icon", '<circle cx="3.5" cy="8" r=".9"/><circle cx="8" cy="8" r=".9"/><circle cx="12.5" cy="8" r=".9"/>');
-  const PLUS = svg("icon", '<path d="M8 3.5v9M3.5 8h9"/>');
   const agentIcon = (agent) => (/claude/i.test(agent || "") ? STAR : PROMPT);
 
   const stateMark = (st) => `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
@@ -120,37 +151,30 @@
     return `<span class="tree-pr ${tone}" title="${esc(window.YardbellPull.describe(p))}" aria-label="${esc(window.YardbellPull.noun(p))} ${esc(ref)}, ${esc(word)}">${esc(ref)}</span>`;
   }
 
-  function chip(m, current) {
-    const mem = window.YardbellMachines.memPct(m);
-    const tone = m.up ? window.YardbellMachines.tone(m) : "down";
-    const word = m.up ? window.YardbellMachines.word(m) : m.reason || "offline";
-    const pressed = current === m.name;
-    const hint = pressed ? "Click to show every machine" : `Click to show only projects on ${m.name}`;
-    return `<button type="button" class="tree-chip ${tone}" data-machine-chip="${esc(m.name)}" aria-pressed="${pressed}" title="${esc(`${m.name}: ${word}. ${hint}. Right-click for more.`)}"><span class="tree-dot" aria-hidden="true"></span><span class="tree-chip-name">${esc(m.name)}</span>${mem === null ? "" : `<span class="tree-chip-mem">${mem}%</span>`}</button>`;
-  }
-
-  function sessionRow(s, opts) {
+  // A session under Other says where it runs instead of its state, which its icon and colour show.
+  function sessionRow(s, opts, where = "") {
     const key = keyOf(s);
     const st = opts.stateOf(s);
     const current = opts.selected?.key === key;
-    const cls = ["tree-row", "tree-session", unseen(key, st) && "unseen", s.stale && "stale", current && "current"].filter(Boolean).join(" ");
+    const cls = ["tree-row", "tree-session", where && "other", unseen(key, st) && "unseen", s.stale && "stale", current && "current"].filter(Boolean).join(" ");
     const label = name(s, opts.agents);
     const word = say(s, st);
     const since = age(opts.ageOf?.(key));
-    const title = `${label}, ${word}${since && since !== "now" ? ` for ${since}` : ""}`;
-    return `<button type="button" class="${cls}" data-key="${esc(key)}" data-state="${esc(st)}" title="${esc(title)}"${s.stale ? " disabled" : ""}${current ? ' aria-current="true"' : ""}>${agentIcon(s.agent)}<span class="tree-name">${esc(label)}</span><span class="tree-word${st === "blocked" ? " needs" : ""}">${esc(word)}</span>${stateMark(st)}</button>`;
+    const title = `${label}${where ? ` in ${short(s.cwd || s.path || s.folder)}` : ""}, ${word}${since && since !== "now" ? ` for ${since}` : ""}`;
+    const shown = where || word;
+    const words = `<span class="tree-word${st === "blocked" ? " needs" : ""}">${esc(shown)}</span>`;
+    return `<button type="button" class="${cls}" data-key="${esc(key)}" data-state="${esc(st)}" title="${esc(title)}"${s.stale ? " disabled" : ""}${current ? ' aria-current="true"' : ""}>${agentIcon(s.agent)}<span class="tree-name">${esc(label)}</span>${words}${stateMark(st)}</button>`;
   }
 
-  function checkoutRow(c, opts) {
-    const current = !opts.selected?.key && opts.selected?.machine === c.machine && opts.selected?.folder === c.folder;
-    const label = c.branch || tail(c.folder);
-    return `<button type="button" class="tree-row tree-branch${current ? " current" : ""}" data-machine="${esc(c.machine)}" data-folder="${esc(c.folder)}" title="${esc(`${short(c.path || c.folder)} on ${c.machine}`)}"${current ? ' aria-current="true"' : ""}><span class="tree-branch-name">${esc(label)}</span><span class="tree-tag">${esc(c.machine)}</span>${pullMark(c.pull)}</button>${c.sessions.map((s) => sessionRow(s, opts)).join("")}`;
+  function lineRow(l, opts) {
+    const current = !opts.selected?.key && opts.selected?.machine === l.machine && opts.selected?.folder === l.folder;
+    return `<button type="button" class="tree-row tree-branch${current ? " current" : ""}" data-machine="${esc(l.machine)}" data-folder="${esc(l.folder)}" title="${esc(`${short(l.path || l.folder)} on ${l.machine}`)}"${current ? ' aria-current="true"' : ""}><span class="tree-branch-name">${esc(l.branch || tail(l.folder))}</span>${pullMark(l.pull)}</button>${l.sessions.map((s) => sessionRow(s, opts)).join("")}`;
   }
 
   function holdsCurrent(p, selected) {
     if (!selected) return false;
     if (selected.key) return p.sessions.some((s) => keyOf(s) === selected.key);
-    return p.checkouts.some((c) => c.machine === selected.machine && c.folder === selected.folder);
+    return p.lines.some((l) => l.machine === selected.machine && l.folder === selected.folder);
   }
 
   function isOpen(p, opts) {
@@ -160,51 +184,60 @@
 
   function projectBlock(p, opts) {
     const open = isOpen(p, opts);
-    const picked = opts.selected?.project === p.id;
-    const inside = !picked && holdsCurrent(p, opts.selected);
+    const inside = holdsCurrent(p, opts.selected);
     const count = `<span class="tree-count" title="${esc(`${p.count} running`)}">${p.count}</span>`;
     const mark = p.state ? `<span class="tree-pdot ${p.state}" title="${esc(WORD[p.state])}"></span>` : "";
-    const head = `<div class="tree-prow${picked ? " current" : ""}${inside ? " inside" : ""}"><button type="button" class="tree-row tree-proj" data-toggle="${esc(p.id)}" aria-expanded="${open}" title="${esc(p.name === p.repo ? p.name : `${p.name} (${p.repo})`)}"${picked ? ' aria-current="true"' : ""}>${CHEVRON}<span class="tree-name">${esc(p.name)}</span>${count}${mark}</button><button type="button" class="tree-more" data-more="${esc(p.id)}" aria-label="${esc(`More for ${p.name}`)}" title="More" aria-haspopup="menu" aria-expanded="false">${MORE}</button></div>`;
+    const head = `<div class="tree-prow${inside ? " inside" : ""}"><button type="button" class="tree-row tree-proj" data-toggle="${esc(p.id)}" aria-expanded="${open}" title="${esc(`${p.name}, ${short(p.path)}`)}">${CHEVRON}<span class="tree-name">${esc(p.name)}</span>${count}${mark}</button><button type="button" class="tree-more" data-more="${esc(p.id)}" aria-label="${esc(`More for ${p.name}`)}" title="More" aria-haspopup="menu" aria-expanded="false">${MORE}</button></div>`;
     if (!open) return `<section class="tree-project" data-project="${esc(p.id)}">${head}</section>`;
-    const empty = p.sessions.length ? "" : `<button type="button" class="tree-row tree-start" data-start="${esc(p.id)}">No sessions, start one</button>`;
-    return `<section class="tree-project" data-project="${esc(p.id)}">${head}<div class="tree-body">${p.checkouts.map((c) => checkoutRow(c, opts)).join("")}${empty}</div></section>`;
+    const body = p.lines.length
+      ? p.lines.map((l) => lineRow(l, opts)).join("")
+      : `<button type="button" class="tree-row tree-start" data-start="${esc(p.id)}">No sessions, start one</button>`;
+    return `<section class="tree-project" data-project="${esc(p.id)}">${head}<div class="tree-body">${body}</div></section>`;
   }
 
-  function hiddenBlock(list, open) {
-    if (!list.length) return "";
-    const rows = open
-      ? `<div class="tree-hidden-list">${list.map((p) => `<div class="tree-hidden-row"><span class="tree-name" title="${esc(p.repo)}">${esc(p.name)}</span><button type="button" class="btn quiet tree-show" data-show="${esc(p.id)}">Show again</button></div>`).join("")}</div>`
-      : "";
-    return `<div class="tree-hidden"><button type="button" class="tree-hidden-toggle" data-hidden-toggle aria-expanded="${open}">${CHEVRON}${list.length} hidden</button>${rows}</div>`;
+  function otherBlock(m, opts) {
+    if (!m.other.length) return "";
+    const rows = m.other.map((s) => sessionRow(s, opts, tail(s.cwd || s.path || s.folder) || "Other")).join("");
+    return `<section class="tree-other"><div class="tree-other-label">Other</div><div class="tree-body">${rows}</div></section>`;
+  }
+
+  function machineBlock(m, opts, folded) {
+    const empty = !m.projects.length && !m.other.length;
+    const open = !folded.has(m.name);
+    const meta = m.up ? (m.mem === null ? "" : `${m.mem}%`) : "offline";
+    const label = `<span class="tree-name">${esc(m.name)}</span><span class="tree-meta">${esc(meta)}</span>`;
+    const tone = m.up ? (m.tone === "warn" ? "warn" : "") : "down";
+    const cls = ["tree-machine", tone, empty && "empty"].filter(Boolean).join(" ");
+    const foldWord = `${open ? "Hide" : "Show"} what runs on ${m.name}`;
+    let head;
+    if (opts.onMachine) {
+      const picked = opts.machine === m.name;
+      const pickWord = picked ? "Show every machine" : `Show only ${m.name}`;
+      head = `<div class="${cls} split${picked ? " current" : ""}" data-machine-head="${esc(m.name)}"><button type="button" class="tree-fold" data-fold="${esc(m.name)}" aria-expanded="${open}" aria-label="${esc(foldWord)}" title="${esc(foldWord)}">${CHEVRON}</button><button type="button" class="tree-pick" data-pick="${esc(m.name)}" title="${esc(`${m.name}: ${m.word}. ${pickWord}`)}"${picked ? ' aria-current="true"' : ""}>${label}</button></div>`;
+    } else {
+      head = `<button type="button" class="${cls}" data-fold="${esc(m.name)}" data-machine-head="${esc(m.name)}" aria-expanded="${open}" title="${esc(`${m.name}: ${m.word}`)}">${CHEVRON}${label}</button>`;
+    }
+    if (!open || empty) return `<section class="tree-group" data-machine-group="${esc(m.name)}">${head}</section>`;
+    return `<section class="tree-group" data-machine-group="${esc(m.name)}">${head}<div class="tree-machine-body">${m.projects.map((p) => projectBlock(p, opts)).join("")}${otherBlock(m, opts)}</div></section>`;
   }
 
   function markup(state, opts) {
-    const machines = machinesOf(state);
-    const filter = machines.some((m) => m.name === opts.machine) ? opts.machine : "";
-    const projects = build(state, { stateOf: opts.stateOf, machine: filter });
-    const strip = machines.length
-      ? `<div class="tree-head"><span class="tree-label">Machines</span></div><div class="tree-chips" role="group" aria-label="Machines">${machines.map((m) => chip(m, filter)).join("")}</div>`
-      : '<p class="tree-empty">No machines yet.</p>';
-    const head = `<div class="tree-head projects"><span class="tree-label">Projects</span><button type="button" class="tree-add" data-add-project aria-label="Add a project" title="Add a project" aria-haspopup="dialog">${PLUS}</button></div>`;
-    const empty = filter
-      ? `<p class="tree-empty">Nothing on ${esc(filter)} yet.</p>`
-      : '<p class="tree-empty">No projects yet. Add one with the + above, or start a session.</p>';
-    const list = projects.length ? projects.map((p) => projectBlock(p, opts)).join("") : empty;
-    return `<div class="tree${opts.phone ? " phone" : ""}">${strip}${head}<div class="tree-projects">${list}</div>${hiddenBlock(state?.hidden_projects || [], hiddenOpen.has(opts.page || ""))}</div>`;
+    const machines = build(state, { stateOf: opts.stateOf });
+    const folded = new Set(Object.keys(stored(FOLDED_KEY, {})));
+    const list = machines.length ? machines.map((m) => machineBlock(m, opts, folded)).join("") : '<p class="tree-empty">No machines yet.</p>';
+    return `<div class="tree${opts.phone ? " phone" : ""}">${list}</div>`;
   }
 
   const painted = new WeakMap();
   const latest = new WeakMap();
   const bound = new WeakSet();
-  const hiddenOpen = new Set();
   let renaming = null;
   let migrated = false;
 
   function selectorFor(node) {
-    for (const attr of ["data-key", "data-toggle", "data-more", "data-machine-chip", "data-start", "data-show"]) {
+    for (const attr of ["data-key", "data-toggle", "data-more", "data-fold", "data-pick", "data-start"]) {
       if (node.hasAttribute(attr)) return `[${attr}="${CSS.escape(node.getAttribute(attr))}"]`;
     }
-    for (const attr of ["data-hidden-toggle", "data-add-project"]) if (node.hasAttribute(attr)) return `[${attr}]`;
     if (node.hasAttribute("data-folder")) return `[data-machine="${CSS.escape(node.dataset.machine)}"][data-folder="${CSS.escape(node.dataset.folder)}"]`;
     return "";
   }
@@ -213,19 +246,8 @@
     if (painted.get(el) === html) return;
     painted.set(el, html);
     const kept = el.contains(document.activeElement) ? selectorFor(document.activeElement) : "";
-    const left = el.querySelector(".tree-chips")?.scrollLeft || 0;
     el.innerHTML = html;
-    const chips = el.querySelector(".tree-chips");
-    if (chips) {
-      chips.scrollLeft = left;
-      fade(chips);
-    }
     if (kept) el.querySelector(kept)?.focus({ preventScroll: true });
-  }
-
-  // Chips that run past the column fade out at the edge, until the strip is scrolled to its end.
-  function fade(chips) {
-    chips.classList.toggle("more", chips.scrollLeft + chips.clientWidth < chips.scrollWidth - 1);
   }
 
   async function post(url, body) {
@@ -322,27 +344,18 @@
   }, true);
   addEventListener("resize", () => closeMenu());
 
-  function fullProject(state, id) {
+  function projectOf(state, id) {
     return (state?.projects || []).find((p) => p.id === id) || null;
-  }
-
-  // A place to start in: a checkout on a machine that is up, the main checkout before worktrees.
-  function startPlace(state, p) {
-    const up = new Set((state?.machines || []).filter((m) => m.up).map((m) => m.name));
-    const c = p.checkouts.find((x) => up.has(x.machine)) || p.checkouts[0];
-    return c ? { machine: c.machine, path: c.path || c.folder } : null;
   }
 
   function projectMenu(el, trigger, id, point) {
     const { state, opts } = latest.get(el);
-    const p = build(state, { stateOf: opts.stateOf, machine: opts.machine }).find((x) => x.id === id);
-    const whole = fullProject(state, id);
-    if (!p || !whole) return;
+    const p = projectOf(state, id);
+    if (!p) return;
     openMenu(trigger, [
-      { label: "New session", run: () => { const at = startPlace(state, p); if (at) opts.onNew?.(at); } },
-      { label: "Rename", run: () => startRename(el, whole) },
-      { label: whole.checkouts.every((c) => c.added) ? "Remove" : "Hide", danger: true, run: () => remove(el, whole) },
-      { label: "Show on Dashboard", run: () => (opts.onProject ? opts.onProject(id) : location.assign(`/?project=${encodeURIComponent(id)}`)) },
+      { label: "New session", run: () => opts.onNew?.({ machine: p.machine, path: p.path }) },
+      { label: "Rename", run: () => startRename(el, p) },
+      { label: "Delete", danger: true, run: () => remove(el, p) },
     ], point);
   }
 
@@ -350,23 +363,23 @@
     const { state, opts } = latest.get(el);
     const m = (state?.machines || []).find((x) => x.name === machine);
     const items = [{ label: "Open on the Dashboard", run: () => (opts.onMachineOpen ? opts.onMachineOpen(machine) : location.assign(`/?machine=${encodeURIComponent(machine)}`)) }];
-    if (!m || m.up) items.unshift({ label: "New session on this machine", run: () => opts.onNew?.({ machine, path: "" }) });
+    if (!m || m.up) {
+      items.unshift({ label: "Add a project here", run: () => addProject(el, machine) });
+      items.unshift({ label: "New session on this machine", run: () => opts.onNew?.({ machine, path: "" }) });
+    }
     openMenu(trigger, items, point);
   }
 
   async function remove(el, p) {
     const { opts } = latest.get(el);
-    const deletes = p.checkouts.every((c) => c.added);
     const ok = await window.YardbellShell.confirm(
-      deletes ? `Remove ${p.name}?` : `Hide ${p.name}?`,
-      deletes
-        ? "You added this project, so it comes off the list on every device. Its folder and files stay where they are."
-        : "Yardbell finds this project in your workspace folders, so it is hidden rather than deleted. It stays under the hidden projects at the end of the list, where Show again brings it back.",
-      { confirm: deletes ? "Remove" : "Hide", danger: deletes },
+      `Delete ${p.name}?`,
+      `It comes off the sidebar on every device. The folder ${short(p.path)} and its files stay where they are, and sessions running there move to Other.`,
+      { confirm: "Delete", danger: true },
     );
     if (!ok) return;
     try {
-      await post("/api/projects/remove", { id: p.id });
+      await post("/api/projects/delete", { id: p.id });
       opts.reload?.();
     } catch (err) {
       fail(opts, err);
@@ -413,8 +426,9 @@
     input.addEventListener("click", (e) => e.stopPropagation());
   }
 
-  function addProject(el) {
-    const { state, opts } = latest.get(el);
+  function addProject(el, machine = "") {
+    const { state, opts } = latest.get(el) || {};
+    if (!opts) return;
     const up = (state?.machines || []).filter((m) => m.up).map((m) => m.name);
     if (!up.length) {
       fail(opts, new Error("No machine is connected right now"));
@@ -422,12 +436,17 @@
     }
     window.YardbellNewSession.addProject({
       machines: up,
-      machine: opts.machine || opts.selected?.machine || "",
-      onAdd: async ({ machine, path }) => {
+      machine: machine || opts.machine || opts.selected?.machine || "",
+      onAdd: async ({ machine: at, path }) => {
         try {
-          const res = await post("/api/projects/add", { machine, path });
+          const res = await post("/api/projects/add", { machine: at, path });
+          const open = stored(OPEN_KEY, {});
+          open[res.id] = true;
+          store(OPEN_KEY, open);
+          const folded = stored(FOLDED_KEY, {});
+          delete folded[at];
+          store(FOLDED_KEY, folded);
           await opts.reload?.();
-          opts.onAdded?.(res);
         } catch (err) {
           fail(opts, err);
         }
@@ -435,14 +454,23 @@
     });
   }
 
-  function toggle(el, id) {
+  function toggleProject(el, id) {
     const { state, opts } = latest.get(el);
-    const p = build(state, { stateOf: opts.stateOf, machine: opts.machine }).find((x) => x.id === id);
+    const p = build(state, { stateOf: opts.stateOf }).flatMap((m) => m.projects).find((x) => x.id === id);
     if (!p) return;
     const map = stored(OPEN_KEY, {});
     map[id] = !isOpen(p, opts);
     store(OPEN_KEY, map);
     render(el, state, opts);
+  }
+
+  function toggleMachine(el, name) {
+    const folded = stored(FOLDED_KEY, {});
+    if (folded[name]) delete folded[name];
+    else folded[name] = true;
+    store(FOLDED_KEY, folded);
+    const last = latest.get(el);
+    render(el, last.state, last.opts);
   }
 
   function bind(el) {
@@ -456,30 +484,27 @@
     };
     el.addEventListener("pointerdown", (e) => {
       pressed = false;
-      const chipEl = e.target.closest("[data-machine-chip]");
-      if (!chipEl || e.pointerType === "mouse") return;
+      const head = e.target.closest("[data-machine-head]");
+      if (!head || e.pointerType === "mouse") return;
       cancelPress();
       press = setTimeout(() => {
         press = null;
         pressed = true;
-        machineMenu(el, chipEl, chipEl.dataset.machineChip);
+        machineMenu(el, head.querySelector("[data-pick]") || head, head.dataset.machineHead);
       }, LONG_PRESS);
     });
     for (const type of ["pointerup", "pointercancel", "pointerleave"]) el.addEventListener(type, cancelPress);
-    el.addEventListener("scroll", (e) => {
-      if (e.target.classList?.contains("tree-chips")) fade(e.target);
-    }, { capture: true, passive: true });
     el.addEventListener("contextmenu", (e) => {
-      const chipEl = e.target.closest("[data-machine-chip]");
+      const head = e.target.closest("[data-machine-head]");
       const prow = e.target.closest(".tree-prow");
-      if (!chipEl && !prow) return;
+      if (!head && !prow) return;
       e.preventDefault();
       cancelPress();
-      // A long press on a touch screen ends in a click that must not also flip the filter.
+      // A long press on a touch screen ends in a click that must not also fold or pick.
       pressed = true;
       if (menuEl) return;
       const point = e.button === 2 ? { x: e.clientX, y: e.clientY } : null;
-      if (chipEl) machineMenu(el, chipEl, chipEl.dataset.machineChip, point);
+      if (head) machineMenu(el, head.querySelector("[data-pick]") || head, head.dataset.machineHead, point);
       else {
         const more = prow.querySelector("[data-more]");
         projectMenu(el, more, more.dataset.more, point);
@@ -487,18 +512,20 @@
     });
     el.addEventListener("click", (e) => {
       const { opts } = latest.get(el);
-      const chipEl = e.target.closest("[data-machine-chip]");
-      if (chipEl) {
-        if (pressed) {
-          pressed = false;
-          return;
-        }
-        const name = chipEl.dataset.machineChip;
-        opts.onMachine?.(opts.machine === name ? "" : name);
+      const head = e.target.closest("[data-machine-head]");
+      if (head && pressed) {
+        pressed = false;
         return;
       }
-      if (e.target.closest("[data-add-project]")) {
-        addProject(el);
+      const fold = e.target.closest("[data-fold]");
+      if (fold) {
+        toggleMachine(el, fold.dataset.fold);
+        return;
+      }
+      const pick = e.target.closest("[data-pick]");
+      if (pick) {
+        const name = pick.dataset.pick;
+        opts.onMachine?.(opts.machine === name ? "" : name);
         return;
       }
       const more = e.target.closest("[data-more]");
@@ -507,17 +534,15 @@
         else projectMenu(el, more, more.dataset.more);
         return;
       }
-      const head = e.target.closest("[data-toggle]");
-      if (head) {
-        toggle(el, head.dataset.toggle);
+      const toggle = e.target.closest("[data-toggle]");
+      if (toggle) {
+        toggleProject(el, toggle.dataset.toggle);
         return;
       }
       const start = e.target.closest("[data-start]");
       if (start) {
-        const { state } = latest.get(el);
-        const p = build(state, { stateOf: opts.stateOf, machine: opts.machine }).find((x) => x.id === start.dataset.start);
-        const at = p && startPlace(state, p);
-        if (at) opts.onNew?.(at);
+        const p = projectOf(latest.get(el).state, start.dataset.start);
+        if (p) opts.onNew?.({ machine: p.machine, path: p.path });
         return;
       }
       const session = e.target.closest("[data-key]");
@@ -526,46 +551,20 @@
         return;
       }
       const folder = e.target.closest("[data-folder]");
-      if (folder) {
-        opts.onFolder?.({ machine: folder.dataset.machine, folder: folder.dataset.folder });
-        return;
-      }
-      if (e.target.closest("[data-hidden-toggle]")) {
-        const page = opts.page || "";
-        if (hiddenOpen.has(page)) hiddenOpen.delete(page);
-        else hiddenOpen.add(page);
-        const last = latest.get(el);
-        render(el, last.state, last.opts);
-        return;
-      }
-      const show = e.target.closest("[data-show]");
-      if (show) {
-        show.disabled = true;
-        post("/api/projects/show", { id: show.dataset.show }).then(() => opts.reload?.()).catch((err) => {
-          show.disabled = false;
-          fail(opts, err);
-        });
-      }
+      if (folder) opts.onFolder?.({ machine: folder.dataset.machine, folder: folder.dataset.folder });
     });
     el.addEventListener("keydown", (e) => {
-      const chipEl = e.target.closest("[data-machine-chip]");
-      if (chipEl && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        const chips = [...el.querySelectorAll("[data-machine-chip]")];
-        const at = chips.indexOf(chipEl);
-        e.preventDefault();
-        chips[Math.max(0, Math.min(chips.length - 1, at + (e.key === "ArrowRight" ? 1 : -1)))].focus();
-        return;
-      }
-      const head = e.target.closest("[data-toggle]");
-      if (head && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
-        if ((head.getAttribute("aria-expanded") === "true") !== (e.key === "ArrowRight")) {
+      const toggle = e.target.closest("[data-toggle], [data-fold]");
+      if (toggle && (e.key === "ArrowLeft" || e.key === "ArrowRight")) {
+        if ((toggle.getAttribute("aria-expanded") === "true") !== (e.key === "ArrowRight")) {
           e.preventDefault();
-          toggle(el, head.dataset.toggle);
+          if (toggle.dataset.toggle) toggleProject(el, toggle.dataset.toggle);
+          else toggleMachine(el, toggle.dataset.fold);
         }
         return;
       }
       if (e.key !== "ArrowDown" && e.key !== "ArrowUp") return;
-      const rows = [...el.querySelectorAll(".tree-row:not(:disabled)")].filter((r) => r.matches("button"));
+      const rows = [...el.querySelectorAll(".tree-row:not(:disabled), .tree-machine:not(.split), .tree-pick")].filter((r) => r.matches("button"));
       const at = rows.indexOf(document.activeElement);
       if (at < 0) return;
       e.preventDefault();
@@ -585,5 +584,5 @@
     paint(el, markup(state, latest.get(el).opts));
   }
 
-  window.YardbellTree = { RANK, WORD, build, render, worst, look, unseen };
+  window.YardbellTree = { RANK, WORD, build, render, addProject, worst, look, unseen };
 })();

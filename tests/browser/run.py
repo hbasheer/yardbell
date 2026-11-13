@@ -965,7 +965,7 @@ class Suite:
     def test_dashboard_shows_the_machine(self):
         self.b.goto(self.url("/"))
         self.b.wait(
-            f"document.querySelector('#col-body .tree-chips [data-machine-chip={json.dumps(MACHINE)}]')?.textContent.includes({json.dumps(MACHINE)})",
+            f"document.querySelector('#col-body [data-machine-head={json.dumps(MACHINE)}] .tree-name')?.textContent === {json.dumps(MACHINE)}",
             "the machine in the column",
         )
         self.b.wait(
@@ -1366,63 +1366,82 @@ class Suite:
         if b.js("document.documentElement.classList.contains('touch-ui') || getComputedStyle(document.getElementById('keys')).display !== 'none'"):
             raise Failure("a desktop terminal shows the key bar")
 
-    def test_tree_groups_a_repo_across_machines_and_filters_by_chip(self):
+    def test_tree_lists_machines_with_their_projects_and_other(self):
         b = self.b
         b.goto(self.url("/workspace"))
         b.wait("typeof YardbellTree === 'object'", "the tree script")
         got = b.js("""(() => {
           localStorage.removeItem('yardbell.tree.open');
-          const s = (machine, tmux, folder, extra) => ({ machine, tmux, folder, attachable: true, agent: 'claude', ...extra });
-          const c = (machine, folder, branch, added = false) => ({ machine, folder, path: '/r/' + folder, branch, worktree: folder.includes('-worktrees/'), added });
+          localStorage.removeItem('yardbell.tree.folded');
+          const s = (machine, tmux, folder, extra) => ({ id: machine + ':' + tmux, machine, tmux, folder, attachable: true, agent: 'claude', ...extra });
           const state = {
             machines: [
               { name: 'hp', up: true, health: { mem_total_kb: 100, mem_used_kb: 48 } },
               { name: 'devbox', up: false, reason: 'ssh: timed out' },
-              { name: 'mini', up: true, health: { mem_total_kb: 100, mem_used_kb: 69 } },
+              { name: 'mini', up: true, health: { mem_total_kb: 100, mem_used_kb: 90 } },
+              { name: 'lab', up: true },
             ],
             agents: [{ name: 'claude', label: 'Claude' }],
             projects: [
-              { id: 'git:github.com/acme/api', name: 'acme/api', repo: 'acme/api', checkouts: [c('hp', 'api', 'main')] },
-              { id: 'git:github.com/acme/web', name: 'acme/web', repo: 'acme/web', checkouts: [c('hp', 'web', 'main'), c('mini', 'web-worktrees/eng-142', 'eng-142-flake')] },
-              { id: 'dir:notes', name: 'notes', repo: 'notes', checkouts: [c('mini', 'notes', '', true)] },
+              { id: 'hp:/r/web', machine: 'hp', path: '/r/web', name: 'acme/web', repo: 'web', sessions: ['hp:a', 'hp:b'] },
+              { id: 'hp:/r/yardbell', machine: 'hp', path: '/r/yardbell', name: 'yardbell', repo: 'yardbell', sessions: [] },
+              { id: 'mini:/u/web', machine: 'mini', path: '/u/web', name: 'web', repo: 'web', sessions: ['mini:c'] },
             ],
-            hidden_projects: [{ id: 'dir:old', name: 'old', repo: 'old', checkouts: [] }],
-            sessions: [s('hp', 'a', 'web', { activity: 'active' }), s('mini', 'b', 'web-worktrees/eng-142', { activity: 'blocked' })],
+            sessions: [
+              s('hp', 'b', 'web-worktrees/eng-142', { path: '/r/web-worktrees/eng-142', branch: 'eng-142-flake', activity: 'blocked' }),
+              s('hp', 'a', 'web', { path: '/r/web', branch: 'main', activity: 'active' }),
+              s('hp', 'd', '/home/u/Desktop', { cwd: '/home/u/Desktop' }),
+              s('mini', 'c', 'web', { path: '/u/web', branch: 'main' }),
+            ],
           };
           const el = document.createElement('div');
           document.body.append(el);
           const picks = [];
-          const opts = { page: 'fixture', stateOf: (x) => (x.activity === 'active' ? 'working' : x.activity || 'idle'), onMachine: (m) => picks.push(m) };
-          const rows = () => [...el.querySelectorAll('.tree-project')].map((p) => ({
-            name: p.querySelector('.tree-proj .tree-name').textContent,
-            count: p.querySelector('.tree-count').textContent,
-            dot: p.querySelector('.tree-pdot')?.className.split(' ')[1] || '',
-            open: p.querySelector('.tree-proj').getAttribute('aria-expanded'),
-            lines: [...p.querySelectorAll('.tree-branch')].map((l) => `${l.querySelector('.tree-branch-name').textContent}@${l.querySelector('.tree-tag').textContent}`),
-            sessions: [...p.querySelectorAll('.tree-session')].map((r) => `${r.querySelector('.tree-name').textContent} ${r.querySelector('.tree-word').textContent}`),
+          const opts = { page: 'fixture', stateOf: (x) => (x.activity === 'active' ? 'working' : x.activity || 'idle') };
+          const tree = () => [...el.querySelectorAll('.tree-group')].map((g) => ({
+            head: [g.querySelector('[data-machine-head] .tree-name').textContent, g.querySelector('.tree-meta').textContent,
+              ['warn', 'down', 'empty'].filter((c) => g.querySelector('.tree-machine').classList.contains(c)).join(' ')],
+            projects: [...g.querySelectorAll('.tree-project')].map((p) => ({
+              name: p.querySelector('.tree-proj .tree-name').textContent,
+              count: p.querySelector('.tree-count').textContent,
+              dot: p.querySelector('.tree-pdot')?.className.split(' ')[1] || '',
+              open: p.querySelector('.tree-proj').getAttribute('aria-expanded'),
+              lines: [...p.querySelectorAll('.tree-branch')].map((l) => l.querySelector('.tree-branch-name').textContent),
+              sessions: [...p.querySelectorAll('.tree-session')].map((r) => `${r.querySelector('.tree-name').textContent} ${r.querySelector('.tree-word').textContent}`),
+            })),
+            other: [...g.querySelectorAll('.tree-other .tree-session')].map((r) => `${r.querySelector('.tree-name').textContent} ${r.querySelector('.tree-word').textContent}`),
           }));
           YardbellTree.render(el, state, opts);
-          const chips = [...el.querySelectorAll('[data-machine-chip]')].map((x) => [x.dataset.machineChip, x.classList.contains('down') ? 'down' : 'up', x.textContent, x.getAttribute('aria-pressed')]);
-          const all = rows();
-          el.querySelector('[data-machine-chip="mini"]').click();
-          YardbellTree.render(el, state, { ...opts, machine: 'mini' });
-          const mini = rows();
-          const pressed = [...el.querySelectorAll('[data-machine-chip][aria-pressed="true"]')].map((x) => x.dataset.machineChip);
-          el.querySelector('[data-machine-chip="mini"]').click();
-          const hidden = el.querySelector('[data-hidden-toggle]').textContent;
+          const first = tree();
+          el.querySelector('[data-toggle="hp:/r/yardbell"]').click();
+          const start = el.querySelector('[data-project="hp:/r/yardbell"] .tree-start')?.textContent;
+          el.querySelector('[data-fold="hp"]').click();
+          const folded = { body: Boolean(el.querySelector('[data-machine-group="hp"] .tree-machine-body')), kept: JSON.parse(localStorage.getItem('yardbell.tree.folded') || '{}').hp === true, expanded: el.querySelector('[data-fold="hp"]').getAttribute('aria-expanded') };
+          el.querySelector('[data-fold="hp"]').click();
+          YardbellTree.render(el, state, { ...opts, onMachine: (m) => picks.push(m) });
+          el.querySelector('[data-pick="mini"]').click();
+          YardbellTree.render(el, state, { ...opts, machine: 'mini', onMachine: (m) => picks.push(m) });
+          const current = [...el.querySelectorAll('.tree-machine.current')].map((h) => h.dataset.machineHead);
+          el.querySelector('[data-pick="mini"]').click();
           el.remove();
-          return { chips, all, mini, pressed, picks, hidden };
+          localStorage.removeItem('yardbell.tree.open');
+          return { first, start, folded, current, picks };
         })()""")
         web = {"name": "acme/web", "count": "2", "dot": "blocked", "open": "true",
-               "lines": ["main@hp", "eng-142-flake@mini"], "sessions": ["Claude working", "Claude needs you"]}
-        quiet = lambda name: {"name": name, "count": "0", "dot": "", "open": "false", "lines": [], "sessions": []}
+               "lines": ["main", "eng-142-flake"], "sessions": ["Claude working", "Claude needs you"]}
         want = {
-            "chips": [["hp", "up", "hp48%", "false"], ["mini", "up", "mini69%", "false"], ["devbox", "down", "devbox", "false"]],
-            "all": [web, quiet("acme/api"), quiet("notes")],
-            "mini": [{**web, "count": "1", "lines": ["eng-142-flake@mini"], "sessions": ["Claude needs you"]}, quiet("notes")],
-            "pressed": ["mini"],
+            "first": [
+                {"head": ["hp", "48%", ""], "other": ["Claude Desktop"], "projects": [
+                    web, {"name": "yardbell", "count": "0", "dot": "", "open": "false", "lines": [], "sessions": []}]},
+                {"head": ["mini", "90%", "warn"], "other": [], "projects": [
+                    {"name": "web", "count": "1", "dot": "idle", "open": "true", "lines": ["main"], "sessions": ["Claude idle"]}]},
+                {"head": ["lab", "", "empty"], "other": [], "projects": []},
+                {"head": ["devbox", "offline", "down empty"], "other": [], "projects": []},
+            ],
+            "start": "No sessions, start one",
+            "folded": {"body": False, "kept": True, "expanded": "false"},
+            "current": ["mini"],
             "picks": ["mini", ""],
-            "hidden": "1 hidden",
         }
         if got != want:
             raise Failure(f"the tree drew {json.dumps(got, indent=1)}\nwanted {json.dumps(want, indent=1)}")
@@ -1433,11 +1452,11 @@ class Suite:
         b.wait("typeof YardbellTree === 'object'", "the tree script")
         rows = b.js("""(() => {
           const hour = 3600 * 1000;
-          const s = (tmux, extra) => ({ machine: 'hp', tmux, folder: 'app', attachable: true, agent: 'claude', ...extra });
+          const s = (tmux, extra) => ({ id: 'hp:' + tmux, machine: 'hp', tmux, folder: 'app', path: '/home/u/code/app', attachable: true, agent: 'claude', ...extra });
           const state = {
             machines: [{ name: 'hp', up: true }],
             agents: [{ name: 'claude', label: 'Claude Code' }],
-            projects: [{ id: 'dir:app', name: 'app', repo: 'app', checkouts: [{ machine: 'hp', folder: 'app', path: '/home/u/code/app', branch: 'main', worktree: false, added: false }] }],
+            projects: [{ id: 'hp:/home/u/code/app', machine: 'hp', path: '/home/u/code/app', name: 'app', repo: 'app', sessions: ['hp:a', 'hp:b', 'hp:c', 'hp:d'] }],
             sessions: [
               s('a', { ticket: 'ENG-142' }),
               s('b', { ticket: '-', stopped: 'limit', resets: new Date(Date.now() + hour).toISOString() }),
@@ -1471,32 +1490,34 @@ class Suite:
         if rows["desk"][3]["title"] != "Claude Code, needs you for 5m":
             raise Failure(f"the tooltip reads {rows['desk'][3]['title']!r}")
 
-    def test_tree_chip_filter_and_folds_are_remembered_and_sessions_open_in_panes(self):
+    def test_tree_folds_are_remembered_and_sessions_open_in_panes(self):
         b = self.b
         key, made = self.demo_api_session()
-        chip = f"#col-body [data-machine-chip={json.dumps(MACHINE)}]"
-        head = "#col-body [data-toggle=\"dir:demo-api\"]"
-        row = f"#col-body .tree-session[data-key={json.dumps(key)}]"
-        kept = ("yardbell.tree.machine.workspace", "yardbell.tree.open")
+        pid = f"{MACHINE}:{os.path.join(self.y.root, 'demo-api')}"
+        fold = f"#col-body [data-fold={json.dumps(MACHINE)}]"
+        head = f"#col-body [data-toggle={json.dumps(pid)}]"
+        row = f"#col-body [data-project={json.dumps(pid)}] .tree-session[data-key={json.dumps(key)}]"
+        kept = ("yardbell.tree.folded", "yardbell.tree.open")
         before = self.storage(self.LAYOUT + kept)
         try:
+            self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": os.path.join(self.y.root, "demo-api")})
             self.put_storage({k: None for k in kept})
             b.goto(self.url("/workspace"))
             b.wait(f"state !== null && document.querySelector({json.dumps(row)})", "the session under its project", timeout=15)
-            if not re.fullmatch(rf"{MACHINE}(\d+%)?", b.js(f"document.querySelector({json.dumps(chip)}).textContent")):
-                raise Failure("the machine chip should read its name and memory")
-            if b.js(f"document.querySelector({json.dumps(chip)}).getAttribute('aria-pressed')") != "false":
-                raise Failure("the machine chip starts pressed")
-            b.click(chip)
-            b.wait(f"document.querySelector({json.dumps(chip)}).getAttribute('aria-pressed') === 'true' && localStorage.getItem('yardbell.tree.machine.workspace') === {json.dumps(MACHINE)}",
-                   "the chip to filter and be remembered")
-            b.wait(f"document.querySelector({json.dumps(row)})", "the session still listed under the filter")
+            if b.js("document.querySelector('#col-body .tree-chips, #col-body [data-machine-chip]') !== null"):
+                raise Failure("the machine chips are still drawn")
+            if not re.fullmatch(rf"{MACHINE}(\d+%)?", b.js(f"document.querySelector({json.dumps(fold)}).textContent")):
+                raise Failure("the machine header should read its name and memory")
+            if b.js(f"getComputedStyle(document.querySelector({json.dumps(fold)})).backgroundColor") != "rgba(0, 0, 0, 0)":
+                raise Failure("the machine header is filled while nothing picked it")
+            b.click(fold)
+            b.wait(f"document.querySelector({json.dumps(fold)}).getAttribute('aria-expanded') === 'false' && !document.querySelector({json.dumps(row)})", "the machine to fold")
             self.settle()
             b.goto(self.url("/workspace"))
-            b.wait(f"document.querySelector({json.dumps(chip)})?.getAttribute('aria-pressed') === 'true'", "the filter after a reload")
-            b.click(chip)
-            b.wait(f"document.querySelector({json.dumps(chip)}).getAttribute('aria-pressed') === 'false' && localStorage.getItem('yardbell.tree.machine.workspace') === null",
-                   "a second tap to clear the filter")
+            b.wait(f"state !== null && document.querySelector({json.dumps(fold)})?.getAttribute('aria-expanded') === 'false'", "the machine fold after a reload")
+            b.js(f"document.querySelector({json.dumps(fold)}).focus()")
+            b.key("ArrowRight")
+            b.wait(f"document.querySelector({json.dumps(row)})", "ArrowRight to unfold the machine")
 
             if b.js(f"document.querySelector({json.dumps(head)}).getAttribute('aria-expanded')") != "true":
                 raise Failure("a project with a session starts folded")
@@ -1508,21 +1529,60 @@ class Suite:
             b.js(f"document.querySelector({json.dumps(head)}).focus()")
             b.key("ArrowRight")
             b.wait(f"document.querySelector({json.dumps(head)}).getAttribute('aria-expanded') === 'true' && document.querySelector({json.dumps(row)})", "ArrowRight to unfold it")
-            if b.js("document.activeElement?.dataset.toggle") != "dir:demo-api":
+            if b.js("document.activeElement?.dataset.toggle") != pid:
                 raise Failure("unfolding moved the focus off the project row")
+            b.key("ArrowUp")
+            if b.js("document.activeElement?.dataset.fold") != MACHINE:
+                raise Failure("ArrowUp from the first project should reach its machine header")
 
             b.click(row)
             b.wait(f"focusedLeaf()?.key === {json.dumps(key)} && document.querySelector('.ws-pane:not([hidden]) iframe[data-key={json.dumps(key)}]')",
                    "the session open in a pane", timeout=15)
-            filled = b.js("""[...document.querySelectorAll('#col-body .tree-row, #col-body .tree-prow')]
+            filled = b.js("""[...document.querySelectorAll('#col-body .tree-row, #col-body .tree-prow, #col-body .tree-machine')]
               .filter((r) => getComputedStyle(r).backgroundColor !== 'rgba(0, 0, 0, 0)').map((r) => r.dataset.key || r.className)""")
             if filled != [key]:
                 raise Failure(f"only the open session should be filled, not {filled}")
         finally:
             self.settle()
+            self.reset_projects()
             self.put_storage(before)
             self.drop_demo_api_session(key, made)
-        self.check_errors("the tree's chips and folds")
+        self.check_errors("the tree's folds")
+
+    def test_tree_other_holds_a_session_outside_every_project(self):
+        b = self.b
+        desk = os.path.join(self.y.home, "Desktop")
+        os.makedirs(desk, exist_ok=True)
+        name = "hp-desktop"
+        key = f"{MACHINE}/{name}"
+        r = self.y.tmux("new", "-d", "-s", name, "-c", desk, self.y.shell)
+        if r.returncode:
+            raise Failure(f"tmux new failed: {r.stderr}")
+        try:
+            self.api("POST", "/refresh")
+            b.goto(self.url("/workspace"))
+            row = f"#col-body [data-machine-group={json.dumps(MACHINE)}] .tree-other .tree-session[data-key={json.dumps(key)}]"
+            b.wait(f"state !== null && document.querySelector({json.dumps(row)})", "the Desktop session under Other", timeout=15)
+            seen = b.js(f"""(() => {{
+              const row = document.querySelector({json.dumps(row)});
+              return {{
+                label: row.closest('.tree-other').querySelector('.tree-other-label').textContent,
+                name: row.querySelector('.tree-name').textContent,
+                word: row.querySelector('.tree-word').textContent,
+                projects: [...document.querySelectorAll('#col-body [data-toggle]')].map((p) => p.textContent),
+                listed: state.projects.map((p) => p.path),
+              }};
+            }})()""")
+            if seen["label"] != "Other" or seen["name"] != "Shell" or seen["word"] != "Desktop":
+                raise Failure(f"the Desktop session reads {seen}")
+            if any("Desktop" in p for p in seen["projects"]) or seen["listed"]:
+                raise Failure(f"a session's folder became a project: {seen}")
+            b.click(row)
+            b.wait(f"focusedLeaf()?.key === {json.dumps(key)}", "the Other session open in a pane", timeout=15)
+        finally:
+            self.settle()
+            self.drop_grid_tab([key])
+        self.check_errors("Other")
 
     def test_tree_marks_changes_until_looked_at(self):
         b = self.b
@@ -1570,8 +1630,12 @@ class Suite:
             if r.returncode:
                 raise Failure(f"tmux new failed: {r.stderr}")
         b.viewport(1000, 700)
+        self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": folder})
         try:
             b.goto(self.url("/workspace"))
+            # An earlier test may have closed hp-demo-api-1 and -2, which keeps them hidden when they come back.
+            b.wait("state !== null && typeof save === 'function'", "the Workspace")
+            b.js(f"(() => {{ saved.hidden = (saved.hidden || []).filter((k) => !k.startsWith({json.dumps(MACHINE + '/hp-demo-api-')})); save(); render(); }})()")
             self.api("POST", "/refresh")
             b.click("#col-body [data-folder$='demo-api']")
             count = b.wait("document.querySelectorAll('#tabs .ws-tab').length >= 8 && document.querySelectorAll('#tabs .ws-tab').length", "eight tabs", timeout=15)
@@ -1592,6 +1656,7 @@ class Suite:
                 )
         finally:
             b.viewport(1280, 800)
+            self.reset_projects()
 
     # Four shell sessions, each in its own tab, with the saved layout wiped so earlier tests
     # cannot shape it. Returns their keys.
@@ -2225,63 +2290,56 @@ class Suite:
     def test_dashboard_column_filters_by_machine(self):
         b = self.b
         key = f"{MACHINE}/hp-dash-col"
-        chip = f"#col-body [data-machine-chip={json.dumps(MACHINE)}]"
+        pick = f"#col-body [data-pick={json.dumps(MACHINE)}]"
+        app = os.path.join(self.y.root, "demo-app")
+        pid = f"{MACHINE}:{app}"
         kept = ("yardbell.tree.seen", "yardbell.tree.machine.dashboard")
         before = self.storage(self.LAYOUT + kept)
-        self.y.tmux("new", "-d", "-s", key.split("/", 1)[1], "-c", os.path.join(self.y.root, "demo-app"), self.y.shell)
+        self.y.tmux("new", "-d", "-s", key.split("/", 1)[1], "-c", app, self.y.shell)
         try:
+            self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": app})
             self.api("POST", "/refresh")
             self.put_storage({"yardbell.tree.seen": json.dumps({key: "done"}), "yardbell.tree.machine.dashboard": None})
             b.goto(self.url("/"))
-            b.wait(f"document.querySelector('#col-body .tree') && document.querySelector({json.dumps(chip)})", "the tree in the Dashboard's column")
-            if b.js("Boolean(window.YardbellNav) || document.querySelector('.side, #col-body [data-all]') !== null"):
-                raise Failure("the Dashboard still draws the old sidebar or the All machines row")
+            b.wait(f"document.querySelector('#col-body .tree') && document.querySelector({json.dumps(pick)})", "the tree in the Dashboard's column")
+            if b.js("Boolean(window.YardbellNav) || document.querySelector('.side, #col-body [data-machine-chip]') !== null"):
+                raise Failure("the Dashboard still draws the old sidebar or the machine chips")
             state = f"""(() => ({{
-              pressed: document.querySelector({json.dumps(chip)}).getAttribute('aria-pressed'),
+              all: document.querySelector('#col-body [data-all]')?.getAttribute('aria-current') || '',
+              picked: document.querySelector('#col-body .tree-machine.current')?.dataset.machineHead || '',
               machine: new URLSearchParams(location.search).get('machine'),
               title: document.getElementById('title').textContent,
             }}))()"""
             seen = b.js(state)
-            if seen != {"pressed": "false", "machine": None, "title": "Sessions"}:
+            if seen != {"all": "true", "picked": "", "machine": None, "title": "Sessions"}:
                 raise Failure(f"with no filter the column reads {seen}")
-            b.click(chip)
-            b.wait(f"new URLSearchParams(location.search).get('machine') === {json.dumps(MACHINE)}", "the chip to set the filter")
+            b.click(pick)
+            b.wait(f"new URLSearchParams(location.search).get('machine') === {json.dumps(MACHINE)}", "the machine header to set the filter")
             seen = b.js(state)
-            if seen != {"pressed": "true", "machine": MACHINE, "title": MACHINE}:
+            if seen != {"all": "", "picked": MACHINE, "machine": MACHINE, "title": MACHINE}:
                 raise Failure(f"filtered to {MACHINE} the column reads {seen}")
             self.settle()
             b.goto(self.url("/"))
-            b.wait(f"document.querySelector({json.dumps(chip)})?.getAttribute('aria-pressed') === 'true' && new URLSearchParams(location.search).get('machine') === {json.dumps(MACHINE)}",
+            b.wait(f"document.querySelector('#col-body .tree-machine.current') && new URLSearchParams(location.search).get('machine') === {json.dumps(MACHINE)}",
                    "the filter remembered on the Dashboard")
-            b.click(chip)
-            b.wait("!new URLSearchParams(location.search).has('machine')", "a second tap to clear the filter")
+            b.click("#col-body [data-all]")
+            b.wait("!new URLSearchParams(location.search).has('machine')", "All machines to clear the filter")
             seen = b.js(state)
-            if seen != {"pressed": "false", "machine": None, "title": "Sessions"} or b.js("localStorage.getItem('yardbell.tree.machine.dashboard')") is not None:
+            if seen != {"all": "true", "picked": "", "machine": None, "title": "Sessions"} or b.js("localStorage.getItem('yardbell.tree.machine.dashboard')") is not None:
                 raise Failure(f"after clearing the filter the column reads {seen}")
+            b.click(pick)
+            b.wait(f"new URLSearchParams(location.search).get('machine') === {json.dumps(MACHINE)}", "the header to filter again")
+            b.click(pick)
+            b.wait("!new URLSearchParams(location.search).has('machine')", "a second click on the header to clear it")
 
-            b.click("#col-body [data-more=\"dir:demo-app\"]")
-            b.wait("document.querySelector('.tree-menu [data-i=\"3\"]')?.textContent === 'Show on Dashboard'", "the project's menu")
-            b.click(".tree-menu [data-i=\"3\"]")
-            b.wait("new URLSearchParams(location.search).get('project') === 'dir:demo-app' && document.getElementById('title').textContent === 'demo-app'",
-                   "Show on Dashboard to filter to the project")
-            shown = b.js(f"""(() => ({{
-              clear: !document.getElementById('clear-project').hidden,
-              picked: document.querySelector('#col-body .tree-prow.current [data-toggle]')?.dataset.toggle,
-              rows: [...document.querySelectorAll('#groups .s-list > li[data-id]')].map((r) => r.dataset.id),
-            }}))()""")
-            if not shown["clear"] or shown["picked"] != "dir:demo-app" or f"{MACHINE}:hp-dash-col" not in shown["rows"] or any("demo-api" in r for r in shown["rows"]):
-                raise Failure(f"the project filter shows {shown}")
-            b.click("#clear-project")
-            b.wait("!new URLSearchParams(location.search).has('project') && document.getElementById('title').textContent === 'Sessions'", "the project filter to clear")
-
-            row = f"#col-body .tree-session[data-key={json.dumps(key)}]"
+            row = f"#col-body [data-project={json.dumps(pid)}] .tree-session[data-key={json.dumps(key)}]"
             b.wait(f"document.querySelector({json.dumps(row)})?.dataset.state === 'idle'", "the idle session in the Dashboard's column", timeout=15)
             if b.js(f"document.querySelector({json.dumps(row)}).classList.contains('unseen')"):
                 raise Failure("an idle session the Workspace last saw as done is bold on the Dashboard")
             folder = b.js(f"(() => {{ let el = document.querySelector({json.dumps(row)}); while (el && !el.matches('.tree-branch')) el = el.previousElementSibling; return el?.dataset.folder; }})()")
             b.click(f"#col-body .tree-branch[data-machine={json.dumps(MACHINE)}][data-folder={json.dumps(folder)}]")
             b.wait(f"location.pathname === '/workspace' && typeof project === 'function' && state !== null && project() === {json.dumps(MACHINE + chr(9) + folder)}",
-                   "a folder row to open its folder in the Workspace", timeout=15)
+                   "a branch line to open its folder in the Workspace", timeout=15)
             self.settle()
             b.goto(self.url("/"))
             b.wait(f"document.querySelector({json.dumps(row)})", "the session row again")
@@ -2290,6 +2348,7 @@ class Suite:
                    "a session row to focus its pane in the Workspace", timeout=15)
         finally:
             self.drop_grid_tab([key])
+            self.reset_projects()
             self.put_storage(before)
         self.check_errors("the Dashboard's column")
 
@@ -2447,21 +2506,23 @@ class Suite:
         finally:
             self.put_storage(before)
 
-    def test_sidebar_machine_chips_are_ringed_only_when_picked(self):
+    def test_sidebar_machine_header_is_filled_only_when_picked(self):
         b = self.b
-        chip = f"#col-body [data-machine-chip={json.dumps(MACHINE)}]"
+        pick = f"#col-body [data-pick={json.dumps(MACHINE)}]"
         before = self.storage(["yardbell.tree.machine.dashboard"])
         try:
             self.put_storage({"yardbell.tree.machine.dashboard": None})
             b.goto(self.url("/"))
-            b.wait(f"document.querySelector({json.dumps(chip)})", "the machine chips in the sidebar")
-            ring = f"getComputedStyle(document.querySelector({json.dumps(chip)})).boxShadow"
-            if b.js(ring) != "none":
-                raise Failure(f"a chip that is not picked has a ring: {b.js(ring)}")
-            b.click(chip)
-            b.wait(f"{ring} !== 'none'", "the picked chip ringed")
-            b.click(chip)
-            b.wait(f"{ring} === 'none'", "the ring gone once the filter clears")
+            b.wait(f"document.querySelector({json.dumps(pick)})", "the machine header in the sidebar")
+            fill = f"getComputedStyle(document.querySelector('#col-body [data-machine-head={json.dumps(MACHINE)}]')).backgroundColor"
+            if b.js(fill) != "rgba(0, 0, 0, 0)":
+                raise Failure(f"a header that is not picked is filled: {b.js(fill)}")
+            b.click(pick)
+            b.click("#title")
+            b.wait(f"{fill} !== 'rgba(0, 0, 0, 0)'", "the picked header filled with the pointer elsewhere")
+            b.click(pick)
+            b.click("#title")
+            b.wait(f"{fill} === 'rgba(0, 0, 0, 0)'", "the fill gone once the filter clears")
         finally:
             self.put_storage(before)
 
@@ -3316,29 +3377,25 @@ class Suite:
             b.viewport(1280, 800)
         self.check_errors("the New session dialog")
 
-    # Projects added, hidden or renamed live in the shared server's config, so each test puts them back.
+    # Projects live in the shared server's config, so each test that adds one deletes it again.
     def reset_projects(self):
-        listing = self.api("GET", "/api/projects")
-        for p in listing["hidden"]:
-            self.api("POST", "/api/projects/show", {"id": p["id"]})
-        for p in listing["projects"] + listing["hidden"]:
-            if p["name"] != p["repo"]:
-                self.api("POST", "/api/projects/rename", {"id": p["id"], "name": ""})
-            if any(c["added"] for c in p["checkouts"]):
-                self.api("POST", "/api/projects/remove", {"id": p["id"]})
+        for p in self.api("GET", "/api/projects")["projects"]:
+            self.api("POST", "/api/projects/delete", {"id": p["id"]})
 
     def test_workspace_add_project_saves_it_on_the_server(self):
         b = self.b
         lab = os.path.join(self.y.root, "lab")
         os.makedirs(os.path.join(lab, "kept-proj"), exist_ok=True)
-        before = self.storage(["yardbell.ws.kept"])
+        pid = f"{MACHINE}:{os.path.join(lab, 'kept-proj')}"
+        head = f"#col-body [data-machine-group={json.dumps(MACHINE)}] [data-toggle={json.dumps(pid)}]"
+        before = self.storage(["yardbell.ws.kept", "yardbell.tree.open"])
         try:
-            self.put_storage({"yardbell.ws.kept": None})
+            self.put_storage({"yardbell.ws.kept": None, "yardbell.tree.open": None})
             b.goto(self.url("/workspace"))
             b.wait("document.querySelector('#col-body .tree') && window.YardbellShell.lastState", "the tree")
-            if b.js("document.getElementById('side-add-project') !== null"):
-                raise Failure("the old Add a project button is still in the column's head")
-            b.click("#col-body [data-add-project]")
+            if b.js("document.querySelector('#col-body [data-add-project], #side-new') !== null"):
+                raise Failure("the old Add a project button is still in the tree, or + still starts a session")
+            b.click("#side-add-project")
             b.wait("document.getElementById('add-project')?.open", "the Add a project dialog")
             ways = b.js("document.getElementById('ap-choices').textContent.replace(/\\s+/g, ' ')")
             if "Browse folder" not in ways or "Clone" in ways:
@@ -3349,81 +3406,73 @@ class Suite:
             b.wait("document.getElementById('ap-where').textContent.includes('kept-proj') && !document.getElementById('ap-add').disabled",
                    "kept-proj ready to add")
             b.click("#ap-add")
-            b.wait("!document.getElementById('add-project').open && state.projects.some((p) => p.id === 'dir:kept-proj' && p.checkouts[0].folder === 'lab/kept-proj')",
-                   "the project on the server, as the scan labels it", timeout=15)
-            listing = self.api("GET", "/api/projects")
-            mine = [p for p in listing["projects"] if p["id"] == "dir:kept-proj"]
-            checkout = mine[0]["checkouts"][0] if mine else {}
-            if checkout.get("machine") != MACHINE or not checkout.get("path", "").endswith("/lab/kept-proj") or not checkout.get("added"):
-                raise Failure(f"the server lists {mine}")
+            b.wait(f"!document.getElementById('add-project').open && state.projects.some((p) => p.id === {json.dumps(pid)})",
+                   "the project on the server", timeout=15)
+            listing = self.api("GET", "/api/projects")["projects"]
+            if [(p["machine"], p["name"]) for p in listing] != [(MACHINE, "kept-proj")]:
+                raise Failure(f"the server lists {listing}")
             if b.js("localStorage.getItem('yardbell.ws.kept')") is not None:
                 raise Failure("the project was also kept in this browser")
-            folder = checkout["folder"]
-            row = f"#col-body .tree-branch.current[data-folder={json.dumps(folder)}]"
-            b.wait(f"document.querySelector({json.dumps(row)}) && project() === {json.dumps(MACHINE + chr(9) + folder)}",
-                   f"the added folder {folder} in the tree, selected")
+            b.wait(f"document.querySelector({json.dumps(head)})?.getAttribute('aria-expanded') === 'true'", "the new project under its machine, open")
+            start = f"#col-body [data-project={json.dumps(pid)}] .tree-start"
+            if b.js(f"document.querySelector({json.dumps(start)})?.textContent") != "No sessions, start one":
+                raise Failure("a new project with no sessions should offer to start one")
             self.settle()
             b.goto(self.url("/workspace"))
-            b.wait("document.querySelector('#col-body [data-toggle=\"dir:kept-proj\"]')", "the added project after a reload")
+            b.wait(f"document.querySelector({json.dumps(head)})", "the added project after a reload")
+            b.click(start)
+            b.wait("document.getElementById('new-dialog')?.open", "No sessions, start one to open New session")
+            b.key("Escape")
             self.check_errors("adding a project")
         finally:
             self.reset_projects()
             self.put_storage(before)
             shutil.rmtree(lab, ignore_errors=True)
 
-    def test_tree_project_menu_renames_removes_and_shows_again(self):
+    def test_tree_project_menu_renames_and_deletes(self):
         b = self.b
-        lab = os.path.join(self.y.root, "lab-menu", "side-proj")
-        os.makedirs(lab, exist_ok=True)
-        side = "#col-body [data-toggle=\"dir:side-proj\"]"
-        app = "#col-body [data-toggle=\"dir:demo-app\"]"
+        app = os.path.join(self.y.root, "demo-app")
+        pid = f"{MACHINE}:{app}"
+        head = f"#col-body [data-toggle={json.dumps(pid)}]"
+        name = "hp-menu-app"
+        key = f"{MACHINE}/{name}"
+        self.y.tmux("new", "-d", "-s", name, "-c", app, self.y.shell)
         try:
+            self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": app})
+            self.api("POST", "/refresh")
             b.goto(self.url("/workspace"))
-            b.wait("state !== null", "the Workspace")
-            self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": lab})
-            b.wait(f"document.querySelector({json.dumps(side)})", "the added project in the tree", timeout=15)
+            b.wait(f"state !== null && document.querySelector('#col-body [data-project={json.dumps(pid)}] [data-key={json.dumps(key)}]')", "the session under the project", timeout=15)
 
-            b.click("#col-body [data-more=\"dir:side-proj\"]")
+            b.click(f"#col-body [data-more={json.dumps(pid)}]")
             items = b.js("[...document.querySelectorAll('.tree-menu [role=menuitem]')].map((i) => i.textContent)")
-            if items != ["New session", "Rename", "Remove", "Show on Dashboard"]:
+            if items != ["New session", "Rename", "Delete"]:
                 raise Failure(f"the project menu offers {items}")
             b.click(".tree-menu [data-i=\"1\"]")
-            b.wait("document.activeElement?.matches('input.tree-rename') && document.activeElement.value === 'side-proj'", "the name ready to edit")
-            b.type("Side project")
+            b.wait("document.activeElement?.matches('input.tree-rename') && document.activeElement.value === 'demo-app'", "the name ready to edit")
+            b.type("Shop")
             b.key("Enter")
-            b.wait(f"document.querySelector({json.dumps(side)} + ' .tree-name')?.textContent === 'Side project'", "the new name in the tree", timeout=15)
-            named = [p["name"] for p in self.api("GET", "/api/projects")["projects"] if p["id"] == "dir:side-proj"]
-            if named != ["Side project"]:
+            b.wait(f"document.querySelector({json.dumps(head)} + ' .tree-name')?.textContent === 'Shop'", "the new name in the tree", timeout=15)
+            named = [p["name"] for p in self.api("GET", "/api/projects")["projects"]]
+            if named != ["Shop"]:
                 raise Failure(f"the server names it {named}")
 
-            b.click("#col-body [data-more=\"dir:side-proj\"]")
+            b.click(f"#col-body [data-more={json.dumps(pid)}]")
             b.click(".tree-menu [data-i=\"2\"]")
-            b.wait("document.querySelector('dialog.confirm[open] h2')?.textContent === 'Remove Side project?'", "the confirm to remove an added project")
+            b.wait("document.querySelector('dialog.confirm[open] h2')?.textContent === 'Delete Shop?'", "the confirm to delete")
+            if "stay where they are" not in b.js("document.querySelector('dialog.confirm[open] p').textContent"):
+                raise Failure("the confirm does not say the files stay")
             b.click("dialog.confirm[open] [data-answer=yes]")
-            b.wait(f"!document.querySelector({json.dumps(side)})", "the added project gone", timeout=15)
-            listing = self.api("GET", "/api/projects")
-            if any(p["id"] == "dir:side-proj" for p in listing["projects"] + listing["hidden"]):
-                raise Failure(f"removing an added project should delete it: {listing}")
-
-            b.click("#col-body [data-more=\"dir:demo-app\"]")
-            if b.js("document.querySelector('.tree-menu [data-i=\"2\"]').textContent") != "Hide":
-                raise Failure("a project the scan finds should offer Hide")
-            b.click(".tree-menu [data-i=\"2\"]")
-            b.wait("document.querySelector('dialog.confirm[open] h2')?.textContent === 'Hide demo-app?'", "the confirm to hide a found project")
-            if "hidden rather than deleted" not in b.js("document.querySelector('dialog.confirm[open] p').textContent"):
-                raise Failure("the confirm does not say the project is only hidden")
-            b.click("dialog.confirm[open] [data-answer=yes]")
-            b.wait(f"!document.querySelector({json.dumps(app)}) && document.querySelector('#col-body [data-hidden-toggle]')?.textContent === '1 hidden'",
-                   "the found project hidden", timeout=15)
-            b.click("#col-body [data-hidden-toggle]")
-            b.click("#col-body [data-show=\"dir:demo-app\"]")
-            b.wait(f"document.querySelector({json.dumps(app)}) && !document.querySelector('#col-body [data-hidden-toggle]')", "Show again to bring it back", timeout=15)
-            if self.api("GET", "/api/projects")["hidden"]:
-                raise Failure("the project is still hidden on the server")
+            b.wait(f"!document.querySelector({json.dumps(head)}) && document.querySelector('#col-body .tree-other [data-key={json.dumps(key)}]')",
+                   "the project gone and its session under Other", timeout=15)
+            if self.api("GET", "/api/projects")["projects"]:
+                raise Failure("the project is still on the server")
+            if not os.path.isdir(app):
+                raise Failure("deleting the project touched its folder")
             self.check_errors("the project menu")
         finally:
             self.reset_projects()
-            shutil.rmtree(os.path.dirname(lab), ignore_errors=True)
+            self.y.tmux("kill-session", "-t", f"={name}")
+            self.api("POST", "/refresh")
 
     def test_tree_moves_kept_projects_to_the_server(self):
         b = self.b
@@ -3437,8 +3486,8 @@ class Suite:
             ])})
             b.goto(self.url("/workspace"))
             b.wait("localStorage.getItem('yardbell.ws.kept') === null", "the kept list moved and cleared", timeout=15)
-            b.wait("document.querySelector('#col-body [data-toggle=\"dir:old-kept\"]')", "the moved project in the tree", timeout=15)
-            added = [c["path"] for p in self.api("GET", "/api/projects")["projects"] for c in p["checkouts"] if c["added"]]
+            b.wait(f"document.querySelector('#col-body [data-toggle={json.dumps(MACHINE + ':' + lab)}]')", "the moved project in the tree", timeout=15)
+            added = [p["path"] for p in self.api("GET", "/api/projects")["projects"]]
             if added != [lab]:
                 raise Failure(f"the server added {added}")
         finally:
@@ -4338,10 +4387,12 @@ class Suite:
     def test_phone_sessions_list_opens_a_session_and_back(self):
         b = self.b
         key, made = self.demo_api_session()
+        pid = f"{MACHINE}:{os.path.join(self.y.root, 'demo-api')}"
         row = f"#col-body [data-key={json.dumps(key)}]"
         sideways = "document.documentElement.scrollWidth > innerWidth"
         before = self.storage(self.LAYOUT)
         b.viewport(390, 844, 3)
+        self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": os.path.join(self.y.root, "demo-api")})
         try:
             b.goto(self.url("/workspace"))
             b.wait(f"state !== null && document.body.classList.contains('ws-list') && document.querySelector({json.dumps(row)})",
@@ -4350,9 +4401,9 @@ class Suite:
             b.pump(0.3)
             seen = b.js(f"""(() => {{
               const row = document.querySelector({json.dumps(row)});
-              const chip = document.querySelector('#col-body [data-machine-chip={json.dumps(MACHINE)}]');
-              const project = document.querySelector('#col-body [data-toggle="dir:demo-api"]');
-              const more = document.querySelector('#col-body [data-more="dir:demo-api"]');
+              const chip = document.querySelector('#col-body [data-machine-head={json.dumps(MACHINE)}]');
+              const project = document.querySelector('#col-body [data-toggle={json.dumps(pid)}]');
+              const more = document.querySelector('#col-body [data-more={json.dumps(pid)}]');
               return {{
                 height: row.getBoundingClientRect().height,
                 ages: row.querySelectorAll('.tree-age').length,
@@ -4372,8 +4423,8 @@ class Suite:
             if seen["ages"] or not seen["word"]:
                 raise Failure(f"a session row on a phone should say its state and no age: {seen}")
             if not re.fullmatch(rf"{MACHINE}(\d+%)?", seen["head"]):
-                raise Failure(f"the machine chip reads {seen['head']!r}")
-            if seen["chip"] < 34 or seen["project"] < 44 or seen["more"] < 40:
+                raise Failure(f"the machine header reads {seen['head']!r}")
+            if seen["chip"] < 44 or seen["project"] < 44 or seen["more"] < 40:
                 raise Failure(f"the touch targets are too small or the project menu is hidden on a phone: {seen}")
             if "Claude" not in seen["usage"] or "42%" not in seen["usage"]:
                 raise Failure(f"the usage card under the list reads {seen['usage']!r}")
@@ -4414,6 +4465,7 @@ class Suite:
         finally:
             b.viewport(1280, 800)
             self.settle()
+            self.reset_projects()
             self.put_storage(before)
             self.drop_demo_api_session(key, made)
 
@@ -5650,8 +5702,12 @@ class Suite:
         href = b.js(f"{row}.querySelector('.review-mark').getAttribute('href')")
         if not href.startswith("/dispatch?c="):
             raise Failure(f"the review mark links to {href!r}")
-        b.goto(self.url("/workspace"))
-        b.wait("document.querySelector('#col-body .tree-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace tree")
+        self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": os.path.join(self.y.root, "demo-app")})
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#col-body .tree-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace tree")
+        finally:
+            self.reset_projects()
 
     def test_pull_request_card_sends_to_the_session(self):
         b = self.b

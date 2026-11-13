@@ -278,6 +278,7 @@ mod tests {
 
     fn session(id: &str, activity: Activity) -> SessionView {
         SessionView {
+            cwd: String::new(),
             pull_why: None,
             id: id.into(),
             machine: "devbox".into(),
@@ -536,6 +537,7 @@ mod tests {
 
         let rig = holding();
         let stale = SessionView {
+            cwd: String::new(),
             stale: true,
             ..session("s1", Activity::Idle)
         };
@@ -691,6 +693,7 @@ mod tests {
         view(
             vec![machine("devbox", true)],
             vec![SessionView {
+                cwd: String::new(),
                 pull: Some(pull),
                 ..session("s1", Activity::Active)
             }],

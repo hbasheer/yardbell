@@ -70,10 +70,6 @@ pub struct FolderView {
     pub branch: String,
     #[serde(default)]
     pub worktree: bool,
-    #[serde(default, skip_serializing_if = "String::is_empty")]
-    pub remote: String,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub by_agent: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -106,6 +102,9 @@ pub struct SessionView {
     pub pull_why: Option<String>,
     #[serde(default)]
     pub path: String,
+    // Where the agent runs, so a session in a folder below a project belongs to it.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub cwd: String,
     #[serde(default)]
     pub worktree: bool,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -482,8 +481,6 @@ impl State {
                     path: path.clone(),
                     branch: snap.folders.get(label).cloned().unwrap_or_default(),
                     worktree: snap.linked.contains(label),
-                    remote: snap.remotes.get(label).cloned().unwrap_or_default(),
-                    by_agent: snap.by_agent.contains(label),
                 });
             }
             for s in &snap.sessions {
@@ -503,6 +500,7 @@ impl State {
                     .unwrap_or_default();
                 view.sessions.push(SessionView {
                     id: s.id(),
+                    cwd: s.cwd.clone(),
                     machine: m.name.clone(),
                     agent: s.agent.clone(),
                     pid: s.pid,
