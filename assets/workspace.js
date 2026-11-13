@@ -2018,8 +2018,8 @@ $("pr-strip").addEventListener("click", (e) => {
   else if (button.dataset.pr === "review" && asksReview(s)) openReview(s.review.conversation);
 });
 
-$("keys-btn").addEventListener("click", () => $("keys").showModal());
-$("keys-close").addEventListener("click", () => $("keys").close());
+$("keys-btn").addEventListener("click", () => $("ws-keys").showModal());
+$("keys-close").addEventListener("click", () => $("ws-keys").close());
 
 window.addEventListener("yardbell-app", (e) => {
   document.querySelectorAll(".ws-pane iframe").forEach((f) => f.contentWindow?.postMessage({ yardbell: "app", state: e.detail }, location.origin));

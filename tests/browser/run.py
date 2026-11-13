@@ -1936,6 +1936,23 @@ class Suite:
                        : [...el.childNodes].filter((n) => n.nodeType === Node.TEXT_NODE).map((n) => n.textContent).join('').trim())"""
         )
 
+    def test_workspace_shortcuts_dialog_shows_and_closes(self):
+        b = self.b
+        b.viewport(1280, 800)
+        b.goto(self.url("/workspace"))
+        b.wait("document.getElementById('keys-btn')", "the keyboard shortcuts button")
+        b.click("#keys-btn")
+        b.wait("document.querySelector('dialog.ws-keys[open]')", "the shortcuts dialog to open")
+        seen = b.js("""(() => {
+          const d = document.querySelector('dialog.ws-keys[open]');
+          const r = d.getBoundingClientRect();
+          return { display: getComputedStyle(d).display, w: Math.round(r.width), h: Math.round(r.height), title: d.querySelector('h2')?.textContent };
+        })()""")
+        if seen["display"] == "none" or seen["w"] < 100 or seen["h"] < 100 or seen["title"] != "Keyboard shortcuts":
+            raise Failure(f"the shortcuts dialog opened but cannot be seen, which leaves the page frozen: {seen}")
+        b.click("dialog.ws-keys[open] .dialog-actions .btn")
+        b.wait("!document.querySelector('dialog.ws-keys[open]')", "Done to close the dialog")
+
     def test_workspace_uses_the_shell(self):
         b = self.b
         b.goto(self.url("/workspace"))

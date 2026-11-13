@@ -4543,9 +4543,9 @@ html.touch-ui.pinching #term .xterm { transition: none; }
 html.touch-ui #term .xterm-viewport { scrollbar-width: none; }
 html.kb-fixed body { position: fixed; left: 0; right: 0; top: var(--vis-top, 0px); height: var(--vis-h, 100%); }
 #term-bottom { position: relative; z-index: 10; flex: none; display: flex; flex-direction: column; background: var(--term-bar); }
-#keys { display: none; align-items: center; gap: 6px; padding: 6px max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid var(--term-line); background: var(--term-bar); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
-html.touch-ui #keys { display: flex; }
-html.kb-open #keys { padding-bottom: 6px; }
+#term-bottom > #keys { display: none; align-items: center; gap: 6px; padding: 6px max(8px, env(safe-area-inset-right)) max(6px, env(safe-area-inset-bottom)) max(8px, env(safe-area-inset-left)); border-top: 1px solid var(--term-line); background: var(--term-bar); user-select: none; -webkit-user-select: none; -webkit-touch-callout: none; }
+html.touch-ui #term-bottom > #keys { display: flex; }
+html.kb-open #term-bottom > #keys { padding-bottom: 6px; }
 #keys-row { flex: 1; min-width: 0; display: flex; gap: 6px; padding-right: 12px; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; touch-action: pan-x; -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); mask-image: linear-gradient(to right, #000 calc(100% - 16px), transparent); }
 #keys-row::-webkit-scrollbar { display: none; }
 .tk { position: relative; flex: none; display: inline-flex; align-items: center; justify-content: center; min-width: 44px; height: 40px; padding: 0 11px; border: 0; border-radius: 8px; background: var(--term-raise); box-shadow: inset 0 0 0 1px var(--term-edge), 0 1px 0 rgb(0 0 0 / 0.14); color: var(--term-ink); font: 500 13px/1 var(--sans); cursor: pointer; touch-action: manipulation; -webkit-tap-highlight-color: transparent; transition: background-color 90ms ease-out, box-shadow 90ms ease-out, color 90ms ease-out; }

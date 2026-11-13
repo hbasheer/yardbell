@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **The Workspace's keyboard shortcuts open again.** Since 0.11.102 the shortcuts button opened an
+  invisible dialog that left the page frozen until Esc, because the phone key bar's styles matched it.
 - **A new sidebar: machines on top, projects below.** The Workspace and Dashboard sidebars start
   with a one-line strip of machine chips, each with a state dot and its memory in use, hollow while
   the machine is down. Tap a chip to show only that machine, tap it again for all of them; each page
