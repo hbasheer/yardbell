@@ -86,7 +86,7 @@ impl Probe {
         };
         let args = snapshot::script_args(
             &root,
-            cfg.workspaces_for(m),
+            &cfg.scan_paths(m),
             &cfg.forward_services,
             &cfg.agents(),
         );

@@ -153,10 +153,19 @@ emit_folder() {
   first=0
   linked=false
   [ -f "$1/.git" ] && linked=true
-  printf '{"path":%s,"branch":%s,"linked":%s}' "$(esc "$1")" "$(esc "$(git -C "$1" branch --show-current 2>/dev/null)")" "$linked"
+  local by_agent=false
+  [ "${2:-}" = agent ] && by_agent=true
+  printf '{"path":%s,"branch":%s,"linked":%s,"remote":%s,"agent":%s}' "$(esc "$1")" "$(esc "$(git -C "$1" branch --show-current 2>/dev/null)")" "$linked" "$(esc "$(git -C "$1" config --get remote.origin.url 2>/dev/null)")" "$by_agent"
 }
 if has git; then
   for ws in ${workspaces[@]+"${workspaces[@]}"}; do
+    # An absolute path is a project someone added, listed even when it is not a git checkout.
+    case "$ws" in
+      /*)
+        [ -d "$ws" ] && emit_folder "$ws"
+        continue
+        ;;
+    esac
     for dir in "$root"/$ws; do
       [ -e "$dir/.git" ] || continue
       emit_folder "$dir"
@@ -165,7 +174,7 @@ if has git; then
   while IFS= read -r cwd; do
     [ -z "$cwd" ] && continue
     top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
-    [ -n "$top" ] && emit_folder "$top"
+    [ -n "$top" ] && emit_folder "$top" agent
   done <<EOF_CWDS
 $cwds
 EOF_CWDS

@@ -13,9 +13,12 @@ and free. On a machine shared with other people, a line under it lists the accou
 memory, yours included, and when your account has its own memory limit another line shows how much
 of it you use. The memory warning goes by whichever is fuller, the machine or your limit, and
 Dispatch counts only the room your limit leaves when it picks a machine.
-The sidebar lists the machines, problems first, with a session count; click one to show only that
-machine. Every page updates by itself as soon as Yardbell has checked a machine, and a session you
-stop leaves the list at once.
+The sidebar is the same as the Workspace's: a strip of machine chips over your projects (see
+[Workspace](#workspace)). Tap a chip to show only that machine, here and in the list of sessions,
+and tap it again to show every machine; the Dashboard remembers the choice. A project's **⋯**
+menu has **Show on Dashboard**, which shows only that project's sessions until you clear it with
+the **×** beside the title. Every page updates by itself as soon as Yardbell has checked a machine,
+and a session you stop leaves the list at once.
 
 - **Top bar:** search sessions by folder, branch, ticket or agent (press `/`), show All, Working or
   Idle sessions (an agent waiting for you shows **Needs you** and counts as idle), **Refresh** to check every machine right away, Add machine and New session.
@@ -174,12 +177,30 @@ one, named like the first with `-2` after it.
 
 ![The Workspace with two terminals side by side, a diff of stripe.js docked under them, and the Changes tab on the right](screenshots/workspace.png)
 
-The **Workspace** page shows terminals side by side. Its sidebar lists every terminal as a tree:
-machine, then folder (a workspace), then the sessions in it, each with its state. A session with a pull request shows its number, colored by its state, and
+The **Workspace** page shows terminals side by side. The top of its sidebar is a strip of
+**Machines**: a chip for each machine with a dot for its state and the memory in use, hollow and
+grey while it is down. Tap a chip to show only the projects on that machine, and tap it again to
+show them all; each page remembers its own choice. Right-click a chip, or press and hold it on a
+phone, for **New session on this machine** and **Open on the Dashboard**.
+
+Under it, **Projects** lists your repositories. The same repository on several machines (the same
+`origin` remote, or the same folder name when it has none) is one project, listed once. A project
+row shows how many sessions run in it and a dot for the one that most needs you; click it to fold
+it open or closed, and Yardbell remembers. Open, it lists each checkout and worktree as a line with
+the branch, the machine and a pull request number, and under each the sessions running there with
+the agent, its state and an icon for it (a spinner while working, **needs you** when it waits). A
+project with no sessions offers **No sessions, start one**. The **⋯** on a project row (always shown
+on a phone) has **New session**, **Rename**, **Remove** and **Show on Dashboard**. Remove takes a
+project you added off the list on every device; a project Yardbell finds in your workspace folders
+is hidden instead, and **N hidden** at the end of the list shows it again with **Show again**.
+The projects, the names you give them and the hidden ones are kept in Yardbell's config
+(`projects:` in `yardbell.yml`), so every device shows the same list.
+
+A session with a pull request shows its number, colored by its state, and
 the full state on hover, followed by its newest review as on the dashboard. A pane's **⋯** menu has
 **Review pull request #12** for a session with an open one, which opens the review in the Dispatch
-panel. Click a workspace
-to switch to it and a session to open it in the focused pane. Each workspace has tabs: **+** opens the New
+panel. Click a checkout's line
+to switch to it as the workspace and a session to open it in the focused pane. Each workspace has tabs: **+** opens the New
 session dialog in that folder and the new session in a tab of its own, and closing a tab with
 sessions in it asks whether to stop them or keep them running. Double-click a tab to rename it, or
 right-click it to rename or close it, or to move its panes into another tab. When the tabs do not fit, scroll the row with the mouse
@@ -221,7 +242,7 @@ the lists beside the chat, so it shows one at a time under three tabs, **Chat**,
 **Tasks**, with **+** for a new conversation; picking a conversation or running a task goes back to
 **Chat**. The Dispatch page does the same on a phone.
 
-Click a machine's name in the sidebar to fold its folders and sessions away. Drag the right edge of
+Drag the right edge of
 the sidebar to resize it, and double-click the edge to reset it. On the Dispatch page the sidebar
 holds the conversations and tasks, under the **Chats** and **Tasks** switch. The
 sidebar keeps the same width on every page.
@@ -260,9 +281,11 @@ Workspace remembers whether it was open, its width and its tab. It is not shown 
     **Commit N files** (or **Ctrl+Enter**, **⌘↵** on a Mac) stages and commits, then shows the
     short commit id. Nothing is pushed.
 
-The folder button over the machines opens **Add a project**: pick the machine under **Host**, then
-**Browse folder** to the folder and **Add project**. The folder stays in the sidebar in this browser,
-selected, so **+** starts a session there even before it has one.
+The **+** beside **Projects** opens **Add a project**: pick the machine under **Host**, then
+**Browse folder** to the folder and **Add project**. Any folder works, a git checkout or not. The
+project is saved on the server and shows on every device, selected here, so **+** starts a session
+there even before it has one. Projects an older version kept in one browser move to the server the
+first time that browser opens Yardbell.
 
 There is no bar along the bottom. The right of the sidebar's foot, beside Settings, theme and log
 out, has a cup for **Keep computer awake** (**On**, **While agents work** or **Off**, see Settings,
@@ -272,8 +295,8 @@ green while live, amber and pulsing while reconnecting. The plug lists the ports
 grouped by machine, each with its service and a link that opens it on this computer. After 3
 seconds without a connection a **Reconnecting to Yardbell…** banner shows at the top of the page
 until it is back. With the sidebar folded the same three sit at the bottom of the rail; on a phone,
-**More** has **Keep computer awake** and **Live ports** rows. Each machine's memory is in the
-sidebar's machine list and in the **Machines** part of the usage sheet, and the usage card adds a
+**More** has **Keep computer awake** and **Live ports** rows. Each machine's memory is on its
+chip in the sidebar and in the **Machines** part of the usage sheet, and the usage card adds a
 line only for a machine that is down or short of memory.
 
 ### Terminal and phone

@@ -16,7 +16,10 @@ let lastJson = "";
 let lastRender = 0;
 let lastOk = 0;
 let focusedId = "";
-let selected = new URLSearchParams(location.search).get("machine") || "";
+const MACHINE_KEY = "yardbell.tree.machine.dashboard";
+const query = new URLSearchParams(location.search);
+let selected = (query.has("machine") ? query.get("machine") : remembered(MACHINE_KEY)) || "";
+let project = query.get("project") || "";
 const filters = { q: "", status: "all" };
 let layout = "machines";
 let sshHosts = null;
@@ -58,6 +61,10 @@ function remembered(key) {
 
 function remember(key, value) {
   try { localStorage.setItem(key, value); } catch {}
+}
+
+function forget(key) {
+  try { localStorage.removeItem(key); } catch {}
 }
 
 function toast(message, kind = "error") {
@@ -258,7 +265,16 @@ function actions(s) {
 }
 
 function filtering() {
-  return Boolean(filters.q) || filters.status !== "all";
+  return Boolean(filters.q) || filters.status !== "all" || Boolean(project);
+}
+
+function pickedProject(state = current) {
+  return (state?.projects || []).find((p) => p.id === project) || null;
+}
+
+function inProject(machine, folder) {
+  const p = pickedProject();
+  return !p || p.checkouts.some((c) => c.machine === machine && c.folder === folder);
 }
 
 function matchesText(fields) {
@@ -271,11 +287,12 @@ function shownAs(s) {
 
 function matches(s) {
   if (filters.status !== "all" && (s.stale || shownAs(s) !== filters.status)) return false;
+  if (!inProject(s.machine, s.folder)) return false;
   return matchesText([s.folder, s.branch, s.ticket === "-" ? "" : s.ticket, agentLabel(s.agent), s.machine]);
 }
 
 function matchesEnded(e) {
-  return filters.status === "all" && matchesText([e.folder, e.ticket === "-" ? "" : e.ticket, agentLabel(e.agent), e.machine]);
+  return filters.status === "all" && inProject(e.machine, e.folder) && matchesText([e.folder, e.ticket === "-" ? "" : e.ticket, agentLabel(e.agent), e.machine]);
 }
 
 function agentLabel(name) {
@@ -436,7 +453,7 @@ function board(machines, visible) {
 }
 
 function renderCounts(state) {
-  const live = state.sessions.filter((s) => !s.stale && (!selected || s.machine === selected));
+  const live = state.sessions.filter((s) => !s.stale && (!selected || s.machine === selected) && inProject(s.machine, s.folder));
   $("count-all").textContent = live.length;
   $("count-active").textContent = live.filter((s) => s.activity === "active").length;
   $("count-idle").textContent = live.filter((s) => shownAs(s) === "idle").length;
@@ -446,7 +463,10 @@ function renderCounts(state) {
 function renderGroups(state) {
   const machine = state.machines.find((m) => m.name === selected);
   const machines = M.order(state.machines).filter((m) => !selected || m.name === selected);
-  $("title").textContent = machine ? machine.name : "Sessions";
+  const picked = pickedProject(state);
+  $("title").textContent = picked ? (machine ? `${picked.name} on ${machine.name}` : picked.name) : machine ? machine.name : "Sessions";
+  $("clear-project").hidden = !picked;
+  $("clear-project").setAttribute("aria-label", picked ? `Stop showing only ${picked.name}` : "Stop showing one project");
   renderCounts(state);
   const visible = state.sessions.filter((s) => (!selected || s.machine === selected) && (s.attachable || s.stale) && matches(s));
   if (focusedId && !visible.some((s) => s.id === focusedId)) focusedId = "";
@@ -471,9 +491,7 @@ function renderGroups(state) {
   followMenuTrigger();
 }
 
-const ALL_ICON = '<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>';
-Shell.column.innerHTML = `<nav class="col-list dash-all" aria-label="Machines"><a class="col-row" href="/" data-all>${ALL_ICON}<span class="col-row-name">All machines</span></a></nav><div class="col-tree"></div>`;
-const allRow = Shell.column.querySelector("[data-all]");
+Shell.column.innerHTML = '<div class="col-tree"></div>';
 const treeEl = Shell.column.querySelector(".col-tree");
 
 function sessionState(s) {
@@ -491,12 +509,17 @@ function renderChips(state) {
 
 function renderColumn(state) {
   renderChips(state);
-  if (selected) allRow.removeAttribute("aria-current");
-  else allRow.setAttribute("aria-current", "true");
   Tree.render(treeEl, state, {
+    page: "dashboard",
     stateOf: sessionState,
-    selected: selected ? { machine: selected } : null,
+    machine: selected,
+    selected: project ? { project } : null,
+    toast,
+    reload: refresh,
     onMachine: pickMachine,
+    onMachineOpen: pickMachine,
+    onProject: pickProject,
+    onNew: ({ machine, path }) => openNew(machine, path),
     onSession: (key) => { location.href = `/workspace?open=${encodeURIComponent(key)}`; },
     onFolder: ({ machine, folder }) => { location.href = `/workspace?folder=${encodeURIComponent(`${machine}/${folder}`)}`; },
   });
@@ -504,12 +527,24 @@ function renderColumn(state) {
 
 function pickMachine(name) {
   selected = name;
+  if (name) remember(MACHINE_KEY, name);
+  else forget(MACHINE_KEY);
+  syncAddress();
+  if (current) render(current);
+}
+
+function pickProject(id) {
+  project = id;
   syncAddress();
   if (current) render(current);
 }
 
 function render(state) {
   if (selected && !state.machines.some((m) => m.name === selected)) selected = "";
+  if (project && Array.isArray(state.projects) && !pickedProject(state)) {
+    project = "";
+    syncAddress();
+  }
   renderColumn(state);
   renderMeshBanner(state.mesh);
   renderHealthBanner(state.problems);
@@ -627,15 +662,12 @@ $("chips").addEventListener("click", (e) => {
   if (chip) pickMachine(chip.dataset.chip);
 });
 
-allRow.addEventListener("click", (e) => {
-  if (e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey || e.altKey) return;
-  e.preventDefault();
-  pickMachine("");
-});
+$("clear-project").addEventListener("click", () => pickProject(""));
 
 function syncAddress() {
   const params = new URLSearchParams();
   if (selected) params.set("machine", selected);
+  if (project) params.set("project", project);
   if (layout === "board") params.set("view", "board");
   const query = params.toString();
   history.replaceState(null, "", query ? `/?${query}` : "/");
@@ -826,12 +858,13 @@ async function startAndOpen(body) {
   }
 }
 
-function openNew(machine) {
+function openNew(machine, path = "") {
   const up = (current?.machines || []).filter((m) => m.up);
   if (!up.length) { toast("No machine is connected right now"); return; }
   NewSession.open({
     machines: up.map((m) => m.name),
     machine: machine || selected,
+    path,
     agents: current?.agents || [],
     defaultAgent: current?.default_agent,
     onError: toast,
@@ -896,6 +929,8 @@ document.addEventListener("click", async (e) => {
   if (act === "clear-filters") {
     filters.q = "";
     filters.status = "all";
+    project = "";
+    syncAddress();
     $("search").value = "";
     applyFilters();
     return;

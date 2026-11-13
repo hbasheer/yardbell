@@ -72,6 +72,10 @@ impl Poller {
             .or_default()
             .clone();
         let _turn = turn.lock().await;
+        // A check queued behind another reads the config again, or one loaded before a change
+        // (a project added, say) would store a snapshot older than the one just taken.
+        let cfg = self.load().unwrap_or_else(|| cfg.clone());
+        let m = cfg.machine(&m.name).cloned().unwrap_or_else(|| m.clone());
         let (check, task_cfg, task_m) = (self.check.clone(), cfg.clone(), m.clone());
         let task = tokio::spawn(async move {
             match tokio::time::timeout(CHECK_CAP, check.check(&task_cfg, &task_m)).await {
@@ -87,7 +91,7 @@ impl Poller {
             }
         };
         self.state.update(st.clone());
-        (self.hook)(cfg, &st);
+        (self.hook)(&cfg, &st);
     }
 
     pub async fn tick(&self) -> Option<Config> {
@@ -204,6 +208,40 @@ mod tests {
                 MachineStatus::down(&m.name, Reason::NoMesh)
             })
         }
+    }
+
+    struct ScanCheck(Arc<Mutex<Vec<Vec<String>>>>);
+
+    impl Check for ScanCheck {
+        fn check<'a>(&'a self, cfg: &'a Config, m: &'a Machine) -> BoxFuture<'a, MachineStatus> {
+            Box::pin(async move {
+                self.0.lock().unwrap().push(cfg.scan_paths(m));
+                MachineStatus::down(&m.name, Reason::NoMesh)
+            })
+        }
+    }
+
+    #[tokio::test]
+    async fn a_queued_check_reads_the_config_saved_after_its_tick_began() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("yardbell.yml");
+        let stale = Arc::new(Config::load(&cfg_path()).unwrap());
+        let mut fresh = (*stale).clone();
+        fresh.projects.add("hp", "/r/added");
+        fresh.save(&path).unwrap();
+        let scans = Arc::new(Mutex::new(Vec::new()));
+        let poller = Poller::new(
+            path,
+            Arc::new(ScanCheck(scans.clone())),
+            State::default(),
+            Arc::new(|_: &Config, _: &MachineStatus| {}),
+            Arc::new(|_: &Config| {}),
+        );
+        let hp = stale.machine("hp").unwrap().clone();
+        poller.check_one(&stale, &hp).await;
+        let seen = scans.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1);
+        assert!(seen[0].contains(&"/r/added".to_string()), "{seen:?}");
     }
 
     #[tokio::test]

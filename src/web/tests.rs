@@ -23,6 +23,7 @@ mod mcp_pipeline;
 mod mcp_read;
 mod memory;
 mod pipeline;
+mod projects;
 mod proposals;
 mod term;
 mod transcript;

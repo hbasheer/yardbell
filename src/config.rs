@@ -742,6 +742,8 @@ pub struct Config {
     pub connectors: Vec<crate::connectors::Connector>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub worktree_setup: Vec<crate::worktrees::setup::WorktreeSetup>,
+    #[serde(default, skip_serializing_if = "crate::projects::Projects::is_empty")]
+    pub projects: crate::projects::Projects,
     pub machines: Vec<Machine>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub listen_ip: Option<String>,
@@ -1139,6 +1141,19 @@ impl Config {
 
     pub fn workspaces_for<'a>(&'a self, m: &'a Machine) -> &'a [String] {
         m.workspaces.as_deref().unwrap_or(&self.workspaces)
+    }
+
+    // The workspace globs plus the projects added on this machine, which the scan takes as is.
+    pub fn scan_paths(&self, m: &Machine) -> Vec<String> {
+        let mut all = self.workspaces_for(m).to_vec();
+        all.extend(
+            self.projects
+                .added
+                .iter()
+                .filter(|a| a.machine == m.name)
+                .map(|a| a.path.clone()),
+        );
+        all
     }
 
     pub fn agents(&self) -> Vec<Agent> {

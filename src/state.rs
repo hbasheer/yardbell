@@ -70,6 +70,10 @@ pub struct FolderView {
     pub branch: String,
     #[serde(default)]
     pub worktree: bool,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub remote: String,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub by_agent: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -478,6 +482,8 @@ impl State {
                     path: path.clone(),
                     branch: snap.folders.get(label).cloned().unwrap_or_default(),
                     worktree: snap.linked.contains(label),
+                    remote: snap.remotes.get(label).cloned().unwrap_or_default(),
+                    by_agent: snap.by_agent.contains(label),
                 });
             }
             for s in &snap.sessions {

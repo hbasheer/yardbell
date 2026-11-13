@@ -70,8 +70,8 @@
   function treeSessions(state) {
     const live = (state.sessions || []).filter((s) => s.tmux && s.attachable && !s.stale);
     const T = window.YardbellTree;
-    if (!T || !window.YardbellMachines) return live;
-    const ordered = T.build(state, { stateOf }).flatMap((m) => m.repos.flatMap((r) => r.worktrees.flatMap((w) => w.sessions)));
+    if (!T || !Array.isArray(state.projects)) return live;
+    const ordered = T.build(state, { stateOf }).flatMap((p) => p.sessions);
     return ordered.filter((s) => live.includes(s));
   }
 

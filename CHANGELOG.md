@@ -5,6 +5,23 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+- **A new sidebar: machines on top, projects below.** The Workspace and Dashboard sidebars start
+  with a one-line strip of machine chips, each with a state dot and its memory in use, hollow while
+  the machine is down. Tap a chip to show only that machine, tap it again for all of them; each page
+  remembers its choice, and on the Dashboard the chips replace the All machines row. Right-click or
+  press and hold a chip for **New session on this machine** and **Open on the Dashboard**.
+- **Projects instead of machine folders.** Under **Projects**, the same repository on several
+  machines (the same `origin`, or the same folder name without one) is one row with its session
+  count and a dot for the session that most needs you. Open, it lists each branch or worktree with
+  its machine and pull request, and the sessions under each with the agent, its state and an icon.
+  A project's **⋯** has **New session**, **Rename**, **Remove** and **Show on Dashboard**, and a
+  project with no sessions offers to start one. Folds are remembered per project.
+- **Projects live on the server.** **Add a project** (the **+** beside Projects) saves to
+  Yardbell's config, so every device shows the same list, and **Remove** finally works: it deletes
+  a project you added and hides one the workspace scan finds, with **N hidden** at the end of the
+  list to show it again. Names you give projects are kept there too. Projects a browser kept for
+  itself move to the server the first time it opens Yardbell.
+
 ## [0.11.102] - 2026-11-12
 
 - **A phone terminal that feels native.** The key bar under the terminal now has Esc, Tab, Shift-Tab,

@@ -128,7 +128,7 @@
   const title = PAGES.find((p) => p.page === here)?.name || "";
 
   const search = `<button class="col-search" id="col-search" type="button" aria-label="Jump to (${key})" title="Jump to (${key})">${ICONS.search}<span class="col-search-label">Search</span><kbd class="col-search-key">${key}</kbd></button>`;
-  const section = ["workspace", "dashboard"].includes(here) ? "Machines" : title;
+  const section = ["workspace", "dashboard"].includes(here) ? "Sessions" : title;
   const navLink = (p) => `<a class="col-nav-link" data-page="${p.page}" href="${p.href}"${current(p.page)}>${ICONS[p.page]}<span class="col-nav-name">${p.name}</span>${count(p.count)}</a>`;
 
   const shell = document.createElement("div");
