@@ -178,6 +178,7 @@ mod tests {
             sessions: sessions
                 .into_iter()
                 .map(|(name, activity)| SessionView {
+                    cwd: String::new(),
                     pull_why: None,
                     id: name.into(),
                     machine: "hp".into(),

@@ -21,7 +21,7 @@ let dispatchAfterSync = false;
 const dispatchTitles = new Map();
 
 window.YardbellShell.head.querySelector(".col-title").insertAdjacentHTML("afterend", `
-  <button class="btn quiet icon-btn" id="side-new" type="button" aria-label="New session" title="New session">
+  <button class="btn quiet icon-btn" id="side-add-project" type="button" aria-label="Add a project" title="Add a project" aria-haspopup="dialog">
     <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
   </button>
   <button class="btn quiet icon-btn desk-only" id="keys-btn" type="button" aria-label="Keyboard shortcuts" title="Keyboard shortcuts">
@@ -348,12 +348,17 @@ function trackActivity() {
   for (const key of [...changedAt.keys()]) if (!live.has(key)) changedAt.delete(key);
 }
 
+// A project's folder as the workspace scan labels it, which is how sessions name their folder.
 function checkouts() {
-  return (state?.projects || []).flatMap((p) => p.checkouts);
+  return (state?.projects || []).map((p) => ({
+    machine: p.machine,
+    path: p.path,
+    folder: (state.folders || []).find((f) => f.machine === p.machine && f.path === p.path)?.label || p.path,
+  }));
 }
 
 function projects() {
-  const added = checkouts().filter((c) => c.added).map((c) => `${c.machine}${SEP}${c.folder}`);
+  const added = checkouts().map((c) => `${c.machine}${SEP}${c.folder}`);
   const names = [...new Set([...sessions().map(projectOf), ...added])];
   if (saved.folder && !names.includes(saved.folder)) names.push(saved.folder);
   return names.filter((n) => n.includes(SEP)).sort((a, b) => machineOf(a).localeCompare(machineOf(b)) || folderOf(a).localeCompare(folderOf(b)));
@@ -363,8 +368,6 @@ function dot(st) {
   return `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
 }
 
-const MACHINE_KEY = "yardbell.tree.machine.workspace";
-
 function renderSide() {
   const here = project();
   const focused = saved.tabs.length ? focusedLeaf()?.key : null;
@@ -373,24 +376,13 @@ function renderSide() {
     page: "workspace",
     stateOf,
     phone: phone.matches,
-    machine: stored(MACHINE_KEY) || "",
     selected: focused && sessionFor(focused) && !pickedFolder() ? { key: focused } : folder,
     ageOf: (key) => changedAt.get(key),
     toast,
     reload: load,
     onSession: open,
     onFolder: ({ machine, folder: path }) => openSpace(`${machine}${SEP}${path}`),
-    onMachine: (name) => {
-      try {
-        if (name) localStorage.setItem(MACHINE_KEY, name);
-        else localStorage.removeItem(MACHINE_KEY);
-      } catch {}
-      renderSide();
-    },
     onNew: ({ machine, path }) => newTab({ machine, path }),
-    onAdded: ({ machine, folder: label }) => {
-      if (label) openSpace(`${machine}${SEP}${label}`);
-    },
   });
 }
 
@@ -1700,7 +1692,7 @@ $("tab-list").addEventListener("click", (e) => {
 });
 
 $("new-tab").addEventListener("click", () => newTab());
-$("side-new").addEventListener("click", () => newTab());
+$("side-add-project").addEventListener("click", () => window.YardbellTree.addProject(treeEl));
 
 $("panes").addEventListener("pointerdown", (e) => {
   if (phone.matches || e.button !== 0) return;

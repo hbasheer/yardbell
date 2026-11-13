@@ -4059,6 +4059,7 @@ async fn a_rule_that_allows_typing_resumes_the_session_at_its_reset() {
 async fn an_old_reset_or_a_working_agent_gets_no_card() {
     let now = chrono::Utc::now();
     let session = |activity, resets: chrono::DateTime<chrono::Utc>| crate::state::SessionView {
+        cwd: String::new(),
         id: "hp:t".into(),
         machine: "hp".into(),
         agent: "claude".into(),

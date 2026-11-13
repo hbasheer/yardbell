@@ -814,6 +814,7 @@ mod tests {
             sessions: activity
                 .into_iter()
                 .map(|activity| SessionView {
+                    cwd: String::new(),
                     pull_why: None,
                     id: "x".into(),
                     machine: "hp".into(),

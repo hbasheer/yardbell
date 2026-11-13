@@ -740,7 +740,6 @@ struct StateReply {
     problems: Vec<crate::health::Problem>,
     keep_awake: crate::awake::Status,
     projects: Vec<crate::projects::Project>,
-    hidden_projects: Vec<crate::projects::Project>,
 }
 
 async fn state_json(
@@ -755,13 +754,12 @@ async fn state_json(
     view.server = Some(server_view(&cfg));
     view.proposals = app.proposals.waiting();
     with_reviews(&app, &mut view);
-    let listing = projects_api::group(&cfg, &view);
+    let projects = projects_api::group(&cfg, &view);
     let reply = StateReply {
         view,
         problems: app.state.problems(),
         keep_awake: app.awake.status(),
-        projects: listing.projects,
-        hidden_projects: listing.hidden,
+        projects,
     };
     Ok(([(BUILD_HEADER, page_build())], Json(reply)).into_response())
 }

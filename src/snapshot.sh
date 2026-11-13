@@ -153,9 +153,7 @@ emit_folder() {
   first=0
   linked=false
   [ -f "$1/.git" ] && linked=true
-  local by_agent=false
-  [ "${2:-}" = agent ] && by_agent=true
-  printf '{"path":%s,"branch":%s,"linked":%s,"remote":%s,"agent":%s}' "$(esc "$1")" "$(esc "$(git -C "$1" branch --show-current 2>/dev/null)")" "$linked" "$(esc "$(git -C "$1" config --get remote.origin.url 2>/dev/null)")" "$by_agent"
+  printf '{"path":%s,"branch":%s,"linked":%s}' "$(esc "$1")" "$(esc "$(git -C "$1" branch --show-current 2>/dev/null)")" "$linked"
 }
 if has git; then
   for ws in ${workspaces[@]+"${workspaces[@]}"}; do
@@ -174,7 +172,7 @@ if has git; then
   while IFS= read -r cwd; do
     [ -z "$cwd" ] && continue
     top=$(git -C "$cwd" rev-parse --show-toplevel 2>/dev/null)
-    [ -n "$top" ] && emit_folder "$top" agent
+    [ -n "$top" ] && emit_folder "$top"
   done <<EOF_CWDS
 $cwds
 EOF_CWDS
