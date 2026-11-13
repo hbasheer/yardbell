@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.103] - 2026-11-13
+
 - **The Workspace's keyboard shortcuts open again.** Since 0.11.102 the shortcuts button opened an
   invisible dialog that left the page frozen until Esc, because the phone key bar's styles matched it.
 - **A new sidebar: machines on top, projects below.** The Workspace and Dashboard sidebars start
