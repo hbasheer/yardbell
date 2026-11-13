@@ -1067,6 +1067,7 @@ mod tests {
 
     fn session(machine: &str, tmux: Option<&str>, folder: &str, activity: Activity) -> SessionView {
         SessionView {
+            cwd: String::new(),
             pull_why: None,
             id: format!("{machine}-{}", tmux.unwrap_or("loose")),
             machine: machine.into(),

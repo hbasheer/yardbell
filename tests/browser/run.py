@@ -1633,6 +1633,9 @@ class Suite:
         self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": folder})
         try:
             b.goto(self.url("/workspace"))
+            # An earlier test may have closed hp-demo-api-1 and -2, which keeps them hidden when they come back.
+            b.wait("state !== null && typeof save === 'function'", "the Workspace")
+            b.js(f"(() => {{ saved.hidden = (saved.hidden || []).filter((k) => !k.startsWith({json.dumps(MACHINE + '/hp-demo-api-')})); save(); render(); }})()")
             self.api("POST", "/refresh")
             b.click("#col-body [data-folder$='demo-api']")
             count = b.wait("document.querySelectorAll('#tabs .ws-tab').length >= 8 && document.querySelectorAll('#tabs .ws-tab').length", "eight tabs", timeout=15)
@@ -5699,8 +5702,12 @@ class Suite:
         href = b.js(f"{row}.querySelector('.review-mark').getAttribute('href')")
         if not href.startswith("/dispatch?c="):
             raise Failure(f"the review mark links to {href!r}")
-        b.goto(self.url("/workspace"))
-        b.wait("document.querySelector('#col-body .tree-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace tree")
+        self.api("POST", "/api/projects/add", {"machine": MACHINE, "path": os.path.join(self.y.root, "demo-app")})
+        try:
+            b.goto(self.url("/workspace"))
+            b.wait("document.querySelector('#col-body .tree-pr.bad')?.textContent === '#12'", "the pull request mark in the Workspace tree")
+        finally:
+            self.reset_projects()
 
     def test_pull_request_card_sends_to_the_session(self):
         b = self.b

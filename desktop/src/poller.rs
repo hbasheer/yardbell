@@ -114,6 +114,7 @@ mod tests {
     fn working() -> StateView {
         view(
             vec![SessionView {
+                cwd: String::new(),
                 pull_why: None,
                 id: "s1".into(),
                 machine: "devbox".into(),
