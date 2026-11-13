@@ -5,6 +5,8 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.104] - 2026-11-13
+
 - **The sidebar is grouped by machine again, with your projects inside.** Each machine is a quiet
   header with its memory in use (amber when it runs short, **offline** when it is down) that folds
   open to the projects you added on it. A project lists only the branches and worktrees that have
