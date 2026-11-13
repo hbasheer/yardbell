@@ -598,6 +598,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .merge(connectors_api::routes())
         .merge(mcp_auth_api::routes())
         .merge(proposals_api::routes())
+        .merge(projects_api::routes())
         .merge(files_api::routes())
         .merge(term_api::routes())
         .layer(middleware::from_fn_with_state(app.clone(), guard))
@@ -738,6 +739,8 @@ struct StateReply {
     view: crate::state::StateView,
     problems: Vec<crate::health::Problem>,
     keep_awake: crate::awake::Status,
+    projects: Vec<crate::projects::Project>,
+    hidden_projects: Vec<crate::projects::Project>,
 }
 
 async fn state_json(
@@ -752,10 +755,13 @@ async fn state_json(
     view.server = Some(server_view(&cfg));
     view.proposals = app.proposals.waiting();
     with_reviews(&app, &mut view);
+    let listing = projects_api::group(&cfg, &view);
     let reply = StateReply {
         view,
         problems: app.state.problems(),
         keep_awake: app.awake.status(),
+        projects: listing.projects,
+        hidden_projects: listing.hidden,
     };
     Ok(([(BUILD_HEADER, page_build())], Json(reply)).into_response())
 }
@@ -2544,6 +2550,7 @@ mod insights_api;
 pub mod limits;
 mod mcp_auth_api;
 pub(crate) mod pipeline_api;
+mod projects_api;
 mod proposals_api;
 mod pulls_api;
 mod review_api;

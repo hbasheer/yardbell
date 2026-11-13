@@ -1004,6 +1004,8 @@ mod tests {
             path: "/r/api".into(),
             branch: "main".into(),
             worktree: false,
+            remote: String::new(),
+            by_agent: false,
         }];
         v.mesh = Some(MeshView {
             provider: crate::config::MeshProvider::Tailscale,

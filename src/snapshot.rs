@@ -130,6 +130,10 @@ pub struct Snapshot {
     pub folder_paths: BTreeMap<String, String>,
     // Folders whose .git is a file: worktrees, by their label.
     pub linked: std::collections::BTreeSet<String>,
+    // Each folder's origin as a host and path, without the scheme or any credentials, by its label.
+    pub remotes: BTreeMap<String, String>,
+    // Folders listed only because an agent runs in them, not found by the workspace scan.
+    pub by_agent: std::collections::BTreeSet<String>,
     pub ports: BTreeMap<String, Vec<Port>>,
     // The tool calls and test runs each session's screen shows, by session id.
     pub runs: BTreeMap<String, Vec<crate::insights::runs::Run>>,
@@ -172,6 +176,10 @@ struct RawFolder {
     branch: String,
     #[serde(default)]
     linked: bool,
+    #[serde(default)]
+    remote: String,
+    #[serde(default)]
+    agent: bool,
 }
 
 #[derive(Deserialize)]
@@ -291,6 +299,13 @@ pub fn parse(
         snap.folder_paths.insert(label(&f.path), f.path.clone());
         if f.linked {
             snap.linked.insert(label(&f.path));
+        }
+        if f.agent {
+            snap.by_agent.insert(label(&f.path));
+        }
+        let remote = crate::projects::normalize_remote(&f.remote);
+        if !remote.is_empty() {
+            snap.remotes.insert(label(&f.path), remote);
         }
     }
     for p in &raw.ports {
@@ -961,5 +976,76 @@ mod tests {
         let ports = snap.ports.get("app").unwrap();
         assert_eq!(ports[0].host.as_deref(), Some("127.0.1.3"));
         assert_eq!(ports[1].host, None);
+    }
+
+    #[test]
+    fn a_folders_remote_is_kept_without_its_credentials() {
+        let json = r#"{"agents":[],"ports":[],"folders":[
+            {"path":"/w/app","branch":"main","remote":"https://bot:s3cret@github.com/acme/app.git"},
+            {"path":"/w/notes","branch":""}]}"#;
+        let snap = parse(json, &machine("hp", "/w"), Path::new("/w"), None).unwrap();
+        assert_eq!(snap.remotes.get("app").unwrap(), "github.com/acme/app");
+        assert!(!snap.remotes.contains_key("notes"));
+    }
+
+    #[test]
+    fn script_lists_added_folders_by_their_full_path_with_the_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("root");
+        let repo = root.join("app");
+        let plain = dir.path().join("elsewhere");
+        std::fs::create_dir_all(&repo).unwrap();
+        std::fs::create_dir_all(&plain).unwrap();
+        let git = |args: &[&str]| {
+            let ok = std::process::Command::new("git")
+                .args(args)
+                .current_dir(&repo)
+                .output()
+                .unwrap()
+                .status
+                .success();
+            assert!(ok, "git {args:?}");
+        };
+        git(&["init", "-q"]);
+        git(&["remote", "add", "origin", "git@github.com:acme/app.git"]);
+        let root_arg = root.display().to_string();
+        let plain_arg = plain.display().to_string();
+        let mut script = std::process::Command::new("bash")
+            .args(["-s", "--", &root_arg, "*", &plain_arg, "--", "--"])
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        use std::io::Write;
+        script
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(SCRIPT.as_bytes())
+            .unwrap();
+        let out = script.wait_with_output().unwrap();
+        let json: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let folders: Vec<(String, String)> = json["folders"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| {
+                (
+                    f["path"].as_str().unwrap().to_string(),
+                    f["remote"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            folders,
+            vec![
+                (
+                    repo.display().to_string(),
+                    "git@github.com:acme/app.git".into()
+                ),
+                (plain_arg, String::new()),
+            ],
+            "{json}"
+        );
     }
 }

@@ -21,9 +21,6 @@ let dispatchAfterSync = false;
 const dispatchTitles = new Map();
 
 window.YardbellShell.head.querySelector(".col-title").insertAdjacentHTML("afterend", `
-  <button class="btn quiet icon-btn" id="side-add-project" type="button" aria-label="Add a project" title="Add a project" aria-haspopup="dialog">
-    <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.5h4l1.5 1.5h5.5v6.5h-11z"/><path d="M8 7.5v3.5M6.25 9.25h3.5"/></svg>
-  </button>
   <button class="btn quiet icon-btn" id="side-new" type="button" aria-label="New session" title="New session">
     <svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
   </button>
@@ -351,25 +348,13 @@ function trackActivity() {
   for (const key of [...changedAt.keys()]) if (!live.has(key)) changedAt.delete(key);
 }
 
-const KEPT_KEY = "yardbell.ws.kept";
-
-function kept() {
-  try {
-    const list = JSON.parse(stored(KEPT_KEY) || "[]");
-    return Array.isArray(list) ? list.filter((k) => k && typeof k.machine === "string" && typeof k.folder === "string") : [];
-  } catch {
-    return [];
-  }
-}
-
-function keepFolder(entry) {
-  const list = kept().filter((k) => !(k.machine === entry.machine && k.folder === entry.folder));
-  list.push(entry);
-  try { localStorage.setItem(KEPT_KEY, JSON.stringify(list)); } catch {}
+function checkouts() {
+  return (state?.projects || []).flatMap((p) => p.checkouts);
 }
 
 function projects() {
-  const names = [...new Set([...sessions().map(projectOf), ...kept().map((k) => `${k.machine}${SEP}${k.folder}`)])];
+  const added = checkouts().filter((c) => c.added).map((c) => `${c.machine}${SEP}${c.folder}`);
+  const names = [...new Set([...sessions().map(projectOf), ...added])];
   if (saved.folder && !names.includes(saved.folder)) names.push(saved.folder);
   return names.filter((n) => n.includes(SEP)).sort((a, b) => machineOf(a).localeCompare(machineOf(b)) || folderOf(a).localeCompare(folderOf(b)));
 }
@@ -378,18 +363,34 @@ function dot(st) {
   return `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
 }
 
+const MACHINE_KEY = "yardbell.tree.machine.workspace";
+
 function renderSide() {
   const here = project();
   const focused = saved.tabs.length ? focusedLeaf()?.key : null;
   const folder = here ? { machine: machineOf(here), folder: folderOf(here) } : null;
   window.YardbellTree.render(treeEl, state, {
+    page: "workspace",
     stateOf,
     phone: phone.matches,
+    machine: stored(MACHINE_KEY) || "",
     selected: focused && sessionFor(focused) && !pickedFolder() ? { key: focused } : folder,
-    keep: [...kept(), ...(folder ? [folder] : [])],
     ageOf: (key) => changedAt.get(key),
+    toast,
+    reload: load,
     onSession: open,
     onFolder: ({ machine, folder: path }) => openSpace(`${machine}${SEP}${path}`),
+    onMachine: (name) => {
+      try {
+        if (name) localStorage.setItem(MACHINE_KEY, name);
+        else localStorage.removeItem(MACHINE_KEY);
+      } catch {}
+      renderSide();
+    },
+    onNew: ({ machine, path }) => newTab({ machine, path }),
+    onAdded: ({ machine, folder: label }) => {
+      if (label) openSpace(`${machine}${SEP}${label}`);
+    },
   });
 }
 
@@ -524,23 +525,8 @@ function home() {
   if (!name) return null;
   const known = (state?.folders || []).find((f) => f.label === folderOf(name) && f.machine === machineOf(name));
   if (known) return known;
-  const mine = kept().find((k) => k.machine === machineOf(name) && k.folder === folderOf(name));
+  const mine = checkouts().find((c) => c.machine === machineOf(name) && c.folder === folderOf(name));
   return mine ? { machine: mine.machine, label: mine.folder, path: mine.path } : null;
-}
-
-function addProject() {
-  if (!state) return;
-  const up = (state.machines || []).filter((m) => m.up).map((m) => m.name);
-  if (!up.length) { toast("No machine is connected right now"); return; }
-  window.YardbellNewSession.addProject({
-    machines: up,
-    machine: home()?.machine || (project() ? machineOf(project()) : ""),
-    onAdd: ({ machine, path }) => {
-      const label = (state?.folders || []).find((f) => f.machine === machine && f.path === path)?.label || path;
-      keepFolder({ machine, folder: label, path });
-      openSpace(`${machine}${SEP}${label}`);
-    },
-  });
 }
 
 const START_ICON = `<svg class="icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M3 4.5l3 3-3 3M8 11.5h5"/></svg>`;
@@ -1508,11 +1494,11 @@ document.addEventListener("keydown", (e) => {
 });
 window.addEventListener("resize", () => closeMenu());
 
-function newTab() {
+function newTab(place = null) {
   if (!state) return;
   const up = (state.machines || []).filter((m) => m.up).map((m) => m.name);
   if (!up.length) { toast("No machine is connected right now"); return; }
-  const where = project() ? home() : null;
+  const where = place?.machine ? place : project() ? home() : null;
   window.YardbellNewSession.open({
     machines: up,
     machine: where?.machine,
@@ -1713,9 +1699,8 @@ $("tab-list").addEventListener("click", (e) => {
   })), button);
 });
 
-$("new-tab").addEventListener("click", newTab);
-$("side-new").addEventListener("click", newTab);
-$("side-add-project").addEventListener("click", addProject);
+$("new-tab").addEventListener("click", () => newTab());
+$("side-new").addEventListener("click", () => newTab());
 
 $("panes").addEventListener("pointerdown", (e) => {
   if (phone.matches || e.button !== 0) return;
@@ -2033,8 +2018,8 @@ $("pr-strip").addEventListener("click", (e) => {
   else if (button.dataset.pr === "review" && asksReview(s)) openReview(s.review.conversation);
 });
 
-$("keys-btn").addEventListener("click", () => $("keys").showModal());
-$("keys-close").addEventListener("click", () => $("keys").close());
+$("keys-btn").addEventListener("click", () => $("ws-keys").showModal());
+$("keys-close").addEventListener("click", () => $("ws-keys").close());
 
 window.addEventListener("yardbell-app", (e) => {
   document.querySelectorAll(".ws-pane iframe").forEach((f) => f.contentWindow?.postMessage({ yardbell: "app", state: e.detail }, location.origin));
