@@ -17,3 +17,6 @@ docs/superpowers/
 .impeccable/hook.cache.json
 .impeccable/brief-*.md
 .impeccable/critique/
+
+# Signed builds from ~/.local/android/build-apk.sh land here; they belong on releases, not in git.
+/android/*.apk
