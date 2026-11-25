@@ -294,7 +294,14 @@ pub fn sign_in_place(id: &str) -> Option<Place> {
             label: "Datadog site",
             template: "https://mcp.{}/api/unstable/mcp-server/mcp",
             default: "datadoghq.com",
-            choices: &["datadoghq.com", "us3.datadoghq.com", "us5.datadoghq.com", "datadoghq.eu", "ap1.datadoghq.com", "ap2.datadoghq.com"],
+            choices: &[
+                "datadoghq.com",
+                "us3.datadoghq.com",
+                "us5.datadoghq.com",
+                "datadoghq.eu",
+                "ap1.datadoghq.com",
+                "ap2.datadoghq.com",
+            ],
             hint: "The site in your Datadog address.",
         }),
         _ => None,
@@ -305,12 +312,19 @@ pub fn sign_in_url(tool: &SignInTool, place: Option<&str>) -> Result<String, Str
     let Some(p) = sign_in_place(tool.id) else {
         return Ok(tool.url.to_string());
     };
-    let value = place.map(str::trim).filter(|v| !v.is_empty()).unwrap_or(p.default);
+    let value = place
+        .map(str::trim)
+        .filter(|v| !v.is_empty())
+        .unwrap_or(p.default);
     let value = value.trim_start_matches("https://").trim_end_matches('/');
     if !p.choices.is_empty() && !p.choices.contains(&value) {
         return Err(format!("{value} is not a {} Yardbell knows", p.label));
     }
-    if value.is_empty() || !value.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':')) {
+    if value.is_empty()
+        || !value
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | ':'))
+    {
         return Err(format!("\"{value}\" is not a host name"));
     }
     Ok(p.template.replace("{}", value))

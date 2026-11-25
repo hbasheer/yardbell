@@ -439,7 +439,12 @@ impl Sessions {
 
     // Runs an install in a session of its own, so the person sees it, answers what it asks and the
     // shell stays open afterwards.
-    pub async fn run_install(&self, m: &Machine, agent: &str, command: &str) -> Result<String, String> {
+    pub async fn run_install(
+        &self,
+        m: &Machine,
+        agent: &str,
+        command: &str,
+    ) -> Result<String, String> {
         let name = session_name(&m.name, "-", &format!("install-{agent}"));
         let script = format!(
             "echo {shown}; {command}; status=$?; echo; if [ $status -eq 0 ]; then echo 'Installed. You can close this tab.'; else echo \"The install ended with exit code $status.\"; fi; exec bash -l",

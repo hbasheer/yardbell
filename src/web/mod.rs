@@ -16,7 +16,7 @@ use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as UrlPath, Request, State as AxState};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
-use axum::response::{IntoResponse, Response};
+use axum::response::{IntoResponse, Redirect, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Form, Json, Router};
 use axum_extra::extract::cookie::{Cookie, Key, SameSite, SignedCookieJar};
@@ -384,6 +384,14 @@ pub fn asset(name: &str) -> Response {
         Some("html") => "text/html; charset=utf-8",
         Some("css") => "text/css; charset=utf-8",
         Some("js") => "text/javascript; charset=utf-8",
+        Some("json") => "application/json",
+        Some("svg") => "image/svg+xml",
+        Some("png") => "image/png",
+        Some("ico") => "image/x-icon",
+        Some("woff2") => "font/woff2",
+        Some("woff") => "font/woff",
+        Some("ttf") => "font/ttf",
+        Some("wasm") => "application/wasm",
         _ => "application/octet-stream",
     };
     (
@@ -397,6 +405,43 @@ pub fn asset(name: &str) -> Response {
 }
 
 pub const MONACO: &str = "vendor/monaco-0.55.1";
+
+const APP_INDEX: &str = "app/index.html";
+
+fn app_built() -> bool {
+    Assets::get(APP_INDEX).is_some()
+}
+
+// The React app, built by `npm run build` in web/ into assets/app. Its own routes all load the one
+// page; the files Vite names by their hash under assets/ never change, so they can be kept.
+fn app_page(path: &str) -> Response {
+    let unsafe_path = path.starts_with('/')
+        || path.contains(['\\', '\0'])
+        || path.split('/').any(|p| p == ".." || p == ".");
+    if !unsafe_path && !path.is_empty() {
+        let name = format!("app/{path}");
+        if Assets::get(&name).is_some() {
+            let mut res = asset(&name);
+            if path.starts_with("assets/") {
+                res.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    header::HeaderValue::from_static("private, max-age=31536000, immutable"),
+                );
+            }
+            return res;
+        }
+        if path.starts_with("assets/") {
+            return error(StatusCode::NOT_FOUND, "not found");
+        }
+    }
+    if !app_built() {
+        return error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "this build of Yardbell has no web app: run npm run build in web/ and build again",
+        );
+    }
+    asset(APP_INDEX)
+}
 
 // The folder carries Monaco's version, so its files never change under a URL and can be kept.
 fn monaco(path: &str) -> Response {
@@ -419,7 +464,23 @@ fn monaco(path: &str) -> Response {
 
 pub fn router(app: Arc<AppState>) -> Router {
     Router::new()
-        .route("/", get(|| async { asset("dashboard.html") }))
+        .route(
+            "/",
+            get(|| async {
+                if app_built() {
+                    Redirect::to("/ui/").into_response()
+                } else {
+                    asset("dashboard.html")
+                }
+            }),
+        )
+        .route("/classic", get(|| async { asset("dashboard.html") }))
+        .route("/ui", get(|| async { Redirect::permanent("/ui/") }))
+        .route("/ui/", get(|| async { app_page("") }))
+        .route(
+            "/ui/{*path}",
+            get(|path: UrlPath<String>| async move { app_page(&path.0) }),
+        )
         .route("/login", get(|| async { asset("login.html") }).post(login))
         .route("/logout", post(logout))
         .route("/app/handoff", post(handoff_new))
@@ -2232,7 +2293,10 @@ async fn installed_agents(
     let cfg = app.config()?;
     let m = find_machine(&cfg, &machine)?;
     if q.fresh {
-        app.installed.lock().expect("installed lock").remove(&m.name);
+        app.installed
+            .lock()
+            .expect("installed lock")
+            .remove(&m.name);
     }
     let cached = app
         .installed
@@ -2457,13 +2521,21 @@ async fn install_agent(
     let m = find_machine(&cfg, &req.machine)?;
     let command = crate::agents::guide(&name)
         .and_then(|g| g.install)
-        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, format!("Yardbell has no install command for {name}; follow its install guide")))?;
+        .ok_or_else(|| {
+            ApiError(
+                StatusCode::BAD_REQUEST,
+                format!("Yardbell has no install command for {name}; follow its install guide"),
+            )
+        })?;
     let session = app
         .sessions
         .run_install(&m, &name, command)
         .await
         .map_err(ApiError::gateway)?;
-    app.installed.lock().expect("installed lock").remove(&m.name);
+    app.installed
+        .lock()
+        .expect("installed lock")
+        .remove(&m.name);
     Ok(Json(json!({ "name": session, "command": command })).into_response())
 }
 

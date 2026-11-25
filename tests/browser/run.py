@@ -926,7 +926,11 @@ class Suite:
         self.shots = shots
         self.session = None
 
+    # These tests drive the old pages; the root now opens the React app, and the old dashboard
+    # lives at /classic.
     def url(self, path):
+        if path == "/" or path.startswith(("/?", "/#")):
+            path = "/classic" + path[1:]
         return self.y.base + path
 
     def api(self, method, path, body=None):
@@ -953,7 +957,7 @@ class Suite:
         b.click("input[name=passcode]")
         b.type(PASSCODE)
         b.key("Enter")
-        b.wait("location.pathname === '/' && document.getElementById('title')", "the dashboard after logging in")
+        b.wait("location.pathname === '/ui/' && document.getElementById('root')?.children.length", "the app after logging in")
 
     def test_every_page_loads(self):
         for path in PAGES:

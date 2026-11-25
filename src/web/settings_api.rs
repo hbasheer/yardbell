@@ -668,7 +668,9 @@ async fn linear_check(
     AxState(app): AxState<Arc<AppState>>,
     body: Option<Json<LinearCheckReq>>,
 ) -> Result<Response, ApiError> {
-    let sent = body.map(|Json(b)| b.key.trim().to_string()).unwrap_or_default();
+    let sent = body
+        .map(|Json(b)| b.key.trim().to_string())
+        .unwrap_or_default();
     let key = if sent.is_empty() {
         match app.secrets()?.get(crate::triggers::LINEAR_SECRET) {
             Some(k) => k.to_string(),
@@ -690,13 +692,20 @@ async fn linear_check(
             return Ok(Json(json!({ "ok": false, "connected": true, "error": format!("Linear could not be reached: {e}") })).into_response())
         }
     };
-    if res.status() == reqwest::StatusCode::UNAUTHORIZED || res.status() == reqwest::StatusCode::BAD_REQUEST {
-        return Ok(Json(json!({ "ok": false, "connected": true, "error": "Linear refused this API key" })).into_response());
+    if res.status() == reqwest::StatusCode::UNAUTHORIZED
+        || res.status() == reqwest::StatusCode::BAD_REQUEST
+    {
+        return Ok(Json(
+            json!({ "ok": false, "connected": true, "error": "Linear refused this API key" }),
+        )
+        .into_response());
     }
     let body: serde_json::Value = res.json().await.unwrap_or_default();
     let viewer = &body["data"]["viewer"];
     if viewer.is_null() {
-        let why = body["errors"][0]["message"].as_str().unwrap_or("Linear did not say who this key belongs to");
+        let why = body["errors"][0]["message"]
+            .as_str()
+            .unwrap_or("Linear did not say who this key belongs to");
         return Ok(Json(json!({ "ok": false, "connected": true, "error": why })).into_response());
     }
     Ok(Json(json!({

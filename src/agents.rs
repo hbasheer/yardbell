@@ -130,35 +130,177 @@ impl Agent {
 // a flag before it, or None when its interactive mode has no way to take one. The sixth names the
 // process to look for when it differs from the command's first word. Agents with no way to
 // continue their last conversation resume by starting again in the same folder.
-const BUILTIN: [(&str, &str, &str, &str, Option<&str>, Option<&str>); 47] = [
-    ("claude", "Claude Code", "claude", "claude --continue", Some(""), None),
-    ("codex", "Codex", "codex", "codex resume --last", Some(""), None),
-    ("gemini", "Gemini CLI", "gemini", "gemini --resume", Some("-i"), None),
-    ("qwen", "Qwen Code", "qwen", "qwen --continue", Some("-i"), None),
-    ("opencode", "opencode", "opencode", "opencode --continue", Some("--prompt"), None),
-    ("copilot", "Copilot CLI", "copilot", "copilot --continue", Some("-i"), None),
-    ("cursor", "Cursor Agent", "cursor-agent", "cursor-agent resume", Some(""), None),
+type BuiltinAgent = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    Option<&'static str>,
+    Option<&'static str>,
+);
+
+const BUILTIN: [BuiltinAgent; 47] = [
+    (
+        "claude",
+        "Claude Code",
+        "claude",
+        "claude --continue",
+        Some(""),
+        None,
+    ),
+    (
+        "codex",
+        "Codex",
+        "codex",
+        "codex resume --last",
+        Some(""),
+        None,
+    ),
+    (
+        "gemini",
+        "Gemini CLI",
+        "gemini",
+        "gemini --resume",
+        Some("-i"),
+        None,
+    ),
+    (
+        "qwen",
+        "Qwen Code",
+        "qwen",
+        "qwen --continue",
+        Some("-i"),
+        None,
+    ),
+    (
+        "opencode",
+        "opencode",
+        "opencode",
+        "opencode --continue",
+        Some("--prompt"),
+        None,
+    ),
+    (
+        "copilot",
+        "Copilot CLI",
+        "copilot",
+        "copilot --continue",
+        Some("-i"),
+        None,
+    ),
+    (
+        "cursor",
+        "Cursor Agent",
+        "cursor-agent",
+        "cursor-agent resume",
+        Some(""),
+        None,
+    ),
     ("crush", "Crush", "crush", "crush --continue", None, None),
-    ("goose", "Goose", "goose session", "goose session --resume", None, None),
-    ("aider", "Aider", "aider", "aider --restore-chat-history", None, None),
-    ("openclaude", "OpenClaude", "openclaude", "openclaude", Some(""), None),
-    ("codebuddy", "CodeBuddy", "codebuddy", "codebuddy", Some(""), None),
+    (
+        "goose",
+        "Goose",
+        "goose session",
+        "goose session --resume",
+        None,
+        None,
+    ),
+    (
+        "aider",
+        "Aider",
+        "aider",
+        "aider --restore-chat-history",
+        None,
+        None,
+    ),
+    (
+        "openclaude",
+        "OpenClaude",
+        "openclaude",
+        "openclaude",
+        Some(""),
+        None,
+    ),
+    (
+        "codebuddy",
+        "CodeBuddy",
+        "codebuddy",
+        "codebuddy",
+        Some(""),
+        None,
+    ),
     ("devin", "Devin", "devin", "devin", Some("--"), None),
     ("droid", "Droid", "droid", "droid", Some(""), None),
     ("grok", "Grok", "grok", "grok", Some("--"), None),
-    ("antigravity", "Antigravity", "agy", "agy", Some("--prompt-interactive"), None),
-    ("qoder", "Qoder CLI", "qodercli", "qodercli", Some("--prompt-interactive"), None),
-    ("qoder-cn", "Qoder CLI China", "qoderclicn", "qoderclicn", Some("--prompt-interactive"), None),
-    ("opencode2", "OpenCode 2", "opencode2 --standalone", "opencode2 --standalone", Some("--prompt"), None),
-    ("mimo-code", "MiMo Code", "mimo", "mimo", Some("--prompt"), None),
+    (
+        "antigravity",
+        "Antigravity",
+        "agy",
+        "agy",
+        Some("--prompt-interactive"),
+        None,
+    ),
+    (
+        "qoder",
+        "Qoder CLI",
+        "qodercli",
+        "qodercli",
+        Some("--prompt-interactive"),
+        None,
+    ),
+    (
+        "qoder-cn",
+        "Qoder CLI China",
+        "qoderclicn",
+        "qoderclicn",
+        Some("--prompt-interactive"),
+        None,
+    ),
+    (
+        "opencode2",
+        "OpenCode 2",
+        "opencode2 --standalone",
+        "opencode2 --standalone",
+        Some("--prompt"),
+        None,
+    ),
+    (
+        "mimo-code",
+        "MiMo Code",
+        "mimo",
+        "mimo",
+        Some("--prompt"),
+        None,
+    ),
     ("pi", "Pi", "pi", "pi", Some(""), None),
     ("omp", "OMP", "omp", "omp", Some(""), None),
-    ("prime-agent", "Prime Agent", "prime-agent", "prime-agent", Some("--"), None),
+    (
+        "prime-agent",
+        "Prime Agent",
+        "prime-agent",
+        "prime-agent",
+        Some("--"),
+        None,
+    ),
     ("trae", "Trae", "traecli", "traecli", Some("--"), None),
-    ("command-code", "Command Code", "command-code --trust", "command-code --trust", Some(""), None),
+    (
+        "command-code",
+        "Command Code",
+        "command-code --trust",
+        "command-code --trust",
+        Some(""),
+        None,
+    ),
     ("amp", "Amp", "amp", "amp", None, None),
     ("kilo", "Kilocode", "kilo", "kilo", None, None),
-    ("kiro", "Kiro", "kiro-cli chat --tui", "kiro-cli chat --tui", None, None),
+    (
+        "kiro",
+        "Kiro",
+        "kiro-cli chat --tui",
+        "kiro-cli chat --tui",
+        None,
+        None,
+    ),
     ("aug", "Auggie", "auggie", "auggie", None, None),
     ("cline", "Cline", "cline", "cline", None, None),
     ("codebuff", "Codebuff", "codebuff", "codebuff", None, None),
@@ -166,18 +308,67 @@ const BUILTIN: [(&str, &str, &str, &str, Option<&str>, Option<&str>); 47] = [
     ("continue", "Continue", "cn", "cn", None, None),
     ("kimi", "Kimi", "kimi", "kimi", None, None),
     ("mistral-vibe", "Mistral Vibe", "vibe", "vibe", None, None),
-    ("rovo", "Rovo Dev", "acli rovodev run", "acli rovodev run", None, None),
-    ("hermes", "Hermes", "hermes --tui", "hermes --tui", None, None),
+    (
+        "rovo",
+        "Rovo Dev",
+        "acli rovodev run",
+        "acli rovodev run",
+        None,
+        None,
+    ),
+    (
+        "hermes",
+        "Hermes",
+        "hermes --tui",
+        "hermes --tui",
+        None,
+        None,
+    ),
     ("openclaw", "OpenClaw", "openclaw", "openclaw", None, None),
     ("ante", "Ante", "ante", "ante", None, None),
-    ("autohand", "Autohand Code", "autohand", "autohand", None, None),
-    ("muse", "Muse", "muse --trust-workspace", "muse --trust-workspace", None, None),
-    ("dsh", "DeepSeek Harness", "dsh-tui .", "dsh-tui .", None, Some("dsh")),
+    (
+        "autohand",
+        "Autohand Code",
+        "autohand",
+        "autohand",
+        None,
+        None,
+    ),
+    (
+        "muse",
+        "Muse",
+        "muse --trust-workspace",
+        "muse --trust-workspace",
+        None,
+        None,
+    ),
+    (
+        "dsh",
+        "DeepSeek Harness",
+        "dsh-tui .",
+        "dsh-tui .",
+        None,
+        Some("dsh"),
+    ),
     ("zcode", "ZCode", "zcode", "zcode", None, Some("zcode-cli")),
     ("jcode", "Jcode", "jcode", "jcode", None, None),
-    ("openhands", "OpenHands", "openhands", "openhands", None, None),
+    (
+        "openhands",
+        "OpenHands",
+        "openhands",
+        "openhands",
+        None,
+        None,
+    ),
     ("plandex", "Plandex", "plandex", "plandex", None, None),
-    ("interpreter", "Open Interpreter", "interpreter", "interpreter", None, None),
+    (
+        "interpreter",
+        "Open Interpreter",
+        "interpreter",
+        "interpreter",
+        None,
+        None,
+    ),
 ];
 
 pub struct Guide {
@@ -240,24 +431,29 @@ const GUIDES: &[(&str, Option<&str>, &str, bool)] = &[
 ];
 
 pub fn guide(name: &str) -> Option<Guide> {
-    GUIDES.iter().find(|(n, ..)| *n == name).map(|(_, install, homepage, open_source)| Guide {
-        install: *install,
-        homepage,
-        open_source: *open_source,
-    })
+    GUIDES
+        .iter()
+        .find(|(n, ..)| *n == name)
+        .map(|(_, install, homepage, open_source)| Guide {
+            install: *install,
+            homepage,
+            open_source: *open_source,
+        })
 }
 
 pub fn builtin() -> Vec<Agent> {
     BUILTIN
         .iter()
-        .map(|(name, label, command, resume, prompt_arg, process)| Agent {
-            name: name.to_string(),
-            label: Some(label.to_string()),
-            command: command.to_string(),
-            resume: resume.to_string(),
-            process: process.map(str::to_string),
-            prompt_arg: prompt_arg.map(str::to_string),
-        })
+        .map(
+            |(name, label, command, resume, prompt_arg, process)| Agent {
+                name: name.to_string(),
+                label: Some(label.to_string()),
+                command: command.to_string(),
+                resume: resume.to_string(),
+                process: process.map(str::to_string),
+                prompt_arg: prompt_arg.map(str::to_string),
+            },
+        )
         .collect()
 }
 
@@ -440,12 +636,12 @@ mod tests {
                 "codex --full-auto",
                 "codex resume --last --full-auto",
             ),
-            agent("amp", "amp", "amp threads continue"),
+            agent("house-agent", "house-agent", "house-agent --continue"),
         ];
         let all = merged(&custom);
         assert_eq!(all.len(), builtin().len() + 1);
         let codex = all.iter().find(|a| a.name == "codex").unwrap();
         assert_eq!(codex.command, "codex --full-auto");
-        assert_eq!(all.last().unwrap().name, "amp");
+        assert_eq!(all.last().unwrap().name, "house-agent");
     }
 }
