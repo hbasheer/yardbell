@@ -5,6 +5,24 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.106] - 2026-11-25
+
+- **The apps fit the window at any interface size.** At 125% the page ran past the bottom and right
+  of the window and cut off the terminal. The apps now zoom the way a browser's own zoom does, and
+  in a browser a terminal draws its text larger instead of being scaled, so it fills its pane and
+  takes your typing.
+- **Add a machine by its SSH alias.** Add machine can connect through a Host you already have in
+  `~/.ssh/config`, such as a cloud dev box, using its user, key and port as they are. It lists your
+  Hosts to pick from. A machine that ignores ping but answers on port 22 is accepted.
+- **Test notifications work in the apps**, and the page's notifications are posted by the app.
+- **New session shows that it is starting** and closes as soon as the session exists, instead of
+  freezing until the machine was checked again.
+- **A picked terminal theme reaches the edges**, with no white strip around the terminal.
+- **The menu bar panel is tidier:** sessions grouped by machine, long names on one line. The
+  apps' tab strip matches the Workspace tabs.
+- **A new icon**, a yard of machines with one lit.
+- The Dispatch menu fits on one line, and Connect a phone says what came back when no code arrives.
+
 ## [0.11.105] - 2026-11-25
 
 - **A new interface for every page.** The Dashboard, Workspace, Pipelines, Diagrams, Dispatch and
