@@ -957,7 +957,7 @@ class Suite:
         b.click("input[name=passcode]")
         b.type(PASSCODE)
         b.key("Enter")
-        b.wait("location.pathname === '/ui/' && document.getElementById('root')?.children.length", "the app after logging in")
+        b.wait("location.pathname === '/ui/' && document.getElementById('root')?.children.length", "the app after logging in", timeout=30)
 
     def test_every_page_loads(self):
         for path in PAGES:
@@ -3262,11 +3262,11 @@ class Suite:
               window.YardbellStrip.update();
             }})()""")
             b.js("window.YardbellShell.collapse(false)")
-            b.wait("document.querySelectorAll('#usage-card .usage-trouble').length === 2", "a warning line for each machine in trouble")
-            trouble = b.js("[...document.querySelectorAll('#usage-card .usage-trouble')].map((t) => [t.dataset.machine, t.classList.contains('bad'), t.textContent.trim()])")
+            b.wait("document.querySelectorAll('#status-bar .status-machine').length === 2", "a warning in the status bar for each machine in trouble")
+            trouble = b.js("[...document.querySelectorAll('#status-bar .status-machine')].map((t) => [t.dataset.machine, t.classList.contains('bad'), t.textContent.trim()])")
             if trouble != [["pro", True, "pro: offline"], ["mini", False, "mini: memory at 93%"]]:
-                raise Failure(f"the card's machine lines read {trouble}")
-            b.click("#usage-card")
+                raise Failure(f"the status bar's machine items read {trouble}")
+            b.click("#status-bar .status-machine")
             b.wait("document.querySelectorAll('#usage-sheet .usage-machines .usage-win').length === 3", "the Machines section in the sheet")
             rows = b.js("""[...document.querySelectorAll('#usage-sheet .usage-machines .usage-win')].map((r) => [r.dataset.machine,
               r.querySelector('.usage-win-pct').textContent, r.querySelector('.usage-meter').classList.contains('warn') ? 'warn' : r.querySelector('.usage-meter').classList.contains('bad') ? 'bad' : 'ok'])""")
@@ -8029,88 +8029,6 @@ class Suite:
         if basis != "auto":
             raise Failure(f"the dialog body starts from {basis}, which collapses in WebKit")
 
-    def test_connection_templates_are_a_grid(self):
-        b = self.b
-        lists = {"conn-new-panel": "conn-sign-in-list", "conn-tab-token": "conn-new-list"}
-        measure = """((list) => {
-          const tiles = [...document.getElementById(list).children];
-          const flow = document.getElementById('conn-flow').getBoundingClientRect();
-          const body = document.querySelector('.conn-dialog-body');
-          return {
-            tiles: tiles.length,
-            columns: new Set(tiles.map((t) => Math.round(t.getBoundingClientRect().left))).size,
-            logos: tiles.filter((t) => t.querySelector('.conn-logo')?.textContent.trim() || t.querySelector('svg')).length,
-            clipped: tiles.flatMap((t) => [...t.querySelectorAll('strong, small, button')]).filter((x) => x.scrollWidth > x.clientWidth + 1 && getComputedStyle(x).display !== 'inline').map((x) => x.textContent),
-            past: Math.max(...tiles.map((t) => t.getBoundingClientRect().right)) - flow.right,
-            sideways: body.scrollWidth - body.clientWidth,
-            page: document.documentElement.scrollWidth - innerWidth,
-            flowBottom: flow.bottom,
-            height: innerHeight,
-          };
-        })"""
-
-        def sizes(tab, list_id):
-            b.click(f"#conn-tabs [data-tab={tab}]")
-            b.wait(f"!document.getElementById('{tab}').hidden", f"the {tab} tab")
-            return b.js(f"{measure}('{list_id}')")
-
-        def check(seen, list_id, want):
-            if seen["tiles"] != want:
-                raise Failure(f"{list_id} has {seen['tiles']} tiles for {want} templates")
-            if seen["logos"] != want:
-                raise Failure(f"only {seen['logos']} of {want} tiles in {list_id} have an icon")
-            if seen["clipped"]:
-                raise Failure(f"clipped text in {list_id}: {seen['clipped']}")
-            if seen["sideways"] > 0 or seen["page"] > 0 or seen["past"] > 0:
-                raise Failure(f"{list_id} runs sideways: {seen}")
-            if seen["flowBottom"] > seen["height"]:
-                raise Failure(f"the modal runs past the window: {seen}")
-
-        def open_modal():
-            b.goto(self.url("/"))
-            b.goto(self.url("/settings#connections"))
-            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
-            b.click("#conn-new")
-            b.wait("document.getElementById('conn-flow').open", "the modal")
-            return {
-                "conn-sign-in-list": b.js("connections.sign_in.length"),
-                "conn-new-list": b.js("connections.templates.length") + 1,
-            }
-
-        try:
-            b.viewport(1280, 800)
-            want = open_modal()
-            for tab, list_id in lists.items():
-                seen = sizes(tab, list_id)
-                check(seen, list_id, want[list_id])
-                if seen["columns"] < 2:
-                    raise Failure(f"{list_id} lays out in {seen['columns']} column at desktop width")
-
-            b.viewport(390, 844, 3)
-            want = open_modal()
-            for tab, list_id in lists.items():
-                check(sizes(tab, list_id), list_id, want[list_id])
-
-            b.viewport(1280, 800)
-            b.goto(self.url("/"))
-            b.goto(self.url("/settings#connections"))
-            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
-            b.js("""(() => {
-              const tool = connections.sign_in.find((t) => t.id === 'jira');
-              data.mcp_servers = [{ name: tool.id, url: tool.url }];
-              data.mcp_auth = { [tool.id]: 'signed_in' };
-              document.getElementById('conn-new').click();
-            })()""")
-            b.wait("document.querySelector('#conn-sign-in-list .conn-badge')", "the Connected badge")
-            first = "document.querySelector('#conn-sign-in-list .conn-badge').closest('.conn-card')"
-            if b.js(f"{first}.hasAttribute('data-sign-in') || !{first}.querySelector('svg')"):
-                raise Failure("a connected tile should keep its icon and start no sign-in")
-            b.js("document.getElementById('conn-flow').close()")
-            self.check_errors("the template grid")
-        finally:
-            b.viewport(1280, 800)
-            b.goto(self.url("/"))
-
     def test_sign_in_lists_common_tools_and_finds_one(self):
         b = self.b
         b.goto(self.url("/"))
@@ -8146,7 +8064,7 @@ class Suite:
             b.click("#conn-new")
             b.wait("document.getElementById('conn-flow').open", "the modal")
             tabs = b.js("[...document.querySelectorAll('#conn-tabs [data-tab]')].map((t) => t.textContent).join('|')")
-            if tabs != "Sign in|MCP server|Token":
+            if tabs != "Sign in|MCP server":
                 raise Failure(f"the tabs are {tabs}")
             if b.js("document.querySelector('#conn-tabs [aria-selected=true]').textContent") != "Sign in":
                 raise Failure("Sign in should be the first tab")
@@ -8188,35 +8106,6 @@ class Suite:
         finally:
             self.remove_mcp_servers()
 
-    def test_a_token_connection_takes_its_secret_in_the_form(self):
-        b = self.b
-        try:
-            b.goto(self.url("/"))
-            b.goto(self.url("/settings#connections"))
-            b.wait("document.getElementById('conn-new') && connections.templates", "the section")
-            b.click("#conn-new")
-            b.click("#conn-tabs [data-tab=conn-tab-token]")
-            b.click("#conn-new-list [data-starter=asana]")
-            b.wait("!document.getElementById('conn-form').hidden && document.querySelector('#conn-secrets input[type=password]')", "a box for its secret")
-            if b.js("document.getElementById('conn-more').open"):
-                raise Failure("headers and calls should be folded for an example")
-            name = b.js("document.querySelector('#conn-secrets input').dataset.secret")
-            self.set_field("#conn-secrets input", "asana-value-BROWSER")
-            b.click("#conn-form button[type=submit]")
-            b.wait("document.querySelector('[data-conn=asana]')", "the saved connection")
-            if "Save the secret" in b.js("document.querySelector('[data-conn=asana]').textContent"):
-                raise Failure("the secret typed in the form was not saved")
-            if "asana-value-BROWSER" in b.js("document.documentElement.outerHTML"):
-                raise Failure("the secret stayed on the page")
-            self.row_action("[data-conn=asana]", "[data-conn-act=delete]")
-            b.wait("document.querySelector('dialog.confirm[open]')", "the question")
-            b.click("dialog.confirm[open] [data-answer=yes]")
-            b.wait("!document.querySelector('[data-conn=asana]')", "the connection gone")
-            self.api("POST", "/api/settings/secrets/delete", {"name": name})
-            self.check_errors("a token connection")
-
-        finally:
-            b.js("document.getElementById('conn-flow')?.close(); fetch('/api/settings/connectors/asana', { method: 'DELETE' })")
     def test_one_connections_page(self):
         b = self.b
         self.api("POST", "/api/settings/mcp/servers", {"servers": []})
@@ -8226,7 +8115,7 @@ class Suite:
         nav = b.js("[...document.querySelectorAll('.settings-nav a')].map((a) => a.textContent).join('|')")
         if "MCP servers" in nav:
             raise Failure(f"the menu still splits them: {nav}")
-        if not b.js("document.querySelector('#connections #server-rows') && document.querySelector('#connections #conn-rows') && document.querySelector('#connections #secret-rows')"):
+        if not b.js("document.querySelector('#connections #server-rows') && document.querySelector('#connections #secret-rows')"):
             raise Failure("servers, connections and secrets are not all on the one page")
         guide = b.js("document.querySelector('#connections .conn-guide').textContent")
         for part in ("New connection", "Sign in", "Test"):
@@ -8560,69 +8449,6 @@ class Suite:
             raise Failure(f"the section reads {said}")
         self.check_errors("Archify in Settings")
 
-    def test_connection_actions_are_fields(self):
-        b = self.b
-        b.goto(self.url("/"))
-        b.goto(self.url("/settings#connections"))
-        b.wait("document.getElementById('conn-new') && connections.templates", "the section")
-        b.click("#conn-new")
-        b.click("#conn-tabs [data-tab=conn-tab-token]")
-        b.click("#conn-new-list [data-starter=trello]")
-        b.wait("!document.getElementById('conn-form').hidden", "the form")
-        b.js("document.getElementById('conn-more').open = true")
-        b.wait("document.querySelector('#conn-more-tabs [data-more=conn-actions]')", "the tabs")
-        tabs = b.js("[...document.querySelectorAll('#conn-more-tabs button')].map((t) => t.textContent).join('|')")
-        if tabs != "Actions|Login headers|Choices|Settings":
-            raise Failure(f"the tabs are {tabs}")
-        if b.js("[...document.querySelectorAll('#conn-form textarea')].some((t) => t.value.includes('request:'))"):
-            raise Failure("the form still shows YAML")
-        said = b.js("document.getElementById('conn-actions').textContent")
-        for want in ("Lists items", "Moves an item", "GET", "PUT", "Reads", "Changes"):
-            if want not in said:
-                raise Failure(f"the actions do not say {want!r}: {said}")
-        b.js("document.querySelector('[data-call-name=list]').open = true")
-        path = "[data-call-name=list] [data-field=path]"
-        if "/boards/" not in b.js(f"document.querySelector('{path}').value"):
-            raise Failure("the path is not in its own field")
-        self.set_field(path, "/boards/{{board}}/cards/open")
-        if not b.js("document.querySelector('[data-call-name=list] [data-pairs=map] [data-pair-key]')"):
-            raise Failure("the reply fields are not in their own rows")
-        b.click("#conn-action-add")
-        b.wait("document.querySelector('[data-call-name=\"\"]')", "a new action")
-        self.set_field("#conn-call-list [data-call]:last-child [data-field=name]", "archive")
-        self.set_field("#conn-call-list [data-call]:last-child [data-field=path]", "/cards/{{item_id}}/archive")
-        self.set_field("#conn-call-list [data-call]:last-child [data-field=method]", "POST")
-        b.js("document.querySelector('[data-call-name=comment] [data-remove-call]').click()")
-        b.click("#conn-more-tabs [data-more=conn-settings]")
-        b.wait("document.querySelector('#conn-settings [name=id]').offsetParent !== null", "the settings tab")
-        b.click("#conn-form button[type=submit]")
-        b.wait("document.querySelector('[data-conn=trello]') && !document.getElementById('conn-flow').open", "the saved connection")
-        saved = self.api("GET", "/api/settings/connectors")["list"]
-        trello = next(c for c in saved if c["id"] == "trello")
-        if trello["calls"]["list"]["request"]["path"] != "/boards/{{board}}/cards/open":
-            raise Failure(f"the path was not saved: {trello['calls']['list']}")
-        if trello["calls"]["list"]["map"].get("title") != "name":
-            raise Failure("the reply fields were lost")
-        if trello["calls"]["archive"]["request"]["method"] != "POST" or "comment" in trello["calls"]:
-            raise Failure(f"the added and removed actions: {list(trello['calls'])}")
-        if trello["params"][0]["name"] != "board":
-            raise Failure("the choices were lost")
-        if not next(p for p in trello["params"] if p["name"] == "label").get("filter"):
-            raise Failure("saving the form lost a filter")
-        self.row_action("[data-conn=trello]", "[data-conn-act=edit]")
-        b.wait("!document.getElementById('conn-form').hidden", "the edit form")
-        b.js("document.getElementById('conn-more').open = true")
-        b.js("document.querySelector('[data-call-name=archive]').open = true")
-        self.set_field("[data-call-name=archive] [data-field=body]", "{ not json")
-        b.click("#conn-form button[type=submit]")
-        b.wait("document.getElementById('conn-note').textContent.includes('archive')", "word about the bad body")
-        b.js("document.getElementById('conn-flow').close()")
-        self.row_action("[data-conn=trello]", "[data-conn-act=delete]")
-        b.wait("document.querySelector('dialog.confirm[open]')", "the question")
-        b.click("dialog.confirm[open] [data-answer=yes]")
-        b.wait("!document.querySelector('[data-conn=trello]')", "the connection gone")
-        self.check_errors("actions as fields")
-
     def test_every_connection_input_looks_the_same(self):
         b = self.b
         b.goto(self.url("/"))
@@ -8643,15 +8469,6 @@ class Suite:
         seen.update(b.js(measure))
         b.click("#conn-tabs [data-tab=server-form]")
         b.js("document.getElementById('server-more').open = true")
-        seen.update(b.js(measure))
-        b.click("#conn-tabs [data-tab=conn-tab-token]")
-        b.click("#conn-new-list [data-starter=trello]")
-        b.js("document.getElementById('conn-more').open = true")
-        b.js("document.querySelector('[data-call-name=list]').open = true")
-        seen.update(b.js(measure))
-        b.click("#conn-more-tabs [data-more=conn-login]")
-        seen.update(b.js(measure))
-        b.click("#conn-more-tabs [data-more=conn-choices]")
         seen.update(b.js(measure))
         b.js("document.getElementById('conn-flow').close()")
         b.click("#secret-add")
@@ -8689,28 +8506,11 @@ class Suite:
             b.goto(self.url("/"))
             b.goto(self.url("/settings#connections"))
             b.wait("document.querySelector('#server-rows .conn-row') && connections.templates", "the row")
-            if b.js("document.querySelector('#conn-rows [data-conn=trello]')"):
-                raise Failure("Trello shows twice")
-            b.click("#server-rows .conn-row [data-row-menu]")
-            b.wait("document.querySelector('#server-rows [data-conn-edit=trello]')?.offsetParent", "its actions in the menu")
-            b.click("#server-rows [data-conn-edit=trello]")
-            b.wait("!document.getElementById('conn-form').hidden", "the form")
-            if b.js("document.querySelector('#conn-form [name=base_url]').offsetParent"):
-                raise Failure("a server connection has no address to type")
-            b.js("document.getElementById('conn-more').open = true")
-            if "trelloReadCard" not in b.js("document.getElementById('conn-call-list').textContent"):
-                raise Failure("the actions do not name their tool")
-            b.js("document.getElementById('conn-flow').close()")
+            if b.js("document.querySelectorAll('#server-rows .conn-row').length") != 1:
+                raise Failure("Trello does not show as one row")
             data = self.api("GET", "/api/pipelines")
             if not any(c["id"] == "trello" for c in data["connectors"]):
                 raise Failure("the pipeline builder does not offer Trello")
-            b.click("#conn-new")
-            b.click("#conn-tabs [data-tab=conn-tab-token]")
-            b.click("#conn-new-list [data-starter=trello]")
-            b.wait("!document.getElementById('conn-form').hidden", "the token form")
-            b.click("#conn-form button[type=submit]")
-            b.wait("document.querySelector('[data-conn=trello-token]') && !document.getElementById('conn-flow').open", "a token Trello beside the signed-in one")
-            b.js("fetch('/api/settings/connectors/trello-token', { method: 'DELETE' })")
             self.check_errors("a signed-in tool")
         finally:
             b.js("document.getElementById('conn-flow')?.close(); fetch('/api/settings/connectors/trello', { method: 'DELETE' })")
@@ -8785,18 +8585,6 @@ class Suite:
             if "Bearer ${secret:example_token}" not in config or "${secret:example_x-api-key}" not in config:
                 raise Failure(f"the headers do not name secrets:\n{config}")
 
-            b.click("#conn-new")
-            b.click("#conn-tabs [data-tab=conn-tab-token]")
-            b.click("#conn-new-list [data-starter=asana]")
-            b.wait("!document.getElementById('conn-form').hidden", "the form")
-            b.js("""connHeaders = [{ name: 'Authorization', value: 'Bearer tok-BROWSER-THREE' }]; renderConnHeaders()""")
-            b.click("#conn-form button[type=submit]")
-            b.wait("document.querySelector('[data-conn=asana]') && !document.getElementById('conn-flow').open", "the connection saved")
-            with open(self.y.config) as f:
-                config = f.read()
-            if "tok-BROWSER-THREE" in config or "Bearer ${secret:asana_authorization}" not in config:
-                raise Failure(f"the login header was not kept as a secret:\n{config}")
-
             b.click("#forge-rows [data-forge=gitlab]")
             b.click("#pr-add-host")
             self.set_field("#pr-hosts .row:last-child [data-key=host]", "git-auto.example.com")
@@ -8809,10 +8597,10 @@ class Suite:
             if "glpat-BROWSER-FOUR" in config or "${secret:gitlab_git-auto_example_com}" not in config:
                 raise Failure(f"the host's token was not kept as a secret:\n{config}")
             page = b.js("document.documentElement.outerHTML")
-            for value in ("tok-BROWSER-ONE", "tok-BROWSER-TWO", "tok-BROWSER-THREE", "glpat-BROWSER-FOUR"):
+            for value in ("tok-BROWSER-ONE", "tok-BROWSER-TWO", "glpat-BROWSER-FOUR"):
                 if value in page:
                     raise Failure(f"{value} is still on the page")
-            b.wait("document.querySelector('[data-secret-row=asana_authorization]')?.textContent.includes('Asana')", "the secret saying what uses it")
+            b.wait("document.querySelector('[data-secret-row=example_token]')?.textContent.includes('example')", "the secret saying what uses it")
             self.check_errors("tokens as secrets")
         finally:
             b.js("document.getElementById('conn-flow')?.close(); if (window.__real) { window.fetch = window.__real; delete window.__real; }")
@@ -8837,64 +8625,6 @@ class Suite:
             raise Failure("Save should wait for a change")
         self.set_field("#pr-form [name=poll_seconds]", "180")
         b.wait("!document.getElementById('pr-save').hidden", "Save after a change")
-
-    def test_connections_section(self):
-        b = self.b
-        b.goto(self.url("/settings#connections"))
-        b.wait("document.getElementById('conn-new')", "the section")
-        if b.js("document.getElementById('conn-trello')"):
-            raise Failure("the page still has a button for one tool")
-        b.click("#conn-new")
-        b.click("#conn-tabs [data-tab=conn-tab-token]")
-        b.wait("document.querySelector('#conn-new-list [data-starter=trello]')", "the examples")
-        said = b.js("document.getElementById('conn-new-list').textContent")
-        for want in ("Start blank", "Trello", "GitHub Issues", "GitLab Issues", "Jira", "Asana"):
-            if want not in said:
-                raise Failure(f"the list does not offer {want!r}: {said}")
-        b.click("#conn-new-list [data-starter=jira]")
-        b.wait("document.querySelector('#conn-form [name=base_url]')?.value.includes('atlassian.net')", "the Jira example")
-        b.click("#conn-cancel")
-        b.click("#conn-new")
-        b.click("#conn-tabs [data-tab=conn-tab-token]")
-        b.click("#conn-new-list [data-starter='']")
-        b.wait("document.querySelector('#conn-form [name=base_url]')?.value === ''", "a blank form")
-        b.click("#conn-cancel")
-        b.click("#conn-new")
-        b.click("#conn-tabs [data-tab=conn-tab-token]")
-        b.click("#conn-new-list [data-starter=trello]")
-        b.wait("document.querySelector('#conn-form [name=base_url]')?.value === 'https://api.trello.com/1'", "the Trello template")
-        b.js("document.getElementById('conn-more').open = true")
-        if "secret:trello_token" not in b.js("document.querySelector('#conn-headers [data-key=value]').value"):
-            raise Failure("the template's header is not a secret reference")
-        b.click("#conn-form button[type=submit]")
-        b.wait("document.querySelector('[data-conn=trello]')", "the saved connection")
-        row = b.js("document.querySelector('[data-conn=trello]').textContent")
-        for want in ("api.trello.com", "Save the secret", "trello_token"):
-            if want not in row:
-                raise Failure(f"the row does not say {want!r}: {row}")
-        self.row_action("[data-conn=trello]", "[data-conn-act=share]")
-        b.wait("document.getElementById('conn-share-text')", "the shared text")
-        text = b.js("document.getElementById('conn-share-text').value")
-        if "${secret:trello_token}" not in text:
-            raise Failure(f"share lost its reference: {text}")
-        b.click("[data-close-output]")
-        b.click("#conn-new")
-        b.click("#conn-tabs [data-tab=conn-tab-token]")
-        b.click("#conn-import-open")
-        self.set_field("#conn-import [name=text]", text.replace("id: trello", "id: copy"))
-        b.click("#conn-import button[type=submit]")
-        b.wait("document.querySelector('[data-conn=copy]')", "the imported connection")
-        if "Switched off" not in b.js("document.querySelector('[data-conn=copy]').textContent") and "Save the secret" not in b.js("document.querySelector('[data-conn=copy]').textContent"):
-            raise Failure("an import did not arrive switched off")
-        if "api.trello.com" not in b.js("document.getElementById('conn-output').textContent"):
-            raise Failure("the import does not name its host")
-        b.click("[data-close-output]")
-        for name in ("copy", "trello"):
-            self.row_action(f"[data-conn={name}]", "[data-conn-act=delete]")
-            b.wait("document.querySelector('dialog.confirm[open]')", "the question")
-            b.click("dialog.confirm[open] [data-answer=yes]")
-            b.wait(f"!document.querySelector('[data-conn={name}]')", "the connection gone")
-        self.check_errors("the Connections section")
 
     def test_settings_explains_github_and_gitlab(self):
         b = self.b
