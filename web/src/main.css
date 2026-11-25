@@ -1,0 +1,695 @@
+/* Tokens and base rules adapted from Orca (MIT, Lovecast Inc.), see THIRD_PARTY_NOTICES.md */
+@import 'tailwindcss';
+@import 'tw-animate-css';
+
+@font-face {
+  font-family: 'Geist';
+  src: url('./assets/fonts/Geist-Variable.woff2') format('woff2');
+  font-weight: 100 900;
+  font-style: normal;
+  font-display: swap;
+}
+
+@custom-variant dark (&:is(.dark *));
+@custom-variant can-hover (@media (hover: hover));
+
+@theme {
+  --text-2xs: 0.6875rem;
+  --text-2xs--line-height: calc(1 / 0.6875);
+  --text-3xs: 0.625rem;
+  --text-3xs--line-height: calc(0.875 / 0.625);
+  --text-settings-detail: 0.78125rem;
+  --text-settings-detail--line-height: 1.35;
+  --text-settings-heading: 0.9375rem;
+  --text-settings-heading--line-height: 1.4;
+  --text-chat-code: 0.75rem;
+  --text-chat-code--line-height: calc(1 / 0.75);
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-chat-canvas: var(--chat-canvas);
+  --color-chat-pane: var(--chat-pane);
+  --color-chat-foreground: var(--chat-foreground);
+  --color-chat-foreground-strong: var(--chat-foreground-strong);
+  --color-chat-foreground-faint: var(--chat-foreground-faint);
+  --color-chat-unread: var(--chat-unread);
+  --color-chat-user-surface: var(--chat-user-surface);
+  --color-chat-user-border: var(--chat-user-border);
+  --color-chat-code-foreground: var(--chat-code-foreground);
+  --color-chat-code-surface: var(--chat-code-surface);
+  --color-chat-code-border: var(--chat-code-border);
+  --color-chat-inline-code-surface: var(--chat-inline-code-surface);
+  --color-chat-inline-code-border: var(--chat-inline-code-border);
+  --color-chat-composer-surface: var(--chat-composer-surface);
+  --color-chat-composer-border: var(--chat-composer-border);
+  --color-chat-warning: var(--chat-warning);
+  --color-chat-diff-added: var(--chat-diff-added);
+  --color-chat-diff-removed: var(--chat-diff-removed);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-brand-mark: var(--brand-mark);
+  --color-brand-mark-foreground: var(--brand-mark-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-editor-surface: var(--editor-surface);
+  --color-floating-surface: var(--floating-surface);
+  --color-dialog-surface: var(--dialog-surface);
+  --color-agent-question: var(--agent-question);
+  --color-agent-working: var(--agent-working);
+  --color-agent-question-text: var(--agent-question-text);
+  --color-question-card-border: var(--question-card-border);
+  --color-question-option-border: var(--question-option-border);
+  --color-chat-focus-ring: var(--chat-focus-ring);
+  --color-unread: var(--unread);
+  --color-unread-inverse: var(--unread-inverse);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-worktree-sidebar: var(--worktree-sidebar);
+  --color-worktree-sidebar-foreground: var(--worktree-sidebar-foreground);
+  --color-worktree-sidebar-accent: var(--worktree-sidebar-accent);
+  --color-worktree-sidebar-accent-foreground: var(--worktree-sidebar-accent-foreground);
+  --color-worktree-sidebar-border: var(--worktree-sidebar-border);
+  /* Section dividers must read at a glance as a 1px line, so they mix foreground into
+     --worktree-sidebar-border; derived so light, dark, tinted and plugin themes follow. */
+  --color-worktree-sidebar-divider: color-mix(
+    in srgb,
+    var(--worktree-sidebar-foreground) 15%,
+    var(--worktree-sidebar-border)
+  );
+  --color-worktree-sidebar-ring: var(--worktree-sidebar-ring);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-terminal-pane-title-on-dark-fg: var(--terminal-pane-title-on-dark-fg);
+  --color-terminal-pane-title-on-dark-input-fg: var(--terminal-pane-title-on-dark-input-fg);
+  --color-terminal-pane-title-on-dark-placeholder: var(--terminal-pane-title-on-dark-placeholder);
+  --color-terminal-pane-title-on-dark-button-fg: var(--terminal-pane-title-on-dark-button-fg);
+  --color-terminal-pane-title-on-dark-button-hover-fg: var(
+    --terminal-pane-title-on-dark-button-hover-fg
+  );
+  --color-terminal-pane-title-on-dark-input-bg: var(--terminal-pane-title-on-dark-input-bg);
+  --color-terminal-pane-title-on-dark-separator: var(--terminal-pane-title-on-dark-separator);
+  --color-terminal-pane-title-on-light-fg: var(--terminal-pane-title-on-light-fg);
+  --color-terminal-pane-title-on-light-input-fg: var(--terminal-pane-title-on-light-input-fg);
+  --color-terminal-pane-title-on-light-placeholder: var(--terminal-pane-title-on-light-placeholder);
+  --color-terminal-pane-title-on-light-button-fg: var(--terminal-pane-title-on-light-button-fg);
+  --color-terminal-pane-title-on-light-button-hover-fg: var(
+    --terminal-pane-title-on-light-button-hover-fg
+  );
+  --color-terminal-pane-title-on-light-input-bg: var(--terminal-pane-title-on-light-input-bg);
+  --color-terminal-pane-title-on-light-separator: var(--terminal-pane-title-on-light-separator);
+  --color-ai-action-accent: var(--ai-action-accent);
+  --color-status-success: var(--status-success);
+  --color-status-success-background: var(--status-success-background);
+  --color-status-success-border: var(--status-success-border);
+  --color-status-warning: var(--status-warning);
+  --color-status-warning-text: var(--status-warning-text);
+  --color-jira-priority-high: var(--jira-priority-high);
+  --color-jira-priority-medium: var(--jira-priority-medium);
+  --color-jira-priority-low: var(--jira-priority-low);
+  --color-status-warning-background: var(--status-warning-background);
+  --color-status-warning-border: var(--status-warning-border);
+  --color-status-warning-foreground: var(--status-warning-foreground);
+  --color-callout-note: var(--callout-note);
+  --color-callout-important: var(--callout-important);
+  --color-workspace-status-done: var(--workspace-status-done);
+  --color-workspace-status-review: var(--workspace-status-review);
+  --color-workspace-status-progress: var(--workspace-status-progress);
+  --color-tab-active: var(--tab-active);
+  --color-tab-inactive: var(--tab-inactive);
+  /* Public tokens a theme may omit; resolved per element so unthemed tabs paint exactly as before. */
+  --color-tab-bar: var(--tab-bar, var(--card));
+  --color-tab-active-foreground: var(--tab-active-foreground, var(--foreground));
+  --color-tab-active-indicator: var(
+    --tab-active-indicator,
+    var(--tab-active-foreground, var(--foreground))
+  );
+  /* --tab-inactive-label is set only in a light unfocused split group (below). */
+  --color-tab-inactive-foreground: var(
+    --tab-inactive-foreground,
+    var(--tab-inactive-label, var(--muted-foreground))
+  );
+  /* Active right sidebar tool line: the theme's tab indicator, else the foreground it always used. */
+  --color-activity-bar-indicator: var(--tab-active-indicator, var(--foreground));
+  /* The theme's accent where one is set (link color); the built-in note blue otherwise. */
+  --color-theme-accent: var(--text-link, var(--callout-note));
+  /* A theme-accent button's fill: the accent, unless no label reads on it (then the built-in accent). */
+  --color-theme-accent-fill: var(--theme-accent-fill, var(--text-link, var(--callout-note)));
+  /* Its hover: 12% toward the neutral opposite of the label, so the label keeps 4.5:1 either way. */
+  --color-theme-accent-fill-hover: color-mix(
+    in srgb,
+    var(--theme-accent-fill, var(--text-link, var(--callout-note))) 88%,
+    oklch(from var(--theme-accent-foreground) calc(1 - l) 0 0)
+  );
+  /* The label on a theme-accent fill: derived from the accent (near-black or white, whichever reads better). */
+  --color-theme-accent-foreground: var(--theme-accent-foreground);
+  --color-git-graph-ref: var(--git-graph-ref);
+  --color-git-graph-remote-ref: var(--git-graph-remote-ref);
+  --color-git-graph-base-ref: var(--git-graph-base-ref);
+  --color-git-graph-lane-1: var(--git-graph-lane-1);
+  --color-git-graph-lane-2: var(--git-graph-lane-2);
+  --color-git-graph-lane-3: var(--git-graph-lane-3);
+  --color-git-graph-lane-4: var(--git-graph-lane-4);
+  --color-git-graph-lane-5: var(--git-graph-lane-5);
+  --color-annotation-highlight: var(--annotation-highlight);
+  --color-search-match: var(--markdown-search-match);
+  --shadow-floating: 0 10px 24px rgb(0 0 0 / 0.18);
+  --shadow-notice: var(--notice-shadow);
+  --radius-sm: calc(var(--radius) * 0.6);
+  --radius-md: calc(var(--radius) * 0.8);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) * 1.4);
+  --radius-2xl: calc(var(--radius) * 1.8);
+  --radius-3xl: calc(var(--radius) * 2.2);
+  --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+/* Why: react-remove-scroll-bar sets this on body per modal and nothing reads it; inheriting it restyles the whole app. */
+@property --removed-body-scroll-bar-size {
+  syntax: '*';
+  inherits: false;
+}
+
+/* Why: only the drawer that carries it reads the live sidebar width; don't restyle its subtree per drag frame. */
+@property --workspace-sidebar-live-width {
+  syntax: '*';
+  inherits: false;
+}
+
+/* Why: non-inherited and keyed on .app-layout, so a modal toggle restyles only its direct children, not the whole app. */
+@property --app-layout-modal-blur {
+  syntax: '*';
+  inherits: false;
+}
+
+:root {
+  --workspace-tab-row-height: 32px;
+  /* How far a split divider's invisible grab area reaches past its visible line. */
+  --divider-grab-reach: 7px;
+  --divider-hover-delay: 200ms;
+  --app-header-height: 36px;
+  --app-font-family: 'Geist', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-sans: var(--app-font-family);
+  --font-mono:
+    'SF Mono', SFMono-Regular, ui-monospace, 'Cascadia Code', Menlo, Consolas, 'Liberation Mono',
+    monospace;
+  --radius: 0.625rem;
+  --orca-security-background: #fff;
+  --orca-security-foreground: #0a0a0a;
+  --orca-security-card: #fff;
+  --orca-security-card-foreground: #0a0a0a;
+  --orca-security-popover: #fff;
+  --orca-security-popover-foreground: #0a0a0a;
+  --orca-security-primary: #171717;
+  --orca-security-primary-foreground: #fafafa;
+  --orca-security-secondary: #f5f5f5;
+  --orca-security-secondary-foreground: #171717;
+  --orca-security-muted: #f5f5f5;
+  --orca-security-muted-foreground: #696969;
+  --orca-security-accent: #f5f5f5;
+  --orca-security-accent-foreground: #171717;
+  --orca-security-border: #e5e5e5;
+  --orca-security-input: #e5e5e5;
+  --orca-security-ring: #a1a1a1;
+  --orca-security-floating-surface: rgba(255, 255, 255, 0.82);
+  --orca-security-dialog-surface: rgba(255, 255, 255, 0.96);
+  --background: #fff;
+  --editor-surface: #ffffff;
+  --foreground: #0a0a0a;
+  --chat-canvas-mix: 0%;
+  --chat-foreground-mix: 88%;
+  --chat-strong-mix: 98%;
+  --chat-faint-mix: 100%;
+  --chat-user-mix: 4%;
+  --chat-user-border-mix: 7%;
+  --chat-code-mix: 2%;
+  --chat-code-base: var(--chat-canvas);
+  --chat-inline-code-mix: 4%;
+  --chat-inline-code-base: var(--chat-canvas);
+  --chat-inline-code-border-mix: 9%;
+  --chat-composer-mix: 0%;
+  --chat-composer-base: var(--chat-canvas);
+  --chat-composer-border-mix: 11%;
+  --chat-selection-mix: 30%;
+  --chat-content-max-width: 46rem;
+  /* Why: unitless so each markdown surface multiplies it by its own font size; zoom keeps characters per line. */
+  --markdown-reading-measure-em: 60;
+  --card: #fff;
+  --card-foreground: #0a0a0a;
+  /* Why: another product's logo is drawn for a white backdrop in both themes. */
+  --brand-mark: #fff;
+  --brand-mark-foreground: #0a0a0a;
+  --popover: #fff;
+  --popover-foreground: #0a0a0a;
+  /* Glass tints for menus and dialogs; a plugin theme replaces both with its --popover. */
+  --floating-surface: rgba(255, 255, 255, 0.82);
+  --dialog-surface: color-mix(in srgb, var(--background) 96%, transparent);
+  --primary: #171717;
+  --primary-foreground: #fafafa;
+  --secondary: #f5f5f5;
+  --secondary-foreground: #171717;
+  --muted: #f5f5f5;
+  --muted-foreground: #696969;
+  --accent: #f5f5f5;
+  --accent-foreground: #171717;
+  --border: #e5e5e5;
+  --input: #e5e5e5;
+  --ring: #a1a1a1;
+  --terminal-pane-locate: var(--color-blue-600);
+  --ai-action-accent: var(--color-violet-500);
+  /* Use one question hue across surfaces, distinct from working-yellow. */
+  --agent-question: var(--color-orange-600);
+  /* The working-state yellow every agent working/monitoring glyph paints. */
+  --agent-working: var(--color-yellow-500);
+  /* Legible weight for text/glyphs on a tinted --agent-question surface. */
+  --agent-question-text: var(--color-orange-700);
+  /* Answer card edge and the outline shared by its option tiles, badges, answer field and Skip. */
+  --question-card-border-mix: 14%;
+  --question-option-border-mix: 16%;
+  /* A finished agent result the user hasn't seen; blue so it never reads as a state color. */
+  --unread: var(--color-blue-500);
+  /* The unread dot on an inverted surface (tips): blue-500 keeps 3:1 on both the near-black and near-white inverse. */
+  --unread-inverse: var(--color-blue-500);
+  /* Keep PR-state hues stable across theme changes. */
+  --workspace-status-done: #c7a594;
+  --workspace-status-review: #16a34a;
+  --workspace-status-progress: #d4a300;
+  --chart-1: var(--color-blue-300);
+  --chart-2: var(--color-blue-500);
+  --chart-3: var(--color-blue-600);
+  --chart-4: var(--color-blue-700);
+  --chart-5: var(--color-blue-800);
+  --worktree-sidebar: #f5f5f5;
+  --worktree-sidebar-foreground: #0a0a0a;
+  --worktree-sidebar-accent: #eaeaea;
+  --worktree-sidebar-accent-foreground: #171717;
+  --worktree-sidebar-border: #e5e5e5;
+  --worktree-sidebar-ring: #a1a1a1;
+  --sidebar: #fafafa;
+  --sidebar-foreground: #0a0a0a;
+  --sidebar-primary: #171717;
+  --sidebar-primary-foreground: #fafafa;
+  --sidebar-accent: #f5f5f5;
+  --sidebar-accent-foreground: #171717;
+  --sidebar-border: #e5e5e5;
+  --sidebar-ring: #a1a1a1;
+  --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
+  --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
+  --terminal-pane-title-on-dark-placeholder: rgb(255 255 255 / 0.38);
+  --terminal-pane-title-on-dark-button-fg: rgb(255 255 255);
+  --terminal-pane-title-on-dark-button-hover-fg: rgb(255 255 255);
+  --terminal-pane-title-on-dark-input-bg: rgb(255 255 255 / 0.04);
+  --terminal-pane-title-on-dark-separator: rgb(255 255 255 / 0.06);
+  --terminal-pane-title-on-light-fg: rgb(24 24 27 / 0.64);
+  --terminal-pane-title-on-light-input-fg: rgb(24 24 27 / 0.82);
+  --terminal-pane-title-on-light-placeholder: rgb(24 24 27 / 0.48);
+  --terminal-pane-title-on-light-button-fg: rgb(24 24 27);
+  --terminal-pane-title-on-light-button-hover-fg: rgb(24 24 27);
+  --terminal-pane-title-on-light-input-bg: rgb(24 24 27 / 0.05);
+  --terminal-pane-title-on-light-separator: rgb(24 24 27 / 0.1);
+  --git-graph-ref: #007acc;
+  --git-graph-remote-ref: #b66dff;
+  --git-graph-base-ref: #ea5c00;
+  --git-graph-lane-1: #ffb000;
+  --git-graph-lane-2: #dc267f;
+  --git-graph-lane-3: #994f00;
+  --git-graph-lane-4: #40b0a6;
+  --git-graph-lane-5: #b66dff;
+  --annotation-highlight: #f59e0b;
+  --markdown-search-match: #facc15;
+  --markdown-search-match-active: #fb923c;
+  /* Split dividers must clear 3:1 against --card even before hover; --border is too faint. */
+  --split-divider: #868690;
+  --split-divider-hover: #71717a;
+  /* `--tab-bar` is set only by themes; keep in sync with PLUGIN_APP_THEME_CSS_FALLBACKS. */
+  /* White --card can't be lifted, so light mode recesses inactive tabs to keep the active one lighter.
+     Why 8%: 4% left tabs ~2% apart on tinted bars; past 8% muted tab text drops under 4.5:1.
+     An app theme lowers the mix where its tab text would read worse (tab-contrast-mix.ts). */
+  --tab-contrast-mix: 8%;
+  --tab-active: var(--tab-bar, var(--card));
+  --tab-inactive: color-mix(
+    in srgb,
+    var(--foreground) var(--tab-contrast-mix),
+    var(--tab-bar, var(--card))
+  );
+}
+
+.light {
+  --tab-decoration-added: color-mix(in srgb, black 15%, var(--git-decoration-added));
+  --tab-decoration-renamed: color-mix(in srgb, black 20%, var(--git-decoration-renamed));
+  --tab-decoration-copied: color-mix(in srgb, black 20%, var(--git-decoration-copied));
+}
+
+/* The split's 95% opacity can take the muted label under 4.5:1. Themes check their actual fill. */
+.light [data-unfocused-split-group] {
+  --tab-inactive-label: var(
+    --tab-unfocused-inactive-label,
+    color-mix(in srgb, black 10%, var(--muted-foreground))
+  );
+}
+
+.light .bg-tab-inactive,
+.dark .bg-tab-active {
+  --tab-status-ink: var(--tab-status-mixed-ink);
+}
+
+.dark {
+  --orca-security-background: #0a0a0a;
+  --orca-security-foreground: #f0f0f0;
+  --orca-security-card: #171717;
+  --orca-security-card-foreground: #f0f0f0;
+  --orca-security-popover: #171717;
+  --orca-security-popover-foreground: #f0f0f0;
+  --orca-security-primary: #e5e5e5;
+  --orca-security-primary-foreground: #171717;
+  --orca-security-secondary: #262626;
+  --orca-security-secondary-foreground: #f0f0f0;
+  --orca-security-muted: #262626;
+  --orca-security-muted-foreground: #acacac;
+  --orca-security-accent: #404040;
+  --orca-security-accent-foreground: #f0f0f0;
+  --orca-security-border: rgb(255 255 255 / 0.07);
+  --orca-security-input: rgb(255 255 255 / 0.15);
+  --orca-security-ring: #737373;
+  --orca-security-floating-surface: rgba(0, 0, 0, 0.72);
+  --orca-security-dialog-surface: rgba(23, 23, 23, 0.96);
+  --background: #0a0a0a;
+  --editor-surface: #1e1e1e;
+  --foreground: #f0f0f0;
+  --chat-canvas-mix: 5%;
+  --chat-foreground-mix: 88%;
+  --chat-strong-mix: 98%;
+  --chat-faint-mix: 83%;
+  --chat-user-mix: 7%;
+  --chat-user-border-mix: 6%;
+  --chat-code-mix: 3.5%;
+  --chat-code-base: transparent;
+  --chat-inline-code-mix: 6%;
+  --chat-inline-code-base: transparent;
+  --chat-inline-code-border-mix: 8%;
+  --chat-composer-mix: 4%;
+  --chat-composer-base: transparent;
+  --chat-composer-border-mix: 9%;
+  --chat-selection-mix: 40%;
+  --chat-content-max-width: 46rem;
+  --card: #171717;
+  --card-foreground: #f0f0f0;
+  --brand-mark: #fff;
+  --brand-mark-foreground: #0a0a0a;
+  --popover: #171717;
+  --popover-foreground: #f0f0f0;
+  --floating-surface: rgba(0, 0, 0, 0.72);
+  --dialog-surface: rgba(23, 23, 23, 0.96);
+  --primary: #e5e5e5;
+  --primary-foreground: #171717;
+  --secondary: #262626;
+  --secondary-foreground: #f0f0f0;
+  --muted: #262626;
+  --muted-foreground: #acacac;
+  --accent: #404040;
+  --accent-foreground: #f0f0f0;
+  --border: rgb(255 255 255 / 0.07);
+  --input: rgb(255 255 255 / 0.15);
+  --ring: #737373;
+  --terminal-pane-locate: var(--color-blue-400);
+  --ai-action-accent: var(--color-violet-400);
+  --agent-question: var(--color-orange-500);
+  --agent-question-text: var(--color-orange-300);
+  --question-card-border-mix: 16%;
+  --question-option-border-mix: 12%;
+  --unread: var(--color-blue-400);
+  --workspace-status-done: #c7a594;
+  --workspace-status-review: #16a34a;
+  --workspace-status-progress: #d4a300;
+  --chart-1: var(--color-blue-300);
+  --chart-2: var(--color-blue-500);
+  --chart-3: var(--color-blue-600);
+  --chart-4: var(--color-blue-700);
+  --chart-5: var(--color-blue-800);
+  /* Mirror light mode’s lifted worktree sidebar above the dark canvas. */
+  --worktree-sidebar: #2a2a2a;
+  --worktree-sidebar-foreground: #f0f0f0;
+  --worktree-sidebar-accent: #353535;
+  --worktree-sidebar-accent-foreground: #f0f0f0;
+  /* Match --border / --sidebar-border (7%) so the left sidebar's divider lines
+     aren't brighter than the rest of the UI in dark mode (#5906). */
+  --worktree-sidebar-border: rgb(255 255 255 / 0.07);
+  --worktree-sidebar-ring: #737373;
+  --sidebar: #171717;
+  --sidebar-foreground: #f0f0f0;
+  --sidebar-primary: #1447e6;
+  --sidebar-primary-foreground: #f0f0f0;
+  --sidebar-accent: #262626;
+  --sidebar-accent-foreground: #f0f0f0;
+  --sidebar-border: rgb(255 255 255 / 0.07);
+  --sidebar-ring: #525252;
+  --terminal-pane-title-on-dark-fg: rgb(255 255 255 / 0.52);
+  --terminal-pane-title-on-dark-input-fg: rgb(255 255 255 / 0.7);
+  --terminal-pane-title-on-dark-placeholder: rgb(255 255 255 / 0.38);
+  --terminal-pane-title-on-dark-button-fg: rgb(255 255 255);
+  --terminal-pane-title-on-dark-button-hover-fg: rgb(255 255 255);
+  --terminal-pane-title-on-dark-input-bg: rgb(255 255 255 / 0.04);
+  --terminal-pane-title-on-dark-separator: rgb(255 255 255 / 0.06);
+  --terminal-pane-title-on-light-fg: rgb(24 24 27 / 0.64);
+  --terminal-pane-title-on-light-input-fg: rgb(24 24 27 / 0.82);
+  --terminal-pane-title-on-light-placeholder: rgb(24 24 27 / 0.48);
+  --terminal-pane-title-on-light-button-fg: rgb(24 24 27);
+  --terminal-pane-title-on-light-button-hover-fg: rgb(24 24 27);
+  --terminal-pane-title-on-light-input-bg: rgb(24 24 27 / 0.05);
+  --terminal-pane-title-on-light-separator: rgb(24 24 27 / 0.1);
+  --git-graph-ref: #3794ff;
+  --git-graph-remote-ref: #b66dff;
+  --git-graph-base-ref: #ea5c00;
+  --git-graph-lane-1: #ffb000;
+  --git-graph-lane-2: #dc267f;
+  --git-graph-lane-3: #ce9178;
+  --git-graph-lane-4: #40b0a6;
+  --git-graph-lane-5: #b66dff;
+  --annotation-highlight: #fbbf24;
+  --markdown-search-match: #facc15;
+  --markdown-search-match-active: #fb923c;
+  /* Brighter than terminal defaults so the always-visible line clears 3:1 on `--card`. */
+  --split-divider: #71717a;
+  --split-divider-hover: #a1a1aa;
+  --tab-contrast-mix: 11%;
+  --tab-active: color-mix(
+    in srgb,
+    var(--foreground) var(--tab-contrast-mix),
+    var(--tab-bar, var(--card))
+  );
+  --tab-inactive: var(--tab-bar, var(--card));
+  --tab-decoration-deleted: color-mix(in srgb, white 35%, var(--git-decoration-deleted));
+}
+
+/* Status and diff colors follow the chat scheme without copying the app palette. */
+:root,
+.native-chat-appearance[data-native-chat-scheme='light'] {
+  /* Native scrollbars and form controls follow the scheme instead of Chromium's light default. */
+  color-scheme: light;
+  --destructive: #e40014;
+  --destructive-foreground: #fff;
+  --status-success: #147638;
+  --status-success-background: color-mix(in srgb, var(--status-success) 10%, transparent);
+  --status-success-border: color-mix(in srgb, var(--status-success) 25%, transparent);
+  /* Needs-attention states use yellow, separate from errors and working states. */
+  --status-warning: #ca8a04;
+  /* Why: raw amber is under 3:1 on white; small warning text needs the darker mix. */
+  --status-warning-text: color-mix(in srgb, var(--status-warning) 70%, var(--foreground));
+  --jira-priority-high: var(--destructive);
+  --jira-priority-medium: var(--status-warning);
+  --jira-priority-low: var(--callout-note);
+  --status-warning-background: color-mix(in srgb, var(--status-warning) 10%, transparent);
+  --status-warning-border: color-mix(in srgb, var(--status-warning) 25%, transparent);
+  /* Warning text on a plain surface; the bare hue is ~3:1 on light backgrounds. */
+  --status-warning-foreground: color-mix(in srgb, var(--status-warning) 70%, var(--foreground));
+  /* GitHub's own hues for the two callout kinds no status token covers. */
+  --callout-note: #0969da;
+  /* Keep in step with accentInkHex (src/shared/color/accent-ink.ts): white reads better on this accent. */
+  --theme-accent-foreground: #fafafa;
+  --callout-important: #8250df;
+  --git-decoration-added: #587c0c;
+  --git-decoration-modified: #895503;
+  --git-decoration-deleted: #ad0707;
+  --git-decoration-renamed: #007acc;
+  --git-decoration-untracked: #007100;
+  --git-decoration-copied: #007acc;
+  --git-decoration-ignored: #737373;
+  --diff-added: var(--git-decoration-added);
+  --diff-removed: var(--git-decoration-deleted);
+  --diff-added-background: color-mix(in srgb, var(--diff-added) 13%, transparent);
+  --diff-added-gutter: color-mix(in srgb, var(--diff-added) 26%, transparent);
+  --diff-added-emphasis: color-mix(in srgb, var(--diff-added) 15%, transparent);
+  --diff-removed-background: color-mix(in srgb, var(--diff-removed) 11%, transparent);
+  --diff-removed-gutter: color-mix(in srgb, var(--diff-removed) 22%, transparent);
+  --diff-removed-emphasis: color-mix(in srgb, var(--diff-removed) 15%, transparent);
+}
+
+.dark,
+.native-chat-appearance[data-native-chat-scheme='dark'] {
+  color-scheme: dark;
+  --destructive: #ff6568;
+  /* Dark --destructive is a light red, so its label needs dark ink to clear AA. */
+  --destructive-foreground: #450a0a;
+  --status-success: #86efac;
+  --status-success-background: color-mix(in srgb, var(--status-success) 10%, transparent);
+  --status-success-border: color-mix(in srgb, var(--status-success) 25%, transparent);
+  --status-warning: #eab308;
+  --status-warning-text: var(--status-warning);
+  --jira-priority-high: var(--destructive);
+  --jira-priority-medium: var(--status-warning);
+  --jira-priority-low: var(--callout-note);
+  --status-warning-background: color-mix(in srgb, var(--status-warning) 10%, transparent);
+  --status-warning-border: color-mix(in srgb, var(--status-warning) 25%, transparent);
+  /* Warning text on a plain surface; the bare hue is ~3:1 on light backgrounds. */
+  --status-warning-foreground: color-mix(in srgb, var(--status-warning) 70%, var(--foreground));
+  --callout-note: #4493f8;
+  /* Keep in step with accentInkHex (src/shared/color/accent-ink.ts): near-black reads better on this accent. */
+  --theme-accent-foreground: #171717;
+  --callout-important: #ab7df8;
+  --git-decoration-added: #81b88b;
+  --git-decoration-modified: #e2c08d;
+  --git-decoration-deleted: #c74e39;
+  --git-decoration-renamed: #73c991;
+  --git-decoration-untracked: #73c991;
+  --git-decoration-copied: #73c991;
+  --git-decoration-ignored: #808080;
+  --diff-added: var(--git-decoration-added);
+  --diff-removed: var(--git-decoration-deleted);
+  --diff-added-background: color-mix(in srgb, var(--diff-added) 16%, transparent);
+  --diff-added-gutter: color-mix(in srgb, var(--diff-added) 30%, transparent);
+  --diff-added-emphasis: color-mix(in srgb, var(--diff-added) 20%, transparent);
+  --diff-removed-background: color-mix(in srgb, var(--diff-removed) 18%, transparent);
+  --diff-removed-gutter: color-mix(in srgb, var(--diff-removed) 32%, transparent);
+  --diff-removed-emphasis: color-mix(in srgb, var(--diff-removed) 20%, transparent);
+}
+
+.plugin-security-chrome {
+  /* Host-owned contrast prevents plugin themes from disguising provenance or consent. */
+  --background: var(--orca-security-background);
+  --foreground: var(--orca-security-foreground);
+  --card: var(--orca-security-card);
+  --card-foreground: var(--orca-security-card-foreground);
+  --popover: var(--orca-security-popover);
+  --popover-foreground: var(--orca-security-popover-foreground);
+  --primary: var(--orca-security-primary);
+  --primary-foreground: var(--orca-security-primary-foreground);
+  --secondary: var(--orca-security-secondary);
+  --secondary-foreground: var(--orca-security-secondary-foreground);
+  --muted: var(--orca-security-muted);
+  --muted-foreground: var(--orca-security-muted-foreground);
+  --accent: var(--orca-security-accent);
+  --accent-foreground: var(--orca-security-accent-foreground);
+  --border: var(--orca-security-border);
+  --input: var(--orca-security-input);
+  --ring: var(--orca-security-ring);
+  /* A plugin theme copies its --popover into these, so trust dialogs would paint on it. */
+  --floating-surface: var(--orca-security-floating-surface);
+  --dialog-surface: var(--orca-security-dialog-surface);
+}
+
+:root {
+  --notice-surface: var(--popover);
+  --notice-border: color-mix(in srgb, var(--popover-foreground) 20%, transparent);
+  --notice-shadow: 0 16px 40px -8px rgb(0 0 0 / 0.28), 0 3px 8px rgb(0 0 0 / 0.12);
+}
+
+.dark {
+  --notice-surface: color-mix(in srgb, var(--foreground) 15%, var(--popover));
+  --notice-border: color-mix(in srgb, var(--popover-foreground) 22%, transparent);
+  --notice-shadow:
+    0 18px 48px -8px rgb(0 0 0 / 0.7), 0 4px 12px rgb(0 0 0 / 0.35),
+    inset 0 1px 0 rgb(255 255 255 / 0.08);
+}
+
+@layer base {
+  *,
+  *::before,
+  *::after {
+    @apply border-border outline-ring/50;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    margin: 0;
+    padding: 0;
+    overflow: hidden;
+    height: 100dvh;
+    font-family: var(--app-font-family);
+    letter-spacing: 0.01em;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  ul {
+    list-style: none;
+  }
+}
+
+.scrollbar-sleek {
+  scrollbar-width: thin;
+  scrollbar-color: transparent transparent;
+}
+.scrollbar-sleek:hover {
+  scrollbar-color: color-mix(in srgb, var(--foreground) 22%, transparent) transparent;
+}
+
+.reduce-motion *,
+.reduce-motion *::before,
+.reduce-motion *::after {
+  animation: none !important;
+  transition: none !important;
+}
+
+body > [data-radix-popper-content-wrapper] > *,
+body > [role='dialog'],
+body > [role='alertdialog'],
+[data-sonner-toaster] {
+  zoom: var(--ui-zoom, 1);
+}
+
+/* A zoomed dialog measures its height limit before the zoom, so the limit is divided by it. */
+body > [role='dialog'] {
+  max-height: calc((100dvh - 2rem) / var(--ui-zoom, 1)) !important;
+}
+
+.yb-prompt p.is-editor-empty:first-child::before {
+  content: attr(data-placeholder);
+  float: left;
+  height: 0;
+  pointer-events: none;
+  color: var(--muted-foreground);
+}
+.yb-prompt p { margin: 0; }
+
+/* A focused field only darkens its border: no halo, no browser outline. Tailwind's ring is a box
+   shadow, so it is cleared here for every field whatever its classes ask for. */
+input:not([type='checkbox'], [type='radio'], [type='range'], [type='file']):focus,
+textarea:focus,
+select:focus {
+  outline: none !important;
+  box-shadow: none !important;
+  border-color: color-mix(in oklab, var(--foreground) 32%, transparent) !important;
+}

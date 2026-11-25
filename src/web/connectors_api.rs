@@ -80,6 +80,8 @@ async fn list(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
         "sign_in": crate::connectors::sign_in_tools().iter().map(|t| {
             let mut tool = json!(t);
             tool["template"] = json!(crate::connectors::sign_in_template(t.id).is_some());
+            tool["category"] = json!(crate::connectors::sign_in_category(t.id));
+            tool["place"] = json!(crate::connectors::sign_in_place(t.id));
             tool
         }).collect::<Vec<_>>(),
         "list": items,
@@ -333,6 +335,8 @@ async fn import(
 #[derive(Deserialize)]
 struct ConnectReq {
     template: String,
+    #[serde(default)]
+    place: Option<String>,
 }
 
 async fn connect(
@@ -344,9 +348,10 @@ async fn connect(
         .iter()
         .find(|t| t.id == req.template)
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, format!("no tool {}", req.template)))?;
+    let url = crate::connectors::sign_in_url(tool, req.place.as_deref()).map_err(bad)?;
     let cfg = app.config()?;
     let mut servers = cfg.mcp_servers.clone();
-    let name = match servers.iter().find(|s| s.url == tool.url) {
+    let name = match servers.iter().find(|s| s.url == url) {
         Some(s) => s.name.clone(),
         None if servers.iter().any(|s| s.name == tool.id) => {
             return Err(bad(format!(
@@ -358,7 +363,7 @@ async fn connect(
             servers.push(crate::config::McpServer {
                 name: tool.id.to_string(),
                 command: String::new(),
-                url: tool.url.to_string(),
+                url: url.clone(),
                 env: Default::default(),
                 headers: Default::default(),
                 machines: Vec::new(),

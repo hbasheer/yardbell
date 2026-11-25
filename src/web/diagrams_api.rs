@@ -10,6 +10,7 @@ use axum::routing::{get, post};
 use axum::{Json, Router};
 use serde::Deserialize;
 use serde_json::{json, Value};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 const STATUS_WAIT: Duration = Duration::from_secs(15);
@@ -39,20 +40,45 @@ fn bad(message: &str) -> ApiError {
     ApiError(StatusCode::BAD_REQUEST, message.to_string())
 }
 
-fn folder_path(app: &AppState, machine: &str, folder: &str) -> Result<String, ApiError> {
-    app.state
+// The folders Yardbell scanned on the machine, and the projects you added there.
+fn known_folders(app: &AppState, machine: &str) -> BTreeMap<String, String> {
+    let mut known = app
+        .state
         .snapshot(machine)
-        .and_then(|snap| snap.folder_paths.get(folder).cloned())
+        .map(|snap| snap.folder_paths)
+        .unwrap_or_default();
+    if let Ok(cfg) = app.config() {
+        for p in cfg.projects.added.iter().filter(|p| p.machine == machine) {
+            if !known.values().any(|path| path == &p.path) {
+                known.insert(p.path.clone(), p.path.clone());
+            }
+        }
+    }
+    known
+}
+
+fn folder_path(app: &AppState, machine: &str, folder: &str) -> Result<String, ApiError> {
+    let known = known_folders(app, machine);
+    known
+        .get(folder)
+        .or_else(|| known.values().find(|path| *path == folder))
+        .cloned()
         .ok_or_else(|| bad(&format!("{machine} has no folder {folder}")))
 }
 
+// Drawing can also start in a folder picked with Browse, as a new session can.
+fn draw_folder(app: &AppState, machine: &str, folder: &str) -> Result<String, ApiError> {
+    folder_path(app, machine, folder)
+        .or_else(|_| crate::projects::valid_path(folder).map_err(|why| bad(&why)))
+}
+
 async fn machine_entry(app: &AppState, m: Machine) -> (Value, Vec<Diagram>) {
-    let folders: Vec<(String, String)> = app
-        .state
-        .snapshot(&m.name)
-        .map(|snap| snap.folder_paths.into_iter().collect())
-        .unwrap_or_default();
+    let folders: Vec<(String, String)> = known_folders(app, &m.name).into_iter().collect();
     let labels: Vec<&String> = folders.iter().map(|(label, _)| label).collect();
+    let paths: serde_json::Map<String, Value> = folders
+        .iter()
+        .map(|(label, path)| (label.clone(), json!(path)))
+        .collect();
     let status = app
         .sessions
         .script(&m, &login_shell(&diagrams::status_script()), STATUS_WAIT)
@@ -60,7 +86,7 @@ async fn machine_entry(app: &AppState, m: Machine) -> (Value, Vec<Diagram>) {
     let setup = match status {
         Ok(text) => diagrams::parse_status(&text),
         Err(problem) => {
-            let entry = json!({ "name": m.name, "state": "offline", "problem": problem, "folders": labels });
+            let entry = json!({ "name": m.name, "state": "offline", "problem": problem, "folders": labels, "paths": paths });
             return (entry, Vec::new());
         }
     };
@@ -78,6 +104,7 @@ async fn machine_entry(app: &AppState, m: Machine) -> (Value, Vec<Diagram>) {
         "node": setup.node,
         "problem": problem,
         "folders": labels,
+        "paths": paths,
     });
     (entry, found)
 }
@@ -234,6 +261,10 @@ pub(crate) struct Draw {
     pub description: String,
     #[serde(default)]
     pub new_folder: String,
+    #[serde(default)]
+    pub model: String,
+    #[serde(default)]
+    pub effort: String,
 }
 
 async fn draw_route(
@@ -251,7 +282,7 @@ pub(crate) fn check_draw(app: &AppState, req: &Draw) -> Result<(), ApiError> {
         if req.folder.is_empty() {
             return Err(bad("choose a folder, or a name for a new one"));
         }
-        folder_path(app, &m.name, &req.folder)?;
+        draw_folder(app, &m.name, &req.folder)?;
     } else {
         if !diagrams::safe_name(&req.new_folder) || req.new_folder.starts_with('.') {
             return Err(bad("that folder name is not a plain name"));
@@ -288,7 +319,7 @@ pub(crate) async fn draw(app: &AppState, req: Draw) -> Result<Value, ApiError> {
         _ => return Err(bad(&format!("Install Archify on {} first", m.name))),
     }
     let path = if req.new_folder.is_empty() {
-        folder_path(app, &m.name, &req.folder)?
+        draw_folder(app, &m.name, &req.folder)?
     } else {
         let made = app
             .sessions
@@ -318,6 +349,8 @@ pub(crate) async fn draw(app: &AppState, req: Draw) -> Result<Value, ApiError> {
         "machine": m.name,
         "path": path,
         "agent": req.agent,
+        "model": req.model,
+        "effort": req.effort,
         "prompt": prompt,
         "name_tag": "diagram",
     }))

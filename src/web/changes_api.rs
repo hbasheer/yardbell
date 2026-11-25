@@ -1,6 +1,6 @@
 use super::files_api::{known, refused};
 use super::{find_machine, ApiError, AppState};
-use crate::changes::{draft, Changes};
+use crate::changes::{draft, Changes, GitAction};
 use crate::config::Machine;
 use crate::dispatch::valid_review_path;
 use crate::files::{check_relative, check_root, FileError};
@@ -22,6 +22,7 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/machines/{machine}/changes/diff", get(diff))
         .route("/machines/{machine}/changes/draft", get(draft_message))
         .route("/machines/{machine}/changes/commit", post(commit))
+        .route("/machines/{machine}/changes/{action}", post(git_action))
 }
 
 #[derive(Deserialize)]
@@ -120,6 +121,8 @@ struct CommitInput {
     message: String,
     #[serde(default)]
     paths: Option<Vec<String>>,
+    #[serde(default)]
+    staged: bool,
 }
 
 async fn commit(
@@ -140,6 +143,16 @@ async fn commit(
             StatusCode::BAD_REQUEST,
             "that commit message is too long or has a NUL in it".into(),
         ));
+    }
+    if req.staged {
+        let (_, known) = changes_of(&app, &m, &req.root).await?;
+        let sha = app
+            .folders
+            .commit_staged(&m, &req.root, known, &req.message)
+            .await
+            .map_err(git_refused)?;
+        app.recheck(&m.name);
+        return Ok(Json(json!({ "sha": sha, "short": &sha[..sha.len().min(7)] })).into_response());
     }
     let wanted = match &req.paths {
         Some(paths) if paths.is_empty() => {
@@ -201,4 +214,81 @@ async fn commit(
         })?;
     app.recheck(&m.name);
     Ok(Json(json!({ "sha": sha, "short": &sha[..sha.len().min(7)] })).into_response())
+}
+
+fn git_refused(e: FileError) -> ApiError {
+    match e {
+        FileError::Failed(why) => {
+            ApiError(StatusCode::UNPROCESSABLE_ENTITY, format!("git said: {why}"))
+        }
+        e => refused(e, ""),
+    }
+}
+
+#[derive(Deserialize)]
+struct ActionInput {
+    #[serde(default)]
+    root: String,
+    #[serde(default)]
+    paths: Vec<String>,
+}
+
+async fn git_action(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath((machine, action)): UrlPath<(String, String)>,
+    Json(req): Json<ActionInput>,
+) -> Result<Response, ApiError> {
+    let action = GitAction::parse(&action).ok_or_else(|| {
+        ApiError(
+            StatusCode::NOT_FOUND,
+            format!("there is no git action called {action}"),
+        )
+    })?;
+    let m = find_machine(&app.config()?, &machine)?;
+    check_root(&req.root).map_err(|e| refused(e, ""))?;
+    let (changes, known) = changes_of(&app, &m, &req.root).await?;
+    let mut tracked: Vec<String> = Vec::new();
+    let mut untracked: Vec<String> = Vec::new();
+    if action.takes_paths() {
+        if req.paths.is_empty() {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                "pick at least one file".into(),
+            ));
+        }
+        if req.paths.len() > PATHS_MAX {
+            return Err(ApiError(
+                StatusCode::BAD_REQUEST,
+                format!("pick at most {PATHS_MAX} files at a time"),
+            ));
+        }
+        for want in &req.paths {
+            let want = relative(want)?;
+            let found: Vec<_> = changes.files.iter().filter(|f| f.path == want).collect();
+            if found.is_empty() {
+                return Err(ApiError(
+                    StatusCode::BAD_REQUEST,
+                    format!("{want} has no changes"),
+                ));
+            }
+            for f in found {
+                let into = if f.status == "untracked" {
+                    &mut untracked
+                } else {
+                    &mut tracked
+                };
+                for p in [Some(&f.path), f.old_path.as_ref()].into_iter().flatten() {
+                    if !into.contains(p) {
+                        into.push(p.clone());
+                    }
+                }
+            }
+        }
+    }
+    app.folders
+        .git_action(&m, &req.root, known, action, &tracked, &untracked)
+        .await
+        .map_err(git_refused)?;
+    app.recheck(&m.name);
+    Ok(Json(json!({ "ok": true })).into_response())
 }

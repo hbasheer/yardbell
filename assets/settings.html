@@ -10,6 +10,7 @@
 <link rel="stylesheet" href="/style.css">
 <script src="/theme.js"></script>
 <script src="/live.js"></script>
+<script>if (new URLSearchParams(location.search).has("bare")) document.documentElement.classList.add("bare");</script>
 </head>
 <body data-page="settings" data-column-mode="settings">
 
@@ -536,9 +537,6 @@
   </section>
 
 
-  <datalist id="conn-reply-fields">
-    <option value="item_id"><option value="id"><option value="name"><option value="title"><option value="url"><option value="description"><option value="state"><option value="closed">
-  </datalist>
   <section id="connections">
     <div class="section-head"><h2>Connections</h2><button class="btn primary small-link" type="button" id="conn-new">New connection</button></div>
     <div id="conn-home">
@@ -556,7 +554,7 @@
         <div class="conn-head" aria-hidden="true"><span>Connection</span><span>Type</span><span>Status</span><span></span></div>
         <ul class="rows" id="forge-rows"></ul>
         <ul class="rows" id="server-rows"></ul>
-        <ul class="rows conn-rows" id="conn-rows"></ul>
+        <p class="help">Connections with a token are in <a href="/ui/settings#integrations">Settings, Integrations</a>, under Token tools.</p>
       </div>
 
 
@@ -608,7 +606,6 @@
       <div class="segmented conn-tabs" id="conn-tabs" role="tablist" aria-label="How to connect">
         <button type="button" role="tab" data-tab="conn-new-panel" aria-selected="true">Sign in</button>
         <button type="button" role="tab" data-tab="server-form" aria-selected="false">MCP server</button>
-        <button type="button" role="tab" data-tab="conn-tab-token" aria-selected="false">Token</button>
       </div>
       <div class="conn-dialog-body">
       <button class="conn-back" type="button" id="conn-back" hidden><svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 6l-6 6 6 6"/></svg><span>Back</span></button>
@@ -618,12 +615,7 @@
         <input type="search" id="conn-sign-in-search" placeholder="Find a tool" autocomplete="off" spellcheck="false">
         <ul class="conn-grid" id="conn-sign-in-list"></ul>
         <p class="conn-empty" id="conn-sign-in-none" hidden>No tool by that name. You can add its MCP server by address.</p>
-        <p class="help">Not listed? <button class="conn-link" type="button" data-another>Add its MCP server</button>, or use a token if it has none.</p>
-      </div>
-      <div class="conn-step" id="conn-tab-token" role="tabpanel" hidden>
-        <p class="help">For a tool with no MCP server. You paste its token in the next step.</p>
-        <ul class="conn-grid" id="conn-new-list"></ul>
-        <p class="help">Someone shared one with you? <button class="conn-link" type="button" id="conn-import-open">Paste it here</button>.</p>
+        <p class="help">Not listed? <button class="conn-link" type="button" data-another>Add its MCP server</button>. A tool with no MCP server can use a token, in <a href="/ui/settings#integrations">Settings, Integrations</a>.</p>
       </div>
     <form class="conn-step" id="server-form" hidden novalidate>
       <p class="help" data-kind="url">Paste the address from the tool's docs. You will sign in next if it needs it.</p>
@@ -658,59 +650,6 @@
         <p class="help conn-error" id="server-note" role="status"></p>
         <button class="btn quiet" type="button" id="server-cancel">Cancel</button>
         <button class="btn primary" type="submit" id="server-save">Continue</button>
-      </div>
-    </form>
-    <form class="conn-step conn-form" id="conn-form" hidden novalidate>
-      <p class="help" id="conn-about"></p>
-      <label>Name<input type="text" name="name" autocomplete="off"></label>
-      <label>Address, with its API path <input type="text" name="base_url" placeholder="https://api.example.com/1" autocapitalize="off" spellcheck="false"></label>
-      <div class="conn-secrets" id="conn-secrets"></div>
-      <details class="conn-more" id="conn-more">
-        <summary>More options</summary>
-        <div class="conn-more-body">
-          <div class="segmented conn-more-tabs" id="conn-more-tabs" role="tablist" aria-label="More options">
-            <button type="button" role="tab" data-more="conn-actions" aria-selected="true">Actions</button>
-            <button type="button" role="tab" data-more="conn-login" aria-selected="false">Login headers</button>
-            <button type="button" role="tab" data-more="conn-choices" aria-selected="false">Choices</button>
-            <button type="button" role="tab" data-more="conn-settings" aria-selected="false">Settings</button>
-          </div>
-          <div class="conn-more-tab" id="conn-actions" role="tabpanel">
-            <p class="help">What Yardbell can ask this tool to do. A pipeline starts runs from <strong>list</strong>, and reads one item with <strong>read</strong>.</p>
-            <div class="conn-call-list" id="conn-call-list"></div>
-            <button class="btn small-link" type="button" id="conn-action-add">Add action</button>
-          </div>
-          <div class="conn-more-tab" id="conn-login" role="tabpanel" hidden>
-            <p class="help">Sent with every request. Paste a token in a value and it is saved as a secret by itself.</p>
-            <div class="conn-pair-head" aria-hidden="true"><span>Header</span><span>Value</span></div>
-            <ul class="conn-headers" id="conn-headers"></ul>
-            <button class="btn small-link" type="button" id="conn-header-add">Add header</button>
-          </div>
-          <div class="conn-more-tab" id="conn-choices" role="tabpanel" hidden>
-            <p class="help">What a pipeline asks you when it uses this connection, such as which board. Options can come from one of its actions. Tick Filter for an optional choice that narrows which items start a run: send it as a whole value in the list action's query, or map a field with the same name.</p>
-            <div class="conn-choice-head" aria-hidden="true"><span>Name</span><span>Label</span><span>Options from</span><span>Filter</span></div>
-            <ul class="conn-choices" id="conn-choice-list"></ul>
-            <button class="btn small-link" type="button" id="conn-choice-add">Add choice</button>
-          </div>
-          <div class="conn-more-tab" id="conn-settings" role="tabpanel" hidden>
-            <label>Id, used in pipelines<input type="text" name="id" placeholder="Taken from the name" autocapitalize="off" spellcheck="false"></label>
-            <label class="choice"><input type="checkbox" name="enabled">Switched on</label>
-            <label class="choice"><input type="checkbox" name="allow_private">Allow private addresses</label>
-            <p class="help">Only for a tool on your own network or mesh. Public tools never need this.</p>
-          </div>
-        </div>
-      </details>
-      <div class="form-foot">
-        <p class="help conn-error" id="conn-note" role="status"></p>
-        <button class="btn quiet" type="button" id="conn-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Save</button>
-      </div>
-    </form>
-    <form class="conn-step conn-form" id="conn-import" hidden>
-      <label class="conn-yaml">Paste a shared connection<textarea name="text" rows="10" spellcheck="false"></textarea></label>
-      <p class="help">It arrives switched off. Nothing runs until you have read it and switched it on.</p>
-      <div class="form-foot">
-        <button class="btn quiet" type="button" id="conn-import-cancel">Cancel</button>
-        <button class="btn primary" type="submit">Import</button>
       </div>
     </form>
       <div class="conn-step" id="forge-github" hidden>
@@ -757,8 +696,7 @@
       </form>
       <div class="conn-step" id="mcp-sign-in" hidden></div>
       <div class="conn-step" id="mcp-tools" hidden></div>
-      <div class="conn-step conn-output" id="conn-output" hidden></div>
-      <p class="help conn-error" id="conn-flow-error" role="alert"></p>
+            <p class="help conn-error" id="conn-flow-error" role="alert"></p>
       </div>
     </dialog>
   </section>

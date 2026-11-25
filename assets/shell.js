@@ -1,4 +1,19 @@
 (function () {
+  // Inside the React shell the page keeps only its own content; the shell draws the sidebar and
+  // the status bar, and links to other pages go through it so a page never loads inside a page.
+  const hosted = Boolean(window.frameElement?.hasAttribute("data-yardbell-host"));
+  if (hosted) {
+    document.documentElement.classList.add("hosted");
+    document.addEventListener("click", (e) => {
+      const a = e.target.closest?.("a[href]");
+      if (!a || a.target || e.defaultPrevented || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+      const url = new URL(a.href, location.href);
+      if (url.origin !== location.origin || url.pathname === location.pathname) return;
+      if (!["/", "/workspace", "/pipeline", "/diagrams", "/dispatch", "/proposals", "/settings"].includes(url.pathname)) return;
+      e.preventDefault();
+      parent.postMessage({ yardbell: "go", href: url.pathname + url.search }, location.origin);
+    }, true);
+  }
   const app = window.__TAURI__;
   const mac = /Mac/.test(navigator.platform);
   const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c]);

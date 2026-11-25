@@ -152,6 +152,12 @@
         ],
         "createdAt": "2026-11-05T00:02:09.727Z",
         "reason": "model decided: flagged compose-tool buttons are icon-only with no text, and their 5x7px inset on a colored background is the file's pre-existing hover pattern for every compose tool"
+      },
+      {
+        "rule": "overused-font",
+        "value": "geist",
+        "createdAt": "2026-11-25T01:14:32.947Z",
+        "reason": "Intentional: the user asked for Yardbell to match Orca's UI exactly, and Orca's STYLEGUIDE requires Geist as the sans font"
       }
     ]
   }

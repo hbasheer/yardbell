@@ -33,6 +33,8 @@ fn duration(minutes: i64) -> String {
     }
 }
 
+pub const PERSON_CONTINUED: &str = "continued by you";
+
 // Who asks to continue a waiting run: a person on the run's page, or an agent's tool call, whatever
 // a rule or an approved card says about it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -694,7 +696,17 @@ pub fn step(mut run: Run, seen: Seen, cfg: &Cfg, now: DateTime<Local>) -> (Run, 
                     "{name}'s command failed, and a person continued on pass anyway"
                 ));
             }
-            follow(run, outcome, now)
+            // The history says when a person, not the step itself, chose the line.
+            let (mut run, effects) = follow(run, outcome, now);
+            if let Some(e) = run
+                .history
+                .iter_mut()
+                .rev()
+                .find(|e| e.step == at && e.outcome == Some(outcome))
+            {
+                e.note = PERSON_CONTINUED.into();
+            }
+            (run, effects)
         }
         Seen::Answer(text) if waiting => answer(run, text, now),
         Seen::Tick if waits_on_an_unsettled_check(&run) => tick_unsettled(run, cfg, now),
@@ -1887,6 +1899,26 @@ pub(crate) mod tests {
             RunState::Waiting,
             "implement's fail line goes to wait"
         );
+    }
+
+    #[test]
+    fn a_person_continuing_is_written_in_the_history() {
+        let mut run = at_step("Implement my tickets", "implement");
+        run.history.push(Entry {
+            step: "implement".into(),
+            outcome: None,
+            at: at(4).to_rfc3339(),
+            note: String::new(),
+        });
+        let (run, _) = step(run, ended("implement", Outcome::Fail), &cfg(), at(5));
+        let (run, _) = step(run, Seen::Continue(Outcome::Pass), &cfg(), at(6));
+        let entry = run
+            .history
+            .iter()
+            .rev()
+            .find(|e| e.step == "implement" && e.outcome == Some(Outcome::Pass))
+            .expect("implement's pass is in the history");
+        assert_eq!(entry.note, PERSON_CONTINUED);
     }
 
     #[test]

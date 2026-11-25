@@ -90,6 +90,7 @@ pub struct AppState {
     pub awake: Arc<crate::awake::Awake>,
     tasks: std::sync::Mutex<HashMap<(String, String), String>>,
     installed: std::sync::Mutex<HashMap<String, (Instant, Vec<String>)>>,
+    models: std::sync::Mutex<HashMap<(String, String), ListedModels>>,
     servers: tokio::sync::Mutex<Option<(Instant, Vec<crate::discover::Found>)>>,
     refresh: Refresh,
     pub(crate) updates: crate::about::Updates,
@@ -180,6 +181,7 @@ impl AppState {
             awake,
             tasks: std::sync::Mutex::new(HashMap::new()),
             installed: std::sync::Mutex::new(HashMap::new()),
+            models: std::sync::Mutex::new(HashMap::new()),
             servers: tokio::sync::Mutex::new(None),
             refresh,
             updates: crate::about::Updates::new(releases, clock.clone()),
@@ -394,6 +396,27 @@ pub fn asset(name: &str) -> Response {
         .into_response()
 }
 
+pub const MONACO: &str = "vendor/monaco-0.55.1";
+
+// The folder carries Monaco's version, so its files never change under a URL and can be kept.
+fn monaco(path: &str) -> Response {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains(['\\', '\0'])
+        || path.split('/').any(|p| p == ".." || p == ".")
+    {
+        return error(StatusCode::NOT_FOUND, "not found");
+    }
+    let mut res = asset(&format!("{MONACO}/{path}"));
+    if res.status() == StatusCode::OK {
+        res.headers_mut().insert(
+            header::CACHE_CONTROL,
+            header::HeaderValue::from_static("private, max-age=31536000, immutable"),
+        );
+    }
+    res
+}
+
 pub fn router(app: Arc<AppState>) -> Router {
     Router::new()
         .route("/", get(|| async { asset("dashboard.html") }))
@@ -428,6 +451,11 @@ pub fn router(app: Arc<AppState>) -> Router {
             "/vendor/lit-html/directives/repeat.js",
             get(|| async { asset("vendor/lit-html/directives/repeat.js") }),
         )
+        .route(
+            "/vendor/monaco-0.55.1/{*path}",
+            get(|UrlPath(path): UrlPath<String>| async move { monaco(&path) }),
+        )
+        .route("/editor.js", get(|| async { asset("editor.js") }))
         .route("/nav.js", get(|| async { asset("nav.js") }))
         .route("/machines.js", get(|| async { asset("machines.js") }))
         .route("/shell.js", get(|| async { asset("shell.js") }))
@@ -563,10 +591,14 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/mesh/on", post(mesh_on))
         .route("/machines/{machine}/browse", get(browse))
         .route("/machines/{machine}/agents", get(installed_agents))
+        .route("/api/agents/catalog", get(agent_catalog))
+        .route("/api/agents/{name}/install", post(install_agent))
+        .route("/machines/{machine}/models", get(agent_models))
         .route("/machines/{machine}/recent/forget", post(forget_recent))
         .route("/machines/{machine}/branches", get(branches))
         .route("/term.js", get(|| async { asset("term.js") }))
         .route("/term-agent.js", get(|| async { asset("term-agent.js") }))
+        .route("/term-themes.js", get(|| async { asset("term-themes.js") }))
         .route(
             "/term-compose.js",
             get(|| async { asset("term-compose.js") }),
@@ -1872,6 +1904,10 @@ pub struct NewSession {
     #[serde(default)]
     agent: String,
     #[serde(default)]
+    model: String,
+    #[serde(default)]
+    effort: String,
+    #[serde(default)]
     prompt: String,
     // A reviewer or scanner: the agent starts unable to edit files where it has a way to.
     #[serde(default)]
@@ -1941,6 +1977,9 @@ pub async fn start_session(app: &AppState, req: NewSession) -> Result<Value, Api
             format!("no agent named {agent_name}"),
         )
     })?;
+    let agent = agent
+        .with_choice(&req.model, &req.effort)
+        .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
     if !req.resume_id.is_empty() {
         if !crate::history::valid_id(&req.resume_id) {
             return Err(ApiError(
@@ -2121,16 +2160,80 @@ struct BrowseResponse {
     recent: Vec<String>,
 }
 
+type ListedModels = (Instant, Vec<crate::models::Model>);
+
 const INSTALLED_FOR: Duration = Duration::from_secs(5 * 60);
 
 // Checking a machine for agents takes a login shell over ssh, and the New session dialog asks
 // every time it opens, so the answer is kept a few minutes.
-async fn installed_agents(
+#[derive(Deserialize)]
+struct ModelsQuery {
+    agent: String,
+}
+
+// The models an agent offers on a machine, read from the agent itself. Only Claude Code can be
+// asked, so any other agent answers null and the picker keeps its own list.
+async fn agent_models(
     AxState(app): AxState<Arc<AppState>>,
     UrlPath(machine): UrlPath<String>,
+    axum::extract::Query(q): axum::extract::Query<ModelsQuery>,
 ) -> Result<Response, ApiError> {
     let cfg = app.config()?;
     let m = find_machine(&cfg, &machine)?;
+    let agent = cfg.agent(&q.agent).ok_or_else(|| {
+        ApiError(
+            StatusCode::BAD_REQUEST,
+            format!("no agent named {}", q.agent),
+        )
+    })?;
+    if agent.process_name() != "claude" {
+        return Ok(Json(json!({ "models": null })).into_response());
+    }
+    let key = (m.name.clone(), agent.name.clone());
+    let cached = app
+        .models
+        .lock()
+        .expect("models lock")
+        .get(&key)
+        .filter(|(at, _)| at.elapsed() < INSTALLED_FOR)
+        .map(|(_, models)| models.clone());
+    let models = match cached {
+        Some(models) => models,
+        None => {
+            let program = agent.command.split_whitespace().next().unwrap_or("claude");
+            let models = app
+                .sessions
+                .claude_models(&m, program)
+                .await
+                .map_err(ApiError::gateway)?;
+            if !models.is_empty() {
+                app.models
+                    .lock()
+                    .expect("models lock")
+                    .insert(key, (Instant::now(), models.clone()));
+            }
+            models
+        }
+    };
+    Ok(Json(json!({ "models": models })).into_response())
+}
+
+#[derive(Deserialize, Default)]
+struct FreshQuery {
+    #[serde(default)]
+    fresh: bool,
+}
+
+async fn installed_agents(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(machine): UrlPath<String>,
+    axum::extract::Query(q): axum::extract::Query<FreshQuery>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &machine)?;
+    if q.fresh {
+        app.installed.lock().expect("installed lock").remove(&m.name);
+    }
     let cached = app
         .installed
         .lock()
@@ -2317,6 +2420,51 @@ async fn app_notifications(
         .wait(q.boot.as_deref(), q.after, APP_POLL)
         .await;
     Json(page).into_response()
+}
+
+async fn agent_catalog(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let list: Vec<_> = cfg
+        .agents()
+        .iter()
+        .map(|a| {
+            let g = crate::agents::guide(&a.name);
+            json!({
+                "name": a.name,
+                "label": a.display(),
+                "command": a.command,
+                "install": g.as_ref().and_then(|g| g.install),
+                "homepage": g.as_ref().map(|g| g.homepage),
+                "open_source": g.as_ref().is_some_and(|g| g.open_source),
+                "custom": g.is_none(),
+            })
+        })
+        .collect();
+    Ok(Json(json!({ "agents": list })).into_response())
+}
+
+#[derive(Deserialize)]
+struct InstallReq {
+    machine: String,
+}
+
+async fn install_agent(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(name): UrlPath<String>,
+    Json(req): Json<InstallReq>,
+) -> Result<Response, ApiError> {
+    let cfg = app.config()?;
+    let m = find_machine(&cfg, &req.machine)?;
+    let command = crate::agents::guide(&name)
+        .and_then(|g| g.install)
+        .ok_or_else(|| ApiError(StatusCode::BAD_REQUEST, format!("Yardbell has no install command for {name}; follow its install guide")))?;
+    let session = app
+        .sessions
+        .run_install(&m, &name, command)
+        .await
+        .map_err(ApiError::gateway)?;
+    app.installed.lock().expect("installed lock").remove(&m.name);
+    Ok(Json(json!({ "name": session, "command": command })).into_response())
 }
 
 async fn open_shell(

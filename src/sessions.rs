@@ -437,6 +437,24 @@ impl Sessions {
         self.exec(m, &cmd).await.map(|_| name)
     }
 
+    // Runs an install in a session of its own, so the person sees it, answers what it asks and the
+    // shell stays open afterwards.
+    pub async fn run_install(&self, m: &Machine, agent: &str, command: &str) -> Result<String, String> {
+        let name = session_name(&m.name, "-", &format!("install-{agent}"));
+        let script = format!(
+            "echo {shown}; {command}; status=$?; echo; if [ $status -eq 0 ]; then echo 'Installed. You can close this tab.'; else echo \"The install ended with exit code $status.\"; fi; exec bash -l",
+            shown = quote(&format!("$ {command}"))
+        );
+        let cmd = format!(
+            "{}; tmux kill-session -t {} 2>/dev/null; tmux new -d -s {} -c \"$p\" {}",
+            expand_home(&m.root),
+            quote(&exact(&name)),
+            quote(&name),
+            quote(&format!("bash -lc {}", quote(&script)))
+        );
+        self.exec(m, &cmd).await.map(|_| name)
+    }
+
     pub async fn stop_pid(&self, m: &Machine, pid: u32) -> Result<(), String> {
         // An agent suspended with Ctrl+Z only acts on SIGTERM once it is continued.
         let cmd = format!(
@@ -648,6 +666,22 @@ impl Sessions {
             .filter_map(|line| line.trim().strip_prefix("agent "))
             .map(str::to_string)
             .collect())
+    }
+
+    pub async fn claude_models(
+        &self,
+        m: &Machine,
+        program: &str,
+    ) -> Result<Vec<crate::models::Model>, String> {
+        let script = login_shell(&crate::models::claude_list_script(program));
+        let out = self
+            .output_with_input(
+                m,
+                &script,
+                Some(format!("{}\n", crate::models::CLAUDE_LIST_REQUEST)),
+            )
+            .await?;
+        Ok(crate::models::parse_claude_models(&out))
     }
 
     pub async fn size_viewers(&self, m: &Machine, name: &str, plan: &Plan) -> Result<(), String> {
