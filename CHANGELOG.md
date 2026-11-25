@@ -5,6 +5,24 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.105] - 2026-11-25
+
+- **A new interface for every page.** The Dashboard, Workspace, Pipelines, Diagrams, Dispatch and
+  all of Settings are redrawn, and opening Yardbell now lands on the new app at `/ui/`. The old
+  dashboard is still at `/classic` for now.
+- **Settings, Agents lists every coding agent Yardbell can start**, 47 of them, with the open-source
+  ones marked. Pick a machine to see which are installed there. **Install** runs the agent's own
+  install command on that machine in a new terminal, so you can watch it and answer what it asks;
+  agents with no single command link to their install guide.
+- **Connect a tool is one catalog.** Search, browse by category or see what you already added, and
+  each tool shows whether it needs adding, signing in or nothing. **Add by URL** takes any MCP
+  server by its address or the command that starts it. GitLab asks for your host, so a self-hosted
+  GitLab works, and Datadog asks for your site.
+- **Connections with a token have a new editor**, with actions, login headers and choices, and
+  **Test**, **Share** and **Paste a shared connection**. A token typed into a header still moves
+  into secrets when you save.
+- **Terminal themes**, copy on select and right-click paste, in Settings, Terminal.
+
 ## [0.11.104] - 2026-11-13
 
 - **The sidebar is grouped by machine again, with your projects inside.** Each machine is a quiet

@@ -16,6 +16,11 @@ Ubuntu that needs `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `libr
 `libssl-dev` and `libxdo-dev`. `cargo tauri build` (from `cargo install tauri-cli`) makes the
 installers.
 
+The app at `/ui/` lives in `web/`. Run `npm ci` there once, then `npm run dev` serves it on port
+5173 with live reload, talking to a Yardbell on 4110 (or `YARDBELL_URL`). After changing it, run
+`npm run build`, which writes `assets/app`; commit that folder, since `cargo build` embeds it and
+needs no Node. Without it, `/` falls back to the older dashboard.
+
 To release, set the same version in `Cargo.toml` and `desktop/Cargo.toml`, move the changes under
 that version in `CHANGELOG.md`, and push a `v<version>` tag. The Desktop release workflow builds the
 installers into a draft release on GitHub; try them, then publish it.
@@ -30,7 +35,8 @@ installers into a draft release on GitHub; try them, then publish it.
 | `src/mesh.rs` | Mesh VPN providers |
 | `src/onboarding/`, `src/settings.rs` | Add machine and Settings |
 | `src/web/` | HTTP routes and auth |
-| `assets/` | The UI: plain HTML, CSS and JavaScript (embedded in release builds) |
+| `web/` | The app at `/ui/`: React, TypeScript and Tailwind, built into `assets/app` |
+| `assets/` | The older pages and the built app, embedded in every build |
 | `desktop/` | The desktop app (Tauri 2), see [Apps](apps.md#apps) |
 | `DESIGN.md` | The design system the UI follows |
 

@@ -424,9 +424,205 @@
     return `<td class="dc ${cls}"><span class="dmark" aria-hidden="true">${mark}</span>${html}</td>`;
   }
 
+  // A diff of the whole file in one piece can be rebuilt into its two sides for Monaco; anything
+  // else (cut short, binary, several hunks) keeps the table.
+  function sides(lines) {
+    const before = [];
+    const after = [];
+    for (const l of lines) {
+      if (l.k === "hunk" || l.k === "meta") continue;
+      if (l.k === "del" || l.k === "ctx") {
+        if (l.o !== before.length + 1) return null;
+        before.push(l.t);
+      }
+      if (l.k === "add" || l.k === "ctx") {
+        if (l.n !== after.length + 1) return null;
+        after.push(l.t);
+      }
+    }
+    return { before: before.join("\n"), after: after.join("\n") };
+  }
+
+  function monacoReady(st) {
+    if (st.plain || !window.YardbellEditor || st.data.binary || st.data.cut) return null;
+    if (!st.lines.some((l) => l.k !== "hunk" && l.k !== "meta")) return null;
+    return sides(st.lines);
+  }
+
+  function addPlus(e, side, body, st) {
+    const types = st.ed.monaco.editor.MouseTargetType;
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.className = "dplus monaco-plus";
+    btn.textContent = "+";
+    btn.title = "Add a note";
+    btn.setAttribute("aria-label", "Add a note on this line");
+    btn.style.display = "none";
+    e.getDomNode().append(btn);
+    let line = 0;
+    const show = (n) => {
+      line = n;
+      if (!n) {
+        btn.style.display = "none";
+        return;
+      }
+      btn.style.top = `${e.getTopForLineNumber(n) - e.getScrollTop() + 1}px`;
+      btn.style.display = "";
+    };
+    e.onMouseMove((ev) => {
+      if (btn.contains(ev.event.target)) return;
+      const t = ev.target;
+      if (t.type === types.CONTENT_VIEW_ZONE || t.type === types.GUTTER_VIEW_ZONE || !t.position) return show(0);
+      show(t.position.lineNumber);
+    });
+    e.onMouseLeave((ev) => { if (!btn.contains(ev.event.browserEvent?.relatedTarget)) show(0); });
+    e.onDidScrollChange(() => show(line));
+    btn.addEventListener("mouseleave", (ev) => { if (!e.getDomNode().contains(ev.relatedTarget)) show(0); });
+    btn.addEventListener("mousedown", (ev) => { ev.preventDefault(); ev.stopPropagation(); });
+    btn.addEventListener("click", (ev) => {
+      ev.stopPropagation();
+      if (!line) return;
+      st.adding = `${side}:${line}`;
+      st.editing = "";
+      st.focus = true;
+      paint(body);
+    });
+  }
+
+  function clearZones(st) {
+    for (const z of st.zones || []) {
+      z.ro.disconnect();
+      z.editor.changeViewZones((acc) => acc.removeZone(z.id));
+    }
+    st.zones = [];
+  }
+
+  function zoneTarget(st, anchor) {
+    const [side, num] = anchor.split(":");
+    const n = Number(num);
+    const de = st.ed.editor;
+    if (side === "new") return { editor: de.getModifiedEditor(), after: n };
+    if (view === "split") return { editor: de.getOriginalEditor(), after: n };
+    const ch = (de.getLineChanges() || []).find((c) => c.originalStartLineNumber <= n && n <= c.originalEndLineNumber);
+    return { editor: de.getModifiedEditor(), after: ch ? (ch.modifiedEndLineNumber || ch.modifiedStartLineNumber) : 0 };
+  }
+
+  function addZone(body, st, editor, after, html) {
+    const node = document.createElement("div");
+    node.className = "dzone";
+    const inner = document.createElement("div");
+    inner.className = "dzone-inner";
+    inner.innerHTML = html;
+    node.append(inner);
+    // Monaco keeps clicks and keys inside its own node, so a zone handles its own.
+    node.addEventListener("keydown", (e) => {
+      onDiffKey(e);
+      e.stopPropagation();
+    });
+    node.addEventListener("click", (e) => {
+      onDiffClick(e);
+      e.stopPropagation();
+    });
+    // Monaco captures the pointer on any press inside the editor, so the release, and the click,
+    // would land on its text layer instead of the note's buttons.
+    for (const type of ["pointerdown", "mousedown"]) node.addEventListener(type, (e) => e.stopPropagation());
+    const zone = { editor, node, id: "", ro: null };
+    const spec = { afterLineNumber: after, heightInPx: 96, domNode: node, suppressMouseDown: true };
+    editor.changeViewZones((acc) => { zone.id = acc.addZone(spec); });
+    zone.ro = new ResizeObserver(() => {
+      const h = Math.ceil(inner.getBoundingClientRect().height) + 8;
+      if (!h || h === spec.heightInPx) return;
+      spec.heightInPx = h;
+      editor.changeViewZones((acc) => acc.layoutZone(zone.id));
+    });
+    zone.ro.observe(inner);
+    st.zones.push(zone);
+  }
+
+  // Until Monaco has worked out the changes a removed line's note has nowhere to go, so notes wait
+  // for onDidUpdateDiff rather than appear and then jump.
+  function placeZones(body, st) {
+    if (!st.ed || st.ed === "loading" || !st.ed.editor.getLineChanges()) return;
+    clearZones(st);
+    const list = notesOf(st.key);
+    const byAnchor = new Map();
+    const lost = [];
+    for (const n of list) {
+      const a = `${n.side}:${n.line}`;
+      if (!lineAt(st, a)) {
+        lost.push(n);
+        continue;
+      }
+      if (!byAnchor.has(a)) byAnchor.set(a, []);
+      byAnchor.get(a).push(n);
+    }
+    if (st.adding && !byAnchor.has(st.adding)) byAnchor.set(st.adding, []);
+    // A removed line shows above the line that replaced it, so its notes come first too.
+    const anchors = [...byAnchor.keys()].sort((x, y) => (x.startsWith("old:") ? 0 : 1) - (y.startsWith("old:") ? 0 : 1));
+    for (const a of anchors) {
+      const notesHere = byAnchor.get(a);
+      const parts = notesHere.map((n) => noteCard(n, st.editing === n.id));
+      if (st.adding === a) parts.push(editorHtml("", ""));
+      const { editor, after } = zoneTarget(st, a);
+      addZone(body, st, editor, after, parts.join(""));
+    }
+    if (lost.length) {
+      const html = `<p class="dnote-lost">${lost.length === 1 ? "This note is" : "These notes are"} on lines no longer in the diff.</p>${lost.map((n) => `<div class="dnote" data-note="${esc(n.id)}"><p class="dnote-where">${esc(where({ ...n, path: st.leaf.path }))}</p><p class="dnote-text">${esc(n.text)}</p><div class="dnote-acts"><button type="button" data-act="remove-note">Remove</button></div></div>`).join("")}`;
+      addZone(body, st, st.ed.editor.getModifiedEditor(), 0, html);
+    }
+    if (!st.focus) return;
+    st.focus = false;
+    // Monaco puts a zone's node on the page on its next frame, so focus waits for that.
+    const focusBox = (tries) => {
+      const box = body.querySelector(".dzone .dnote.editing textarea");
+      if (box?.isConnected && box.offsetParent) {
+        box.focus();
+        box.setSelectionRange(box.value.length, box.value.length);
+      } else if (tries > 0) requestAnimationFrame(() => focusBox(tries - 1));
+    };
+    requestAnimationFrame(() => focusBox(10));
+  }
+
+  async function paintMonaco(body, st, both) {
+    const scroll = body.querySelector(".ws-diff-scroll");
+    if (!st.ed) {
+      st.ed = "loading";
+      scroll.classList.add("monaco");
+      scroll.innerHTML = `${st.data.notes?.length ? `<p class="ws-diff-notes">${esc(st.data.notes.join(". "))}</p>` : ""}<div class="ws-diff-editor"></div>`;
+      let ed;
+      try {
+        ed = await window.YardbellEditor.diff(scroll.querySelector(".ws-diff-editor"), { path: st.leaf.path, before: both.before, after: both.after, inline: view !== "split" });
+      } catch {
+        st.ed = null;
+        st.plain = true;
+        scroll.classList.remove("monaco");
+        paint(body);
+        return;
+      }
+      if (bodies.get(body) !== st) {
+        ed.dispose();
+        return;
+      }
+      st.ed = ed;
+      st.zones = [];
+      addPlus(ed.editor.getModifiedEditor(), "new", body, st);
+      addPlus(ed.editor.getOriginalEditor(), "old", body, st);
+      ed.editor.onDidUpdateDiff(() => placeZones(body, st));
+    }
+    if (st.ed === "loading") return;
+    st.ed.editor.updateOptions({ renderSideBySide: view === "split" });
+    placeZones(body, st);
+  }
+
   function paint(body) {
     const st = bodies.get(body);
     if (!st?.data) return;
+    const both = monacoReady(st);
+    if (both) {
+      paintHead(body);
+      paintMonaco(body, st, both);
+      return;
+    }
     const { data, leaf } = st;
     const lines = st.lines;
     const list = notesOf(st.key);

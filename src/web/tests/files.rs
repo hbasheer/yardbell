@@ -84,12 +84,17 @@ async fn a_folder_the_machine_finds_outside_is_refused() {
 async fn a_text_file_is_read_and_a_binary_or_large_one_refused() {
     let r = rig();
     r.fake
-        .stub(READ, Output::ok_with("SIZE\t15\nfn main() {}\nERR \n"));
+        .stub(READ, Output::ok_with("SIZE\t15\nHASH\t08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a\nfn main() {}\nERR \n"));
     let (status, v) = get(&r, "/machines/hp/file?root=/r/slots/slot2&path=src/main.rs").await;
     assert_eq!(status, StatusCode::OK, "{v}");
     assert_eq!(v["text"], "fn main() {}\nERR \n");
     assert_eq!(v["size"], 15);
     assert_eq!(v["path"], "src/main.rs");
+    assert_eq!(
+        v["hash"],
+        "08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a"
+    );
+    assert_eq!(v["editable"], true);
 
     r.fake.restub(READ, Output::ok_with("ERR binary\n"));
     let (status, v) = get(&r, "/machines/hp/file?root=/r/slots/slot2&path=logo.png").await;
@@ -203,4 +208,75 @@ async fn resume_by_id_runs_claude_with_that_session() {
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
     assert!(body.contains("only Claude Code sessions"), "{body}");
+}
+
+const WRITE: &str = ".yardbell-save.";
+
+async fn save(r: &Rig, body: serde_json::Value) -> (StatusCode, serde_json::Value) {
+    let c = cookie(&r.app).await;
+    let (status, _, text) =
+        super::post_json(&r.app, &c, "/machines/hp/file", &body.to_string()).await;
+    (status, serde_json::from_str(&text).unwrap_or(json!(text)))
+}
+
+#[tokio::test]
+async fn a_save_sends_the_text_and_says_what_it_wrote() {
+    let r = rig();
+    r.fake.stub(
+        WRITE,
+        Output::ok_with(
+            "SAVED\t13\t08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a\n",
+        ),
+    );
+    let (status, v) = save(
+        &r,
+        json!({"root": "/r/slots/slot2", "path": "src/main.rs", "hash": "08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a", "text": "fn main() {}\n"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{v}");
+    assert_eq!(v["size"], 13);
+    assert_eq!(
+        v["hash"],
+        "08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a"
+    );
+    let script = last_script(&r);
+    assert!(
+        script.contains("08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a"),
+        "the save names the version it replaces: {script}"
+    );
+}
+
+#[tokio::test]
+async fn a_save_over_a_changed_file_is_a_conflict() {
+    let r = rig();
+    r.fake.stub(WRITE, Output::ok_with("ERR changed\n"));
+    let (status, v) = save(
+        &r,
+        json!({"root": "/r/slots/slot2", "path": "src/main.rs", "hash": "08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a", "text": "x"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        v["error"]
+            .as_str()
+            .unwrap()
+            .contains("changed on the machine"),
+        "{v}"
+    );
+}
+
+#[tokio::test]
+async fn a_save_without_a_version_or_out_of_the_folder_never_reaches_the_machine() {
+    let r = rig();
+    for body in [
+        json!({"root": "/r/slots/slot2", "path": "src/main.rs", "hash": "", "text": "x"}),
+        json!({"root": "/r/slots/slot2", "path": "src/main.rs", "hash": "zz", "text": "x"}),
+        json!({"root": "/r/slots/slot2", "path": "../../etc/passwd", "hash": "08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a", "text": "x"}),
+        json!({"root": "slots/slot2", "path": "a.rs", "hash": "08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a", "text": "x"}),
+        json!({"root": "/r/slots/slot2", "path": "", "hash": "08010eac1d7c41563f2bf8485d7a4de0d5c6a54fbda8ef6fab811e379331826a", "text": "x"}),
+    ] {
+        let (status, v) = save(&r, body.clone()).await;
+        assert!(status.is_client_error(), "{body}: {status} {v}");
+    }
+    assert!(r.fake.calls().is_empty(), "{:?}", r.fake.calls());
 }

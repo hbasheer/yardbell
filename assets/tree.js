@@ -140,6 +140,8 @@
   const PROMPT = svg("tree-agent", '<path d="M3 4.5 6.5 8 3 11.5M8 11.5h5"/>');
   const CHEVRON = svg("icon chevron", '<path d="M6 4l4 4-4 4"/>');
   const MORE = svg("icon", '<circle cx="3.5" cy="8" r=".9"/><circle cx="8" cy="8" r=".9"/><circle cx="12.5" cy="8" r=".9"/>');
+  const SERVER = svg("icon tree-icon", '<rect x="2.5" y="2.5" width="11" height="4.5" rx="1"/><rect x="2.5" y="9" width="11" height="4.5" rx="1"/><path d="M5 4.75h.01M5 11.25h.01"/>');
+  const FOLDER = svg("icon tree-icon", '<path d="M2 4.5A1.5 1.5 0 0 1 3.5 3h2.6l1.4 1.5h5A1.5 1.5 0 0 1 14 6v5.5a1.5 1.5 0 0 1-1.5 1.5h-9A1.5 1.5 0 0 1 2 11.5z"/>');
   const agentIcon = (agent) => (/claude/i.test(agent || "") ? STAR : PROMPT);
 
   const stateMark = (st) => `<span class="ws-state ${st}" title="${esc(WORD[st] || "last known")}"></span>`;
@@ -163,12 +165,19 @@
     const title = `${label}${where ? ` in ${short(s.cwd || s.path || s.folder)}` : ""}, ${word}${since && since !== "now" ? ` for ${since}` : ""}`;
     const shown = where || word;
     const words = `<span class="tree-word${st === "blocked" ? " needs" : ""}">${esc(shown)}</span>`;
-    return `<button type="button" class="${cls}" data-key="${esc(key)}" data-state="${esc(st)}" title="${esc(title)}"${s.stale ? " disabled" : ""}${current ? ' aria-current="true"' : ""}>${agentIcon(s.agent)}<span class="tree-name">${esc(label)}</span>${words}${stateMark(st)}</button>`;
+    const when = since ? `<span class="tree-when">${esc(since)}</span>` : "";
+    return `<button type="button" class="${cls}" data-key="${esc(key)}" data-state="${esc(st)}" title="${esc(title)}"${s.stale ? " disabled" : ""}${current ? ' aria-current="true"' : ""}>${stateMark(st)}${agentIcon(s.agent)}<span class="tree-name">${esc(label)}</span>${words}${when}</button>`;
   }
 
-  function lineRow(l, opts) {
+  function lineRow(l, opts, home = "") {
     const current = !opts.selected?.key && opts.selected?.machine === l.machine && opts.selected?.folder === l.folder;
-    return `<button type="button" class="tree-row tree-branch${current ? " current" : ""}" data-machine="${esc(l.machine)}" data-folder="${esc(l.folder)}" title="${esc(`${short(l.path || l.folder)} on ${l.machine}`)}"${current ? ' aria-current="true"' : ""}><span class="tree-branch-name">${esc(l.branch || tail(l.folder))}</span>${pullMark(l.pull)}</button>${l.sessions.map((s) => sessionRow(s, opts)).join("")}`;
+    const active = current || l.sessions.some((s) => opts.selected?.key === keyOf(s));
+    const title = l.branch || tail(l.folder);
+    const where = tail(l.folder);
+    const sub = l.path && l.path !== home && where && where !== title ? where : "";
+    const mark = l.state ? `<span class="tree-cstate ${l.state}" title="${esc(WORD[l.state] || "")}"></span>` : '<span class="tree-cstate"></span>';
+    const head = `<button type="button" class="tree-row tree-branch${current ? " current" : ""}" data-machine="${esc(l.machine)}" data-folder="${esc(l.folder)}" title="${esc(`${short(l.path || l.folder)} on ${l.machine}`)}"${current ? ' aria-current="true"' : ""}><span class="tree-ctitle">${mark}<span class="tree-branch-name">${esc(title)}</span>${pullMark(l.pull)}</span>${sub ? `<span class="tree-csub">${esc(sub)}</span>` : ""}</button>`;
+    return `<div class="tree-card${active ? " active" : ""}">${head}${l.sessions.map((s) => sessionRow(s, opts)).join("")}</div>`;
   }
 
   function holdsCurrent(p, selected) {
@@ -187,10 +196,10 @@
     const inside = holdsCurrent(p, opts.selected);
     const count = `<span class="tree-count" title="${esc(`${p.count} running`)}">${p.count}</span>`;
     const mark = p.state ? `<span class="tree-pdot ${p.state}" title="${esc(WORD[p.state])}"></span>` : "";
-    const head = `<div class="tree-prow${inside ? " inside" : ""}"><button type="button" class="tree-row tree-proj" data-toggle="${esc(p.id)}" aria-expanded="${open}" title="${esc(`${p.name}, ${short(p.path)}`)}">${CHEVRON}<span class="tree-name">${esc(p.name)}</span>${count}${mark}</button><button type="button" class="tree-more" data-more="${esc(p.id)}" aria-label="${esc(`More for ${p.name}`)}" title="More" aria-haspopup="menu" aria-expanded="false">${MORE}</button></div>`;
+    const head = `<div class="tree-prow${inside ? " inside" : ""}"><button type="button" class="tree-row tree-proj" data-toggle="${esc(p.id)}" aria-expanded="${open}" title="${esc(`${p.name}, ${short(p.path)}`)}">${FOLDER}${CHEVRON}<span class="tree-name">${esc(p.name)}</span>${count}${mark}</button><button type="button" class="tree-more" data-more="${esc(p.id)}" aria-label="${esc(`More for ${p.name}`)}" title="More" aria-haspopup="menu" aria-expanded="false">${MORE}</button></div>`;
     if (!open) return `<section class="tree-project" data-project="${esc(p.id)}">${head}</section>`;
     const body = p.lines.length
-      ? p.lines.map((l) => lineRow(l, opts)).join("")
+      ? p.lines.map((l) => lineRow(l, opts, p.path)).join("")
       : `<button type="button" class="tree-row tree-start" data-start="${esc(p.id)}">No sessions, start one</button>`;
     return `<section class="tree-project" data-project="${esc(p.id)}">${head}<div class="tree-body">${body}</div></section>`;
   }
@@ -205,7 +214,9 @@
     const empty = !m.projects.length && !m.other.length;
     const open = !folded.has(m.name);
     const meta = m.up ? (m.mem === null ? "" : `${m.mem}%`) : "offline";
-    const label = `<span class="tree-name">${esc(m.name)}</span><span class="tree-meta">${esc(meta)}</span>`;
+    const live = m.sessions.filter((s) => !s.stale).length;
+    const badge = live ? `<span class="tree-badge" title="${esc(`${live} running`)}">${live}</span>` : "";
+    const label = `${SERVER}<span class="tree-name">${esc(m.name)}</span>${badge}<span class="tree-meta">${esc(meta)}</span>`;
     const tone = m.up ? (m.tone === "warn" ? "warn" : "") : "down";
     const cls = ["tree-machine", tone, empty && "empty"].filter(Boolean).join(" ");
     const foldWord = `${open ? "Hide" : "Show"} what runs on ${m.name}`;

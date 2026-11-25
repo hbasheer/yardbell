@@ -615,7 +615,7 @@ mod tests {
         );
         assert_eq!(
             args,
-            "bash -s -- '/home/u/My Projects' 'slots/slot*' -- 'rails' -- 'claude=claude' 'aider=aider'"
+            "bash -s -- '/home/u/My Projects' 'slots/slot*' -- 'rails' -- 'claude=claude' 'interpreter=interpreter'"
         );
     }
 

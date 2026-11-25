@@ -319,9 +319,7 @@ function serverMenu(srv, i) {
   const status = data.mcp_auth?.[srv.name];
   const name = `data-name="${esc(srv.name)}"`;
   const signOut = status === "signed_in" || status === "sign_in_again" ? menuItem(`data-mcp-act="sign-out" ${name}`, "Sign out") : "";
-  const linked = connections.list.find((c) => c.server === srv.name);
-  const actions = linked ? menuItem(`data-conn-edit="${esc(linked.id)}"`, "Actions") : "";
-  return rowMenu(srv.name, `${menuItem(`data-mcp-act="test" ${name}`, "Test")}${actions}${menuItem(`data-edit="${i}"`, "Edit")}${signOut}${menuItem(`data-remove="${i}"`, "Remove", true)}`);
+  return rowMenu(srv.name, `${menuItem(`data-mcp-act="test" ${name}`, "Test")}${menuItem(`data-edit="${i}"`, "Edit")}${signOut}${menuItem(`data-remove="${i}"`, "Remove", true)}`);
 }
 
 // Only when something changed, so a load does not lose a click on a row or close its menu.
@@ -412,12 +410,10 @@ function renderLinearAgents(srv) {
   const i = data.mcp_servers.indexOf(srv);
   const status = data.mcp_auth?.[srv.name];
   const name = `data-name="${esc(srv.name)}"`;
-  const linked = connections.list.find((c) => c.server === srv.name);
   const shown = `<h3>Agent sessions</h3>
     <p class="help">Agents on ${esc(machinesOf(srv))} reach Linear through the MCP server <code>${esc(srv.name)}</code> at ${esc(serverWhere(srv))}.</p>
     <div class="conn-linear-actions">${serverNeeds(srv)}
       <button class="btn" type="button" data-mcp-act="test" ${name}>Test</button>
-      ${linked ? `<button class="btn" type="button" data-conn-edit="${esc(linked.id)}">Actions</button>` : ""}
       <button class="btn" type="button" data-edit="${i}">Edit</button>
       ${status === "signed_in" || status === "sign_in_again" ? `<button class="btn" type="button" data-mcp-act="sign-out" ${name}>Sign out</button>` : ""}
       <button class="btn" type="button" data-remove="${i}">Remove</button>
@@ -483,8 +479,8 @@ function signsInHere() {
   return ["127.0.0.1", "localhost"].includes(location.hostname);
 }
 
-const FLOW_STEPS = ["conn-new-panel", "conn-tab-token", "server-form", "conn-form", "conn-import", "mcp-sign-in", "mcp-tools", "conn-output", "forge-github", "forge-gitlab", "forge-linear", "secret-form"];
-const FLOW_TABS = ["conn-new-panel", "server-form", "conn-tab-token"];
+const FLOW_STEPS = ["conn-new-panel", "server-form", "mcp-sign-in", "mcp-tools", "forge-github", "forge-gitlab", "forge-linear", "secret-form"];
+const FLOW_TABS = ["conn-new-panel", "server-form"];
 let flowStep = null;
 let flowAdding = false;
 let flowRun = 0;
@@ -1134,10 +1130,7 @@ $("pr-folders").addEventListener("click", (e) => {
   openForge("gitlab");
 });
 
-let connections = { list: [], status: {}, starters: {} };
-let connHeaders = [];
-let connWas = "";
-let connServer = "";
+let connections = { list: [], status: {}, sign_in: [] };
 
 async function loadConnections() {
   connections = await api("GET", "/api/settings/connectors");
@@ -1146,287 +1139,8 @@ async function loadConnections() {
 
 function renderConnections() {
   showConnectionsEmpty();
-  const own = connections.list.filter((c) => !c.server);
-  $("conn-rows").hidden = !own.length;
   if (data) renderServers();
-  setRows("conn-rows", own.map((c) => {
-    const status = connections.status[c.id];
-    const state = c.missing.length
-      ? badge("warn", "Needs a secret")
-      : !c.enabled ? badge("idle", "Switched off")
-      : !status ? badge("idle", "Not checked")
-      : status.ok ? badge("ok", "Working") : badge("bad", "Failing");
-    const detail = c.missing.length
-      ? `Save the secret ${c.missing.join(", ")}`
-      : c.enabled && status && !status.ok ? status.message : "";
-    const items = `${menuItem('data-conn-act="test"', "Test")}${menuItem('data-conn-act="edit"', "Edit")}${menuItem('data-conn-act="share"', "Share")}${menuItem('data-conn-act="delete"', "Delete", true)}`;
-    return `<li class="row conn-row" data-conn="${esc(c.id)}">
-      <span class="conn-name"><strong>${esc(c.name)}</strong><small>${esc(c.host || "")}</small>${detail ? `<small class="conn-detail">${esc(detail)}</small>` : ""}</span>
-      <span class="conn-type">Token</span>
-      <span class="conn-status">${state}</span>
-      <span class="conn-actions">${rowMenu(c.name, items)}</span>
-    </li>`;
-  }).join(""));
 }
-
-function renderConnHeaders() {
-  $("conn-headers").innerHTML = connHeaders.map((h, i) => `<li class="conn-header" data-header="${i}">
-    <input data-key="name" aria-label="Header name" placeholder="Authorization" value="${esc(h.name)}" autocapitalize="off" spellcheck="false">
-    <input data-key="value" aria-label="Header value" placeholder="Bearer \${secret:my_token}" value="${esc(h.value)}" autocapitalize="off" spellcheck="false">
-    <button class="btn quiet danger" type="button" data-header-remove="${i}" aria-label="Remove header" title="Remove header">${CROSS}</button>
-  </li>`).join("");
-}
-
-function secretLabel(name) {
-  const words = name.replace(/_/g, " ");
-  return words[0].toUpperCase() + words.slice(1);
-}
-
-function renderConnSecrets(c) {
-  const missing = c.missing || [];
-  $("conn-secrets").innerHTML = missing.map((name) => `<label>${esc(secretLabel(name))}
-    <input type="password" placeholder="Paste it here" data-secret="${esc(name)}" autocomplete="new-password" autocapitalize="off" spellcheck="false"></label>`).join("");
-  $("conn-secrets").hidden = !missing.length;
-}
-
-const CALL_WORDS = {
-  list: "Lists items", read: "Reads one item", states: "Lists states", move: "Moves an item",
-  comment: "Adds a comment", close: "Closes an item", create: "Creates an item", update: "Updates an item",
-};
-const METHODS = ["GET", "POST", "PUT", "PATCH", "DELETE"];
-let connCalls = [];
-let connChoices = [];
-let connOpenCalls = new Set();
-
-const toPairs = (object) => Object.entries(object || {}).map(([key, value]) => ({ key, value }));
-const fromPairs = (pairs) => Object.fromEntries(pairs.filter((p) => p.key.trim()).map((p) => [p.key.trim(), p.value]));
-
-function callFromSaved(name, saved) {
-  const { request, map, items, kind, tool, arguments: args, ...extra } = saved;
-  if (tool) extra.tool = tool;
-  if (args !== undefined) extra.arguments = args;
-  const method = request?.method || "GET";
-  const body = request?.body;
-  return {
-    name,
-    method,
-    path: request?.path || "",
-    query: toPairs(request?.query),
-    body: body === undefined || body === null ? "" : JSON.stringify(body, null, 2),
-    items: items || "",
-    map: toPairs(map),
-    changes: kind ? kind === "change" : method !== "GET",
-    extra,
-  };
-}
-
-function callsToSave() {
-  const out = {};
-  for (const call of connCalls) {
-    const name = call.name.trim();
-    if (!name) throw new Error("Every action needs a name.");
-    if (!call.path.trim() && !call.extra.tool) throw new Error(`The action ${name} needs a path.`);
-    if (Object.hasOwn(out, name)) throw new Error(`There are two actions called ${name}.`);
-    if (call.extra.tool) {
-      const saved = { ...call.extra, kind: call.changes ? "change" : "lookup" };
-      const map = fromPairs(call.map);
-      if (Object.keys(map).length) saved.map = map;
-      if (call.items.trim()) saved.items = call.items.trim();
-      out[name] = saved;
-      continue;
-    }
-    const request = { method: call.method, path: call.path.trim() };
-    const query = fromPairs(call.query);
-    if (Object.keys(query).length) request.query = query;
-    if (call.body.trim() && call.method !== "GET") {
-      try {
-        request.body = JSON.parse(call.body);
-      } catch {
-        throw new Error(`The body of ${name} is not valid JSON.`);
-      }
-    }
-    const saved = { ...call.extra, request, kind: call.changes ? "change" : "lookup" };
-    const map = fromPairs(call.map);
-    if (Object.keys(map).length) saved.map = map;
-    if (call.items.trim()) saved.items = call.items.trim();
-    out[name] = saved;
-  }
-  return out;
-}
-
-function pairRows(list, kind, keyHint, valueHint) {
-  const rows = list.map((p, i) => `<li class="conn-pair" data-pair="${i}">
-    <input data-pair-key aria-label="${esc(keyHint)}" placeholder="${esc(keyHint)}" value="${esc(p.key)}" list="conn-reply-fields" autocapitalize="off" spellcheck="false">
-    <input data-pair-value aria-label="${esc(valueHint)}" placeholder="${esc(valueHint)}" value="${esc(p.value)}" autocapitalize="off" spellcheck="false">
-    <button class="btn quiet danger" type="button" data-pair-remove="${i}" aria-label="Remove" title="Remove">${CROSS}</button>
-  </li>`).join("");
-  return `<ul class="conn-pairs" data-pairs="${kind}">${rows}</ul><button class="btn small-link" type="button" data-pair-add="${kind}">Add</button>`;
-}
-
-function callCard(call, i) {
-  const word = CALL_WORDS[call.name] || call.name || "New action";
-  const extras = [call.extra.page && "reads page by page", call.extra.before?.length && "asks something first"].filter(Boolean);
-  return `<details class="conn-call" data-call="${i}" data-call-name="${esc(call.name)}"${connOpenCalls.has(i) ? " open" : ""}>
-    <summary><span class="conn-method">${esc(call.extra.tool ? "TOOL" : call.method)}</span><span class="conn-call-title"><strong>${esc(word)}</strong><small>${esc(call.extra.tool || call.path || "No path yet")}</small></span>${badge(call.changes ? "warn" : "idle", call.changes ? "Changes" : "Reads")}</summary>
-    <div class="conn-call-body">
-      <label>Name<input data-field="name" value="${esc(call.name)}" placeholder="list" autocapitalize="off" spellcheck="false"></label>
-      ${call.extra.tool ? `<p class="help">Calls the tool <code>${esc(call.extra.tool)}</code> with <code>${esc(JSON.stringify(call.extra.arguments || {}))}</code>.</p>` : `<div class="conn-request">
-        <label>Method<select data-field="method">${METHODS.map((m) => `<option${m === call.method ? " selected" : ""}>${m}</option>`).join("")}</select></label>
-        <label>Path<input data-field="path" value="${esc(call.path)}" placeholder="/boards/{{board}}/cards" autocapitalize="off" spellcheck="false"></label>
-      </div>
-      <p class="help">Values like <code>{{board}}</code> fill in from the run. It is added to the connection's address.</p>
-      <div class="conn-sub"><strong>Query</strong>${pairRows(call.query, "query", "Field", "Value")}</div>
-      <label class="conn-body-field"${call.method === "GET" ? " hidden" : ""}>Body, as JSON<textarea data-field="body" rows="4" spellcheck="false">${esc(call.body)}</textarea></label>`}
-      <label>Where the list is in the reply<input data-field="items" value="${esc(call.items)}" placeholder="Leave empty if the reply is the list" autocapitalize="off" spellcheck="false"></label>
-      <div class="conn-sub"><strong>Reply fields to keep</strong><p class="help">The name Yardbell uses, then where it is in the reply. Use <strong>Test</strong> after saving to see the reply's fields.</p>${pairRows(call.map, "map", "item_id", "id")}</div>
-      <label class="choice"><input type="checkbox" data-field="changes"${call.changes ? " checked" : ""}>Changes something in the tool, so your Dispatch rules can refuse it</label>
-      ${extras.length ? `<p class="help">It also ${esc(extras.join(" and "))}, which stays as it is.</p>` : ""}
-      <div class="conn-call-foot"><button class="btn quiet danger small-link" type="button" data-remove-call="${i}">Remove action</button></div>
-    </div>
-  </details>`;
-}
-
-function renderCalls() {
-  $("conn-call-list").innerHTML = connCalls.map(callCard).join("") || `<p class="help">No actions yet.</p>`;
-}
-
-function renderChoices() {
-  $("conn-choice-list").innerHTML = connChoices.map((c, i) => `<li class="conn-choice" data-choice="${i}">
-    <input data-key="name" aria-label="Name" placeholder="board" value="${esc(c.name)}" autocapitalize="off" spellcheck="false">
-    <input data-key="label" aria-label="Label" placeholder="Board" value="${esc(c.label)}">
-    <select data-key="options" aria-label="Options from"><option value="">Typed in</option>${connCalls.filter((x) => x.name).map((x) => `<option value="${esc(x.name)}"${x.name === c.options ? " selected" : ""}>${esc(x.name)}</option>`).join("")}</select>
-    <label class="choice" title="Optional. It narrows which items start a run."><input type="checkbox" data-key="filter"${c.filter ? " checked" : ""}>Filter</label>
-    <button class="btn quiet danger" type="button" data-choice-remove="${i}" aria-label="Remove" title="Remove">${CROSS}</button>
-  </li>`).join("");
-}
-
-function showConnTab(tab) {
-  document.querySelectorAll("#conn-more-tabs [data-more]").forEach((b) => b.setAttribute("aria-selected", String(b.dataset.more === tab)));
-  document.querySelectorAll(".conn-more-tab").forEach((p) => { p.hidden = p.id !== tab; });
-}
-
-$("conn-more-tabs").addEventListener("click", (e) => {
-  const tab = e.target.closest("[data-more]");
-  if (tab) showConnTab(tab.dataset.more);
-});
-
-$("conn-action-add").addEventListener("click", () => {
-  connCalls.push(callFromSaved("", { request: { method: "GET", path: "" } }));
-  connOpenCalls.add(connCalls.length - 1);
-  renderCalls();
-});
-
-$("conn-call-list").addEventListener("toggle", (e) => {
-  const card = e.target.closest?.("[data-call]");
-  if (!card) return;
-  if (card.open) connOpenCalls.add(Number(card.dataset.call));
-  else connOpenCalls.delete(Number(card.dataset.call));
-}, true);
-
-function editCall(e) {
-  const card = e.target.closest("[data-call]");
-  if (!card) return;
-  const call = connCalls[Number(card.dataset.call)];
-  const pairs = e.target.closest("[data-pair]");
-  if (pairs) {
-    const list = call[pairs.closest("[data-pairs]").dataset.pairs];
-    list[Number(pairs.dataset.pair)][e.target.hasAttribute("data-pair-key") ? "key" : "value"] = e.target.value;
-    return;
-  }
-  const field = e.target.dataset.field;
-  if (!field) return;
-  call[field] = field === "changes" ? e.target.checked : e.target.value;
-  if (field === "name") card.dataset.callName = call.name;
-  if (field === "method") {
-    call.changes = call.method !== "GET";
-    card.querySelector(".conn-method").textContent = call.method;
-    card.querySelector("[data-field=changes]").checked = call.changes;
-    card.querySelector(".conn-body-field").hidden = call.method === "GET";
-  }
-  if (field === "path") card.querySelector(".conn-call-title small").textContent = call.path || "No path yet";
-  if (field === "name") card.querySelector(".conn-call-title strong").textContent = CALL_WORDS[call.name] || call.name || "New action";
-  if (field === "method" || field === "changes") {
-    card.querySelector(".conn-badge").outerHTML = badge(call.changes ? "warn" : "idle", call.changes ? "Changes" : "Reads");
-  }
-}
-$("conn-call-list").addEventListener("input", editCall);
-$("conn-call-list").addEventListener("change", editCall);
-
-$("conn-call-list").addEventListener("click", (e) => {
-  const remove = e.target.closest("[data-remove-call]");
-  if (remove) {
-    connCalls.splice(Number(remove.dataset.removeCall), 1);
-    connOpenCalls = new Set();
-    renderCalls();
-    return;
-  }
-  const add = e.target.closest("[data-pair-add]");
-  const gone = e.target.closest("[data-pair-remove]");
-  if (!add && !gone) return;
-  const call = connCalls[Number(e.target.closest("[data-call]").dataset.call)];
-  if (add) call[add.dataset.pairAdd].push({ key: "", value: "" });
-  else call[gone.closest("[data-pairs]").dataset.pairs].splice(Number(gone.dataset.pairRemove), 1);
-  renderCalls();
-});
-
-$("conn-choice-add").addEventListener("click", () => {
-  connChoices.push({ name: "", label: "", options: "", filter: false });
-  renderChoices();
-});
-
-$("conn-choice-list").addEventListener("input", (e) => {
-  const row = e.target.closest("[data-choice]");
-  if (row && e.target.dataset.key) connChoices[Number(row.dataset.choice)][e.target.dataset.key] = e.target.type === "checkbox" ? e.target.checked : e.target.value;
-});
-
-$("conn-choice-list").addEventListener("click", (e) => {
-  const button = e.target.closest("[data-choice-remove]");
-  if (!button) return;
-  connChoices.splice(Number(button.dataset.choiceRemove), 1);
-  renderChoices();
-});
-
-function openConnection(c, was) {
-  connWas = was;
-  connServer = c.server || "";
-  const f = $("conn-form");
-  f.querySelector("[name=base_url]").closest("label").hidden = Boolean(connServer);
-  $("conn-output").hidden = true;
-  for (const key of ["name", "id", "base_url"]) f.elements[key].value = c[key] || "";
-  const known = Object.keys(CALL_WORDS);
-  const rank = (name) => (known.includes(name) ? known.indexOf(name) : known.length);
-  connCalls = Object.entries(c.calls || {})
-    .map(([name, saved]) => callFromSaved(name, saved))
-    .sort((a, b) => rank(a.name) - rank(b.name));
-  connChoices = (c.params || []).map((p) => ({ name: p.name, label: p.label || "", options: p.options || "", filter: !!p.filter }));
-  connOpenCalls = new Set();
-  renderCalls();
-  renderChoices();
-  showConnTab("conn-actions");
-  f.elements.enabled.checked = c.enabled !== false;
-  f.elements.allow_private.checked = !!c.allow_private;
-  connHeaders = Object.entries(c.headers || {}).map(([name, value]) => ({ name, value }));
-  renderConnHeaders();
-  const blank = !Object.keys(c.calls || {}).length;
-  $("conn-about").textContent = was ? "" : c.missing?.length
-    ? `${c.about || ""} Create what it asks for in ${c.name}, then paste it here. Yardbell keeps it in secrets and never shows it again.`
-    : blank ? "Describe the tool's API under More options." : c.about || "";
-  $("conn-about").hidden = !$("conn-about").textContent;
-  renderConnSecrets(c);
-  $("conn-more").open = blank;
-  $("conn-note").textContent = "";
-  showStep("conn-form", was ? `Edit ${c.name}` : c.name ? `Connect ${c.name}` : "");
-  focusIfActive(c.missing?.length ? $("conn-secrets").querySelector("input") : f.elements.name);
-}
-
-function showConnOutput(html, title) {
-  showStep("conn-output", title);
-  $("conn-output").innerHTML = `${html}<div class="form-foot"><button class="btn primary" type="button" data-close-output>Done</button></div>`;
-}
-
-$("conn-output").addEventListener("click", (e) => {
-  if (e.target.closest("[data-close-output]")) closeFlow();
-});
 
 const brandMark = (d) => `<svg viewBox="0 0 24 24" aria-hidden="true"><path d="${d}"/></svg>`;
 const CONN_LOGOS = {
@@ -1466,17 +1180,10 @@ function openPicker(step = "conn-new-panel") {
   const signedIn = (t) => {
     const have = (data.mcp_servers || []).find((s) => s.url === t.url);
     if (!have || data.mcp_auth?.[have.name] !== "signed_in") return false;
-    return !t.template || connections.list.some((c) => c.server === have.name);
+    return true;
   };
   $("conn-sign-in-list").innerHTML = [
     ...(connections.sign_in || []).map((t) => pickTile(t.id, signedIn(t) ? "" : `data-sign-in="${esc(t.id)}"`, t.name, t.needs_client ? `${t.about} Needs an app you make in its developer console.` : t.about, "Connect", signedIn(t))),
-  ].join("");
-  $("conn-new-list").innerHTML = [
-    ...connections.templates.map((name) => {
-      const c = connections.starters[name];
-      return pickTile(name, `data-starter="${esc(name)}"`, c.name, c.about, "Set up");
-    }),
-    pickTile("", 'data-starter=""', "Start blank", "Any tool with a web API.", "Set up"),
   ].join("");
   flowAdding = true;
   if (step === "server-form") openServerForm(null);
@@ -1516,146 +1223,6 @@ $("conn-sign-in-list").addEventListener("click", async (e) => {
     await connectByTool(connections.sign_in.find((t) => t.id === pick.dataset.signIn));
   } catch (err) {
     tellFlow(err.message);
-  }
-});
-
-$("conn-new-list").addEventListener("click", (e) => {
-  const button = e.target.closest("[data-starter]");
-  if (!button) return;
-  const name = button.dataset.starter;
-  openConnection(name ? connections.starters[name] : { enabled: true, headers: {} }, "");
-});
-$("conn-cancel").addEventListener("click", closeFlow);
-$("conn-header-add").addEventListener("click", () => {
-  connHeaders.push({ name: "", value: "" });
-  renderConnHeaders();
-});
-$("conn-headers").addEventListener("input", (e) => {
-  const row = e.target.closest("[data-header]");
-  if (row && e.target.dataset.key) connHeaders[Number(row.dataset.header)][e.target.dataset.key] = e.target.value;
-});
-$("conn-headers").addEventListener("click", (e) => {
-  const button = e.target.closest("[data-header-remove]");
-  if (!button) return;
-  connHeaders.splice(Number(button.dataset.headerRemove), 1);
-  renderConnHeaders();
-});
-function freeConnectionId(wanted) {
-  if (connWas || !connections.list.some((c) => c.id === wanted)) return wanted;
-  const base = `${wanted}-token`;
-  let id = base;
-  for (let n = 2; connections.list.some((c) => c.id === id); n += 1) id = `${base}-${n}`;
-  return id;
-}
-
-function slugOf(text) {
-  return text.trim().toLowerCase().replace(/[^a-z0-9_-]+/g, "-").replace(/^-+|-+$/g, "");
-}
-
-$("conn-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  const f = e.target;
-  const name = f.elements.name.value.trim();
-  let calls;
-  try {
-    calls = callsToSave();
-  } catch (err) {
-    $("conn-more").open = true;
-    showConnTab("conn-actions");
-    $("conn-note").textContent = err.message;
-    return;
-  }
-  const choices = connChoices.filter((c) => c.name.trim()).map((c) => ({ name: c.name.trim(), label: c.label, ...(c.options ? { options: c.options } : {}), ...(c.filter ? { filter: true } : {}) }));
-  const body = {
-    was: connWas,
-    id: freeConnectionId(f.elements.id.value.trim() || slugOf(name)),
-    name,
-    base_url: connServer ? "" : f.elements.base_url.value.trim(),
-    server: connServer,
-    enabled: f.elements.enabled.checked,
-    allow_private: f.elements.allow_private.checked,
-    headers: Object.fromEntries(connHeaders.filter((h) => h.name.trim()).map((h) => [h.name.trim(), h.value.trim()])),
-    params_yaml: choices.length ? JSON.stringify(choices) : "",
-    calls_yaml: JSON.stringify(calls),
-  };
-  try {
-    if (!body.base_url && !connServer) throw new Error("Type the tool's address, starting with https://");
-    body.headers = await tokensKept(body.headers, body.id);
-    connHeaders = toPairs(body.headers).map(({ key, value }) => ({ name: key, value }));
-    renderConnHeaders();
-    await api("POST", "/api/settings/connectors", body);
-    const typed = [...$("conn-secrets").querySelectorAll("input")].filter((i) => i.value);
-    for (const input of typed) await api("POST", "/api/settings/secrets", { name: input.dataset.secret, value: input.value });
-    typed.forEach((i) => { i.value = ""; });
-    saved(`${body.name || body.id} saved.`);
-    closeFlow();
-    await load();
-    const left = connections.list.find((c) => c.id === body.id);
-    if (typed.length && left && !left.missing.length && left.enabled) {
-      api("POST", `/api/settings/connectors/${encodeURIComponent(body.id)}/test`, {}).catch(() => {}).then(loadConnections).catch(() => {});
-    }
-  } catch (err) {
-    $("conn-note").textContent = err.message;
-    if (/call|param|header/i.test(err.message)) $("conn-more").open = true;
-  }
-});
-$("conn-import-open").addEventListener("click", () => {
-  $("conn-output").hidden = true;
-  showStep("conn-import", "Paste a shared connection");
-  focusIfActive($("conn-import").elements.text);
-});
-$("conn-import-cancel").addEventListener("click", closeFlow);
-$("conn-import").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  try {
-    const out = await api("POST", "/api/settings/connectors/import", { text: e.target.elements.text.value });
-    e.target.elements.text.value = "";
-    saved(`${out.id} imported, switched off.`);
-    closeFlow();
-    await load();
-    const needs = out.secrets.length ? ` It needs the secret ${out.secrets.join(", ")}.` : "";
-    showConnOutput(`<p>${esc(out.id)} can reach <strong>${esc(out.host || "")}</strong>.${esc(needs)} Read its calls, then switch it on with <strong>Edit</strong>.</p>`, `${out.id} imported`);
-  } catch (err) {
-    toast(err.message);
-  }
-});
-$("conn-rows").addEventListener("click", async (e) => {
-  if (!e.target.closest("button")) {
-    const row = e.target.closest("[data-conn]");
-    if (row) openConnection(connections.list.find((x) => x.id === row.dataset.conn), row.dataset.conn);
-    return;
-  }
-  const button = e.target.closest("[data-conn-act]");
-  if (!button) return;
-  const id = button.closest("[data-conn]").dataset.conn;
-  const c = connections.list.find((x) => x.id === id);
-  const at = `/api/settings/connectors/${encodeURIComponent(id)}`;
-  try {
-    if (button.dataset.connAct === "edit") openConnection(c, id);
-    if (button.dataset.connAct === "delete") {
-      if (!(await Nav.confirm(`Delete ${c.name}?`, "A pipeline using it waits until it has another. Its secrets stay.", { confirm: "Delete", danger: true }))) return;
-      await api("DELETE", at);
-      saved(`${c.name} deleted.`);
-      await load();
-    }
-    if (button.dataset.connAct === "share") {
-      const { text } = await api("GET", `${at}/share`);
-      showConnOutput(`<p class="help">This holds no secret values, only their names.</p><textarea id="conn-share-text" rows="12" readonly spellcheck="false">${esc(text)}</textarea>`, `Share ${c.name}`);
-    }
-    if (button.dataset.connAct === "test") {
-      showConnOutput(`<p class="help" role="status">Reading ${esc(c.name)}...</p>`, `Test ${c.name}`);
-      const out = await api("POST", `${at}/test`, {});
-      const items = out.items.map((i) => `<li><strong>${esc(i.id)}</strong> ${esc(i.title)} <small>${esc(i.state)}</small></li>`).join("");
-      const skipped = out.skipped.map((s) => `<li class="pr-bad">Skipped: ${esc(s)}</li>`).join("");
-      showConnOutput(`<p><strong>${out.count} items.</strong>${out.cut_off ? ` <span class="pr-bad">${esc(out.cut_off)}</span>` : ""}</p>
-        <ul class="conn-items">${skipped}${items}</ul>
-        <p class="pl-field-head">Fields you can map</p>
-        <p class="conn-paths">${out.paths.map((p) => `<code>${esc(p)}</code>`).join(" ")}</p>`, `Test ${c.name}`);
-      await loadConnections();
-    }
-  } catch (err) {
-    showConnOutput(`<p class="pr-bad">${esc(err.message)}</p>`, c.name);
-    await loadConnections().catch(() => {});
   }
 });
 
@@ -2469,10 +2036,9 @@ $("pair-show").addEventListener("click", async () => {
 
 $("server-cancel").addEventListener("click", closeFlow);
 $("conn-back").addEventListener("click", () => {
-  const from = flowStep;
   stopWaiting();
   signingIn = null;
-  openPicker(from === "conn-form" || from === "conn-import" ? "conn-tab-token" : "conn-new-panel");
+  openPicker("conn-new-panel");
 });
 $("conn-close").addEventListener("click", closeFlow);
 $("conn-flow").addEventListener("close", () => {
@@ -2559,12 +2125,6 @@ async function serverClick(e) {
   if (!e.target.closest("button")) {
     const row = e.target.closest("[data-server]");
     if (row) openServerForm(Number(row.dataset.server));
-    return;
-  }
-  const linked = e.target.closest("[data-conn-edit]");
-  if (linked) {
-    openConnection(connections.list.find((c) => c.id === linked.dataset.connEdit), linked.dataset.connEdit);
-    $("conn-more").open = true;
     return;
   }
   const act = e.target.closest("[data-mcp-act]");

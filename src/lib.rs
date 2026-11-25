@@ -24,6 +24,7 @@ pub mod mcp_client;
 pub mod mcp_pipeline;
 pub mod mcp_read;
 pub mod mesh;
+pub mod models;
 pub mod onboarding;
 pub mod phone;
 pub mod pipeline;

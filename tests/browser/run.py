@@ -926,7 +926,11 @@ class Suite:
         self.shots = shots
         self.session = None
 
+    # These tests drive the old pages; the root now opens the React app, and the old dashboard
+    # lives at /classic.
     def url(self, path):
+        if path == "/" or path.startswith(("/?", "/#")):
+            path = "/classic" + path[1:]
         return self.y.base + path
 
     def api(self, method, path, body=None):
@@ -953,7 +957,7 @@ class Suite:
         b.click("input[name=passcode]")
         b.type(PASSCODE)
         b.key("Enter")
-        b.wait("location.pathname === '/' && document.getElementById('title')", "the dashboard after logging in")
+        b.wait("location.pathname === '/ui/' && document.getElementById('root')?.children.length", "the app after logging in")
 
     def test_every_page_loads(self):
         for path in PAGES:
@@ -2969,35 +2973,38 @@ class Suite:
           return window.YardbellUsage.load();
         }})()""")
 
-    def test_usage_card_and_sheet_list_every_window(self):
+    def test_usage_status_bar_and_sheet_list_every_window(self):
         b = self.b
         b.goto(self.url("/workspace"))
-        b.wait("window.YardbellUsage && document.getElementById('usage-card')", "the usage card")
+        b.wait("window.YardbellUsage && document.getElementById('status-bar')", "the status bar")
         self.mock_usage()
-        b.wait("!document.getElementById('usage-card').hidden && document.querySelectorAll('#usage-card .usage-row').length === 2", "a row per agent with figures")
-        card = b.js("""(() => {
-          const card = document.getElementById('usage-card');
-          const rows = [...card.querySelectorAll('.usage-row')];
+        b.wait("document.querySelectorAll('#status-bar .status-usage').length === 2", "an item per agent with figures")
+        bar = b.js("""(() => {
+          const bar = document.getElementById('status-bar');
+          const items = [...bar.querySelectorAll('.status-usage')];
+          const box = bar.getBoundingClientRect();
           return {
-            inColumn: card.parentElement.id === 'col' && card.nextElementSibling?.classList.contains('col-foot'),
-            rows: rows.map((r) => [...r.querySelector('.usage-row-line').children].map((c) => c.textContent.trim()).filter(Boolean).join(' ')),
-            tones: rows.map((r) => r.querySelector('.usage-meter').className.split(' ').pop()),
-            lit: rows.map((r) => r.querySelectorAll('.usage-meter i.on').length),
-            cells: rows.map((r) => r.querySelectorAll('.usage-meter i').length),
-            resets: rows.map((r) => r.querySelector('.usage-row-reset').textContent),
+            inShell: bar.parentElement.id === 'shell',
+            bottom: Math.round(box.bottom) === innerHeight, left: Math.round(box.left), wide: Math.round(box.width) === innerWidth,
+            providers: items.map((i) => i.dataset.provider),
+            words: items.map((i) => i.querySelector('.status-words').textContent),
+            tones: items.map((i) => ['ok', 'warn', 'bad'].find((t) => i.classList.contains(t))),
+            fill: items.map((i) => i.querySelector('.status-meter i').style.width),
+            refresh: Boolean(bar.querySelector('[data-usage-refresh]')),
           };
         })()""")
-        if not card["inColumn"]:
-            raise Failure("the usage card should sit just above the sidebar's foot")
-        if card["rows"] != ["Claude Fable wk 30%", "Codex 5h 75%"]:
-            raise Failure(f"each row should show the tightest existing window, with five_hour missing: {card['rows']}")
-        if card["tones"] != ["ok", "warn"] or card["lit"] != [3, 8] or card["cells"] != [10, 10]:
-            raise Failure(f"the meters read {card}")
-        if not all(card["resets"]):
-            raise Failure(f"every row should say when it resets: {card['resets']}")
-        if b.js("document.getElementById('strip') || document.getElementById('usage-pop')"):
-            raise Failure("the status bar still shows usage")
-        b.click("#usage-card")
+        if not (bar["inShell"] and bar["bottom"] and bar["left"] == 0 and bar["wide"]):
+            raise Failure(f"the status bar should run along the bottom of the window: {bar}")
+        if bar["providers"] != ["claude", "codex"] or bar["tones"] != ["ok", "warn"] or bar["fill"] != ["30%", "75%"]:
+            raise Failure(f"each item should show its agent's tightest window: {bar}")
+        claude, codex = bar["words"]
+        if not re.fullmatch(r"16% \d+d \d+h · 30% \d+d \d+h", claude) or not re.fullmatch(r"75% \d+h \d+m · 1% \d+d \d+h", codex):
+            raise Failure(f"every window should read its figure and reset: {bar['words']}")
+        if not bar["refresh"]:
+            raise Failure("the bar has no button to check usage now")
+        if b.js("document.getElementById('usage-card').checkVisibility() || document.getElementById('rail-usage')"):
+            raise Failure("the sidebar card or rail ring still shows next to the bar")
+        b.click('#status-bar .status-usage[data-provider="codex"]')
         b.wait("!document.getElementById('usage-sheet').hidden && document.activeElement?.matches('#usage-sheet [data-usage-close]')", "the sheet with focus in it")
         sheet = b.js("""(() => {
           const sheet = document.getElementById('usage-sheet');
@@ -3030,37 +3037,32 @@ class Suite:
         if sheet["link"] != "/settings#stats-usage":
             raise Failure(f"the Stats & Usage link goes to {sheet['link']}")
         b.key("Escape")
-        b.wait("document.getElementById('usage-sheet').hidden && document.activeElement?.id === 'usage-card'", "Escape to close the sheet and return focus")
-        b.click("#usage-card")
+        b.wait("document.getElementById('usage-sheet').hidden && document.activeElement?.dataset.provider === 'codex'", "Escape to close the sheet and return focus")
+        b.click("#status-bar .status-usage")
         b.wait("!document.getElementById('usage-sheet').hidden", "the sheet again")
         b.js("document.querySelector('.usage-scrim').click()")
         b.wait("document.getElementById('usage-sheet').hidden", "a click outside to close the sheet")
         self.mock_usage("{ windows: [], codex: null, providers: [{ id: 'codex', name: 'Codex', status: 'signed_out', message: 'Not signed in', windows: [] }] }")
-        b.wait("document.getElementById('usage-card').hidden", "the card hidden when no agent has figures")
-        self.check_errors("the usage card and sheet")
+        b.wait("!document.querySelector('#status-bar .status-usage') && document.querySelector('#status-bar [data-usage-refresh]')", "no usage items when no agent has figures")
+        self.check_errors("the usage bar and sheet")
 
-    def test_usage_rail_button_and_phone_more_row(self):
+    def test_usage_bar_with_a_folded_sidebar_and_phone_more_row(self):
         b = self.b
         b.goto(self.url("/workspace"))
         b.wait("window.YardbellUsage && window.YardbellShell", "the shell")
         try:
             b.js("window.YardbellShell.collapse(true)")
             self.mock_usage()
-            b.wait("!document.getElementById('rail-usage').hidden && getComputedStyle(document.getElementById('rail')).display !== 'none'", "the usage ring in the folded rail")
-            ring = b.js("""(() => {
-              const fill = document.querySelector('#rail-usage .usage-ring-fill');
-              return { label: document.getElementById('rail-usage').getAttribute('aria-label'), tone: document.querySelector('#rail-usage .usage-ring').classList.contains('warn'),
-                       dash: parseFloat(fill.getAttribute('stroke-dasharray')) };
-            })()""")
-            if "Codex 5h 75%" not in ring["label"] or not ring["tone"] or not 30 < ring["dash"] < 31:
-                raise Failure(f"the rail ring should show the tightest 75%: {ring}")
-            b.click("#rail-usage")
-            b.wait("!document.getElementById('usage-sheet').hidden", "the sheet from the rail")
+            b.wait("document.querySelectorAll('#status-bar .status-usage').length === 2 && getComputedStyle(document.getElementById('rail')).display !== 'none'", "the bar under the folded rail")
+            if b.js("Math.round(document.getElementById('status-bar').getBoundingClientRect().left)") != 0:
+                raise Failure("the bar should start under the rail")
+            b.click("#status-bar .status-usage")
+            b.wait("!document.getElementById('usage-sheet').hidden", "the sheet from the bar")
             left = b.js("Math.round(document.getElementById('usage-sheet').getBoundingClientRect().left) === Math.round(document.getElementById('rail').getBoundingClientRect().right)")
             if not left:
                 raise Failure("the sheet should open from the rail's edge")
             b.key("Escape")
-            b.wait("document.getElementById('usage-sheet').hidden && document.activeElement?.id === 'rail-usage'", "focus back on the rail button")
+            b.wait("document.getElementById('usage-sheet').hidden && document.activeElement?.classList.contains('status-usage')", "focus back on the bar")
         finally:
             b.js("window.YardbellShell.collapse(false)")
         b.viewport(390, 844, 3)
@@ -3082,6 +3084,8 @@ class Suite:
             })()""")
             if phone["left"] != 0 or phone["width"] != 390 or phone["sideways"] or phone["close"] < 40:
                 raise Failure(f"the sheet should fill the phone's width: {phone}")
+            if b.js("getComputedStyle(document.getElementById('status-bar')).display") != "none":
+                raise Failure("a phone has the tab bar, so the status bar should not show")
             b.key("Escape")
             b.wait("document.getElementById('usage-sheet').hidden", "Escape to close it on a phone")
         finally:
@@ -3172,21 +3176,22 @@ class Suite:
           dispatchEvent(new CustomEvent('yardbell-live', {{ detail: {{ open: {'true' if up else 'false'} }} }}));
         }})()""")
 
-    def test_sidebar_foot_has_the_status_and_no_page_has_a_bottom_bar(self):
+    def test_sidebar_foot_has_the_status_and_the_bar_sits_below_the_page(self):
         b = self.b
         b.goto(self.url("/workspace"))
         b.wait("document.querySelector('#col .col-foot #status-group #status-live.up')", "the connection dot in the sidebar's foot")
         self.mock_usage("""{ windows: [{ label: "5 hour", used: 0.42, resets_at: Math.floor(Date.now() / 1000) + 7200, status: "allowed" }],
           codex: { seen: new Date().toISOString(), windows: [{ label: "5 hour", used: 0.42, resets_at: 4102444800, status: "allowed" }] }, runs_on: "codex" }""")
-        b.wait("document.querySelector('#usage-card')?.textContent.includes('Codex') && document.querySelector('#usage-card').textContent.includes('42%')",
-               "an older server's figures in the usage card")
+        b.wait("document.querySelector('#status-bar [data-provider=\"codex\"]')?.textContent.includes('42%')",
+               "an older server's figures in the status bar")
         seen = b.js("""(() => {
           const foot = document.querySelector('#col .col-foot');
           const group = document.getElementById('status-group');
+          const bar = document.getElementById('status-bar').getBoundingClientRect();
           return {
-            bar: Boolean(document.getElementById('strip') || document.querySelector('.strip')),
             rows: getComputedStyle(document.getElementById('shell')).gridTemplateRows.split(' ').length,
             mainBottom: Math.round(document.getElementById('main').getBoundingClientRect().bottom),
+            barTop: Math.round(bar.top), barBottom: Math.round(bar.bottom),
             tall: innerHeight,
             footText: foot.textContent,
             right: Math.round(group.getBoundingClientRect().right) > Math.round(foot.getBoundingClientRect().right) - 20,
@@ -3194,8 +3199,8 @@ class Suite:
             ports: document.getElementById('status-ports'),
           };
         })()""")
-        if seen["bar"] or seen["rows"] != 1 or seen["mainBottom"] != seen["tall"]:
-            raise Failure(f"the page should have no bottom bar and fill the window: {seen}")
+        if seen["rows"] != 2 or seen["mainBottom"] != seen["barTop"] or seen["barBottom"] != seen["tall"]:
+            raise Failure(f"the page should end where the bar starts, and the bar at the window's bottom: {seen}")
         if "%" in seen["footText"] or "hp" in seen["footText"]:
             raise Failure(f"the foot should not repeat machine memory: {seen['footText']!r}")
         if not seen["right"] or seen["live"] != "Live" or seen["ports"]:
@@ -3219,11 +3224,11 @@ class Suite:
             b.wait("document.getElementById('shell') && document.getElementById('status-group')", f"the shell on {path}")
             if b.js("Boolean(document.getElementById('strip') || document.querySelector('.strip'))"):
                 raise Failure(f"{path} still renders a bottom bar")
-        visible = b.js("document.getElementById('status-group').checkVisibility() || document.getElementById('usage-card').checkVisibility()")
+        visible = b.js("document.getElementById('status-group').checkVisibility() && document.getElementById('status-bar').checkVisibility()")
         b.goto(self.url("/settings"))
         b.wait("document.querySelector('#col-body .settings-back')", "Settings")
-        if b.js("document.getElementById('status-group').checkVisibility() || document.getElementById('usage-card').checkVisibility()"):
-            raise Failure("Settings' column should show no status or usage")
+        if b.js("document.getElementById('status-group').checkVisibility() || document.getElementById('status-bar').checkVisibility()"):
+            raise Failure("Settings should show no status or usage")
         if not visible:
             raise Failure("the status should show on a page with the sidebar")
         b.viewport(390, 844, 3)
@@ -3243,10 +3248,10 @@ class Suite:
         try:
             b.js("window.YardbellShell.collapse(true)")
             self.mock_usage()
-            b.wait("document.querySelector('#rail #status-group.in-rail #status-live') && !document.getElementById('rail-usage').hidden", "the status in the rail")
+            b.wait("document.querySelector('#rail #status-group.in-rail #status-live')", "the status in the rail")
             order = b.js("""[...document.getElementById('rail').children].filter((el) => el.checkVisibility())
-              .map((el) => el.id || (el.hasAttribute('data-theme-toggle') ? 'theme' : el.className)).slice(-4)""")
-            if order != ["rail-usage", "status-group", "theme", "logout"]:
+              .map((el) => el.id || (el.hasAttribute('data-theme-toggle') ? 'theme' : el.className)).slice(-3)""")
+            if order != ["status-group", "theme", "logout"]:
                 raise Failure(f"the rail's bottom group reads {order}")
             b.js(f"""(() => {{
               const s = structuredClone(window.YardbellShell.lastState);
@@ -3857,6 +3862,8 @@ class Suite:
         b.wait("!document.getElementById('ws-right').hidden", "the right panel to open")
         return folder
 
+    EDITOR = "window.monaco?.editor.getEditors().find((e) => e.getContainerDomNode().closest('.ws-pane:not([hidden]) .ws-file-editor'))"
+
     def drop_panel_files(self):
         shutil.rmtree(os.path.join(self.y.root, "demo-api", "panel-demo"), ignore_errors=True)
 
@@ -3929,24 +3936,45 @@ class Suite:
             folder = self.panel_on_demo_api()
             b.click('#side-tree [data-dir="panel-demo"]')
             b.click('#side-tree [data-file="panel-demo/app.js"]')
-            b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-file-text .hl-keyword')", "app.js shown with colours")
-            seen = b.js("""(() => {
+            b.wait(f"{self.EDITOR} && {self.EDITOR}.getModel()", "app.js open in the editor", timeout=30)
+            seen = b.js(f"""(() => {{
               const pane = document.querySelector('.ws-pane:not([hidden])');
-              return {
+              const ed = {self.EDITOR};
+              return {{
                 tab: document.querySelector('#tabs .ws-tab.current .ws-tab-name').textContent,
-                lines: pane.querySelector('.ws-file-gutter').textContent.split(String.fromCharCode(10)).length,
-                keywords: [...pane.querySelectorAll('.hl-keyword')].map((k) => k.textContent),
-                comment: pane.querySelector('.hl-comment')?.textContent,
+                lines: ed.getModel().getLineCount(),
+                language: ed.getModel().getLanguageId(),
+                readOnly: ed.getRawOptions().readOnly,
                 meta: pane.querySelector('.ws-file-meta').textContent,
                 leaf: focusedLeaf(),
-              };
-            })()""")
-            if seen["tab"] != "app.js" or seen["lines"] != 5:
+              }};
+            }})()""")
+            if seen["tab"] != "app.js" or seen["lines"] != 6:
                 raise Failure(f"the file tab is wrong: {seen}")
-            if not {"export", "function", "return", "const"} <= set(seen["keywords"]) or seen["comment"] != "// greets":
-                raise Failure(f"the file is not coloured as JavaScript: {seen}")
-            if "read only" not in seen["meta"]:
-                raise Failure(f"the file tab does not say it is read only: {seen['meta']}")
+            if seen["language"] != "javascript":
+                raise Failure(f"the file is not read as JavaScript: {seen}")
+            if seen["readOnly"] or seen["meta"] != "5 lines · 84 bytes":
+                raise Failure(f"the file tab should be editable and say its size: {seen}")
+            b.click(".ws-pane:not([hidden]) .ws-file-editor .view-line")
+            b.key("\ue011", "Control")
+            b.type("// saved\n")
+            b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-file-meta').textContent === 'Unsaved changes' && !document.querySelector('.ws-pane:not([hidden]) .ws-file-save').hidden",
+                   "the tab marked as changed, with Save")
+            b.key("s", "Control")
+            b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-file-meta').textContent === '6 lines · 93 bytes'", "the file saved", timeout=15)
+            with open(os.path.join(folder, "panel-demo", "app.js")) as f:
+                saved = f.read()
+            if not saved.startswith("// saved\n// greets\n"):
+                raise Failure(f"the saved file is {saved!r}")
+            write(os.path.join(folder, "panel-demo", "app.js"), "changed elsewhere\n")
+            b.type("x")
+            b.key("s", "Control")
+            b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-file-meta').textContent.includes('changed on the machine since it was opened')",
+                   "a save over a file changed elsewhere refused", timeout=15)
+            with open(os.path.join(folder, "panel-demo", "app.js")) as f:
+                if f.read() != "changed elsewhere\n":
+                    raise Failure("the refused save still wrote the file")
+            b.js(f"{self.EDITOR}.trigger('test', 'undo')")
             leaf = seen["leaf"]
             if (leaf.get("kind"), leaf.get("machine"), leaf.get("root"), leaf.get("path")) != ("file", MACHINE, folder, "panel-demo/app.js"):
                 raise Failure(f"the file leaf is {leaf}")
@@ -3956,8 +3984,8 @@ class Suite:
             if b.js("document.querySelectorAll('#tabs .ws-tab').length") != tabs:
                 raise Failure("opening the same file again made another tab")
             b.goto(self.url("/workspace"))
-            b.wait("document.querySelector('#tabs .ws-tab.current')?.textContent.includes('app.js') && document.querySelector('.ws-pane:not([hidden]) .ws-file-text .hl-keyword')",
-                   "the file tab back after a reload")
+            b.wait(f"document.querySelector('#tabs .ws-tab.current')?.textContent.includes('app.js') && {self.EDITOR}?.getModel().getValue() === 'changed elsewhere\\n'",
+                   "the file tab back after a reload, showing the file as it is now", timeout=30)
             b.click('#side-tree [data-dir="panel-demo"]')
             b.click('#side-tree [data-file="panel-demo/logo.bin"]')
             b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-file-error')?.textContent.includes('is a binary file')", "a binary file refused with a reason")
@@ -4093,10 +4121,39 @@ class Suite:
           ? [...el.children].map((c) => c.textContent).join(' ')
           : [el.querySelector('.chg-st').textContent, el.dataset.path, el.dataset.staged, el.querySelector('.chg-stats').textContent].join(' '))""")
 
+    DIFF = "window.monaco?.editor.getDiffEditors().find((e) => e.getContainerDomNode().closest('.ws-pane:not([hidden]) .ws-diff-editor'))"
+
     def open_long_diff(self):
         b = self.b
         b.click('#chg-list [data-path="long.txt"]')
-        b.wait("document.querySelector('.ws-pane:not([hidden]) .ws-diff-table')", "the diff of long.txt")
+        b.wait(f"{self.DIFF}?.getModifiedEditor().getModel()?.getValue().includes('line twenty') && {self.DIFF}.getLineChanges()?.length",
+               "the diff of long.txt", timeout=30)
+
+    # Clicks where the element is now. Bidi's click scrolls it into view first, and inside Monaco
+    # that scrolls a container Monaco puts straight back, so the click would miss.
+    def press(self, selector):
+        at = self.b.centre(selector)
+        self.b._actions({"type": "pointer", "id": "mouse", "parameters": {"pointerType": "mouse"}, "actions": [
+            {"type": "pointerMove", "x": int(at["x"]), "y": int(at["y"]), "origin": "viewport"},
+            {"type": "pointerDown", "button": 0},
+            {"type": "pointerUp", "button": 0},
+        ]})
+        self.b.pump(0.2)
+
+    # Moves the pointer over a line of one side of the diff, so its "+" button shows, and clicks it.
+    def note_on(self, side, line):
+        b = self.b
+        which = "getModifiedEditor" if side == "new" else "getOriginalEditor"
+        at = b.js(f"""(() => {{
+          const ed = {self.DIFF}.{which}();
+          ed.revealLine({line});
+          const p = ed.getScrolledVisiblePosition({{ lineNumber: {line}, column: 1 }});
+          const r = ed.getDomNode().getBoundingClientRect();
+          return [r.left + p.left + 30, r.top + p.top + p.height / 2];
+        }})()""")
+        b.call("input.performActions", context=b.context, actions=[{"type": "pointer", "id": "mouse", "actions": [{"type": "pointerMove", "x": int(at[0]), "y": int(at[1])}]}])
+        cls = "modified" if side == "new" else "original"
+        self.press(f".ws-pane:not([hidden]) .editor.{cls} .monaco-plus")
 
     def test_workspace_changes_lists_a_repo_with_counts(self):
         b = self.b
@@ -4167,35 +4224,33 @@ class Suite:
         try:
             repo, head = self.changes_on_demo_api()
             self.open_long_diff()
+            b.wait(f"document.querySelectorAll('{pane} .editor.modified .diff-hidden-lines').length === 2", "the unchanged lines folded")
             seen = b.js(f"""(() => {{
               const pane = document.querySelector('{pane}');
-              const rows = [...pane.querySelectorAll('tr.dl.add, tr.dl.del')].map((r) => [r.className.replace('dl ', ''), r.querySelector('.dn.o').textContent, r.querySelector('.dn.n').textContent, r.querySelector('.dc').textContent.slice(1)]);
+              const d = {self.DIFF};
+              const c = d.getLineChanges()[0];
               return {{
                 tab: document.querySelector('#tabs .ws-tab.current .ws-tab-name').textContent,
-                rows,
-                folds: [...pane.querySelectorAll('tr.dfold button')].map((b) => b.textContent),
+                changes: d.getLineChanges().length,
+                change: [c.originalStartLineNumber, c.originalEndLineNumber, c.modifiedStartLineNumber, c.modifiedEndLineNumber],
+                was: d.getOriginalEditor().getModel().getLineContent(20),
+                now: d.getModifiedEditor().getModel().getLineContent(20),
+                folds: [...pane.querySelectorAll('.editor.modified .diff-hidden-lines .center')].map((f) => f.textContent.trim()),
                 counts: pane.querySelector('.ws-diff-counts').textContent,
                 leaf: focusedLeaf(),
               }};
             }})()""")
-            if seen["tab"] != "long.txt" or seen["rows"] != [["del", "20", "", "line 20"], ["add", "", "20", "line twenty"]]:
+            if seen["tab"] != "long.txt" or seen["changes"] != 1 or seen["change"] != [20, 20, 20, 20] or (seen["was"], seen["now"]) != ("line 20", "line twenty"):
                 raise Failure(f"the unified diff is wrong: {seen}")
-            if seen["folds"] != ["Show 16 lines", "Show 17 lines"] or seen["counts"] != "+1-1":
+            if seen["counts"] != "+1-1" or len(seen["folds"]) != 2 or not all("hidden lines" in f for f in seen["folds"]):
                 raise Failure(f"the unchanged lines do not fold as they should: {seen}")
             leaf = seen["leaf"]
             if (leaf.get("kind"), leaf.get("machine"), leaf.get("root"), leaf.get("path"), leaf.get("staged")) != ("diff", MACHINE, repo, "long.txt", False):
                 raise Failure(f"the diff leaf is {leaf}")
-            b.click(f"{pane} tr.dfold button")
-            b.wait(f"document.querySelectorAll('{pane} tr.dfold').length === 1 && [...document.querySelectorAll('{pane} tr.dl .dn.n')].some((n) => n.textContent === '1')",
-                   "the first 16 lines shown")
+            if b.js(f"document.querySelector('{pane} .monaco-diff-editor').classList.contains('side-by-side')"):
+                raise Failure("the diff opened side by side, not unified")
             b.click(f"{pane} [data-view=split]")
-            b.wait(f"document.querySelector('{pane} .ws-diff-table.split')", "the split view")
-            pair = b.js(f"""(() => {{
-              const r = document.querySelector('{pane} tr.pair');
-              return [r.className, r.querySelector('.dc.left').textContent.slice(1), r.querySelector('.dc.right').textContent.slice(1), r.querySelector('.dn.o').textContent, r.querySelector('.dn.n').textContent];
-            }})()""")
-            if pair != ["dl pair has-del has-add", "line 20", "line twenty", "20", "20"]:
-                raise Failure(f"the split view pairs the lines wrong: {pair}")
+            b.wait(f"document.querySelector('{pane} .monaco-diff-editor.side-by-side') && {self.DIFF}.getOriginalEditor().getDomNode().getBoundingClientRect().width > 100", "the split view")
             if json.loads(b.js("localStorage.getItem('workspace.diff.view')")) != "split":
                 raise Failure("the split view is not remembered")
             tabs = b.js("document.querySelectorAll('#tabs .ws-tab').length")
@@ -4204,26 +4259,25 @@ class Suite:
             if b.js("document.querySelectorAll('#tabs .ws-tab').length") != tabs:
                 raise Failure("opening the same diff again made another tab")
             b.goto(self.url("/workspace"))
-            b.wait(f"document.querySelector('#tabs .ws-tab.current')?.textContent.includes('long.txt') && document.querySelector('{pane} .ws-diff-table.split tr.pair')",
-                   "the diff tab back in the split view after a reload", timeout=15)
+            b.wait(f"document.querySelector('#tabs .ws-tab.current')?.textContent.includes('long.txt') && document.querySelector('{pane} .monaco-diff-editor.side-by-side')",
+                   "the diff tab back in the split view after a reload", timeout=30)
             b.click('#chg-list [data-path="src/app.js"]')
-            b.wait(f"document.querySelector('#tabs .ws-tab.current')?.textContent.includes('app.js (staged)') && document.querySelector('{pane} .ws-diff-table .hl-keyword')",
-                   "the staged diff of app.js coloured as JavaScript")
+            b.wait(f"document.querySelector('#tabs .ws-tab.current')?.textContent.includes('app.js (staged)') && {self.DIFF}?.getModifiedEditor().getModel()?.getValue().includes('asked twice')",
+                   "the staged diff of app.js", timeout=30)
             got = b.js(f"""(() => {{
               const pane = document.querySelector('{pane}');
+              const d = {self.DIFF};
               return {{
                 side: pane.querySelector('.ws-diff-side').textContent,
-                left: [...pane.querySelectorAll('tr.pair .dc.left:not(.dvoid)')].map((c) => c.textContent.slice(1)),
-                right: [...pane.querySelectorAll('tr.pair .dc.right:not(.dvoid)')].map((c) => c.textContent.slice(1)),
-                keywords: [...pane.querySelectorAll('.hl-keyword')].map((k) => k.textContent),
+                left: d.getOriginalEditor().getModel().getValue(),
+                right: d.getModifiedEditor().getModel().getValue(),
+                language: d.getModifiedEditor().getModel().getLanguageId(),
               }};
             }})()""")
-            if got["side"] != "Staged" or got["left"] != ["export const answer = 1;"] or got["right"] != ["export const answer = 2;", "// asked twice"]:
+            if got != {"side": "Staged", "left": "export const answer = 1;", "right": "export const answer = 2;\n// asked twice", "language": "javascript"}:
                 raise Failure(f"the staged diff is wrong: {got}")
-            if not {"export", "const"} <= set(got["keywords"]):
-                raise Failure(f"the staged diff is not coloured: {got}")
             b.click(f"{pane} [data-view=unified]")
-            b.wait(f"document.querySelector('{pane} .ws-diff-table.unified')", "the unified view again")
+            b.wait(f"!document.querySelector('{pane} .monaco-diff-editor.side-by-side')", "the unified view again")
         finally:
             self.settle()
             self.put_storage(before)
@@ -4241,42 +4295,52 @@ class Suite:
         try:
             repo, head = self.changes_on_demo_api()
             self.open_long_diff()
-            b.click(f'{pane} .dplus[data-at="new:20"]')
+            self.note_on("new", 20)
             b.wait(f"document.activeElement?.matches('{pane} .dnote-box')", "a note box under the line, focused")
             b.type("Use a word here")
-            b.click(f"{pane} [data-act=save-note]")
+            self.press(f"{pane} [data-act=save-note]")
             b.wait(f"document.querySelector('{pane} .dnote .dnote-text')?.textContent === 'Use a word here'", "the note under its line")
             stored = self.notes_stored()
             key = "\n".join([MACHINE, repo, "long.txt", "worktree"])
             notes = stored.get(key, [])
             if len(notes) != 1 or (notes[0]["side"], notes[0]["line"], notes[0]["code"], notes[0]["text"]) != ("new", 20, "line twenty", "Use a word here"):
                 raise Failure(f"the note is stored as {stored}")
-            row = b.js(f"document.querySelector('{pane} tr.dnote-row').previousElementSibling.querySelector('.dc').textContent")
-            if row != "+line twenty":
-                raise Failure(f"the note is not under its line but under {row!r}")
+            gap = b.js(f"""(() => {{
+              const ed = {self.DIFF}.getModifiedEditor();
+              const below = ed.getScrolledVisiblePosition({{ lineNumber: 20, column: 1 }});
+              const zone = document.querySelector('{pane} .editor.modified .dzone').getBoundingClientRect();
+              return Math.abs(zone.top - (ed.getDomNode().getBoundingClientRect().top + below.top + below.height));
+            }})()""")
+            if gap > 3:
+                raise Failure(f"the note is not right under line 20 ({gap}px away)")
             b.wait("document.querySelector('#chg-list [data-path=\"long.txt\"] .chg-noted')?.textContent === '1' && document.getElementById('chg-send-all').textContent === 'Send notes (1)' && !document.getElementById('chg-send-all').hidden",
                    "the Changes tab to count the note")
             if b.js(f"document.querySelector('{pane} [data-act=send-notes]').textContent") != "Send notes to agent (1)":
                 raise Failure("the diff header does not offer to send the note")
-            b.click(f"{pane} [data-act=edit-note]")
+            self.press(f"{pane} [data-act=edit-note]")
             b.wait(f"document.querySelector('{pane} .dnote.editing textarea')?.value === 'Use a word here'", "the note open for editing")
             self.set_input(f"{pane} .dnote.editing textarea", "Spell the number out")
-            b.click(f"{pane} .dnote.editing [data-act=save-note]")
+            self.press(f"{pane} .dnote.editing [data-act=save-note]")
             b.wait(f"document.querySelector('{pane} .dnote .dnote-text')?.textContent === 'Spell the number out'", "the edited note")
-            b.click(f'{pane} .dplus[data-at="old:20"]')
-            b.wait(f"document.querySelector('{pane} .dnote.editing textarea')", "a second note box")
+            b.click(f"{pane} [data-view=split]")
+            b.wait(f"document.querySelector('{pane} .monaco-diff-editor.side-by-side')", "the split view, where removed lines take notes")
+            self.note_on("old", 20)
+            b.wait(f"document.querySelector('{pane} .editor.original .dnote.editing textarea')", "a second note box, on the removed side")
             self.set_input(f"{pane} .dnote.editing textarea", "Why remove it?")
-            b.click(f"{pane} .dnote.editing textarea")
+            self.press(f"{pane} .dnote.editing textarea")
             b.key("Enter", "Control")
             b.wait(f"document.querySelectorAll('{pane} .dnote:not(.editing)').length === 2", "two notes")
+            b.click(f"{pane} [data-view=unified]")
+            b.wait(f"!document.querySelector('{pane} .monaco-diff-editor.side-by-side') && document.querySelectorAll('{pane} .editor.modified .dnote').length === 2",
+                   "both notes shown in the unified view, the removed line's beside its change")
             b.goto(self.url("/workspace"))
             b.wait(f"document.querySelectorAll('{pane} .dnote').length === 2", "the notes back after a reload", timeout=15)
-            b.click(f"{pane} .dnote [data-act=remove-note]")
+            self.press(f"{pane} .dnote [data-act=remove-note]")
             b.wait(f"document.querySelectorAll('{pane} .dnote').length === 1", "one note removed")
             left = [n["text"] for n in self.notes_stored().get(key, [])]
             if left != ["Spell the number out"]:
                 raise Failure(f"the notes left are {left}")
-            b.click(f"{pane} .dnote [data-act=remove-note]")
+            self.press(f"{pane} .dnote [data-act=remove-note]")
             b.wait(f"!document.querySelector('{pane} .dnote') && document.getElementById('chg-send-all').hidden", "the last note removed")
             if self.notes_stored():
                 raise Failure(f"removed notes are still stored: {self.notes_stored()}")
@@ -4422,7 +4486,7 @@ class Suite:
                 raise Failure(f"a session row on a phone is {seen['height']}px tall")
             if seen["ages"] or not seen["word"]:
                 raise Failure(f"a session row on a phone should say its state and no age: {seen}")
-            if not re.fullmatch(rf"{MACHINE}(\d+%)?", seen["head"]):
+            if not re.fullmatch(rf"{MACHINE}\d*(\d+%)?", seen["head"]):
                 raise Failure(f"the machine header reads {seen['head']!r}")
             if seen["chip"] < 44 or seen["project"] < 44 or seen["more"] < 40:
                 raise Failure(f"the touch targets are too small or the project menu is hidden on a phone: {seen}")
@@ -4997,8 +5061,8 @@ class Suite:
             b.wait(f"document.querySelector('{card}')?.textContent.includes('Fix the login redirect.')", "the proposed session, waiting for approval", timeout=20)
             b.wait("[...document.querySelectorAll('#dispatch-log .msg')].some((m) => m.textContent.includes('I proposed a session on hp in demo-app.'))", "Codex's reply")
             b.wait("[...document.querySelectorAll('#dispatch-log *')].some((x) => x.textContent === 'Checked machines')", "the tool Codex called")
-            b.wait("document.getElementById('usage-card')?.getClientRects().length > 0 && document.getElementById('usage-card').getAttribute('aria-label').includes('Codex 5h 42%')",
-                   "Codex's limits on the sidebar's usage card")
+            b.wait("document.querySelector('#status-bar [data-provider=\"codex\"]')?.getAttribute('aria-label').includes('42%')",
+                   "Codex's limits in the status bar")
             id = b.js("new URLSearchParams(location.search).get('c')")
             convo = self.api("GET", f"/dispatch/conversations/{id}")
             if convo["backend"] != "codex" or any(e["role"] == "error" for e in convo["events"]):
@@ -6602,8 +6666,8 @@ class Suite:
         b.wait("document.querySelector('.pl-builder:not(.full)') && document.getElementById('rail').getBoundingClientRect().width > 0", "the builder back in the page")
         b.goto(self.url("/pipeline?p=review&run=run-a"))
         b.wait("document.querySelector('.pl-builder:not(.full) .pl-run-view')", "the Runs tab remembering the choice")
-        if b.js("document.querySelector('.pl-run-main').getBoundingClientRect().bottom") < b.js("innerHeight") - 40:
-            raise Failure("the Runs view does not reach the bottom of the window")
+        if b.js("document.querySelector('.pl-run-main').getBoundingClientRect().bottom") < b.js("document.getElementById('main').getBoundingClientRect().bottom") - 40:
+            raise Failure("the Runs view does not reach the bottom of the page")
         b.click("#pl-full")
         b.wait("document.querySelector('.pl-builder.full .pl-run-view')", "the Runs tab full screen")
         self.check_errors("the builder shell")

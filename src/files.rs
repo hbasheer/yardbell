@@ -2,6 +2,7 @@ use crate::config::Machine;
 use crate::folders::Folders;
 use crate::shell::{expand_home, quote, Duration};
 use serde::Serialize;
+use sha2::{Digest, Sha256};
 
 pub const LIST_MAX: usize = 2000;
 pub const READ_MAX: u64 = 1024 * 1024;
@@ -9,6 +10,7 @@ pub const FIND_MAX: usize = 200;
 const LIST_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_TIMEOUT: Duration = Duration::from_secs(15);
 const FIND_TIMEOUT: Duration = Duration::from_secs(15);
+const WRITE_TIMEOUT: Duration = Duration::from_secs(20);
 const FIND_SECONDS: u32 = 10;
 const SNIFF: usize = 8192;
 
@@ -31,6 +33,15 @@ pub struct FileText {
     pub path: String,
     pub size: u64,
     pub text: String,
+    pub hash: String,
+    pub editable: bool,
+}
+
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct Saved {
+    pub path: String,
+    pub size: u64,
+    pub hash: String,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize)]
@@ -49,6 +60,7 @@ pub enum FileError {
     NotRepo,
     Binary,
     TooLarge(u64),
+    Changed,
     Failed(String),
 }
 
@@ -67,6 +79,9 @@ impl FileError {
                 "{name} is {}, larger than the {} Yardbell shows",
                 size_words(*size),
                 size_words(READ_MAX)
+            ),
+            FileError::Changed => format!(
+                "{name} changed on the machine since it was opened. Reload it before saving"
             ),
             FileError::Failed(why) => why.clone(),
         }
@@ -169,7 +184,7 @@ pub fn list_command(machine_root: &str, root: &str, dir: &str, known: bool) -> S
 pub fn read_command(machine_root: &str, root: &str, path: &str, known: bool) -> String {
     let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
     in_sh(&format!(
-        "{}; {}; f={}; \
+        "{}; {}; {HASH_FN}; f={}; \
          if [ -L \"$f\" ]; then t=$(realpath -- \"$f\" 2>/dev/null || readlink -f -- \"$f\" 2>/dev/null); \
          [ -n \"$t\" ] && inside \"$t\" || {{ echo 'ERR outside'; exit 0; }}; fi; \
          [ -e \"$f\" ] || {{ echo 'ERR missing'; exit 0; }}; \
@@ -178,13 +193,68 @@ pub fn read_command(machine_root: &str, root: &str, path: &str, known: bool) -> 
          [ \"$n\" -le {max} ] || {{ echo \"ERR large $n\"; exit 0; }}; \
          a=$(head -c {sniff} -- \"$f\" | wc -c); b=$(head -c {sniff} -- \"$f\" | tr -d '\\000' | wc -c); \
          [ \"$a\" -eq \"$b\" ] || {{ echo 'ERR binary'; exit 0; }}; \
-         printf 'SIZE\\t%s\\n' \"$n\"; head -c {max} -- \"$f\"; true",
+         printf 'SIZE\\t%s\\nHASH\\t%s\\n' \"$n\" \"$(h \"$f\")\"; head -c {max} -- \"$f\"; true",
         prelude(machine_root, root, known),
         enter(dir),
         quote(name),
         max = READ_MAX,
         sniff = SNIFF,
     ))
+}
+
+const HASH_FN: &str = "h() { if command -v sha256sum >/dev/null 2>&1; then sha256sum; else shasum -a 256; fi < \"$1\" | cut -c1-64; }";
+
+fn sha256(text: &str) -> String {
+    Sha256::digest(text.as_bytes())
+        .iter()
+        .map(|b| format!("{b:02x}"))
+        .collect()
+}
+
+// Only an existing regular file is written, and only while it still holds what was read: the
+// text arrives on stdin into a file beside it first, so a dropped connection leaves it whole.
+pub fn write_command(
+    machine_root: &str,
+    root: &str,
+    path: &str,
+    hash: &str,
+    known: bool,
+) -> String {
+    let (dir, name) = path.rsplit_once('/').unwrap_or(("", path));
+    in_sh(&format!(
+        "{}; {}; {HASH_FN}; f={}; \
+         if [ -L \"$f\" ]; then t=$(realpath -- \"$f\" 2>/dev/null || readlink -f -- \"$f\" 2>/dev/null); \
+         [ -n \"$t\" ] && inside \"$t\" || {{ echo 'ERR outside'; cat >/dev/null; exit 0; }}; fi; \
+         [ -e \"$f\" ] || {{ echo 'ERR missing'; cat >/dev/null; exit 0; }}; \
+         [ -f \"$f\" ] || {{ echo 'ERR notfile'; cat >/dev/null; exit 0; }}; \
+         [ \"$(h \"$f\")\" = {} ] || {{ echo 'ERR changed'; cat >/dev/null; exit 0; }}; \
+         t=$(mktemp \"./.yardbell-save.XXXXXX\") || {{ echo 'ERR the file could not be written'; cat >/dev/null; exit 0; }}; \
+         if cat >\"$t\" && cat \"$t\" >\"$f\"; then rm -f \"$t\"; \
+         printf 'SAVED\\t%s\\t%s\\n' \"$(wc -c < \"$f\" | tr -d ' ')\" \"$(h \"$f\")\"; \
+         else rm -f \"$t\"; echo 'ERR the file could not be written'; fi",
+        prelude(machine_root, root, known),
+        enter(dir),
+        quote(name),
+        quote(hash),
+    ))
+}
+
+pub fn parse_write(out: &str, path: &str) -> Result<Saved, FileError> {
+    if let Some(e) = error_of(out) {
+        return Err(e);
+    }
+    let line = out
+        .lines()
+        .find_map(|l| l.strip_prefix("SAVED\t"))
+        .ok_or_else(|| FileError::Failed("the machine did not confirm the save".into()))?;
+    let (size, hash) = line
+        .split_once('\t')
+        .ok_or_else(|| FileError::Failed("the machine did not confirm the save".into()))?;
+    Ok(Saved {
+        path: path.to_string(),
+        size: size.trim().parse().unwrap_or(0),
+        hash: hash.trim().to_string(),
+    })
 }
 
 fn glob_escape(text: &str) -> String {
@@ -242,6 +312,7 @@ pub(crate) fn error_of(out: &str) -> Option<FileError> {
             "notfile" => FileError::NotFile,
             "notrepo" => FileError::NotRepo,
             "binary" => FileError::Binary,
+            "changed" => FileError::Changed,
             other => FileError::Failed(other.to_string()),
         },
     })
@@ -291,15 +362,27 @@ pub fn parse_read(out: &str, path: &str) -> Result<FileText, FileError> {
     if let Some(e) = error_of(out) {
         return Err(e);
     }
-    let (head, text) = out.split_once('\n').unwrap_or((out, ""));
+    let missing = || FileError::Failed("the machine did not send the file".into());
+    let (head, rest) = out.split_once('\n').ok_or_else(missing)?;
     let size = head
         .strip_prefix("SIZE\t")
         .and_then(|n| n.trim().parse().ok())
-        .ok_or_else(|| FileError::Failed("the machine did not send the file".into()))?;
+        .ok_or_else(missing)?;
+    let (line, text) = rest.split_once('\n').unwrap_or((rest, ""));
+    let hash = line
+        .strip_prefix("HASH\t")
+        .ok_or_else(missing)?
+        .trim()
+        .to_string();
+    // The text is read as UTF-8; a file that is not valid UTF-8 comes back altered, so its hash
+    // no longer matches and saving it would write the altered text.
+    let editable = hash.len() == 64 && sha256(text) == hash;
     Ok(FileText {
         path: path.to_string(),
         size,
         text: text.to_string(),
+        hash,
+        editable,
     })
 }
 
@@ -346,6 +429,23 @@ impl Folders {
             .await
             .map_err(FileError::Failed)?;
         parse_read(&out, path)
+    }
+
+    pub async fn write_file(
+        &self,
+        m: &Machine,
+        root: &str,
+        path: &str,
+        hash: &str,
+        text: String,
+        known: bool,
+    ) -> Result<Saved, FileError> {
+        let script = write_command(&m.root, root, path, hash, known);
+        let out = self
+            .exec_input(m, &script, text, WRITE_TIMEOUT)
+            .await
+            .map_err(FileError::Failed)?;
+        parse_write(&out, path)
     }
 
     pub async fn search_files(
@@ -515,6 +615,103 @@ mod tests {
         let err = parse_read(&out, "big.log").unwrap_err();
         assert_eq!(err, FileError::TooLarge(READ_MAX + 10));
         assert!(err.message("big.log").contains("larger than the 1.0 MB"));
+    }
+
+    fn run_with(script: &str, home: &Path, input: &str) -> String {
+        use std::io::Write;
+        let mut child = std::process::Command::new("sh")
+            .args(["-c", script])
+            .env("HOME", home)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(input.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "{script}");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    }
+
+    fn read(home: &Path, root: &str, path: &str) -> Result<FileText, FileError> {
+        parse_read(&run(&read_command("~/code", root, path, false), home), path)
+    }
+
+    #[test]
+    fn a_file_saves_only_while_it_holds_what_was_read() {
+        let (home, root) = sandbox();
+        let first = read(home.path(), &root, "src/main.rs").unwrap();
+        assert!(first.editable);
+        assert_eq!(first.hash, sha256(&first.text));
+        let text = "fn main() {}\n";
+        let out = run_with(
+            &write_command("~/code", &root, "src/main.rs", &first.hash, false),
+            home.path(),
+            text,
+        );
+        let saved = parse_write(&out, "src/main.rs").unwrap();
+        assert_eq!(saved.hash, sha256(text));
+        assert_eq!(saved.size, text.len() as u64);
+        assert_eq!(read(home.path(), &root, "src/main.rs").unwrap().text, text);
+        let stale = run_with(
+            &write_command("~/code", &root, "src/main.rs", &first.hash, false),
+            home.path(),
+            "lost\n",
+        );
+        assert_eq!(
+            parse_write(&stale, "src/main.rs").unwrap_err(),
+            FileError::Changed
+        );
+        assert_eq!(read(home.path(), &root, "src/main.rs").unwrap().text, text);
+        let leftovers = std::fs::read_dir(Path::new(&root).join("src"))
+            .unwrap()
+            .filter(|e| {
+                e.as_ref()
+                    .unwrap()
+                    .file_name()
+                    .to_string_lossy()
+                    .starts_with(".yardbell-save")
+            })
+            .count();
+        assert_eq!(leftovers, 0);
+    }
+
+    #[test]
+    fn saving_through_a_link_out_or_to_a_new_file_is_refused() {
+        let (home, root) = sandbox();
+        let secret = sha256("top secret\n");
+        let leak = run_with(
+            &write_command("~/code", &root, "leak.txt", &secret, false),
+            home.path(),
+            "owned\n",
+        );
+        assert_eq!(
+            parse_write(&leak, "leak.txt").unwrap_err(),
+            FileError::Outside
+        );
+        assert_eq!(
+            std::fs::read_to_string(home.path().join("secret.txt")).unwrap(),
+            "top secret\n"
+        );
+        let new = run_with(
+            &write_command("~/code", &root, "new.rs", &secret, false),
+            home.path(),
+            "x\n",
+        );
+        assert_eq!(parse_write(&new, "new.rs").unwrap_err(), FileError::Missing);
+        assert!(!Path::new(&root).join("new.rs").exists());
+    }
+
+    #[test]
+    fn a_file_that_is_not_utf8_reads_but_cannot_be_saved() {
+        let (home, root) = sandbox();
+        std::fs::write(Path::new(&root).join("latin1.txt"), b"caf\xe9\n").unwrap();
+        let f = read(home.path(), &root, "latin1.txt").unwrap();
+        assert!(!f.editable);
     }
 
     #[test]

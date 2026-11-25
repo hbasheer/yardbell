@@ -75,7 +75,7 @@
 
   const M = () => window.YardbellMachines;
 
-  // Memory is in the sidebar's machine list already, so the card speaks up only for a machine that
+  // Memory is in the sidebar's machine list already, so the bar speaks up only for a machine that
   // is down or short of memory.
   function machineTrouble() {
     const m = M();
@@ -84,6 +84,7 @@
 
   const machineWord = (x) => (x.up ? M().word(x) : "offline");
 
+  // A phone has no status bar, so its usage stays in a card under the list.
   const card = document.createElement("button");
   card.type = "button";
   card.className = "usage-card";
@@ -92,13 +93,11 @@
   card.hidden = true;
   col?.querySelector(".col-foot")?.before(card);
 
-  const railButton = document.createElement("button");
-  railButton.type = "button";
-  railButton.className = "rail-link rail-usage";
-  railButton.id = "rail-usage";
-  railButton.setAttribute("aria-haspopup", "dialog");
-  railButton.hidden = true;
-  rail?.querySelector(".rail-gap")?.after(railButton);
+  const bar = document.createElement("footer");
+  bar.className = "status-bar";
+  bar.id = "status-bar";
+  bar.setAttribute("aria-label", "Usage");
+  document.getElementById("shell")?.append(bar);
 
   const scrim = document.createElement("div");
   scrim.className = "usage-scrim";
@@ -121,17 +120,10 @@
     </span>`;
   }
 
-  function ring(pct, tone) {
-    const r = 6.5;
-    const c = 2 * Math.PI * r;
-    return `<svg class="usage-ring ${tone}" viewBox="0 0 16 16" aria-hidden="true"><circle class="usage-ring-track" cx="8" cy="8" r="${r}"/><circle class="usage-ring-fill" cx="8" cy="8" r="${r}" stroke-dasharray="${((pct / 100) * c).toFixed(2)} ${c.toFixed(2)}" transform="rotate(-90 8 8)"/></svg>`;
-  }
-
   function renderCard() {
     const list = providers().filter((p) => p.windows.length);
     const trouble = machineTrouble();
     card.hidden = !list.length && !trouble.length;
-    railButton.hidden = !list.length;
     if (card.hidden) return;
     const summary = [
       ...list.map((p) => {
@@ -144,11 +136,20 @@
     card.title = "Usage for every agent";
     const warn = trouble.map((x) => `<span class="usage-trouble ${M().tone(x)}" data-machine="${esc(x.name)}">${ICONS.machine}<span>${esc(x.name)}: ${esc(machineWord(x))}</span></span>`).join("");
     card.innerHTML = `<span class="usage-card-head">Usage</span>${list.map(cardRow).join("")}${warn}`;
-    if (!list.length) return;
-    const top = list.map((p) => tightest(p.windows)).reduce((a, w) => (pctOf(w) > pctOf(a) ? w : a));
-    railButton.innerHTML = ring(pctOf(top), toneOf(top));
-    railButton.setAttribute("aria-label", `Usage: ${summary}`);
-    railButton.title = `Usage: ${summary}`;
+  }
+
+  // Every window with its figure and reset, the way Orca's status bar reads: "42% 2h 48m · 59% 4d 6h".
+  function barItem(p) {
+    const w = tightest(p.windows);
+    const words = p.windows.map((x) => `${past(x) ? "reset" : `${pctOf(x)}%`}${!past(x) && x.resets_at ? ` ${resetWord(x.resets_at)}` : ""}`).join(" · ");
+    const label = `${p.name}: ${p.windows.map((x) => `${x.label} ${pctOf(x)}%`).join(", ")}`;
+    return `<button class="status-usage ${toneOf(w)}" type="button" data-provider="${esc(p.id)}" aria-haspopup="dialog" aria-label="${esc(label)}" title="${esc(label)}">${iconOf(p)}<span class="status-meter" role="meter" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pctOf(w)}"><i style="width:${pctOf(w)}%"></i></span><span class="status-words">${esc(words)}</span></button>`;
+  }
+
+  function renderBar() {
+    const list = providers().filter((p) => p.windows.length);
+    const trouble = machineTrouble().map((x) => `<button class="status-usage status-machine ${M().tone(x)}" type="button" data-machine="${esc(x.name)}" aria-haspopup="dialog">${ICONS.machine}<span class="status-words">${esc(x.name)}: ${esc(machineWord(x))}</span></button>`).join("");
+    bar.innerHTML = `${list.map(barItem).join("")}${trouble}<button class="status-refresh" type="button" data-usage-refresh aria-label="Check usage now" title="Check usage now">${ICONS.refresh}</button>`;
   }
 
   function windowRow(w) {
@@ -201,6 +202,7 @@
   }
 
   function render() {
+    renderBar();
     renderCard();
     if (!sheet.hidden) renderSheet();
   }
@@ -229,7 +231,9 @@
     sheet.hidden = true;
     scrim.hidden = true;
     sheet.classList.remove("shown");
-    const back = opener && opener.isConnected && !opener.hidden ? opener : card.hidden ? null : card;
+    // The bar is drawn again whenever figures arrive, so the item that opened the sheet may be a new node.
+    const again = opener?.dataset.provider ? bar.querySelector(`.status-usage[data-provider="${CSS.escape(opener.dataset.provider)}"]`) : null;
+    const back = opener?.isConnected && opener.checkVisibility() ? opener : again || bar.querySelector(".status-usage");
     back?.focus();
     opener = null;
   }
@@ -259,7 +263,12 @@
   }
 
   card.addEventListener("click", () => open(card));
-  railButton.addEventListener("click", () => open(railButton));
+  bar.addEventListener("click", (e) => {
+    const again = e.target.closest("[data-usage-refresh]");
+    if (again) { refresh(again); return; }
+    const item = e.target.closest(".status-usage");
+    if (item) open(item);
+  });
   scrim.addEventListener("click", close);
   sheet.addEventListener("click", (e) => {
     if (e.target.closest("[data-usage-close]")) { close(); return; }

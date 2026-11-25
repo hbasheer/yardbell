@@ -1,8 +1,8 @@
 use super::{find_machine, ApiError, AppState};
 use crate::config::Machine;
-use crate::files::{check_relative, check_root, within, FileError};
+use crate::files::{check_relative, check_root, within, FileError, READ_MAX};
 use crate::history;
-use axum::extract::{Path as UrlPath, Query, State as AxState};
+use axum::extract::{DefaultBodyLimit, Path as UrlPath, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
@@ -14,7 +14,13 @@ use std::sync::Arc;
 pub fn routes() -> Router<Arc<AppState>> {
     Router::new()
         .route("/machines/{machine}/files", get(list))
-        .route("/machines/{machine}/file", get(read))
+        .route(
+            "/machines/{machine}/file",
+            // JSON escaping can grow the text up to six times; the text itself is capped below.
+            get(read)
+                .post(write)
+                .layer(DefaultBodyLimit::max(6 * READ_MAX as usize + 4096)),
+        )
         .route("/machines/{machine}/files/search", get(search))
         .route("/machines/{machine}/history", get(past_sessions))
 }
@@ -40,6 +46,7 @@ pub(super) fn refused(e: FileError, path: &str) -> ApiError {
         }
         FileError::Binary => StatusCode::UNSUPPORTED_MEDIA_TYPE,
         FileError::TooLarge(_) => StatusCode::PAYLOAD_TOO_LARGE,
+        FileError::Changed => StatusCode::CONFLICT,
         FileError::Failed(_) => StatusCode::BAD_GATEWAY,
     };
     ApiError(status, e.message(path))
@@ -91,6 +98,43 @@ async fn read(
         .await
         .map_err(|e| refused(e, &path))?;
     Ok(Json(file).into_response())
+}
+
+#[derive(Deserialize)]
+struct WriteBody {
+    root: String,
+    path: String,
+    hash: String,
+    text: String,
+}
+
+async fn write(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(machine): UrlPath<String>,
+    Json(body): Json<WriteBody>,
+) -> Result<Response, ApiError> {
+    let m = find_machine(&app.config()?, &machine)?;
+    check_root(&body.root).map_err(|e| refused(e, ""))?;
+    let path = check_relative(&body.path).map_err(|e| refused(e, &body.path))?;
+    if path.is_empty() {
+        return Err(refused(FileError::NotFile, "that folder"));
+    }
+    if body.hash.len() != 64 || !body.hash.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError(
+            StatusCode::BAD_REQUEST,
+            "the save does not say which version of the file it replaces".into(),
+        ));
+    }
+    if body.text.len() as u64 > READ_MAX {
+        return Err(refused(FileError::TooLarge(body.text.len() as u64), &path));
+    }
+    let known = known(&app, &m, &body.root);
+    let saved = app
+        .folders
+        .write_file(&m, &body.root, &path, &body.hash, body.text, known)
+        .await
+        .map_err(|e| refused(e, &path))?;
+    Ok(Json(saved).into_response())
 }
 
 async fn search(

@@ -333,6 +333,112 @@ pub fn commit_command(
     ))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum GitAction {
+    Stage,
+    Unstage,
+    Discard,
+    Push,
+    Pull,
+    Fetch,
+}
+
+impl GitAction {
+    pub fn parse(word: &str) -> Option<GitAction> {
+        Some(match word {
+            "stage" => GitAction::Stage,
+            "unstage" => GitAction::Unstage,
+            "discard" => GitAction::Discard,
+            "push" => GitAction::Push,
+            "pull" => GitAction::Pull,
+            "fetch" => GitAction::Fetch,
+            _ => return None,
+        })
+    }
+
+    pub fn takes_paths(self) -> bool {
+        matches!(
+            self,
+            GitAction::Stage | GitAction::Unstage | GitAction::Discard
+        )
+    }
+}
+
+fn quoted(paths: &[String]) -> String {
+    paths.iter().map(|p| quote(p)).collect::<Vec<_>>().join(" ")
+}
+
+// Discard restores tracked files and deletes untracked ones, so the caller sorts the paths into the two.
+pub fn action_command(
+    machine_root: &str,
+    root: &str,
+    known: bool,
+    action: GitAction,
+    tracked: &[String],
+    untracked: &[String],
+) -> String {
+    let all: Vec<String> = tracked.iter().chain(untracked).cloned().collect();
+    let run = match action {
+        GitAction::Stage => format!("git add -A -- {}", quoted(&all)),
+        GitAction::Unstage => format!(
+            "{{ git restore --staged -- {0} || git rm -q -r --cached -- {0}; }}",
+            quoted(&all)
+        ),
+        GitAction::Discard => {
+            let mut steps = Vec::new();
+            if !tracked.is_empty() {
+                steps.push(format!("git restore --worktree -- {}", quoted(tracked)));
+            }
+            if !untracked.is_empty() {
+                steps.push(format!("git clean -f -q -- {}", quoted(untracked)));
+            }
+            if steps.is_empty() {
+                "true".to_string()
+            } else {
+                steps.join(" && ")
+            }
+        }
+        GitAction::Push => {
+            "if git rev-parse --abbrev-ref --symbolic-full-name '@{u}' >/dev/null 2>&1; \
+             then git push -q; else git push -q -u origin HEAD; fi"
+                .to_string()
+        }
+        GitAction::Pull => "git pull -q --ff-only".to_string(),
+        GitAction::Fetch => "git fetch -q".to_string(),
+    };
+    // Nobody can answer a password or host-key prompt here, so git fails at once instead of hanging.
+    in_sh(&format!(
+        "{}export GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND=\"${{GIT_SSH_COMMAND:-ssh -o BatchMode=yes}}\"; \
+         one() {{ printf '%s' \"$1\" | tr '\\n' ' ' | cut -c1-400; }}; \
+         o=$({run} 2>&1) || {{ printf 'ERR %s\\n' \"$(one \"$o\")\"; exit 0; }}; \
+         printf 'OK\\n'",
+        repo(machine_root, root, known)
+    ))
+}
+
+pub fn parse_action(out: &str) -> Result<(), FileError> {
+    if let Some(e) = error_of(out) {
+        return Err(e);
+    }
+    if out.lines().any(|l| l.trim() == "OK") {
+        Ok(())
+    } else {
+        Err(FileError::Failed(
+            "git did not say whether it worked".into(),
+        ))
+    }
+}
+
+pub fn commit_staged_command(machine_root: &str, root: &str, known: bool) -> String {
+    in_sh(&format!(
+        "{}one() {{ printf '%s' \"$1\" | tr '\\n' ' ' | cut -c1-400; }}; \
+         git diff --cached --quiet && {{ printf 'ERR nothing is staged\\n'; exit 0; }}; \
+         o=$(git commit -q --cleanup=verbatim -F - 2>&1) || {{ printf 'ERR %s\\n' \"$(one \"$o\")\"; exit 0; }}; \
+         printf 'SHA\\t%s\\n' \"$(git rev-parse HEAD)\"",
+        repo(machine_root, root, known)
+    ))
+}
+
 pub fn parse_commit(out: &str) -> Result<String, FileError> {
     if let Some(e) = error_of(out) {
         return Err(e);
@@ -445,6 +551,46 @@ impl Folders {
             next,
             cut,
         })
+    }
+
+    pub async fn commit_staged(
+        &self,
+        m: &Machine,
+        root: &str,
+        known: bool,
+        message: &str,
+    ) -> Result<String, FileError> {
+        let mut message = message.to_string();
+        if !message.ends_with('\n') {
+            message.push('\n');
+        }
+        let out = self
+            .exec_input(
+                m,
+                &commit_staged_command(&m.root, root, known),
+                message,
+                COMMIT_TIMEOUT,
+            )
+            .await
+            .map_err(FileError::Failed)?;
+        parse_commit(&out)
+    }
+
+    pub async fn git_action(
+        &self,
+        m: &Machine,
+        root: &str,
+        known: bool,
+        action: GitAction,
+        tracked: &[String],
+        untracked: &[String],
+    ) -> Result<(), FileError> {
+        let script = action_command(&m.root, root, known, action, tracked, untracked);
+        let out = self
+            .exec(m, &script, COMMIT_TIMEOUT)
+            .await
+            .map_err(FileError::Failed)?;
+        parse_action(&out)
     }
 
     pub async fn commit(

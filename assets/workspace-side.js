@@ -377,13 +377,65 @@
     refresh();
   }
 
+  function sizeWords(n) {
+    return n >= 1024 ? `${(n / 1024).toFixed(n >= 10240 ? 0 : 1)} KB` : `${n} bytes`;
+  }
+
+  function facts(text, size, why) {
+    const lines = text.split("\n").length - (text.endsWith("\n") ? 1 : 0);
+    return `${lines} ${lines === 1 ? "line" : "lines"} · ${sizeWords(size)}${why}`;
+  }
+
+  async function saveFile(body, leaf, text) {
+    const ed = body._editor;
+    const meta = body.querySelector(".ws-file-meta");
+    const button = body.querySelector(".ws-file-save");
+    if (!ed || !ed.dirty() || body.dataset.saving) return;
+    body.dataset.saving = "1";
+    if (button) button.disabled = true;
+    meta.textContent = "Saving…";
+    try {
+      const res = await fetch(`/machines/${encodeURIComponent(leaf.machine)}/file`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        body: JSON.stringify({ root: leaf.root, path: leaf.path, hash: body.dataset.hash, text }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data.error || `The save failed (${res.status})`);
+      body.dataset.hash = data.hash;
+      body.dataset.facts = facts(text, data.size, "");
+      if (ed.editor.getValue() === text) ed.markClean();
+      paintMeta(body);
+    } catch (err) {
+      meta.textContent = err.message;
+      meta.classList.add("bad");
+    } finally {
+      delete body.dataset.saving;
+      if (button) button.disabled = false;
+    }
+  }
+
+  function paintMeta(body) {
+    const ed = body._editor;
+    const meta = body.querySelector(".ws-file-meta");
+    const button = body.querySelector(".ws-file-save");
+    if (!ed || !meta) return;
+    const dirty = ed.dirty();
+    meta.classList.remove("bad");
+    meta.textContent = dirty ? "Unsaved changes" : body.dataset.facts;
+    body.querySelector(".ws-file").classList.toggle("dirty", dirty);
+    if (button) button.hidden = !dirty;
+  }
+
   async function fillFile(body, leaf, { reload = false } = {}) {
     const key = `${leaf.machine}\n${leaf.root}\n${leaf.path}`;
     if (!reload && body.dataset.file === key) return;
+    if (reload && body._editor?.dirty() && !confirm(`Discard your changes to ${base(leaf.path)}?`)) return;
+    body._editor = null;
     body.dataset.file = key;
     const parts = [base(String(leaf.root || "").replace(/\/$/, "")) || leaf.root, ...String(leaf.path || "").split("/")];
     const crumbs = parts.map((p, i) => (i === parts.length - 1 ? `<b>${esc(p)}</b>` : esc(p))).join('<span class="ws-file-crumb">/</span>');
-    body.innerHTML = `<div class="ws-file"><div class="ws-file-bar"><span class="ws-file-path" title="${esc(`${leaf.root}/${leaf.path} on ${leaf.machine}`)}">${crumbs}</span><span class="ws-file-meta">Loading…</span></div><div class="ws-file-scroll"></div></div>`;
+    body.innerHTML = `<div class="ws-file"><div class="ws-file-bar"><span class="ws-file-path" title="${esc(`${leaf.root}/${leaf.path} on ${leaf.machine}`)}">${crumbs}</span><span class="ws-file-meta" aria-live="polite">Loading…</span><button class="btn ws-file-save" type="button" hidden title="Save (Ctrl+S)">Save</button></div><div class="ws-file-editor"></div></div>`;
     let data;
     try {
       if (!leaf.machine || !leaf.root || !leaf.path) throw new Error("This tab does not say which file it shows.");
@@ -391,15 +443,34 @@
     } catch (err) {
       if (body.dataset.file !== key) return;
       body.querySelector(".ws-file-meta").textContent = "";
-      body.querySelector(".ws-file-scroll").innerHTML = `<p class="ws-file-error" role="alert">${esc(err.message)}</p>`;
+      body.querySelector(".ws-file-editor").innerHTML = `<p class="ws-file-error" role="alert">${esc(err.message)}</p>`;
       return;
     }
     if (body.dataset.file !== key) return;
-    const { lang, lines } = window.YardbellHighlight.highlight(data.text, leaf.path);
-    const size = data.size >= 1024 ? `${(data.size / 1024).toFixed(data.size >= 10240 ? 0 : 1)} KB` : `${data.size} bytes`;
-    body.querySelector(".ws-file-meta").textContent = `${lang ? `${lang} · ` : ""}${lines.length} ${lines.length === 1 ? "line" : "lines"} · ${size} · read only`;
-    const nums = lines.map((_, i) => i + 1).join("\n");
-    body.querySelector(".ws-file-scroll").innerHTML = `<div class="ws-file-code"><pre class="ws-file-gutter" aria-hidden="true">${nums}</pre><pre class="ws-file-text" tabindex="0" aria-label="${esc(leaf.path)}">${lines.join("\n")}\n</pre></div>`;
+    const readOnly = !data.editable || phone.matches;
+    const why = !data.editable ? " · read only, not UTF-8" : phone.matches ? " · read only on a phone" : "";
+    body.dataset.facts = facts(data.text, data.size, why);
+    body.dataset.hash = data.hash || "";
+    let ed;
+    try {
+      ed = await window.YardbellEditor.code(body.querySelector(".ws-file-editor"), {
+        path: leaf.path,
+        text: data.text,
+        readOnly,
+        onChange: () => paintMeta(body),
+        onSave: readOnly ? null : (text) => saveFile(body, leaf, text),
+      });
+    } catch (err) {
+      body.querySelector(".ws-file-editor").innerHTML = `<p class="ws-file-error" role="alert">${esc(err.message)}</p>`;
+      return;
+    }
+    if (body.dataset.file !== key) {
+      ed.dispose();
+      return;
+    }
+    body._editor = ed;
+    body.querySelector(".ws-file-save").addEventListener("click", () => saveFile(body, leaf, ed.editor.getValue()));
+    paintMeta(body);
   }
 
   function init(context) {

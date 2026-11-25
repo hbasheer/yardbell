@@ -82,6 +82,17 @@ function storedFont() {
   }
 }
 
+// A theme picked in Settings, Terminal replaces the built-in palette for its mode.
+function themeFor(mode) {
+  try {
+    const p = JSON.parse(localStorage.getItem("yardbell.term.prefs") || "{}") || {};
+    const name = mode === "light" ? p.lightTheme : p.darkTheme;
+    const picked = name && window.YardbellTermThemes?.[mode]?.[name];
+    if (picked) return picked;
+  } catch {}
+  return THEMES[mode];
+}
+
 const term = new Terminal({
   cursorBlink: true,
   fontFamily: FONT,
@@ -89,15 +100,58 @@ const term = new Terminal({
   letterSpacing: 0,
   lineHeight: 1.15,
   scrollback: 5000,
-  theme: THEMES[shade()],
+  theme: themeFor(shade()),
   minimumContrastRatio: CONTRAST[shade()],
 });
 window.addEventListener("yardbell-term-theme", () => {
-  term.options.theme = THEMES[shade()];
+  term.options.theme = themeFor(shade());
   term.options.minimumContrastRatio = CONTRAST[shade()];
 });
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
+
+// Settings, Terminal keeps these per device; a change there reaches open terminals through the
+// storage event, so they update without a reload.
+const PREFS_KEY = "yardbell.term.prefs";
+let prefs = {};
+function applyPrefs() {
+  try { prefs = JSON.parse(localStorage.getItem(PREFS_KEY) || "{}") || {}; } catch { prefs = {}; }
+  term.options.fontFamily = prefs.fontFamily ? `${prefs.fontFamily}, ${FONT}` : FONT;
+  term.options.fontWeight = prefs.fontWeight || "normal";
+  term.options.lineHeight = Number(prefs.lineHeight) || 1.15;
+  term.options.cursorStyle = prefs.cursorStyle || "block";
+  term.options.cursorBlink = prefs.cursorBlink !== false;
+  term.options.scrollback = Number(prefs.scrollback) || 5000;
+  term.options.theme = themeFor(shade());
+  const size = Number(localStorage.getItem(FONT_KEY));
+  if (FONT_SIZES.includes(size)) term.options.fontSize = size;
+  const pad = prefs.padding === undefined ? null : Number(prefs.padding);
+  const box = document.getElementById("term");
+  if (box) box.style.padding = pad === null ? "" : `${pad}px`;
+  try { fit.fit(); } catch {}
+}
+applyPrefs();
+window.addEventListener("storage", (e) => {
+  if (e.key === PREFS_KEY || e.key === FONT_KEY) applyPrefs();
+});
+let selectionCopy = 0;
+term.onSelectionChange(() => {
+  if (!prefs.copyOnSelect) return;
+  clearTimeout(selectionCopy);
+  selectionCopy = setTimeout(async () => {
+    const text = term.getSelection();
+    if (!text) return;
+    try {
+      if (app?.clipboardManager) await app.clipboardManager.writeText(text);
+      else if (navigator.clipboard && window.isSecureContext) await navigator.clipboard.writeText(text);
+    } catch {}
+  }, 250);
+});
+document.getElementById("term")?.addEventListener("contextmenu", (e) => {
+  if (!prefs.rightClickPaste) return;
+  e.preventDefault();
+  pasteClipboard();
+});
 
 const RETRY = [1000, 2000, 5000, 10000];
 let socket = null;
