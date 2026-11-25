@@ -160,11 +160,24 @@ export function PairSection() {
   const show = async () => {
     setBusy(true)
     try {
-      const out = await api<{ qr_svg: string; server: string; expires_in: number }>('POST', '/api/settings/pair', {})
+      const res = await fetch('/api/settings/pair', { method: 'POST', headers: { Accept: 'application/json', 'Content-Type': 'application/json' }, body: '{}' })
+      const text = await res.text()
+      let out: { qr_svg?: string; server?: string; expires_in?: number; error?: string } = {}
+      try {
+        out = JSON.parse(text)
+      } catch {}
+      if (!res.ok) throw new Error(out.error || `The server refused (${res.status}).`)
+      // A reply with no code says what came back, so a screenshot names the cause.
+      if (!out.qr_svg || !out.server || !out.expires_in) {
+        const kind = res.headers.get('content-type') || 'no type'
+        const start = text.replace(/\s+/g, ' ').slice(0, 120)
+        throw new Error(`The server answered ${res.status} (${kind}) from ${res.url} without a code: ${start || 'an empty reply'}`)
+      }
       setMessage('')
       setPair({ qr_svg: out.qr_svg, server: out.server, ends: Date.now() + out.expires_in * 1000 })
     } catch (e) {
       setPair(null)
+      setMessage((e as Error).message)
       fail(e)
     } finally {
       setBusy(false)
@@ -207,7 +220,7 @@ export function PairSection() {
           {pair ? (
             <div className="size-56 rounded-lg bg-white p-3 [&_svg]:size-full" dangerouslySetInnerHTML={{ __html: pair.qr_svg }} />
           ) : (
-            <div className="grid size-56 place-items-center rounded-lg border border-dashed border-border bg-muted/30 p-6 text-center text-xs text-muted-foreground">
+            <div className="grid size-56 place-items-center overflow-auto rounded-lg border border-dashed border-border bg-muted/30 p-4 text-center text-xs break-words text-muted-foreground">
               {message || 'The pairing code shows here.'}
             </div>
           )}

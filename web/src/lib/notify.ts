@@ -26,7 +26,14 @@ export function setNotifyPrefs(change: Partial<NotifyPrefs>) {
   localStorage.setItem(KEY, JSON.stringify({ ...notifyPrefs(), ...change }))
 }
 
-export const canNotify = () => 'Notification' in window && window.isSecureContext
+type AppEvents = { emit: (name: string, payload: unknown) => Promise<void> }
+const appEvents = (): AppEvents | undefined => (window as unknown as { __TAURI__?: { event?: AppEvents } }).__TAURI__?.event
+
+// The Yardbell apps post notifications from their own process, the way a native app does; a page
+// inside them has no web notifications, so it hands them over.
+export const inApp = () => Boolean(appEvents())
+export const canNotify = () => inApp() || ('Notification' in window && window.isSecureContext)
+export const permissionNow = () => (inApp() ? 'granted' : canNotify() ? Notification.permission : 'unsupported')
 
 const TONES: Record<string, [number, number][]> = {
   chime: [
@@ -60,6 +67,11 @@ export function playSound(sound = notifyPrefs().sound, volume = notifyPrefs().vo
 
 export function show(title: string, body: string, onClick?: () => void, tag?: string) {
   playSound()
+  const app = appEvents()
+  if (app) {
+    app.emit('yardbell-notify', { title, body }).catch(() => {})
+    return true
+  }
   if (!canNotify() || Notification.permission !== 'granted') return false
   const n = new Notification(title, { body, tag, icon: '/favicon.svg' })
   n.onclick = () => {
@@ -77,7 +89,8 @@ export function useDesktopNotifications(state: YardbellState | null, onOpen: (ke
   const open = useRef(onOpen)
   open.current = onOpen
   useEffect(() => {
-    if (!state) return
+    // The apps already notify for sessions from their own process, by the switches in their menu.
+    if (!state || inApp()) return
     const now = new Map<string, Status>()
     for (const s of state.sessions) if (s.tmux && !s.stale) now.set(keyOf(s), statusOf(s))
     const before = seen.current

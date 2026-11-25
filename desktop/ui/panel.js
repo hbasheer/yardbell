@@ -23,39 +23,39 @@ function heat(percent) {
   return percent >= FULL ? " full" : percent >= RATED ? " hot" : "";
 }
 
-function meter(name, percent, title, segments, value) {
+function meter(name, percent, title, segments) {
   return `<span class="meter${heat(percent)}" title="${esc(title)}">
-    <span>${name}</span>
-    <span class="mem-bar" role="img" aria-label="${esc(title)}">${segments}</span>
-    <span class="value"><span class="pct">${percent}%</span>${value}</span>
+    <span class="meter-top"><span>${name}</span><span class="pct">${percent}%</span></span>
+    <span class="bar" role="img" aria-label="${esc(title)}">${segments}</span>
   </span>`;
 }
 
 function memory(m) {
   const used = Math.min(m.used_kb / m.total_kb, 1);
   const agents = Math.min(m.agent_kb / m.total_kb, used);
-  const segments = `<span class="mem-agents" style="width:${(agents * 100).toFixed(1)}%"></span><span class="mem-other" style="width:${((used - agents) * 100).toFixed(1)}%"></span>`;
+  const segments = `<span class="bar-agents" style="width:${(agents * 100).toFixed(1)}%"></span><span class="bar-other" style="width:${((used - agents) * 100).toFixed(1)}%"></span>`;
   const title = `Memory ${m.percent}% used of ${gb(m.total_kb)} GB, agents ${gb(m.agent_kb)} GB`;
-  return meter("Memory", m.percent, title, segments, ` of ${gb(m.total_kb)} GB`);
+  return meter("Memory", m.percent, title, segments);
 }
 
 function cpu(c) {
-  const segments = `<span class="mem-other" style="width:${c.percent}%"></span>`;
+  const segments = `<span class="bar-other" style="width:${c.percent}%"></span>`;
   const title = `1-minute load ${c.load1.toFixed(1)} across ${c.cpus} CPUs`;
-  return meter("CPU", c.percent, title, segments, ` · ${c.cpus} cores`);
+  return meter("CPU", c.percent, title, segments);
 }
 
 function disk(d) {
-  const segments = `<span class="mem-other" style="width:${Math.min(d.percent, 100)}%"></span>`;
+  const segments = `<span class="bar-other" style="width:${Math.min(d.percent, 100)}%"></span>`;
   const title = `Disk ${d.percent}% used of ${gb(d.total_kb)} GB, ${gb(d.total_kb - d.used_kb)} GB free`;
-  return meter("Disk", d.percent, title, segments, ` of ${gb(d.total_kb)} GB`);
+  return meter("Disk", d.percent, title, segments);
 }
 
 function machineRow(machine) {
   const state = machine.up
     ? `<span class="state">up</span>`
-    : `<span class="state bad">${esc(machine.reason ? `down (${machine.reason})` : "down")}</span>`;
-  const meters = machine.up ? `${machine.memory ? memory(machine.memory) : ""}${machine.cpu ? cpu(machine.cpu) : ""}${machine.disk ? disk(machine.disk) : ""}` : "";
+    : `<span class="state bad" title="${esc(machine.reason || "")}">${esc(machine.reason ? `down, ${machine.reason}` : "down")}</span>`;
+  const parts = machine.up ? `${machine.memory ? memory(machine.memory) : ""}${machine.cpu ? cpu(machine.cpu) : ""}${machine.disk ? disk(machine.disk) : ""}` : "";
+  const meters = parts ? `<span class="meters">${parts}</span>` : "";
   return `<button class="row machine" type="button" data-machine="${esc(machine.name)}">
     <span class="machine-head"><span class="dot ${level(machine)}"></span><span class="name">${esc(machine.name)}</span>${state}</span>
     ${meters}
@@ -83,10 +83,21 @@ function resize() {
 }
 
 function sessionRow(session) {
-  const badge = session.working ? `<span class="badge">Working</span>` : "";
-  return `<button class="row session" type="button" role="listitem" data-machine="${esc(session.machine)}" data-tmux="${esc(session.tmux)}">
-    <span class="label">${esc(session.label)}</span>${badge}
+  return `<button class="row session" type="button" role="listitem" title="${esc(session.label)}" data-machine="${esc(session.machine)}" data-tmux="${esc(session.tmux)}">
+    <span class="dot${session.working ? " working" : ""}"></span>
+    <span class="label">${esc(session.label)}</span>
+    <span class="activity${session.working ? " on" : ""}">${session.working ? "Working" : "Idle"}</span>
   </button>`;
+}
+
+// Sessions come ordered by machine, so each machine's run gets one heading.
+function sessionList(sessions) {
+  let last = null;
+  return sessions.map((s) => {
+    const head = s.machine !== last ? `<div class="group" role="presentation">${esc(s.machine)}</div>` : "";
+    last = s.machine;
+    return head + sessionRow(s);
+  }).join("");
 }
 
 function render(view) {
@@ -95,6 +106,12 @@ function render(view) {
   shown = next;
   const machines = $("machines");
   const ready = view.state === "ready";
+  const up = ready ? view.machines.filter((m) => m.up).length : 0;
+  $("conn").innerHTML = view.state === "pending"
+    ? "Connecting…"
+    : view.state === "unreachable"
+      ? `<span class="dot bad"></span>Offline`
+      : `<span class="dot ${up === view.machines.length ? "ok" : "warn"}"></span>${up} of ${view.machines.length} up`;
   if (view.state === "pending") machines.innerHTML = `<p class="note">Connecting…</p>`;
   else if (view.state === "unreachable") machines.innerHTML = `<p class="note bad">Can't reach the server</p>`;
   else if (!view.machines.length) machines.innerHTML = `<p class="note">No machines yet</p>`;
@@ -102,7 +119,7 @@ function render(view) {
   $("sessions-section").hidden = !ready;
   if (ready) {
     $("sessions").innerHTML = view.sessions.length
-      ? view.sessions.map(sessionRow).join("")
+      ? sessionList(view.sessions)
       : `<p class="note">No sessions to open</p>`;
   }
   resize();

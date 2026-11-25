@@ -4,7 +4,7 @@ import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/class-names'
-import { canNotify, notifyPrefs, playSound, setNotifyPrefs, show, type NotifyPrefs } from '@/lib/notify'
+import { canNotify, inApp, notifyPrefs, permissionNow, playSound, setNotifyPrefs, show, type NotifyPrefs } from '@/lib/notify'
 import { Group, inputClass, Row, Section, Segmented } from './ui'
 
 function Toggle({ icon, label, description, checked, disabled, onChange }: { icon?: React.ReactNode; label: string; description: string; checked: boolean; disabled?: boolean; onChange: (on: boolean) => void }) {
@@ -24,18 +24,23 @@ function Toggle({ icon, label, description, checked, disabled, onChange }: { ico
 
 export function DesktopNotifications({ machines }: { machines: string[] }) {
   const [p, setP] = useState<NotifyPrefs>(notifyPrefs)
-  const [permission, setPermission] = useState(() => (canNotify() ? Notification.permission : 'unsupported'))
+  const [permission, setPermission] = useState<string>(permissionNow)
   const set = (c: Partial<NotifyPrefs>) => {
     setNotifyPrefs(c)
     setP(notifyPrefs())
   }
   const enable = async (on: boolean) => {
-    if (on && canNotify() && Notification.permission === 'default') setPermission(await Notification.requestPermission())
+    if (on && !inApp() && canNotify() && Notification.permission === 'default') setPermission(await Notification.requestPermission())
     set({ enabled: on })
   }
   const off = !p.enabled
   return (
     <Section title="Notifications" description="System notifications on this device when an agent needs you or finishes, kept in this browser. The phone app's notifications are below.">
+      {inApp() && (
+        <p role="note" className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          The Yardbell app shows these as system notifications. Which session events notify is set in its menu bar panel; the test below goes through the app.
+        </p>
+      )}
       {permission === 'unsupported' && (
         <p role="note" className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
           This browser only shows system notifications on a secure page, such as Yardbell on localhost or over https. Here only the sound plays.

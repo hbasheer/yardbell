@@ -1,7 +1,22 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // The machine list and its add form follow Orca's SSH hosts pane (MIT, Lovecast Inc.), see THIRD_PARTY_NOTICES.md
 import { useEffect, useRef, useState } from 'react'
-import { Check, ChevronRight, Copy, ExternalLink, Folder, Loader2, MoreHorizontal, Pencil, PlugZap, Plus, Server, SquareTerminal, Trash2, X } from 'lucide-react'
+import {
+  Check,
+  ChevronRight,
+  Copy,
+  ExternalLink,
+  Folder,
+  Loader2,
+  MoreHorizontal,
+  Pencil,
+  PlugZap,
+  Plus,
+  Server,
+  SquareTerminal,
+  Trash2,
+  X
+} from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -59,7 +74,15 @@ export function MachinesSection({ data, reload }: Props) {
     setTesting('')
   }
   const remove = async (m: any) => {
-    if (!(await confirmAction({ title: `Remove ${m.name} from Yardbell?`, body: 'Its sessions keep running and its tunnels close. ~/.ssh/config is not changed.', confirm: 'Remove', danger: true }))) return
+    if (
+      !(await confirmAction({
+        title: `Remove ${m.name} from Yardbell?`,
+        body: 'Its sessions keep running and its tunnels close. ~/.ssh/config is not changed.',
+        confirm: 'Remove',
+        danger: true
+      }))
+    )
+      return
     try {
       const res = await api<{ ok?: boolean; message: string }>('POST', `/machines/${encodeURIComponent(m.name)}/remove`)
       if (res.ok === false) throw new Error(res.message)
@@ -208,7 +231,19 @@ export function MachinesSection({ data, reload }: Props) {
   )
 }
 
-function Modal({ title, description, onClose, children, wide }: { title: string; description?: React.ReactNode; onClose: () => void; children: React.ReactNode; wide?: boolean }) {
+function Modal({
+  title,
+  description,
+  onClose,
+  children,
+  wide
+}: {
+  title: string
+  description?: React.ReactNode
+  onClose: () => void
+  children: React.ReactNode
+  wide?: boolean
+}) {
   return (
     <Dialog open onOpenChange={(o) => !o && onClose()}>
       <DialogContent className={cn('max-h-[calc(100vh-2rem)] gap-4 overflow-y-auto', wide ? 'sm:max-w-2xl' : 'sm:max-w-lg')}>
@@ -217,7 +252,12 @@ function Modal({ title, description, onClose, children, wide }: { title: string;
             <DialogTitle>{title}</DialogTitle>
             {description && <DialogDescription className="text-xs leading-relaxed">{description}</DialogDescription>}
           </div>
-          <button type="button" aria-label="Close" onClick={onClose} className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="grid size-7 shrink-0 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
             <X className="size-4" />
           </button>
         </div>
@@ -253,7 +293,15 @@ function EditMachine({ m, data, onClose, onSaved }: { m: any; data: SettingsData
     }
   }
   return (
-    <Modal title={`Edit ${m.name}`} description={m.local ? 'Yardbell runs on this machine, so it is reached directly, not over SSH.' : 'How Yardbell reaches this machine over SSH, and where its projects live.'} onClose={onClose}>
+    <Modal
+      title={`Edit ${m.name}`}
+      description={
+        m.local
+          ? 'Yardbell runs on this machine, so it is reached directly, not over SSH.'
+          : 'How Yardbell reaches this machine over SSH, and where its projects live.'
+      }
+      onClose={onClose}
+    >
       <div className="grid gap-4">
         {!m.local && (
           <Field label="SSH host or alias" hint="A Host from ~/.ssh/config on this machine, or user@address.">
@@ -274,7 +322,11 @@ function EditMachine({ m, data, onClose, onSaved }: { m: any; data: SettingsData
             {!m.local && (
               <Field
                 label="Port prefix"
-                hint={prefix ? `Apps on ${m.name} open on ${host} at the prefix times 10000 plus their port, so port 3000 opens at ${prefix * 10000 + 3000}.` : `Apps on ${m.name} open on ${host} once it has a port prefix.`}
+                hint={
+                  prefix
+                    ? `Apps on ${m.name} open on ${host} at the prefix times 10000 plus their port, so port 3000 opens at ${prefix * 10000 + 3000}.`
+                    : `Apps on ${m.name} open on ${host} once it has a port prefix.`
+                }
               >
                 <select value={v.port_prefix} onChange={set('port_prefix')} className={inputClass}>
                   {!v.port_prefix && <option value="">None yet</option>}
@@ -317,7 +369,9 @@ type Answer = { ok: boolean; message?: string; data?: any }
 
 function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () => void; onSaved: () => void }) {
   const [peers, setPeers] = useState<{ list: Peer[]; phones: number; note?: string } | null>(null)
-  const [form, setForm] = useState({ name: '', user: '', ip: '', root: '' })
+  const [form, setForm] = useState({ name: '', user: '', ip: '', root: '', alias: '' })
+  const [by, setBy] = useState<'address' | 'alias'>('address')
+  const [aliases, setAliases] = useState<string[] | null>(null)
   const [steps, setSteps] = useState<StepState[]>([])
   const [running, setRunning] = useState(false)
   const [done, setDone] = useState(false)
@@ -337,6 +391,16 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
     )
   }, [])
 
+  useEffect(() => {
+    api<{ aliases: string[] }>('GET', '/onboarding/aliases').then(
+      (r) => setAliases(r.aliases),
+      () => setAliases([])
+    )
+  }, [])
+  const viaAlias = by === 'alias'
+  // Only the chosen way's fields go to the server, so a half-typed address never rides along with an alias.
+  const sent = () => ({ ...formRef.current, alias: viaAlias ? formRef.current.alias : '', ip: viaAlias ? '' : formRef.current.ip })
+
   const wait = () => new Promise((r) => (waiter.current = r))
   const go = () => waiter.current?.(null)
   const put = (s: StepState) => setSteps((list) => [...list.filter((x) => x.key !== s.key), s])
@@ -344,7 +408,7 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
     put({ key, label, state: 'run' })
     let out: Answer
     try {
-      out = await api<Answer>('POST', `/onboarding/${key}`, formRef.current)
+      out = await api<Answer>('POST', `/onboarding/${key}`, sent())
     } catch (e) {
       out = { ok: false, message: (e as Error).message }
     }
@@ -356,96 +420,110 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
     setSteps([])
     setRunning(true)
     try {
-      if (!(await step('reachable', 'Reachable on the mesh')).ok) return
-      for (;;) {
-        const r = await step('key_auth', 'SSH key login')
-        if (r.ok) break
-        if (!r.data?.terminal_url) return
-        put({
-          key: 'key_auth',
-          label: 'SSH key login',
-          state: 'bad',
-          message: r.message,
-          extra: (
-            <div className="grid gap-2">
-              <p>Open the terminal and follow it. When it says done, come back and check again.</p>
-              <div className="flex gap-2">
-                <Button size="xs" variant="outline" asChild>
-                  <a href={r.data.terminal_url} target="_blank" rel="noopener">
-                    <ExternalLink /> Open terminal
-                  </a>
-                </Button>
-                <Button size="xs" onClick={go}>
-                  Check again
-                </Button>
-              </div>
-            </div>
-          )
-        })
-        await wait()
+      if (viaAlias) {
+        if (!(await step('alias_check', `Sign in through ${formRef.current.alias}`)).ok) return
+      } else {
+        if (!(await step('reachable', 'Reachable')).ok) return
+        if (!(await addressSetup())) return
       }
-      const preview = await step('ssh_config_preview', 'SSH config entry')
-      if (!preview.ok) return
-      if (!preview.data.reuse) {
-        put({
-          key: 'ssh_config_preview',
-          label: 'SSH config entry',
-          state: 'ok',
-          message: preview.message,
-          extra: (
-            <div className="grid gap-2">
-              <pre className="overflow-x-auto rounded-md border border-border/50 bg-muted/50 px-3 py-2 font-mono text-[11px]">{preview.data.block}</pre>
-              <div>
-                <Button size="xs" onClick={go}>
-                  Add this to ~/.ssh/config
-                </Button>
-              </div>
-            </div>
-          )
-        })
-        await wait()
-        put({ key: 'ssh_config_preview', label: 'SSH config entry', state: 'ok', message: preview.message })
-        if (!(await step('write_ssh_config', 'Write SSH config')).ok) return
-      }
-      const detect = await step('detect', 'Check the machine')
-      if (!detect.ok) return
-      const d = detect.data
-      setForm((f) => ({ ...f, root: d.root || '~' }))
-      put({
-        key: 'detect',
-        label: 'Check the machine',
-        state: 'ok',
-        message: detect.message,
-        extra: (
-          <div className="grid gap-2">
-            {(d.missing || []).length > 0 && (
-              <ul className="grid gap-0.5">
-                {d.missing.map((m: any) => (
-                  <li key={m.tool}>
-                    <code className="font-mono">{m.tool}</code> missing: <code className="font-mono">{m.hint}</code>
-                  </li>
-                ))}
-              </ul>
-            )}
-            <p>Pick the folder that holds your projects. Sessions start in its subfolders.</p>
-            <FolderPicker name={formRef.current.name} start={d.root || '~'} onPath={(root) => setForm((f) => ({ ...f, root }))} onUse={go} />
-          </div>
-        )
-      })
-      await wait()
-      put({ key: 'detect', label: 'Check the machine', state: 'ok', message: detect.message })
-      const save = await step('save', 'Save to Yardbell')
-      if (save.ok) {
-        setDone(true)
-        onSaved()
-        saved(`${formRef.current.name} added. Its sessions show in the sidebar once Yardbell checks it.`)
-      }
+      await inspectAndSave()
     } finally {
       setRunning(false)
     }
   }
 
-  const valid = /^[a-z0-9-]+$/.test(form.name) && form.user.trim() && form.ip.trim() && !known.includes(form.name)
+  const addressSetup = async () => {
+    for (;;) {
+      const r = await step('key_auth', 'SSH key login')
+      if (r.ok) break
+      if (!r.data?.terminal_url) return
+      put({
+        key: 'key_auth',
+        label: 'SSH key login',
+        state: 'bad',
+        message: r.message,
+        extra: (
+          <div className="grid gap-2">
+            <p>Open the terminal and follow it. When it says done, come back and check again.</p>
+            <div className="flex gap-2">
+              <Button size="xs" variant="outline" asChild>
+                <a href={r.data.terminal_url} target="_blank" rel="noopener">
+                  <ExternalLink /> Open terminal
+                </a>
+              </Button>
+              <Button size="xs" onClick={go}>
+                Check again
+              </Button>
+            </div>
+          </div>
+        )
+      })
+      await wait()
+    }
+    const preview = await step('ssh_config_preview', 'SSH config entry')
+    if (!preview.ok) return false
+    if (!preview.data.reuse) {
+      put({
+        key: 'ssh_config_preview',
+        label: 'SSH config entry',
+        state: 'ok',
+        message: preview.message,
+        extra: (
+          <div className="grid gap-2">
+            <pre className="overflow-x-auto rounded-md border border-border/50 bg-muted/50 px-3 py-2 font-mono text-[11px]">{preview.data.block}</pre>
+            <div>
+              <Button size="xs" onClick={go}>
+                Add this to ~/.ssh/config
+              </Button>
+            </div>
+          </div>
+        )
+      })
+      await wait()
+      put({ key: 'ssh_config_preview', label: 'SSH config entry', state: 'ok', message: preview.message })
+      if (!(await step('write_ssh_config', 'Write SSH config')).ok) return false
+    }
+    return true
+  }
+
+  const inspectAndSave = async () => {
+    const detect = await step('detect', 'Check the machine')
+    if (!detect.ok) return
+    const d = detect.data
+    setForm((f) => ({ ...f, root: d.root || '~' }))
+    put({
+      key: 'detect',
+      label: 'Check the machine',
+      state: 'ok',
+      message: detect.message,
+      extra: (
+        <div className="grid gap-2">
+          {(d.missing || []).length > 0 && (
+            <ul className="grid gap-0.5">
+              {d.missing.map((m: any) => (
+                <li key={m.tool}>
+                  <code className="font-mono">{m.tool}</code> missing: <code className="font-mono">{m.hint}</code>
+                </li>
+              ))}
+            </ul>
+          )}
+          <p>Pick the folder that holds your projects. Sessions start in its subfolders.</p>
+          <FolderPicker name={formRef.current.name} alias={sent().alias} start={d.root || '~'} onPath={(root) => setForm((f) => ({ ...f, root }))} onUse={go} />
+        </div>
+      )
+    })
+    await wait()
+    put({ key: 'detect', label: 'Check the machine', state: 'ok', message: detect.message })
+    const save = await step('save', 'Save to Yardbell')
+    if (save.ok) {
+      setDone(true)
+      onSaved()
+      saved(`${formRef.current.name} added. Its sessions show in the sidebar once Yardbell checks it.`)
+    }
+  }
+
+  const valid =
+    /^[a-z0-9-]+$/.test(form.name) && !known.includes(form.name) && (viaAlias ? Boolean(form.alias.trim()) : Boolean(form.user.trim() && form.ip.trim()))
   const shown = peers?.list.filter((p) => !known.includes(p.suggested_name)) || []
 
   return (
@@ -454,18 +532,52 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
         <div className="shrink-0 border-b border-border/60 px-6 pt-6 pr-12 pb-4">
           <DialogTitle>Add machine</DialogTitle>
           <DialogDescription className="mt-1.5 text-xs leading-relaxed">
-            Yardbell reaches each machine over SSH on your mesh VPN. It checks the connection, sets up key login and the SSH config entry, then asks where your projects are.
+            Yardbell reaches each machine over SSH: on your mesh VPN, on your network, or through a Host you already have in ~/.ssh/config, such as a cloud dev
+            box.
           </DialogDescription>
-          <button type="button" aria-label="Close" onClick={onClose} className="absolute top-5 right-5 grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground">
+          <button
+            type="button"
+            aria-label="Close"
+            onClick={onClose}
+            className="absolute top-5 right-5 grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-accent hover:text-foreground"
+          >
             <X className="size-4" />
           </button>
         </div>
         <div className="scrollbar-sleek min-h-0 flex-1 space-y-5 overflow-y-auto px-6 py-4">
-          {!steps.length && (
+          <div role="radiogroup" aria-label="Connect by" className="grid grid-cols-2 gap-1 rounded-lg bg-muted/60 p-1">
+            {(
+              [
+                ['address', 'Address', 'Mesh IP, LAN address or hostname'],
+                ['alias', 'SSH alias', 'A Host from ~/.ssh/config']
+              ] as const
+            ).map(([k, l, d]) => (
+              <button
+                key={k}
+                type="button"
+                role="radio"
+                aria-checked={by === k}
+                disabled={running || done}
+                onClick={() => (setBy(k), setSteps([]))}
+                className={cn(
+                  'grid rounded-md px-3 py-1.5 text-left transition-colors',
+                  by === k ? 'bg-background shadow-sm' : 'text-muted-foreground hover:text-foreground'
+                )}
+              >
+                <span className="text-[13px] font-medium">{l}</span>
+                <span className="text-[11px] text-muted-foreground">{d}</span>
+              </button>
+            ))}
+          </div>
+          {!steps.length && !viaAlias && (
             <div className="space-y-1.5">
               <p className="text-xs font-medium">Computers on your mesh</p>
               {!peers && <p className="text-xs text-muted-foreground">Looking for mesh peers…</p>}
-              {peers && !shown.length && <p className="text-xs text-muted-foreground">{peers.note || 'Every computer on the mesh is already in Yardbell. Type an address below to add another.'}</p>}
+              {peers && !shown.length && (
+                <p className="text-xs text-muted-foreground">
+                  {peers.note || 'Every computer on the mesh is already in Yardbell. Type an address below to add another.'}
+                </p>
+              )}
               {shown.length > 0 && (
                 <div className="grid max-h-44 gap-1.5 overflow-y-auto sm:grid-cols-2">
                   {shown.map((p) => {
@@ -476,7 +588,10 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
                         type="button"
                         aria-pressed={on}
                         onClick={() => setForm((f) => ({ ...f, ip: p.ip, name: f.name || p.suggested_name }))}
-                        className={cn('flex min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left', on ? 'border-foreground/40 bg-accent' : 'border-border/60 hover:bg-accent/50')}
+                        className={cn(
+                          'flex min-w-0 items-center gap-2 rounded-md border px-2.5 py-2 text-left',
+                          on ? 'border-foreground/40 bg-accent' : 'border-border/60 hover:bg-accent/50'
+                        )}
                       >
                         <span className={cn('size-1.5 shrink-0 rounded-full', p.online ? 'bg-status-success' : 'bg-muted-foreground/40')} />
                         <span className="grid min-w-0">
@@ -493,7 +608,8 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
               )}
               {peers && peers.phones > 0 && (
                 <p className="text-[11px] text-muted-foreground">
-                  {peers.phones} {peers.phones === 1 ? 'phone or tablet' : 'phones and tablets'} hidden. They can open Yardbell in a browser but cannot run sessions.
+                  {peers.phones} {peers.phones === 1 ? 'phone or tablet' : 'phones and tablets'} hidden. They can open Yardbell in a browser but cannot run
+                  sessions.
                 </p>
               )}
             </div>
@@ -501,17 +617,76 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
           <div className="grid grid-cols-2 gap-3">
             <label className="space-y-1.5">
               <span className="block text-xs font-medium">Label *</span>
-              <input value={form.name} disabled={running || done} onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })} placeholder="pro" autoCapitalize="off" spellCheck={false} className={cn(inputClass, 'w-full')} />
+              <input
+                value={form.name}
+                disabled={running || done}
+                onChange={(e) => setForm({ ...form, name: e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, '') })}
+                placeholder="pro"
+                autoCapitalize="off"
+                spellCheck={false}
+                className={cn(inputClass, 'w-full')}
+              />
             </label>
-            <label className="space-y-1.5">
-              <span className="block text-xs font-medium">Username *</span>
-              <input value={form.user} disabled={running || done} onChange={(e) => setForm({ ...form, user: e.target.value })} placeholder="you" autoCapitalize="off" autoComplete="off" spellCheck={false} className={cn(inputClass, 'w-full')} />
-            </label>
-            <label className="col-span-2 space-y-1.5">
-              <span className="block text-xs font-medium">Host or address *</span>
-              <input value={form.ip} disabled={running || done} onChange={(e) => setForm({ ...form, ip: e.target.value })} placeholder="100.x.x.x or studio-mini" autoCapitalize="off" spellCheck={false} className={cn(inputClass, 'w-full font-mono')} />
-              <p className="text-[11px] text-muted-foreground">Its mesh IP or hostname. Pick a computer above to fill it in.</p>
-            </label>
+            {viaAlias ? (
+              <label className="space-y-1.5">
+                <span className="block text-xs font-medium">SSH alias *</span>
+                <input
+                  list="ssh-aliases"
+                  value={form.alias}
+                  disabled={running || done}
+                  onChange={(e) => {
+                    const alias = e.target.value.trim()
+                    setForm((f) => ({ ...f, alias, name: f.name || alias.toLowerCase().replace(/[^a-z0-9-]/g, '') }))
+                  }}
+                  placeholder={aliases?.[0] || 'devbox'}
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  className={cn(inputClass, 'w-full font-mono')}
+                />
+                <datalist id="ssh-aliases">
+                  {(aliases || []).map((a) => (
+                    <option key={a} value={a} />
+                  ))}
+                </datalist>
+              </label>
+            ) : (
+              <label className="space-y-1.5">
+                <span className="block text-xs font-medium">Username *</span>
+                <input
+                  value={form.user}
+                  disabled={running || done}
+                  onChange={(e) => setForm({ ...form, user: e.target.value })}
+                  placeholder="you"
+                  autoCapitalize="off"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className={cn(inputClass, 'w-full')}
+                />
+              </label>
+            )}
+            {viaAlias ? (
+              <p className="col-span-2 text-[11px] leading-relaxed text-muted-foreground">
+                {aliases === null
+                  ? 'Reading ~/.ssh/config…'
+                  : aliases.length
+                    ? `Pick one of ${aliases.length} Hosts in ~/.ssh/config on this machine, or type another. Yardbell signs in with ssh, so the alias's user, key and port are used as they are.`
+                    : 'No unused Host found in ~/.ssh/config on this machine. Add one there, check that ssh <alias> signs in without a password, then come back.'}
+              </p>
+            ) : (
+              <label className="col-span-2 space-y-1.5">
+                <span className="block text-xs font-medium">Host or address *</span>
+                <input
+                  value={form.ip}
+                  disabled={running || done}
+                  onChange={(e) => setForm({ ...form, ip: e.target.value })}
+                  placeholder="100.x.x.x or studio-mini"
+                  autoCapitalize="off"
+                  spellCheck={false}
+                  className={cn(inputClass, 'w-full font-mono')}
+                />
+                <p className="text-[11px] text-muted-foreground">Its mesh IP, LAN address or hostname. Pick a computer above to fill it in.</p>
+              </label>
+            )}
             <label className="col-span-2 space-y-1.5">
               <span className="flex items-center gap-1.5 text-xs font-medium">
                 <Folder className="size-3.5" /> Project folder
@@ -534,7 +709,8 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
                     )}
                   </span>
                   <div className="min-w-0">
-                    <span className="font-medium">{s.label}</span> <span className={cn('text-xs', s.state === 'bad' ? 'text-destructive' : 'text-muted-foreground')}>{s.message}</span>
+                    <span className="font-medium">{s.label}</span>{' '}
+                    <span className={cn('text-xs', s.state === 'bad' ? 'text-destructive' : 'text-muted-foreground')}>{s.message}</span>
                     {s.extra && <div className="mt-2 text-xs text-muted-foreground">{s.extra}</div>}
                   </div>
                 </li>
@@ -557,13 +733,13 @@ function AddMachine({ known, onClose, onSaved }: { known: string[]; onClose: () 
   )
 }
 
-function FolderPicker({ name, start, onPath, onUse }: { name: string; start: string; onPath: (p: string) => void; onUse: () => void }) {
+function FolderPicker({ name, alias, start, onPath, onUse }: { name: string; alias: string; start: string; onPath: (p: string) => void; onUse: () => void }) {
   const [at, setAt] = useState<{ path: string; entries: { name: string }[] } | null>(null)
   const [error, setError] = useState('')
   const show = async (path: string) => {
     setError('')
     try {
-      const l = await api<{ path: string; entries: { name: string }[] }>('GET', `/onboarding/browse?name=${encodeURIComponent(name)}&path=${encodeURIComponent(path)}`)
+      const l = await api<{ path: string; entries: { name: string }[] }>('GET', `/onboarding/browse?${new URLSearchParams({ name, alias, path })}`)
       setAt(l)
       onPath(l.path)
     } catch (e) {
@@ -588,7 +764,11 @@ function FolderPicker({ name, start, onPath, onUse }: { name: string; start: str
         {parts.map((p, i) => (
           <span key={i} className="flex items-center gap-0.5">
             {i > 0 && <span className="text-muted-foreground">/</span>}
-            <button type="button" onClick={() => show(`/${parts.slice(0, i + 1).join('/')}`)} className={cn('rounded px-1 font-mono hover:bg-accent', i === parts.length - 1 && 'font-semibold')}>
+            <button
+              type="button"
+              onClick={() => show(`/${parts.slice(0, i + 1).join('/')}`)}
+              className={cn('rounded px-1 font-mono hover:bg-accent', i === parts.length - 1 && 'font-semibold')}
+            >
               {p}
             </button>
           </span>
@@ -599,14 +779,22 @@ function FolderPicker({ name, start, onPath, onUse }: { name: string; start: str
         {!at && !error && <li className="px-3 py-2 text-muted-foreground">Loading…</li>}
         {at && parts.length > 0 && (
           <li>
-            <button type="button" onClick={() => show(`/${parts.slice(0, -1).join('/')}`)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono hover:bg-accent">
+            <button
+              type="button"
+              onClick={() => show(`/${parts.slice(0, -1).join('/')}`)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left font-mono hover:bg-accent"
+            >
               ..
             </button>
           </li>
         )}
         {at?.entries.map((e) => (
           <li key={e.name}>
-            <button type="button" onClick={() => show(`${at.path.replace(/\/$/, '')}/${e.name}`)} className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-accent">
+            <button
+              type="button"
+              onClick={() => show(`${at.path.replace(/\/$/, '')}/${e.name}`)}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-accent"
+            >
               <Folder className="size-3.5 text-muted-foreground" /> {e.name}
             </button>
           </li>

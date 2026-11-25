@@ -674,7 +674,10 @@ export const Composer = forwardRef<
                     toast(next === 'enter' ? 'Enter sends, Shift+Enter starts a new line' : `${MOD}+Enter sends, Enter starts a new line`)
                   }}
                 >
-                  <Keyboard /> {mode === 'enter' ? 'Enter to send, Shift+Enter for a new line' : `${MOD}+Enter to send, Enter for a new line`}
+                  <Keyboard /> Send with
+                  <span className="ml-auto text-xs whitespace-nowrap text-muted-foreground" title={mode === 'enter' ? 'Shift+Enter starts a new line' : 'Enter starts a new line'}>
+                    {mode === 'enter' ? 'Enter' : `${MOD} Enter`}
+                  </span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>

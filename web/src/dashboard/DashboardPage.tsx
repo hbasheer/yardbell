@@ -760,7 +760,9 @@ function Preview({ s, ctx, onClose, onOpen }: { s: Sess | null; ctx: Ctx; onClos
               <span className="sr-only">Close</span>
             </Button>
           </div>
-          <iframe title={`Terminal for ${s.tmux}`} src={`/term/${enc(s.machine)}/${enc(s.tmux || '')}?embed=1`} className="min-h-0 w-full flex-1 border-0 bg-black" />
+          <div className="relative min-h-0 flex-1">
+            <iframe title={`Terminal for ${s.tmux}`} src={`/term/${enc(s.machine)}/${enc(s.tmux || '')}?embed=1`} data-unzoom="" className="absolute inset-0 size-full border-0 bg-black" />
+          </div>
           <div className="flex shrink-0 items-center gap-1.5 border-t border-border/60 px-3 py-1.5">
             <div className="flex flex-wrap items-center gap-1">
               <Marks s={s} onSetup={ctx.setup} />

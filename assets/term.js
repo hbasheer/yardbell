@@ -73,6 +73,20 @@ const coarse = matchMedia("(pointer: coarse)");
 const FONT_SIZES = [10, 11, 12, 13, 14, 16, 18, 20];
 const FONT_KEY = "yardbell.term.fontSize";
 
+// Inside the app the interface size is the app's own zoom. The frame cancels it, so the terminal
+// measures and takes clicks in one set of pixels, and draws its text that much larger instead.
+function uiZoom() {
+  try {
+    if (!embedded || !window.frameElement) return 1;
+    const z = Number(parent.getComputedStyle(parent.document.documentElement).getPropertyValue("--ui-zoom"));
+    return z > 0 ? z : 1;
+  } catch {
+    return 1;
+  }
+}
+const drawn = (size) => Math.round(size * uiZoom() * 10) / 10;
+const chosen = () => Math.round((term.options.fontSize / uiZoom()) * 10) / 10;
+
 function storedFont() {
   try {
     const size = Number(localStorage.getItem(FONT_KEY));
@@ -96,16 +110,25 @@ function themeFor(mode) {
 const term = new Terminal({
   cursorBlink: true,
   fontFamily: FONT,
-  fontSize: storedFont() || (coarse.matches ? 13 : 14),
+  fontSize: drawn(storedFont() || (coarse.matches ? 13 : 14)),
   letterSpacing: 0,
   lineHeight: 1.15,
   scrollback: 5000,
   theme: themeFor(shade()),
   minimumContrastRatio: CONTRAST[shade()],
 });
+// The grid never fills the box exactly (padding, a part of a cell), so the page behind it takes the
+// theme's own background; otherwise a picked theme shows strips of the built-in colour at the edges.
+function paintBehind() {
+  const bg = term.options.theme?.background;
+  if (bg) document.documentElement.style.setProperty("--term-bg", bg);
+  else document.documentElement.style.removeProperty("--term-bg");
+}
+paintBehind();
 window.addEventListener("yardbell-term-theme", () => {
   term.options.theme = themeFor(shade());
   term.options.minimumContrastRatio = CONTRAST[shade()];
+  paintBehind();
 });
 const fit = new FitAddon.FitAddon();
 term.loadAddon(fit);
@@ -123,8 +146,9 @@ function applyPrefs() {
   term.options.cursorBlink = prefs.cursorBlink !== false;
   term.options.scrollback = Number(prefs.scrollback) || 5000;
   term.options.theme = themeFor(shade());
+  paintBehind();
   const size = Number(localStorage.getItem(FONT_KEY));
-  if (FONT_SIZES.includes(size)) term.options.fontSize = size;
+  term.options.fontSize = drawn(FONT_SIZES.includes(size) ? size : coarse.matches ? 13 : 14);
   const pad = prefs.padding === undefined ? null : Number(prefs.padding);
   const box = document.getElementById("term");
   if (box) box.style.padding = pad === null ? "" : `${pad}px`;
@@ -132,7 +156,10 @@ function applyPrefs() {
 }
 applyPrefs();
 window.addEventListener("storage", (e) => {
-  if (e.key === PREFS_KEY || e.key === FONT_KEY) applyPrefs();
+  if (e.key === PREFS_KEY || e.key === FONT_KEY || e.key === "yardbell.ui.zoom") {
+    applyPrefs();
+    if (term.element) refit();
+  }
 });
 let selectionCopy = 0;
 term.onSelectionChange(() => {
@@ -1001,8 +1028,8 @@ function setFontSize(px) {
   pinching = false;
   pinchScale = 1;
   applyTransform();
-  if (size !== term.options.fontSize) {
-    term.options.fontSize = size;
+  if (drawn(size) !== term.options.fontSize) {
+    term.options.fontSize = drawn(size);
     refit();
   }
   try { localStorage.setItem(FONT_KEY, String(size)); } catch {}
@@ -1011,12 +1038,12 @@ function setFontSize(px) {
 }
 
 function stepFont(dir) {
-  const at = FONT_SIZES.indexOf(nearestFont(term.options.fontSize));
+  const at = FONT_SIZES.indexOf(nearestFont(chosen()));
   return setFontSize(FONT_SIZES[Math.max(0, Math.min(FONT_SIZES.length - 1, at + dir))]);
 }
 
 function showFont() {
-  const size = term.options.fontSize;
+  const size = chosen();
   document.getElementById("font-size").textContent = `${size} px`;
   document.getElementById("font-down").disabled = size <= FONT_SIZES[0];
   document.getElementById("font-up").disabled = size >= FONT_SIZES[FONT_SIZES.length - 1];
@@ -1037,14 +1064,14 @@ function pinchStart(x, y) {
 
 function pinchMove(scale) {
   if (!pinching) return;
-  const size = term.options.fontSize;
+  const size = chosen();
   pinchScale = Math.min(FONT_SIZES[FONT_SIZES.length - 1] / size, Math.max(FONT_SIZES[0] / size, scale));
   applyTransform();
 }
 
 function pinchEnd() {
-  if (!pinching) return term.options.fontSize;
-  return setFontSize(term.options.fontSize * pinchScale);
+  if (!pinching) return chosen();
+  return setFontSize(chosen() * pinchScale);
 }
 
 function startTouchPinch(e) {

@@ -249,9 +249,9 @@ function EmptyGroup({ store, state, group, actions }: { store: WorkspaceStore; s
 
 function ItemBody({ item, store, state, place }: { item: Item; store: WorkspaceStore; state: YardbellState | null; place: Place | null }) {
   if (item.kind === 'session' && item.key)
-    return <iframe title={`Terminal for ${itemName(item, state)}`} src={termSrc(item.key)} data-key={item.key} className="size-full border-0" />
+    return <iframe title={`Terminal for ${itemName(item, state)}`} src={termSrc(item.key)} data-key={item.key} data-unzoom="" className="size-full border-0" />
   if (item.kind === 'dispatch')
-    return <iframe title="Dispatch" src={`/dispatch${item.conversation ? `?c=${encodeURIComponent(item.conversation)}` : ''}`} className="size-full border-0" />
+    return <iframe title="Dispatch" src={`/dispatch${item.conversation ? `?c=${encodeURIComponent(item.conversation)}` : ''}`} data-unzoom="" className="size-full border-0" />
   if (item.kind === 'file') return <FileView machine={item.machine!} root={item.root!} path={item.path!} onDirty={() => {}} />
   if (item.kind === 'diff') return <DiffView machine={item.machine!} root={item.root!} path={item.path!} staged={Boolean(item.staged)} state={state} />
   if (item.kind === 'browser')

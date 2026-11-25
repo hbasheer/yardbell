@@ -191,7 +191,7 @@ pub fn read_command(machine_root: &str, root: &str, path: &str, known: bool) -> 
          [ -f \"$f\" ] || {{ echo 'ERR notfile'; exit 0; }}; \
          n=$(wc -c < \"$f\" | tr -d ' '); \
          [ \"$n\" -le {max} ] || {{ echo \"ERR large $n\"; exit 0; }}; \
-         a=$(head -c {sniff} -- \"$f\" | wc -c); b=$(head -c {sniff} -- \"$f\" | tr -d '\\000' | wc -c); \
+         a=$(head -c {sniff} -- \"$f\" | wc -c); b=$(head -c {sniff} -- \"$f\" | LC_ALL=C tr -d '\\000' | wc -c); \
          [ \"$a\" -eq \"$b\" ] || {{ echo 'ERR binary'; exit 0; }}; \
          printf 'SIZE\\t%s\\nHASH\\t%s\\n' \"$n\" \"$(h \"$f\")\"; head -c {max} -- \"$f\"; true",
         prelude(machine_root, root, known),

@@ -4432,7 +4432,9 @@ class Suite:
             self.set_input("#chg-message", message)
             b.click("#chg-message")
             b.key("Enter", "Control")
-            b.wait("document.getElementById('toast').classList.contains('show')", "the commit toast", timeout=15)
+            # Drafting shows its own toast first, which may still be up when the commit lands.
+            b.wait("document.getElementById('toast').classList.contains('show') && document.getElementById('toast').textContent.startsWith('Committed ')",
+                   "the commit toast", timeout=15)
             said = b.js("document.getElementById('toast').textContent")
             if not said.startswith("Committed "):
                 raise Failure(f"the commit toast says {said!r}")

@@ -1055,6 +1055,7 @@ async fn forget_ended() {
 async fn onboarding_step_route() {
     let r = rig();
     r.fake.stub("ping", Output::failed(1, ""));
+    r.fake.stub("/dev/tcp/100.1.1.1/22", Output::failed(1, ""));
     let c = cookie(&r.app).await;
     let req = Request::post("/onboarding/reachable")
         .header(header::COOKIE, c.clone())
@@ -1065,7 +1066,10 @@ async fn onboarding_step_route() {
     assert_eq!(status, StatusCode::OK);
     let v: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(v["ok"], false);
-    assert_eq!(v["message"], "peer offline");
+    assert!(
+        v["message"].as_str().unwrap().starts_with("no answer"),
+        "{v}"
+    );
     let req = Request::post("/onboarding/format_disk")
         .header(header::COOKIE, c)
         .header(header::CONTENT_TYPE, "application/json")
