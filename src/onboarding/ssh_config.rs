@@ -44,6 +44,31 @@ impl SshConfig {
         }))
     }
 
+    // Every named Host in the file, in order; patterns such as `*` or `*.example.com` are left out.
+    pub fn hosts(&self) -> std::io::Result<Vec<String>> {
+        let text = match std::fs::read_to_string(&self.path) {
+            Ok(text) => text,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+            Err(e) => return Err(e),
+        };
+        let mut hosts: Vec<String> = Vec::new();
+        for line in text.lines() {
+            let mut words = line.split_whitespace();
+            if !words.next().is_some_and(|w| w.eq_ignore_ascii_case("host")) {
+                continue;
+            }
+            for word in words {
+                if word.starts_with('#') {
+                    break;
+                }
+                if !word.contains(['*', '?', '!']) && !hosts.iter().any(|h| h == word) {
+                    hosts.push(word.to_string());
+                }
+            }
+        }
+        Ok(hosts)
+    }
+
     pub fn block(&self, name: &str, ip: &str, user: &str) -> String {
         format!(
             "Host {name}\n  HostName {ip}\n  User {user}\n  ServerAliveInterval 30\n  ServerAliveCountMax 3\n"
@@ -117,6 +142,15 @@ mod tests {
         assert!(cfg.has_host("HP").unwrap());
         assert!(!cfg.has_host("pro").unwrap());
         assert!(!cfg.has_host("*x").unwrap());
+    }
+
+    #[test]
+    fn hosts_lists_named_entries_and_skips_patterns() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config");
+        std::fs::write(&path, "Host devbox1\n  HostName 1.2.3.4\nHost *\n  ServerAliveInterval 30\nHost mini hbasheer-mini # same box\nhost *.lan !x\n").unwrap();
+        let cfg = SshConfig::new(path, frozen());
+        assert_eq!(cfg.hosts().unwrap(), ["devbox1", "mini", "hbasheer-mini"]);
     }
 
     #[test]

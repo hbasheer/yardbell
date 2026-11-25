@@ -75,6 +75,15 @@ pub fn valid_user(user: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || matches!(c, '_' | '.' | '-'))
 }
 
+fn valid_alias(alias: &str) -> bool {
+    !alias.is_empty()
+        && alias.len() <= 253
+        && alias
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_'))
+        && !alias.starts_with(['-', '.'])
+}
+
 fn valid_name(name: &str) -> bool {
     !name.is_empty()
         && name
@@ -84,10 +93,11 @@ fn valid_name(name: &str) -> bool {
 }
 
 // A machine being added has an ssh config entry under its name before it is saved to Yardbell.
-fn candidate(name: &str) -> Machine {
+// `alias` is an existing Host in ~/.ssh/config; without one the entry is made under the name.
+fn candidate(name: &str, alias: &str) -> Machine {
     Machine {
         name: name.into(),
-        ssh: Some(name.into()),
+        ssh: Some(if alias.is_empty() { name } else { alias }.into()),
         mesh_ip: None,
         port_prefix: None,
         root: String::new(),
@@ -240,14 +250,24 @@ impl Onboarding {
         if let Err(step) = check_inputs(None, None, Some(ip)) {
             return step;
         }
-        if !self.run(ping_argv(ip)).await.ok() {
-            return Step::fail("peer offline");
-        }
+        // Many cloud machines drop ping, so only an answer on port 22 decides.
+        let pinged = self.run(ping_argv(ip)).await.ok();
         let probe = format!("echo > /dev/tcp/{ip}/22");
         if !self.run(argv(&["bash", "-c", &probe])).await.ok() {
-            return Step::fail("port 22 closed: enable Remote Login / sshd on the machine");
+            return Step::fail(if pinged {
+                "port 22 closed: enable Remote Login / sshd on the machine"
+            } else {
+                "no answer: the machine is off, unreachable from here, or its address is wrong"
+            });
         }
-        Step::ok("reachable on port 22", Value::Null)
+        Step::ok(
+            if pinged {
+                "reachable on port 22"
+            } else {
+                "reachable on port 22 (it does not answer ping)"
+            },
+            Value::Null,
+        )
     }
 
     pub async fn key_auth(&self, user: &str, ip: &str) -> Step {
@@ -394,9 +414,50 @@ impl Onboarding {
         }
     }
 
-    pub async fn detect(&self, name: &str) -> Step {
+    pub fn aliases(&self) -> Result<Vec<String>, String> {
+        let used: Vec<String> = self
+            .config()
+            .map(|cfg| {
+                cfg.machines
+                    .iter()
+                    .map(|m| m.ssh_host().to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        let hosts = self
+            .ssh_config
+            .hosts()
+            .map_err(|e| format!("cannot read ~/.ssh/config: {e}"))?;
+        Ok(hosts.into_iter().filter(|h| !used.contains(h)).collect())
+    }
+
+    // An alias brings its own address, user and key, so the only check is a login through it.
+    pub async fn alias_check(&self, alias: &str) -> Step {
+        if !valid_alias(alias) {
+            return Step::fail("pick a Host from ~/.ssh/config");
+        }
+        let out = self
+            .run(self.ssh.command(&candidate(alias, alias), "true"))
+            .await;
+        if out.ok() {
+            return Step::ok(format!("signed in through {alias}"), Value::Null);
+        }
+        let detail = if out.timed_out {
+            "timed out".to_string()
+        } else {
+            out.stderr.trim().to_string()
+        };
+        Step::fail(format!(
+            "ssh {alias} did not sign in without a password: {detail}. Check that `ssh {alias}` works in a terminal here with a key"
+        ))
+    }
+
+    pub async fn detect(&self, name: &str, alias: &str) -> Step {
         if let Err(step) = check_inputs(Some(name), None, None) {
             return step;
+        }
+        if !alias.is_empty() && !valid_alias(alias) {
+            return Step::fail("pick a Host from ~/.ssh/config");
         }
         let roots = self.candidate_roots();
         let mut script = String::from("uname");
@@ -431,7 +492,7 @@ impl Onboarding {
             ));
         }
         script.push_str("; true");
-        let target = candidate(name);
+        let target = candidate(name, alias);
         let out = self
             .run(self.ssh.command(&target, &login_shell(&script)))
             .await;
@@ -477,13 +538,17 @@ impl Onboarding {
         &self,
         folders: &Folders,
         name: &str,
+        alias: &str,
         path: &str,
     ) -> Result<Listing, String> {
         if !valid_name(name) {
             return Err("name must use only a-z, 0-9 and -".into());
         }
+        if !alias.is_empty() && !valid_alias(alias) {
+            return Err("pick a Host from ~/.ssh/config".into());
+        }
         let path = if path.trim().is_empty() { "~" } else { path };
-        folders.browse(&candidate(name), path).await
+        folders.browse(&candidate(name, alias), path).await
     }
 
     fn candidate_roots(&self) -> Vec<String> {
@@ -500,9 +565,13 @@ impl Onboarding {
         roots
     }
 
-    pub async fn save(&self, name: &str, ip: &str, root: &str) -> Step {
-        if let Err(step) = check_inputs(Some(name), None, Some(ip)) {
+    pub async fn save(&self, name: &str, ip: &str, root: &str, alias: &str) -> Step {
+        let by_alias = !alias.is_empty();
+        if let Err(step) = check_inputs(Some(name), None, (!by_alias).then_some(ip)) {
             return step;
+        }
+        if by_alias && !valid_alias(alias) {
+            return Step::fail("pick a Host from ~/.ssh/config");
         }
         if root.contains('\n') {
             return Step::fail("invalid project folder");
@@ -523,8 +592,9 @@ impl Onboarding {
         };
         cfg.machines.push(Machine {
             name: name.into(),
-            ssh: Some(name.into()),
-            mesh_ip: Some(ip.into()),
+            ssh: Some(if by_alias { alias } else { name }.into()),
+            // Through an alias Yardbell checks the machine by signing in; there is no address to ping.
+            mesh_ip: (!by_alias).then(|| ip.into()),
             port_prefix: Some(prefix),
             root: root.trim().into(),
             local: false,

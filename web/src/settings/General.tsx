@@ -18,8 +18,13 @@ const MOTION_KEY = 'yardbell.ui.reduceMotion'
 // The interface size zooms the app root and, by CSS, each menu and dialog inside its own portal. Zooming
 // the body instead puts menus in the wrong place, because they are measured zoomed and then zoomed again.
 // The app's height is divided by the same amount so a larger size never pushes it past the window.
+// Inside the apps the webview itself zooms, as a browser's own zoom does, so the engine lays the page
+// out to fit the window; CSS zoom there left the page wider and taller than the window.
 export function applyDisplayPrefs() {
-  const zoom = Number(localStorage.getItem(ZOOM_KEY) || '1') || 1
+  const wanted = Number(localStorage.getItem(ZOOM_KEY) || '1') || 1
+  const app = (window as unknown as { __TAURI__?: { event?: { emit: (n: string, p: unknown) => Promise<void> } } }).__TAURI__?.event
+  if (app) app.emit('yardbell-ui-zoom', wanted).catch(() => {})
+  const zoom = app ? 1 : wanted
   const still = localStorage.getItem(MOTION_KEY) === '1'
   document.body.style.zoom = ''
   const root = document.getElementById('root')

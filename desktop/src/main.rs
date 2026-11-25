@@ -331,6 +331,47 @@ fn deliver(
     }
 }
 
+const UI_ZOOM_EVENT: &str = "yardbell-ui-zoom";
+
+// Settings' interface size: the dashboard's webview zooms the way a browser's own zoom does.
+fn on_ui_zoom(app: &AppHandle, payload: &str) {
+    let Some(zoom) = ui_zoom(payload) else {
+        eprintln!("yardbell: a page asked for an interface size it did not give: {payload}");
+        return;
+    };
+    let Some(dashboard) = app.get_webview(DASHBOARD) else {
+        return;
+    };
+    if let Err(e) = dashboard.set_zoom(zoom) {
+        eprintln!("yardbell: can't set the interface size to {zoom}: {e}");
+    }
+}
+
+fn ui_zoom(payload: &str) -> Option<f64> {
+    let zoom: f64 = serde_json::from_str(payload).ok()?;
+    (zoom.is_finite() && (0.5..=2.0).contains(&zoom)).then_some(zoom)
+}
+
+// A page asks for a notification it would otherwise post itself, such as Settings' test.
+fn on_page_notification(app: &AppHandle, payload: &str) {
+    let Some(note) = notify::page_note(payload) else {
+        eprintln!("yardbell: a page asked for a notification it did not describe");
+        return;
+    };
+    let session = app.state::<Session>();
+    let generation = session.generation.current();
+    let server = session
+        .client
+        .try_read()
+        .ok()
+        .and_then(|client| client.as_ref().map(|c| c.server().to_string()))
+        .unwrap_or_default();
+    let app = app.clone();
+    notify::show(note, move |target| {
+        open_target(&app, generation, &server, target)
+    });
+}
+
 fn open_target(app: &AppHandle, generation: u64, server: &str, target: Target) {
     let current = app.state::<Session>().generation.is_current(generation);
     let opened = match target {
@@ -674,6 +715,14 @@ fn main() {
             app.listen_any(shortcuts::EVENT, move |event| {
                 on_shortcut(&handle, event.payload().to_string())
             });
+            let handle = app.handle().clone();
+            app.listen_any(UI_ZOOM_EVENT, move |event| {
+                on_ui_zoom(&handle, event.payload())
+            });
+            let handle = app.handle().clone();
+            app.listen_any(notify::PAGE_EVENT, move |event| {
+                on_page_notification(&handle, event.payload())
+            });
             #[cfg(target_os = "macos")]
             notify::send_as(&app.config().identifier);
             panel::init(app.handle());
@@ -692,6 +741,14 @@ fn main() {
 mod tests {
     use super::{keep_running, panel, permission, windows, DASHBOARD};
     use tauri::webview::{PermissionKind, PermissionResponse};
+
+    #[test]
+    fn an_interface_size_is_a_sane_zoom() {
+        assert_eq!(super::ui_zoom("1.25"), Some(1.25));
+        assert_eq!(super::ui_zoom("1"), Some(1.0));
+        assert_eq!(super::ui_zoom("9"), None);
+        assert_eq!(super::ui_zoom("\"big\""), None);
+    }
 
     #[test]
     fn closing_the_last_window_keeps_a_signed_in_app_in_the_tray() {

@@ -2,6 +2,8 @@ const { invoke } = window.__TAURI__.core;
 const { emit, listen } = window.__TAURI__.event;
 const bar = document.getElementById("tabs");
 const cross = document.getElementById("cross").content;
+const logo = document.getElementById("logo").content;
+const EXIT = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M6 2.5H3.5a1 1 0 0 0-1 1v9a1 1 0 0 0 1 1H6M10.5 11 13.5 8l-3-3M13.5 8H6"/></svg>`;
 const mac = /Mac/.test(navigator.platform);
 const MIDDLE = 1;
 const FIRST_RETRY_MS = 1000;
@@ -26,6 +28,7 @@ function tab(view) {
   name.textContent = view.title;
   name.title = view.title;
   name.addEventListener("click", () => call("select_tab", view.label));
+  if (!view.closable) item.append(logo.cloneNode(true));
   item.append(name);
 
   if (view.closable) {
@@ -124,8 +127,11 @@ let confirmTimer = 0;
 function resetSignOut() {
   clearTimeout(confirmTimer);
   signOut.classList.remove("confirming");
-  signOut.textContent = "Sign out";
+  signOut.innerHTML = EXIT;
 }
+
+signOut.title = "Sign out";
+resetSignOut();
 
 invoke("connect_server")
   .then((server) => {

@@ -364,6 +364,7 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
         || (req.method() == Method::POST && path.starts_with("/app/pair/"));
     if path == "/login"
         || path == "/style.css"
+        || path == "/favicon.svg"
         || path == "/theme.js"
         || public_handoff
         || logged_in(&app.jar(req.headers()))
@@ -492,6 +493,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/app/about", get(app_about))
         .route("/app/about/updates", get(app_updates))
         .route("/style.css", get(|| async { asset("style.css") }))
+        .route("/favicon.svg", get(|| async { asset("favicon.svg") }))
         .route("/theme.js", get(|| async { asset("theme.js") }))
         .route("/side.js", get(|| async { asset("side.js") }))
         .route("/dashboard.js", get(|| async { asset("dashboard.js") }))
@@ -667,6 +669,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/add", get(|| async { asset("add.html") }))
         .route("/add.js", get(|| async { asset("add.js") }))
         .route("/onboarding/peers", get(onboarding_peers))
+        .route("/onboarding/aliases", get(onboarding_aliases))
         .route("/onboarding/browse", get(onboarding_browse))
         .route("/onboarding/{step}", post(onboarding_step))
         .route("/machines/{name}/remove", post(remove_machine))
@@ -2694,6 +2697,8 @@ struct StepInput {
     #[serde(default)]
     name: String,
     #[serde(default)]
+    alias: String,
+    #[serde(default)]
     user: String,
     #[serde(default)]
     ip: String,
@@ -2713,6 +2718,7 @@ async fn onboarding_step(
     let ob = &app.onboarding;
     let StepInput {
         name,
+        alias,
         user,
         ip,
         root,
@@ -2722,8 +2728,9 @@ async fn onboarding_step(
         "key_auth" => ob.key_auth(&user, &ip).await,
         "ssh_config_preview" => ob.ssh_config_preview(&name, &user, &ip).await,
         "write_ssh_config" => ob.write_ssh_config(&name, &user, &ip).await,
-        "detect" => ob.detect(&name).await,
-        "save" => ob.save(&name, &ip, &root).await,
+        "alias_check" => ob.alias_check(&alias).await,
+        "detect" => ob.detect(&name, &alias).await,
+        "save" => ob.save(&name, &ip, &root, &alias).await,
         _ => {
             return Err(ApiError(
                 StatusCode::NOT_FOUND,
@@ -2738,7 +2745,17 @@ async fn onboarding_step(
 struct CandidateQuery {
     name: String,
     #[serde(default)]
+    alias: String,
+    #[serde(default)]
     path: String,
+}
+
+async fn onboarding_aliases(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
+    let aliases = app
+        .onboarding
+        .aliases()
+        .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    Ok(Json(json!({ "aliases": aliases })).into_response())
 }
 
 async fn onboarding_browse(
@@ -2747,7 +2764,7 @@ async fn onboarding_browse(
 ) -> Result<Response, ApiError> {
     let listing = app
         .onboarding
-        .browse(&app.folders, &q.name, &q.path)
+        .browse(&app.folders, &q.name, &q.alias, &q.path)
         .await
         .map_err(|e| ApiError(StatusCode::BAD_REQUEST, e))?;
     Ok(Json(listing).into_response())

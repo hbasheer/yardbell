@@ -679,7 +679,11 @@ function Terminal({ run, step, a, open, onToggle }: { run: Run; step: Step | nul
           Stop session
         </Button>
       </header>
-      {open && <iframe title={`Terminal of ${shown.label}`} src={`${src}?embed=1`} className="min-h-0 flex-1 border-0" />}
+      {open && (
+        <div className="relative min-h-0 flex-1">
+          <iframe title={`Terminal of ${shown.label}`} src={`${src}?embed=1`} data-unzoom="" className="absolute inset-0 size-full border-0" />
+        </div>
+      )}
     </section>
   )
 }

@@ -7,115 +7,74 @@
 <title>Yardbell tabs</title>
 <style>
   :root {
-    --side: #eceef0;
-    --surface: #ffffff;
-    --hover: #e6e9ec;
-    --ink: #1b1e22;
-    --ink-2: #3d434b;
-    --muted: #69717c;
-    --line: #dde0e4;
-    --accent: #2563eb;
+    --card: #ffffff;
+    --strip: color-mix(in srgb, #0a0a0a 8%, #ffffff);
+    --ink: #0a0a0a;
+    --muted: #696969;
+    --line: #e5e5e5;
+    --hover: #f5f5f5;
+    --ring: #a1a1a1;
+    --danger: #b91c1c;
     --term-bar: #0f1012;
     --term-ink: #ededef;
     --term-muted: #8b8f98;
     --term-hover: #2e3137;
-    --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --sans: "Geist", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
     :root {
-      --side: #0c0e10;
-      --surface: #171a1d;
-      --hover: #1f2327;
-      --ink: #e7e9ec;
-      --ink-2: #c0c5cc;
-      --muted: #8b939d;
-      --line: #252a30;
-      --accent: #2563eb;
+      --card: #171717;
+      --strip: color-mix(in srgb, #f0f0f0 8%, #171717);
+      --ink: #f0f0f0;
+      --muted: #acacac;
+      --line: rgb(255 255 255 / 0.07);
+      --hover: #262626;
+      --ring: #737373;
+      --danger: #f87171;
       color-scheme: dark;
     }
   }
+  :root[data-term="light"] { --term-bar: #ffffff; --term-ink: #1f2328; --term-muted: #5f6670; --term-hover: #eceef0; }
   * { box-sizing: border-box; }
   html, body { height: 100%; margin: 0; overflow: hidden; }
   body {
-    background: var(--side);
+    background: var(--strip);
     color: var(--ink);
-    font: 500 13px/1 var(--sans);
-    font-feature-settings: "cv11", "ss01";
+    font: 400 12px/1 var(--sans);
     -webkit-font-smoothing: antialiased;
     user-select: none;
     -webkit-user-select: none;
   }
-  :focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
-  .bar {
-    position: relative;
-    display: flex;
-    height: 100%;
-  }
-  .bar::after {
-    content: "";
-    position: absolute;
-    inset: auto 0 0;
-    height: 1px;
-    background: var(--line);
-  }
-  .tabs {
-    position: relative;
-    display: flex;
-    flex: 1;
-    min-width: 0;
-    height: 100%;
-    overflow: hidden;
-  }
-  .account {
-    flex: none;
-    height: 100%;
-    padding: 0 14px;
-    border: 0;
-    border-left: 1px solid var(--line);
-    background: none;
-    color: var(--muted);
-    font: inherit;
-    cursor: default;
-    transition: background-color 120ms ease-out, color 120ms ease-out;
-  }
-  .account:hover { background: var(--hover); color: var(--ink-2); }
-  .account.confirming { color: #b91c1c; }
-  @media (prefers-color-scheme: dark) { .account.confirming { color: #f87171; } }
-  .tabs::after {
-    content: "";
-    position: absolute;
-    inset: auto 0 0;
-    height: 1px;
-    background: var(--line);
-  }
+  :focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+  .bar { position: relative; display: flex; height: 100%; }
+  .bar::after { content: ""; position: absolute; inset: auto 0 0; height: 1px; background: var(--line); }
+  .tabs { position: relative; display: flex; flex: 1; min-width: 0; height: 100%; overflow: hidden; }
   .tab {
     position: relative;
     display: flex;
     align-items: center;
+    gap: 6px;
     flex: 0 1 220px;
     min-width: 0;
+    padding: 0 6px 0 10px;
     overflow: hidden;
     border-right: 1px solid var(--line);
     color: var(--muted);
-    transition: background-color 120ms ease-out, color 120ms ease-out;
+    transition: color 120ms ease-out;
   }
   .tab.session { container-type: inline-size; }
-  .tab.pinned { flex: none; }
-  .tab:hover { background: var(--hover); color: var(--ink-2); }
-  .tab.selected {
-    z-index: 1;
-    background: var(--surface);
-    color: var(--ink);
-    box-shadow: inset 0 2px var(--ink);
-  }
-  :root[data-term="light"] { --term-bar: #ffffff; --term-ink: #1f2328; --term-muted: #5f6670; --term-hover: #eceef0; }
-  .tab.session.selected { min-width: 112px; background: var(--term-bar); color: var(--term-ink); box-shadow: inset 0 2px var(--term-ink); }
+  .tab.pinned { flex: none; padding-right: 12px; }
+  .tab:hover { color: var(--ink); }
+  .tab.selected { z-index: 1; background: var(--card); color: var(--ink); }
+  .tab.selected::after { content: ""; position: absolute; inset: auto 0 0; height: 2px; background: currentColor; }
+  .tab.session.selected { min-width: 112px; background: var(--term-bar); color: var(--term-ink); }
+  .logo { flex: none; width: 14px; height: 14px; }
   .name {
     flex: 1;
     min-width: 0;
     height: 100%;
-    padding: 0 12px;
+    padding: 0;
     border: 0;
     background: none;
     color: inherit;
@@ -126,17 +85,16 @@
     text-overflow: ellipsis;
     cursor: default;
   }
-  .session .name { padding-right: 4px; }
+  .pinned .name { font-weight: 500; }
   .close {
     display: grid;
     place-items: center;
     flex: none;
-    width: 20px;
-    height: 20px;
-    margin-right: 8px;
+    width: 18px;
+    height: 18px;
     padding: 0;
     border: 0;
-    border-radius: 6px;
+    border-radius: 4px;
     background: none;
     color: var(--muted);
     cursor: default;
@@ -144,29 +102,36 @@
     transition: background-color 120ms ease-out, color 120ms ease-out;
   }
   .tab:hover .close, .tab.selected .close, .close:focus-visible { opacity: 1; }
-  .close:hover { background: var(--line); color: var(--ink); }
+  .close:hover { background: var(--hover); color: var(--ink); }
   .selected.session .close { color: var(--term-muted); }
   .selected.session .close:hover { background: var(--term-hover); color: var(--term-ink); }
-  .close svg {
-    width: 12px;
-    height: 12px;
-    fill: none;
-    stroke: currentColor;
-    stroke-width: 2;
-    stroke-linecap: round;
+  .close svg { width: 12px; height: 12px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; }
+  .account {
+    display: grid;
+    place-items: center;
+    flex: none;
+    width: 36px;
+    height: 100%;
+    padding: 0;
+    border: 0;
+    border-left: 1px solid var(--line);
+    background: none;
+    color: var(--muted);
+    cursor: default;
+    transition: background-color 120ms ease-out, color 120ms ease-out;
   }
-  @container (max-width: 96px) {
-    .name { padding: 0 4px 0 8px; }
-    .close { margin-right: 4px; }
-    .tab:not(.selected, :hover, :focus-within) .close { display: none; }
-  }
+  .account svg { width: 15px; height: 15px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+  .account:hover { background: var(--hover); color: var(--ink); }
+  .account.confirming { width: auto; padding: 0 12px; color: var(--danger); font: 500 12px/1 var(--sans); }
+  @media (prefers-reduced-motion: reduce) { .tab, .close, .account { transition: none; } }
 </style>
 </head>
 <body>
 <div class="bar">
   <nav class="tabs" id="tabs" role="tablist" aria-label="Tabs"></nav>
-  <button class="account" id="sign-out" type="button">Sign out</button>
+  <button class="account" id="sign-out" type="button" aria-label="Sign out"></button>
 </div>
+<template id="logo"><svg class="logo" viewBox="9 9 46 46" aria-hidden="true"><g fill="none" stroke="currentColor" stroke-width="5"><rect x="13" y="13" width="16" height="16" rx="4.5"/><rect x="35" y="13" width="16" height="16" rx="4.5"/><rect x="13" y="35" width="16" height="16" rx="4.5"/></g><circle cx="43" cy="43" r="9.5" fill="#f5a524"/></svg></template>
 <template id="cross"><svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 4l8 8M12 4l-8 8"/></svg></template>
 <script src="tabs.js"></script>
 </body>

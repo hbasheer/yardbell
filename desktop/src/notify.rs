@@ -21,6 +21,28 @@ pub enum Target {
     Terminal { machine: String, tmux: String },
 }
 
+pub const PAGE_EVENT: &str = "yardbell-notify";
+
+pub fn page_note(payload: &str) -> Option<Note> {
+    #[derive(serde::Deserialize)]
+    struct Asked {
+        title: String,
+        #[serde(default)]
+        body: String,
+    }
+    let asked: Asked = serde_json::from_str(payload).ok()?;
+    let clip = |text: String, max: usize| text.chars().take(max).collect::<String>();
+    let title = clip(asked.title, 120);
+    if title.trim().is_empty() {
+        return None;
+    }
+    Some(Note {
+        title,
+        body: clip(asked.body, 400),
+        open: Target::Main,
+    })
+}
+
 pub fn note_for(event: &Event, view: &StateView) -> Note {
     let Message { title, body } = message(event, view, 0);
     Note {
@@ -402,6 +424,20 @@ mod tests {
             CloseReason::Dismissed
         )));
         assert!(!is_click(&NotificationResponse::Reply("ok".into())));
+    }
+
+    #[test]
+    fn a_page_note_needs_a_title_and_is_kept_short() {
+        let note = page_note(r#"{"title":"Yardbell","body":"Notifications work"}"#).unwrap();
+        assert_eq!(
+            (note.title.as_str(), note.body.as_str()),
+            ("Yardbell", "Notifications work")
+        );
+        assert_eq!(note.open, Target::Main);
+        assert!(page_note(r#"{"title":"  "}"#).is_none());
+        assert!(page_note("not json").is_none());
+        let long = page_note(&format!(r#"{{"title":"{}"}}"#, "x".repeat(500))).unwrap();
+        assert_eq!(long.title.chars().count(), 120);
     }
 
     #[test]

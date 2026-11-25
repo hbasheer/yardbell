@@ -95,9 +95,20 @@ async fn peers_parse_failure_message() {
 async fn reachable_offline() {
     let r = rig();
     r.fake.stub("ping", Output::failed(1, ""));
+    r.fake.stub("/dev/tcp/100.1.1.1/22", Output::failed(1, ""));
     let step = r.ob.reachable("100.1.1.1").await;
     assert!(!step.ok);
-    assert_eq!(step.message, "peer offline");
+    assert!(step.message.starts_with("no answer"), "{}", step.message);
+}
+
+#[tokio::test]
+async fn reachable_without_ping_when_ssh_answers() {
+    let r = rig();
+    r.fake.stub("ping", Output::failed(1, ""));
+    r.fake.stub("/dev/tcp/100.1.1.1/22", Output::ok_with(""));
+    let step = r.ob.reachable("100.1.1.1").await;
+    assert!(step.ok, "{}", step.message);
+    assert!(step.message.contains("does not answer ping"));
 }
 
 #[tokio::test]
@@ -250,7 +261,7 @@ async fn detect_missing_tools_hints() {
         "uname",
         Output::ok_with("Linux\nhas git\nhas docker\npacman\nroot ~/code/acme\n"),
     );
-    let step = r.ob.detect("air").await;
+    let step = r.ob.detect("air", "").await;
     assert!(step.ok, "{}", step.message);
     assert_eq!(step.data["os"], "Linux");
     assert_eq!(step.data["root"], "~/code/acme");
@@ -276,7 +287,7 @@ async fn detect_lists_installed_agents() {
         "uname",
         Output::ok_with("Linux\nhas tmux\nhas git\nhas docker\nagent codex\nagent goose\n"),
     );
-    let step = r.ob.detect("air").await;
+    let step = r.ob.detect("air", "").await;
     assert_eq!(step.data["agents"], serde_json::json!(["codex", "goose"]));
     assert_eq!(step.data["missing"], serde_json::json!([]));
     assert_eq!(step.message, "Linux, all tools found, agents: codex, goose");
@@ -288,7 +299,7 @@ async fn detect_lists_installed_agents() {
 async fn detect_hints_for_mac_and_apt() {
     let r = rig();
     r.fake.stub("uname", Output::ok_with("Darwin\n"));
-    let step = r.ob.detect("air").await;
+    let step = r.ob.detect("air", "").await;
     let tmux = step.data["missing"]
         .as_array()
         .unwrap()
@@ -332,9 +343,43 @@ fn next_prefix_full_errors() {
 }
 
 #[tokio::test]
+async fn an_alias_machine_is_saved_with_its_alias_and_no_address() {
+    let r = rig();
+    let step = r.ob.save("devbox", "", "~/code", "devbox1").await;
+    assert!(step.ok, "{}", step.message);
+    let cfg = Config::load(&r.ob.cfg_path).unwrap();
+    let devbox = cfg.machine("devbox").unwrap();
+    assert_eq!(devbox.ssh.as_deref(), Some("devbox1"));
+    assert_eq!(devbox.mesh_ip, None);
+}
+
+#[tokio::test]
+async fn an_alias_is_checked_by_signing_in_through_it() {
+    let r = rig();
+    r.fake.stub("devbox1", Output::ok_with(""));
+    let step = r.ob.alias_check("devbox1").await;
+    assert!(step.ok, "{}", step.message);
+    assert!(!r.ob.alias_check("bad host;rm").await.ok);
+}
+
+#[tokio::test]
+async fn aliases_skip_patterns_and_hosts_already_used() {
+    let r = rig();
+    let used = Config::load(&r.ob.cfg_path).unwrap().machines[0]
+        .ssh_host()
+        .to_string();
+    std::fs::write(
+        r.dir.path().join("ssh_config"),
+        format!("Host devbox1\nHost *\nHost {used}\n"),
+    )
+    .unwrap();
+    assert_eq!(r.ob.aliases().unwrap(), ["devbox1"]);
+}
+
+#[tokio::test]
 async fn save_appends_machine() {
     let r = rig();
-    let step = r.ob.save("air", "100.1.1.1", "~/code/acme").await;
+    let step = r.ob.save("air", "100.1.1.1", "~/code/acme", "").await;
     assert!(step.ok, "{}", step.message);
     let cfg = Config::load(&r.ob.cfg_path).unwrap();
     let air = cfg.machine("air").unwrap();
@@ -390,7 +435,7 @@ async fn rejects_unsafe_inputs_before_running_anything() {
     let bad_user = r.ob.key_auth("-oProxyCommand=x", "100.1.1.1").await;
     assert!(!bad_user.ok);
     assert_eq!(bad_user.message, "invalid username");
-    let bad_name = r.ob.detect("-oX").await;
+    let bad_name = r.ob.detect("-oX", "").await;
     assert!(!bad_name.ok);
     assert_eq!(bad_name.message, "name must use only a-z, 0-9 and -");
     let newline =
@@ -398,7 +443,7 @@ async fn rejects_unsafe_inputs_before_running_anything() {
             .await;
     assert!(!newline.ok);
     assert!(!r.dir.path().join("ssh_config").exists());
-    let bad_save = r.ob.save("air", "1.1.1.1\nx", "~/p").await;
+    let bad_save = r.ob.save("air", "1.1.1.1\nx", "~/p", "").await;
     assert!(!bad_save.ok);
     assert!(r.fake.calls().is_empty(), "{:?}", r.fake.calls());
 }

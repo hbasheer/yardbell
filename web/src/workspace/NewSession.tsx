@@ -1,5 +1,5 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
-import { Check, ChevronDown, ChevronsUpDown, Folder, FolderPlus, GitBranch, Home, Search, Server, Settings2, Sparkles, Terminal, Type, X } from 'lucide-react'
+import { Check, ChevronDown, LoaderCircle, ChevronsUpDown, Folder, FolderPlus, GitBranch, Home, Search, Server, Settings2, Sparkles, Terminal, Type, X } from 'lucide-react'
 import { toast } from 'sonner'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
@@ -486,6 +486,12 @@ export function NewSession({
     else where = `Creates ${target.name} from ${newBase} in ${short(worktreePath(listing.path, target.name))}`
   }
   const ok = Boolean(listing && agent && (blank || !needsPick) && !busy)
+  const agentName = agents.find((a) => a.name === agent)?.label || agent
+  const starting = blank
+    ? `Opening a terminal on ${machine}…`
+    : target?.kind === 'new'
+      ? `Creating ${target.name}, running its setup, then starting ${agentName}. This can take a minute.`
+      : `Starting ${agentName} on ${machine}…`
 
   const start = async () => {
     if (!ok || !listing) return
@@ -498,7 +504,9 @@ export function NewSession({
       if (!more) onClose()
       return
     }
-    const body: Record<string, unknown> = { machine, path: listing.path, agent, model, effort, resume, wait: true }
+    // The answer comes once the session exists; the machine is checked again in the background,
+    // since that check can take many seconds on a slow machine and holds nothing up.
+    const body: Record<string, unknown> = { machine, path: listing.path, agent, model, effort, resume, wait: false }
     if (target?.kind === 'existing') body.branch = target.name
     if (target?.kind === 'new') Object.assign(body, { branch: target.name, new_branch: true, base: newBase })
     setBusy(true)
@@ -511,6 +519,7 @@ export function NewSession({
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error || `Could not start the session (${res.status})`)
       if (data.setup && !data.setup.ok) toast('The worktree setup failed. The agent started anyway.')
+      else toast.success(`Started ${agents.find((a) => a.name === agent)?.label || agent} on ${machine}`)
       onStarted(`${machine}/${data.name}`)
       if (more) {
         setQuery('')
@@ -861,14 +870,25 @@ export function NewSession({
         </div>
 
         <div className="grid gap-2">
-          <p className="truncate text-[11px] text-muted-foreground">{where}</p>
+          <p role="status" className="flex items-center gap-1.5 truncate text-[11px] text-muted-foreground">
+            {busy && <LoaderCircle className="size-3 shrink-0 animate-spin" />}
+            <span className="truncate">{busy ? starting : where}</span>
+          </p>
           <div className="flex items-center justify-between gap-3">
             <label className="group flex cursor-pointer items-center gap-2 text-xs">
               <Switch checked={more} onCheckedChange={setMore} />
               <span className="text-muted-foreground group-hover:text-foreground">Create more</span>
             </label>
-            <Button onClick={start} disabled={!ok}>
-              {blank ? 'Open terminal' : 'Start session'} <span className="ml-1 text-xs opacity-60">{mac ? '⌘↵' : 'Ctrl+↵'}</span>
+            <Button onClick={start} disabled={!ok} aria-busy={busy}>
+              {busy ? (
+                <>
+                  <LoaderCircle className="animate-spin" /> {blank ? 'Opening…' : 'Starting…'}
+                </>
+              ) : (
+                <>
+                  {blank ? 'Open terminal' : 'Start session'} <span className="ml-1 text-xs opacity-60">{mac ? '⌘↵' : 'Ctrl+↵'}</span>
+                </>
+              )}
             </Button>
           </div>
         </div>

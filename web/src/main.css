@@ -693,3 +693,12 @@ select:focus {
   box-shadow: none !important;
   border-color: color-mix(in oklab, var(--foreground) 32%, transparent) !important;
 }
+
+/* A page in a frame keeps its own pixels: the frame cancels the interface size and grows to fill
+   its box, so the page inside measures, draws and takes clicks in one set of pixels. The terminal
+   scales its text by the interface size itself. */
+iframe[data-unzoom] {
+  zoom: calc(1 / var(--ui-zoom, 1));
+  width: calc(100% * var(--ui-zoom, 1)) !important;
+  height: calc(100% * var(--ui-zoom, 1)) !important;
+}

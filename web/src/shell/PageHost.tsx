@@ -41,6 +41,7 @@ export function PageHost({
             title={p.name}
             src={src}
             data-yardbell-host=""
+            data-unzoom=""
             ref={(el) => {
               if (el) frames.current.set(p.id, el)
               else frames.current.delete(p.id)
