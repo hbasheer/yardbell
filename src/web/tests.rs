@@ -3548,10 +3548,14 @@ async fn open_live(
     cookie: &str,
     origin: &str,
 ) -> (String, tokio::net::TcpStream) {
+    open_live_with(addr, &format!("Origin: {origin}\r\nCookie: {cookie}\r\n")).await
+}
+
+async fn open_live_with(addr: SocketAddr, headers: &str) -> (String, tokio::net::TcpStream) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
     let req = format!(
-        "GET /state/live HTTP/1.1\r\nHost: {addr}\r\nOrigin: {origin}\r\nCookie: {cookie}\r\n\
+        "GET /state/live HTTP/1.1\r\nHost: {addr}\r\n{headers}\
          Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
     );
@@ -5657,4 +5661,82 @@ async fn keep_awake_is_saved_applied_and_shown_in_the_state() {
     let shown: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(shown["keep_awake"]["mode"], "off");
     assert_eq!(shown["keep_awake"]["holding"], false);
+}
+
+fn bearer_req(method: &str, uri: &str, token: &str, body: Body) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, "localhost:4000")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json")
+        .body(body)
+        .unwrap()
+}
+
+async fn through_router(app: &Arc<AppState>, req: Request<Body>) -> (StatusCode, String) {
+    let res = router(app.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+#[tokio::test]
+async fn device_token_reads_state_without_cookie_or_origin() {
+    let r = rig();
+    let (_, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    let (status, body) =
+        through_router(&r.app, bearer_req("GET", "/state", &token, Body::empty())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn device_token_posts_without_origin() {
+    let r = rig();
+    let (_, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    let req = bearer_req(
+        "POST",
+        "/sessions/hp/x/keys",
+        &token,
+        Body::from(json!({ "keys": "y" }).to_string()),
+    );
+    let (status, body) = through_router(&r.app, req).await;
+    assert_ne!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_ne!(status, StatusCode::UNAUTHORIZED, "{body}");
+}
+
+#[tokio::test]
+async fn revoked_token_is_refused() {
+    let r = rig();
+    let (view, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    r.app.devices.revoke(&view.id).unwrap();
+    let (status, body) =
+        through_router(&r.app, bearer_req("GET", "/state", &token, Body::empty())).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"], "this phone was signed out, pair it again");
+}
+
+#[tokio::test]
+async fn cookie_post_still_needs_origin() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::post("/sessions/hp/x/keys")
+        .header(header::HOST, "localhost:4000")
+        .header(header::COOKIE, c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "keys": "y" }).to_string()))
+        .unwrap();
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn live_socket_accepts_device_token_without_origin() {
+    let r = rig();
+    let (_, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    let addr = serve(&r).await;
+    let (head, _) = open_live_with(addr, &format!("Authorization: Bearer {token}\r\n")).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
 }

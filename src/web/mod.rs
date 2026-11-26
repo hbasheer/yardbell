@@ -74,6 +74,7 @@ pub struct AppState {
     pub folders: Folders,
     pub settings: Arc<Settings>,
     pub phone: Arc<Phone>,
+    pub devices: Arc<crate::phone::devices::Devices>,
     pub dispatch: Arc<Dispatch>,
     pub usage: Arc<crate::usage::Usage>,
     pub triggers: Arc<crate::triggers::Triggers>,
@@ -155,8 +156,12 @@ impl AppState {
                 Key::generate()
             }
         };
+        let devices = Arc::new(crate::phone::devices::Devices::load(
+            cfg_path.with_file_name("devices.json"),
+        ));
         AppState {
             cfg_path,
+            devices,
             state,
             ports,
             sessions,
@@ -329,6 +334,17 @@ fn wants_json(req: &Request) -> bool {
     req.method() != Method::GET || accept.contains("json") || req.uri().path() == "/state"
 }
 
+#[derive(Clone)]
+pub struct DeviceAuth(pub String);
+
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
 async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Next) -> Response {
     let ip = req
         .extensions()
@@ -351,6 +367,21 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
     // A sign-in comes back here from another site; the handler checks its state.
     if req.method() == Method::GET && req.uri().path() == "/oauth/mcp/callback" {
         return next.run(req).await;
+    }
+    if let Some(token) = bearer(req.headers()) {
+        match app.devices.check(token, now_secs()) {
+            Some(id) => {
+                req.extensions_mut().insert(DeviceAuth(id));
+                return next.run(req).await;
+            }
+            None if !logged_in(&app.jar(req.headers())) => {
+                return error(
+                    StatusCode::UNAUTHORIZED,
+                    "this phone was signed out, pair it again",
+                );
+            }
+            None => {}
+        }
     }
     if req.method() != Method::GET && !term::origin_ok(req.headers()) {
         return error(
@@ -879,10 +910,11 @@ const LIVE_SETTLE: Duration = Duration::from_millis(100);
 
 async fn state_live(
     AxState(app): AxState<Arc<AppState>>,
+    device: Option<Extension<DeviceAuth>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    if !term::origin_ok(&headers) {
+    if device.is_none() && !term::origin_ok(&headers) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
             "origin does not match host".into(),
@@ -2595,11 +2627,12 @@ async fn forget(AxState(app): AxState<Arc<AppState>>, UrlPath(id): UrlPath<Strin
 
 async fn term_ws(
     AxState(app): AxState<Arc<AppState>>,
+    device: Option<Extension<DeviceAuth>>,
     headers: HeaderMap,
     UrlPath((machine, name)): UrlPath<(String, String)>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    if !term::origin_ok(&headers) {
+    if device.is_none() && !term::origin_ok(&headers) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
             "origin does not match host".into(),
