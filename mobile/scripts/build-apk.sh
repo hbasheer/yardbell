@@ -13,6 +13,7 @@ export ANDROID_NDK_ROOT=$NDK PATH="$A/jdk/bin:$PATH"
 cd "$(dirname "$0")/.."
 version=$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{gsub(/"/,"",$3); print $3; exit}' ../Cargo.toml)
 
+node scripts/build-terminal.mjs
 npx expo prebuild --platform android --clean
 (cd android && ./gradlew assembleRelease)
 

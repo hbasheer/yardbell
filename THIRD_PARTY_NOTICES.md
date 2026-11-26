@@ -65,6 +65,7 @@ The direct npm dependencies of `mobile/` and their licences:
 | Package | Licence |
 |---|---|
 | @tanstack/react-query | MIT |
+| @xterm/addon-fit | MIT |
 | @xterm/xterm | MIT |
 | expo | MIT |
 | expo-build-properties | MIT |

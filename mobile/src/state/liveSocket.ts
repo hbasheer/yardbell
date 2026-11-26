@@ -11,10 +11,14 @@ export type LiveSocket = {
 }
 
 type Target = { address: string; token: string }
-type SocketCtor = new (url: string, protocols?: string | string[], options?: { headers: Record<string, string> }) => WebSocket
+export type SocketCtor = new (url: string, protocols?: string | string[], options?: { headers: Record<string, string> }) => WebSocket
 
 const FAILURES_BEFORE_UNREACHABLE = 3
 const MAX_DELAY_MS = 30_000
+
+export function backoffMs(failures: number): number {
+  return Math.min(2 ** (failures - 1) * 1000, MAX_DELAY_MS)
+}
 
 export function liveUrl(address: string): string {
   return `${address.replace(/^http/, 'ws')}/state/live`
@@ -58,7 +62,7 @@ export function openLiveSocket(
       isOpen = false
       failures += 1
       events.onConnection(failures >= FAILURES_BEFORE_UNREACHABLE ? 'unreachable' : 'reconnecting')
-      timer = setTimeout(connect, Math.min(2 ** (failures - 1) * 1000, MAX_DELAY_MS))
+      timer = setTimeout(connect, backoffMs(failures))
     }
   }
 
