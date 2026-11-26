@@ -2,8 +2,9 @@ use rand::distributions::Alphanumeric;
 use rand::{Rng, RngCore};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use std::future::Future;
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 const TOKEN_PREFIX: &str = "ybd_";
 const TOKEN_CHARS: usize = 40;
@@ -43,6 +44,7 @@ impl Device {
 pub struct Devices {
     path: PathBuf,
     list: Mutex<Vec<Device>>,
+    revocations: tokio::sync::watch::Sender<u64>,
 }
 
 fn hash_token(token: &str) -> String {
@@ -104,6 +106,7 @@ impl Devices {
         Devices {
             path,
             list: Mutex::new(list),
+            revocations: tokio::sync::watch::Sender::new(0),
         }
     }
 
@@ -171,7 +174,28 @@ impl Devices {
             list.insert(index, removed);
             return Err(e);
         }
+        drop(list);
+        self.revocations.send_modify(|count| *count += 1);
         Ok(true)
+    }
+
+    fn is_paired(&self, id: &str) -> bool {
+        self.list.lock().unwrap().iter().any(|d| d.id == id)
+    }
+
+    pub fn until_revoked(
+        self: &Arc<Self>,
+        id: String,
+    ) -> impl Future<Output = ()> + Send + 'static {
+        let devices = self.clone();
+        let mut revocations = self.revocations.subscribe();
+        async move {
+            while devices.is_paired(&id) {
+                if revocations.changed().await.is_err() {
+                    std::future::pending::<()>().await;
+                }
+            }
+        }
     }
 }
 

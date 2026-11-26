@@ -12,7 +12,7 @@ use crate::snapshot;
 use crate::state::{PortStatus, State};
 use crate::term;
 use crate::viewers::{Plan, Viewers};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as UrlPath, Request, State as AxState};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -21,7 +21,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Form, Json, Router};
 use axum_extra::extract::cookie::{Cookie, Key, SameSite, SignedCookieJar};
 use base64::Engine;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use rand::Rng;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -337,6 +337,26 @@ fn wants_json(req: &Request) -> bool {
 #[derive(Clone)]
 pub struct DeviceAuth(pub String);
 
+const SIGNED_OUT: &str = "this phone was signed out, pair it again";
+
+type SignedOut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+// The token is only checked when a socket opens, so an open socket of a revoked phone has to be
+// closed when the revocation happens.
+fn until_signed_out(app: &AppState, device: Option<Extension<DeviceAuth>>) -> SignedOut {
+    match device {
+        Some(Extension(DeviceAuth(id))) => Box::pin(app.devices.until_revoked(id)),
+        None => Box::pin(std::future::pending()),
+    }
+}
+
+fn signed_out_frame() -> Message {
+    Message::Close(Some(CloseFrame {
+        code: close_code::POLICY,
+        reason: SIGNED_OUT.into(),
+    }))
+}
+
 fn bearer(headers: &HeaderMap) -> Option<&str> {
     headers
         .get(header::AUTHORIZATION)?
@@ -375,10 +395,7 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
                 return next.run(req).await;
             }
             None if !logged_in(&app.jar(req.headers())) => {
-                return error(
-                    StatusCode::UNAUTHORIZED,
-                    "this phone was signed out, pair it again",
-                );
+                return error(StatusCode::UNAUTHORIZED, SIGNED_OUT);
             }
             None => {}
         }
@@ -983,14 +1000,23 @@ async fn state_live(
         ));
     }
     let changes = app.state.changes();
-    Ok(ws.on_upgrade(move |socket| live(socket, changes)))
+    let signed_out = until_signed_out(&app, device);
+    Ok(ws.on_upgrade(move |socket| live(socket, changes, signed_out)))
 }
 
 // Tells an open page that the state changed, and the page fetches /state as it always did. The
 // machines of one poll finish close together, so a short pause lets one message cover them.
-async fn live(mut socket: WebSocket, mut changes: tokio::sync::watch::Receiver<u64>) {
+async fn live(
+    mut socket: WebSocket,
+    mut changes: tokio::sync::watch::Receiver<u64>,
+    mut signed_out: SignedOut,
+) {
     loop {
         tokio::select! {
+            _ = &mut signed_out => {
+                let _ = socket.send(signed_out_frame()).await;
+                return;
+            }
             changed = changes.changed() => {
                 if changed.is_err() {
                     return;
@@ -2721,7 +2747,8 @@ async fn term_ws(
     } else {
         term::EXIT_MESSAGE
     };
-    Ok(ws.on_upgrade(move |socket| run_terminal(socket, argv, exit_message, control)))
+    let signed_out = until_signed_out(&app, device);
+    Ok(ws.on_upgrade(move |socket| run_terminal(socket, argv, exit_message, control, signed_out)))
 }
 
 // A swipe arrives as many small scroll frames, and each one is an ssh round trip, so whatever
@@ -2779,12 +2806,18 @@ pub async fn run_terminal(
     argv: Vec<String>,
     exit_message: &'static str,
     control: Option<term::Control>,
+    signed_out: SignedOut,
 ) {
-    let (tx, rx) = socket.split();
-    let rx = rx.filter_map(|msg| std::future::ready(msg.ok()));
+    let (mut tx, rx) = socket.split();
+    let mut rx = rx
+        .filter_map(|msg| std::future::ready(msg.ok()))
+        .take_until(signed_out);
     match term::spawn(&argv, 24, 80) {
-        Ok(pty) => term::bridge(tx, rx, pty, exit_message, control).await,
+        Ok(pty) => term::bridge(&mut tx, &mut rx, pty, exit_message, control).await,
         Err(e) => tracing::error!(error = %e, "terminal spawn failed"),
+    }
+    if rx.is_stopped() {
+        let _ = tx.send(signed_out_frame()).await;
     }
 }
 

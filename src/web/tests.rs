@@ -5741,6 +5741,39 @@ async fn live_socket_accepts_device_token_without_origin() {
     assert!(head.starts_with("HTTP/1.1 101"), "{head}");
 }
 
+#[tokio::test]
+async fn revoking_a_phone_closes_its_live_socket() {
+    use tokio::io::AsyncReadExt;
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (view, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    let (_, other) = r.app.devices.issue("Tablet", 0).unwrap();
+    let addr = serve(&r).await;
+    let (head, mut socket) =
+        open_live_with(addr, &format!("Authorization: Bearer {token}\r\n")).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    let (head, mut kept) =
+        open_live_with(addr, &format!("Authorization: Bearer {other}\r\n")).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+
+    let url = format!("/api/settings/devices/{}/revoke", view.id);
+    let (status, body) = settings_post(&r, &c, &url, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let mut first = [0u8; 1];
+    tokio::time::timeout(Duration::from_secs(2), socket.read_exact(&mut first))
+        .await
+        .expect("the revoked phone's socket stayed open")
+        .unwrap();
+    assert_eq!(first[0], 0x88, "a close frame");
+
+    r.app.state.forget("hp:hp-x");
+    let text = tokio::time::timeout(Duration::from_secs(2), next_text(&mut kept))
+        .await
+        .expect("the other phone's socket stopped hearing changes");
+    assert!(text.parse::<u64>().is_ok(), "{text}");
+}
+
 fn native_post(uri: &str, body: Option<&str>) -> Request<Body> {
     let mut b = Request::post(uri).header(header::HOST, "localhost:4000");
     if let Some(body) = body {
