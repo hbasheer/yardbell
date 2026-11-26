@@ -66,11 +66,41 @@ test('plain text error bodies use a status message', async () => {
   expect(err.message).toBe('The server refused the request (415)')
 })
 
+const PRE_APP_API_REFUSAL = { error: 'request did not come from the Yardbell page' }
+
 test('old_server_is_reported', async () => {
-  const fetchImpl = vi.fn(async () => json({ ok: true }))
+  const fetchImpl = vi.fn(async () => json(PRE_APP_API_REFUSAL, 403))
   const err = await failure(pair(LINK, 'Pixel', fetchImpl as unknown as typeof fetch))
   expect(err).toBeInstanceOf(ServerTooOldError)
   expect(err.message).toBe('Update Yardbell on http://100.64.0.10:4000 to 0.11.107 or later')
+})
+
+test('old server refusing the passcode sign-in is reported', async () => {
+  const fetchImpl = vi.fn(async () => json(PRE_APP_API_REFUSAL, 403))
+  const err = await failure(signIn('100.64.0.10:4000', '1234', 'Pixel', fetchImpl as unknown as typeof fetch))
+  expect(err).toBeInstanceOf(ServerTooOldError)
+  expect(err.message).toBe('Update Yardbell on http://100.64.0.10:4000 to 0.11.107 or later')
+})
+
+test('other 403 replies to pairing stay server errors', async () => {
+  const fetchImpl = vi.fn(async () => json({ error: 'pairing is turned off' }, 403))
+  const err = await failure(pair(LINK, 'Pixel', fetchImpl as unknown as typeof fetch))
+  expect(err).toBeInstanceOf(ServerError)
+  expect(err.message).toBe('pairing is turned off')
+})
+
+test('pairing reply without a token is reported as an old server', async () => {
+  const fetchImpl = vi.fn(async () => json({ ok: true }))
+  const err = await failure(pair(LINK, 'Pixel', fetchImpl as unknown as typeof fetch))
+  expect(err).toBeInstanceOf(ServerTooOldError)
+})
+
+test('a failed body read is unreachable', async () => {
+  const response = json({ ok: true })
+  vi.spyOn(response, 'text').mockRejectedValue(new DOMException('Aborted', 'AbortError'))
+  const fetchImpl = vi.fn(async () => response)
+  const err = await failure(new ApiClient(server, fetchImpl as unknown as typeof fetch).get('/x'))
+  expect(err).toBeInstanceOf(UnreachableError)
 })
 
 test('about without api is reported with the machine name', async () => {

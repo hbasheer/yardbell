@@ -3,6 +3,7 @@ import type { PairedServer } from '../servers/store'
 
 const TIMEOUT_MS = 15_000
 const MIN_VERSION = '0.11.107'
+const PRE_APP_API_REFUSAL = 'request did not come from the Yardbell page'
 
 export class SignedOutError extends Error {
   constructor(message = 'This phone was signed out, pair it again') {
@@ -48,6 +49,7 @@ async function send<T>(
   if (init.body !== undefined) headers['Content-Type'] = 'application/json'
 
   let response: Response
+  let text: string
   try {
     response = await fetchImpl(`${address}${path}`, {
       method: init.method,
@@ -55,11 +57,11 @@ async function send<T>(
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
       signal: AbortSignal.timeout(TIMEOUT_MS)
     })
+    text = await response.text()
   } catch {
     throw new UnreachableError(address)
   }
 
-  const text = await response.text()
   let parsed: unknown
   try {
     parsed = text ? JSON.parse(text) : undefined
@@ -100,6 +102,17 @@ export class ApiClient {
 }
 
 type PairReply = { token?: string; device?: { id?: string | number } }
+
+async function requestPairing(address: string, path: string, body: unknown, fetchImpl: typeof fetch) {
+  try {
+    return await send<PairReply>(address, path, { method: 'POST', body }, fetchImpl)
+  } catch (error) {
+    if (error instanceof ServerError && error.status === 403 && error.message === PRE_APP_API_REFUSAL) {
+      throw new ServerTooOldError(address)
+    }
+    throw error
+  }
+}
 type About = { machine?: string; api?: number }
 
 async function finishPairing(
@@ -121,12 +134,7 @@ export async function pair(
   fetchImpl: typeof fetch = fetch
 ): Promise<PairedServer> {
   const { address, code } = parsePairingLink(link)
-  const reply = await send<PairReply>(
-    address,
-    `/app/pair/${encodeURIComponent(code)}`,
-    { method: 'POST', body: { device: deviceName } },
-    fetchImpl
-  )
+  const reply = await requestPairing(address, `/app/pair/${encodeURIComponent(code)}`, { device: deviceName }, fetchImpl)
   return finishPairing(address, reply, fetchImpl)
 }
 
@@ -137,11 +145,6 @@ export async function signIn(
   fetchImpl: typeof fetch = fetch
 ): Promise<PairedServer> {
   const address = normalizeAddress(addressInput)
-  const reply = await send<PairReply>(
-    address,
-    '/app/sign-in',
-    { method: 'POST', body: { passcode, device: deviceName } },
-    fetchImpl
-  )
+  const reply = await requestPairing(address, '/app/sign-in', { passcode, device: deviceName }, fetchImpl)
   return finishPairing(address, reply, fetchImpl)
 }

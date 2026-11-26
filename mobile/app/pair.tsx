@@ -1,8 +1,9 @@
 import { CameraView, useCameraPermissions } from 'expo-camera'
 import { Link, useLocalSearchParams, useRouter } from 'expo-router'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Linking, Pressable, Text, View } from 'react-native'
 import { pairDeps } from '@/pairing/deps'
+import { parsePairingLink } from '@/pairing/link'
 import { pairWithLink } from '@/pairing/pairFlow'
 import { useTheme } from '@/theme/useTheme'
 
@@ -33,9 +34,20 @@ export default function Pair() {
     [router]
   )
 
+  const linkTarget = useMemo(() => {
+    if (!link) return null
+    try {
+      return { address: parsePairingLink(link).address }
+    } catch (e) {
+      return { error: e instanceof Error ? e.message : 'That is not a Yardbell pairing code' }
+    }
+  }, [link])
+  const [confirmed, setConfirmed] = useState(false)
+
   useEffect(() => {
-    if (link) attempt(link)
-  }, [link, attempt])
+    setConfirmed(false)
+    if (linkTarget?.error) setError(linkTarget.error)
+  }, [linkTarget])
 
   useEffect(() => {
     if (permission && !permission.granted && permission.canAskAgain) requestPermission()
@@ -47,6 +59,29 @@ export default function Pair() {
       Sign in with the passcode instead
     </Link>
   )
+
+  if (link && linkTarget?.address && !confirmed) {
+    return (
+      <View style={{ flex: 1, padding: 24, justifyContent: 'center', backgroundColor: theme.background }}>
+        <Text style={{ fontSize: 20, fontWeight: '600', color: theme.foreground }}>Pair with {linkTarget.address}?</Text>
+        <Text style={{ ...text, marginTop: 8, color: theme.mutedForeground }}>
+          Only pair with a Yardbell server you run yourself.
+        </Text>
+        <Pressable
+          onPress={() => {
+            setConfirmed(true)
+            attempt(link)
+          }}
+          style={{ marginTop: 24, padding: 12, borderRadius: 8, backgroundColor: theme.accent }}
+        >
+          <Text style={{ color: theme.accentForeground, fontSize: 16, textAlign: 'center' }}>Pair</Text>
+        </Pressable>
+        <Pressable onPress={() => router.replace('/')} style={{ marginTop: 12, padding: 12 }}>
+          <Text style={{ ...text, textAlign: 'center' }}>Cancel</Text>
+        </Pressable>
+      </View>
+    )
+  }
 
   if (!link && permission && !permission.granted && !permission.canAskAgain) {
     return (
@@ -80,15 +115,17 @@ export default function Pair() {
       {error && (
         <>
           <Text style={{ marginTop: 16, fontSize: 16, color: theme.down }}>{error}</Text>
-          <Pressable
-            onPress={() => {
-              setError(null)
-              if (link) attempt(link)
-            }}
-            style={{ marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: theme.accent }}
-          >
-            <Text style={{ color: theme.accentForeground, fontSize: 16, textAlign: 'center' }}>Try again</Text>
-          </Pressable>
+          {!linkTarget?.error && (
+            <Pressable
+              onPress={() => {
+                setError(null)
+                if (link) attempt(link)
+              }}
+              style={{ marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: theme.accent }}
+            >
+              <Text style={{ color: theme.accentForeground, fontSize: 16, textAlign: 'center' }}>Try again</Text>
+            </Pressable>
+          )}
         </>
       )}
       {passcodeLink}

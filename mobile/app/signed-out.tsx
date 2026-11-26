@@ -11,14 +11,19 @@ export default function SignedOut() {
   const [machine, setMachine] = useState<string | null>(null)
 
   useEffect(() => {
-    listServers().then((servers) => {
-      const found = servers.find((s) => s.id === server)
-      setMachine(found ? found.machine : 'this server')
-    })
+    listServers()
+      .then((servers) => {
+        const found = servers.find((s) => s.id === server)
+        setMachine(found ? found.machine : 'this server')
+        if (found) return forgetServer(found.id)
+      })
+      .catch((error) => {
+        console.error('Could not forget the signed out server', error)
+        setMachine((current) => current ?? 'this server')
+      })
   }, [server])
 
-  async function pairAgain() {
-    if (server) await forgetServer(server)
+  function pairAgain() {
     router.replace('/pair')
   }
 

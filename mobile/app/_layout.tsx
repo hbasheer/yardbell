@@ -3,12 +3,16 @@ import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect, useRef, useState } from 'react'
 import { PermissionsAndroid, Platform } from 'react-native'
+import { SignedOutError } from '@/api/client'
 import { routeIfSignedOut } from '@/api/signedOut'
 import { routeForLink } from '@/notifications/route'
 import { listServers, onServersChanged } from '@/servers/store'
 import { addOpenListener, getInitialLink, start as startNotifications } from '../modules/yardbell-notify'
 
 const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: { retry: (failureCount, error) => !(error instanceof SignedOutError) && failureCount < 3 }
+  },
   queryCache: new QueryCache({
     onError: (error, query) => {
       routeIfSignedOut(error, query.meta?.serverId as string | undefined)
