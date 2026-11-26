@@ -24,6 +24,7 @@ const config: ExpoConfig = {
   android: {
     package: 'dev.yardbell.android',
     versionCode: versionCode(version),
+    allowBackup: false,
     adaptiveIcon: {
       foregroundImage: './assets/adaptive-icon.png',
       backgroundColor: '#18181B'
@@ -33,7 +34,7 @@ const config: ExpoConfig = {
     'expo-router',
     ['expo-camera', { cameraPermission: "Scan the pairing code shown in Yardbell's Settings", recordAudioAndroid: false }],
     'expo-secure-store',
-    ['expo-build-properties', { android: { minSdkVersion: 26, targetSdkVersion: 35 } }],
+    ['expo-build-properties', { android: { minSdkVersion: 26, targetSdkVersion: 35, usesCleartextTraffic: true } }],
     './plugins/withReleaseSigning',
     './modules/yardbell-notify/app.plugin.js'
   ]
