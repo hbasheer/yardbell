@@ -1,9 +1,12 @@
 import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { PermissionsAndroid, Platform } from 'react-native'
 import { routeIfSignedOut } from '@/api/signedOut'
+import { routeForLink } from '@/notifications/route'
 import { listServers, onServersChanged } from '@/servers/store'
+import { addOpenListener, getInitialLink, start as startNotifications } from '../modules/yardbell-notify'
 
 const queryClient = new QueryClient({
   queryCache: new QueryCache({
@@ -34,10 +37,42 @@ function useRouteGuard() {
   useEffect(() => {
     if (hasServers === false && !PUBLIC_ROUTES.includes(first ?? '')) router.replace('/pair')
   }, [hasServers, first, router])
+
+  return hasServers
+}
+
+async function requestNotificationPermission() {
+  if (Platform.OS !== 'android' || Platform.Version < 33) return
+  await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS)
+}
+
+function useNotifications(hasServers: boolean | null) {
+  const router = useRouter()
+  const initialHandled = useRef(false)
+
+  useEffect(() => {
+    if (!hasServers) return
+    startNotifications()
+    requestNotificationPermission().catch((error) => console.error('Could not ask to show notifications', error))
+
+    const open = (link: string) => {
+      listServers()
+        .then((servers) => router.navigate(routeForLink(link, servers) as never))
+        .catch((error) => console.error('Could not open the notification', error))
+    }
+    if (!initialHandled.current) {
+      initialHandled.current = true
+      const initial = getInitialLink()
+      if (initial) open(initial)
+    }
+    const subscription = addOpenListener(open)
+    return () => subscription.remove()
+  }, [hasServers, router])
 }
 
 export default function RootLayout() {
-  useRouteGuard()
+  const hasServers = useRouteGuard()
+  useNotifications(hasServers)
   return (
     <QueryClientProvider client={queryClient}>
       <StatusBar style="auto" />

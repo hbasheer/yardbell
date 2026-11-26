@@ -1,5 +1,6 @@
-android/
-ios/
+/android/
+/ios/
+/modules/*/android/build/
 node_modules/
 .expo/
 *.apk

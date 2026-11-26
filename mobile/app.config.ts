@@ -34,7 +34,8 @@ const config: ExpoConfig = {
     ['expo-camera', { cameraPermission: "Scan the pairing code shown in Yardbell's Settings", recordAudioAndroid: false }],
     'expo-secure-store',
     ['expo-build-properties', { android: { minSdkVersion: 26, targetSdkVersion: 35 } }],
-    './plugins/withReleaseSigning'
+    './plugins/withReleaseSigning',
+    './modules/yardbell-notify/app.plugin.js'
   ]
 }
 
