@@ -1,9 +1,11 @@
 package dev.yardbell.notify
 
+import com.facebook.react.modules.websocket.WebSocketModule
 import expo.modules.kotlin.modules.Module
 import expo.modules.kotlin.modules.ModuleDefinition
 import expo.modules.kotlin.records.Field
 import expo.modules.kotlin.records.Record
+import java.util.concurrent.TimeUnit
 
 class PairedServer : Record {
   @Field val address: String = ""
@@ -15,6 +17,11 @@ class YardbellNotifyModule : Module() {
     Name("YardbellNotify")
 
     Events("open")
+
+    OnCreate {
+      // The server never pings, so without this a silent Meshnet drop leaves the socket open forever.
+      WebSocketModule.setCustomClientBuilder { it.pingInterval(15, TimeUnit.SECONDS) }
+    }
 
     Function("setServers") { list: List<PairedServer> ->
       val context = appContext.reactContext ?: return@Function
