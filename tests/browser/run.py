@@ -9012,6 +9012,24 @@ class Suite:
         b.wait("!document.getElementById('pl-clear-runs') && new URLSearchParams(location.search).get('run') !== 'run-f'", "the page following")
         self.check_errors("deleting finished runs")
 
+    def test_paired_phones_list_and_remove(self):
+        b = self.b
+        body = json.dumps({"passcode": PASSCODE, "device": "Browser test phone"}).encode()
+        req = urllib.request.Request(self.y.base + "/app/sign-in", body, {"Content-Type": "application/json"})
+        with urllib.request.urlopen(req) as res:
+            if not json.load(res).get("ok"):
+                raise Failure("the phone sign-in was refused")
+        b.goto(self.url("/ui/settings#pair"))
+        b.wait("document.body.textContent.includes('Browser test phone')", "the paired phone in the list")
+        if not b.js("document.body.textContent.includes('Not seen yet') && document.body.textContent.includes('Paired ')"):
+            raise Failure("the paired phone row does not say when it paired and that it was not seen")
+        b.click("button[aria-label='Remove Browser test phone']")
+        b.wait("document.querySelector('[role=dialog]')?.textContent.includes('Remove Browser test phone? It will need to pair again.')", "the remove question")
+        b.js("[...document.querySelectorAll('[role=dialog] button')].find((x) => x.textContent.trim() === 'Remove').click()")
+        b.wait("document.body.textContent.includes('No phone is paired with this server.')", "the empty state")
+        if b.js("document.querySelector(\"button[aria-label='Remove Browser test phone']\")"):
+            raise Failure("the removed phone is still listed")
+
     def check_errors(self, where):
         if self.b.errors:
             errors, self.b.errors = self.b.errors, []
