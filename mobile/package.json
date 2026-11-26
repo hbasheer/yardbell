@@ -7,7 +7,10 @@
     "start": "expo start",
     "android": "expo run:android",
     "test": "vitest run",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "notices": "node scripts/build-notices.mjs",
+    "prebuild": "npm run notices",
+    "postinstall": "npm run notices"
   },
   "dependencies": {
     "@tanstack/react-query": "5.107.1",
