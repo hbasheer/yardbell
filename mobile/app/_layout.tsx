@@ -21,7 +21,12 @@ function useRouteGuard() {
   const [hasServers, setHasServers] = useState<boolean | null>(null)
 
   useEffect(() => {
-    listServers().then((servers) => setHasServers(servers.length > 0))
+    listServers()
+      .then((servers) => setHasServers(servers.length > 0))
+      .catch((error) => {
+        console.error('Could not read saved servers', error)
+        setHasServers(false)
+      })
     return onServersChanged((servers) => setHasServers(servers.length > 0))
   }, [])
 

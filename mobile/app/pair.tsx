@@ -22,10 +22,13 @@ export default function Pair() {
       setBusy(true)
       setError(null)
       const outcome = await pairWithLink(target, pairDeps)
+      if (outcome.ok) {
+        router.replace('/')
+        return
+      }
       inFlight.current = false
       setBusy(false)
-      if (outcome.ok) router.replace('/')
-      else setError(outcome.message)
+      setError(outcome.message)
     },
     [router]
   )

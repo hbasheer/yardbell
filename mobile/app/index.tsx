@@ -9,7 +9,12 @@ export default function Index() {
   const [servers, setServers] = useState<PairedServer[] | null>(null)
 
   useEffect(() => {
-    listServers().then(setServers)
+    listServers()
+      .then(setServers)
+      .catch((error) => {
+        console.error('Could not read saved servers', error)
+        setServers([])
+      })
     return onServersChanged(setServers)
   }, [])
 
