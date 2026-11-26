@@ -97,7 +97,6 @@ export default function SessionScreen() {
   }, [scheme, toPage])
 
   const onPageMessage = (event: WebViewMessageEvent) => {
-    if (event.nativeEvent.url !== PAGE_URL) return
     let message: FromPage
     try {
       message = JSON.parse(event.nativeEvent.data) as FromPage
