@@ -41,7 +41,7 @@ class FakeSocket {
 const latest = () => FakeSocket.all[FakeSocket.all.length - 1]
 
 function start() {
-  const events: TerminalEvents = { onOutput: vi.fn(), onExit: vi.fn(), onStatus: vi.fn() }
+  const events: TerminalEvents = { onOutput: vi.fn(), onExit: vi.fn(), onStatus: vi.fn(), onReopen: vi.fn() }
   const socket = openTerminalSocket(
     { address: 'http://100.64.0.1:4000', token: 'tok' },
     'hp box',
@@ -98,6 +98,20 @@ describe('openTerminalSocket', () => {
     expect(events.onStatus).toHaveBeenLastCalledWith('open')
     expect(latest().sent[0]).toBe('{"t":"resize","rows":40,"cols":100}')
     expect(latest().sent.some((frame) => frame.includes('"x"'))).toBe(false)
+  })
+
+  test('a reopen is signalled before the new socket delivers output', () => {
+    const order: string[] = []
+    const { events } = start()
+    events.onReopen = vi.fn(() => order.push('reopen'))
+    events.onOutput = vi.fn(() => order.push('output'))
+    latest().open()
+    expect(events.onReopen).not.toHaveBeenCalled()
+    latest().drop()
+    vi.advanceTimersByTime(1000)
+    latest().open()
+    latest().receive(new Uint8Array([104]).buffer)
+    expect(order).toEqual(['reopen', 'output'])
   })
 
   test('backs off like the live socket', () => {

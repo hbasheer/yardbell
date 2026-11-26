@@ -11,7 +11,8 @@ import type { StateView } from '@/state/types'
 import { KeyBar } from '@/terminal/KeyBar'
 import { keyBytes, withMods, type KeyName, type Mods } from '@/terminal/keys'
 import { toBase64 } from '@/terminal/protocol'
-import { QuickReplies, type AgentInfo } from '@/terminal/QuickReplies'
+import { QuickReplies } from '@/terminal/QuickReplies'
+import type { AgentInfo } from '@/terminal/replies'
 import { terminalHtml } from '@/terminal/terminalHtml'
 import { useTerminalSocket } from '@/terminal/useTerminalSocket'
 import { terminalColors } from '@/theme/colors'
@@ -25,6 +26,7 @@ type FromPage =
 
 const NO_MODS: Mods = { ctrl: false, alt: false }
 const ESC = '\x1b'
+const PAGE_URL = 'about:blank'
 
 const param = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) ?? ''
 
@@ -65,7 +67,6 @@ export default function SessionScreen() {
   const web = useRef<WebView<object>>(null)
   const ready = useRef(false)
   const backlog = useRef<string[]>([])
-  const wasDown = useRef(false)
   const [ended, setEnded] = useState<string | null>(null)
   const [mods, setMods] = useState<Mods>(NO_MODS)
 
@@ -83,15 +84,8 @@ export default function SessionScreen() {
     },
     [toPage]
   )
-  const term = useTerminalSocket(server ?? null, machine, name, onOutput, onExit)
-
-  useEffect(() => {
-    if (term.status === 'reconnecting') wasDown.current = true
-    if (term.status === 'open' && wasDown.current) {
-      wasDown.current = false
-      toPage({ type: 'reset' })
-    }
-  }, [term.status, toPage])
+  const onReopen = useCallback(() => toPage({ type: 'reset' }), [toPage])
+  const term = useTerminalSocket(server ?? null, machine, name, onOutput, onExit, onReopen)
 
   const { view } = term
   useEffect(() => {
@@ -103,6 +97,7 @@ export default function SessionScreen() {
   }, [scheme, toPage])
 
   const onPageMessage = (event: WebViewMessageEvent) => {
+    if (event.nativeEvent.url !== PAGE_URL) return
     let message: FromPage
     try {
       message = JSON.parse(event.nativeEvent.data) as FromPage
@@ -237,8 +232,9 @@ export default function SessionScreen() {
       )}
       <WebView<object>
         ref={web}
-        source={{ html: terminalHtml }}
-        originWhitelist={['*']}
+        source={{ html: terminalHtml, baseUrl: PAGE_URL }}
+        originWhitelist={[PAGE_URL]}
+        onShouldStartLoadWithRequest={(request) => request.url === PAGE_URL}
         onMessage={onPageMessage}
         keyboardDisplayRequiresUserAction={false}
         hideKeyboardAccessoryView
@@ -246,7 +242,7 @@ export default function SessionScreen() {
         overScrollMode="never"
         style={{ flex: 1, backgroundColor: terminalColors[scheme].background }}
       />
-      <QuickReplies info={agent.data} onKeys={answer} onCancel={() => term.send(ESC)} />
+      <QuickReplies info={ended ? undefined : agent.data} onKeys={answer} onCancel={() => term.send(ESC)} />
       <View style={{ paddingBottom: insets.bottom, backgroundColor: theme.background }}>
         <KeyBar mods={mods} onToggle={(mod) => setMods((m) => ({ ...m, [mod]: !m[mod] }))} onKey={onKey} />
       </View>

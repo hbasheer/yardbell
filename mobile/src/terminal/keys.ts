@@ -27,7 +27,6 @@ function ctrlChar(c: string): string {
   return c.length === 1 && n >= 64 && n <= 126 ? String.fromCharCode(n & 0x1f) : c
 }
 
-// Modified cursor keys carry xterm's parameter: 1 plus Alt 2 and Ctrl 4.
 function encode(k: Key, m: Mods): string {
   const p = 1 + (m.alt ? 2 : 0) + (m.ctrl ? 4 : 0)
   if ('csi' in k) return p > 1 ? `\x1b[1;${p}${k.csi}` : `\x1b[${k.csi}`
@@ -59,8 +58,7 @@ function typedKey(d: string): Key | null {
   return [...d].length === 1 && d >= ' ' ? { char: d } : null
 }
 
-// What the soft keyboard or xterm sent, changed by the armed modifiers. Anything that is not a
-// single key, such as a paste or a mouse report, gives null and goes through untouched.
+// A paste or a mouse report is not one key, so it gives null and goes through untouched.
 export function withMods(d: string, mods: Mods): string | null {
   const key = typedKey(d)
   return key ? encode(key, mods) : null

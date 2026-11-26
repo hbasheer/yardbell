@@ -9,6 +9,7 @@ export type TerminalEvents = {
   onOutput: (bytes: Uint8Array) => void
   onExit: (msg: string) => void
   onStatus: (status: TerminalStatus) => void
+  onReopen: () => void
 }
 
 export type TerminalSocket = {
@@ -36,6 +37,7 @@ export function openTerminalSocket(
   let timer: ReturnType<typeof setTimeout> | null = null
   let failures = 0
   let isOpen = false
+  let everOpened = false
   let ended = false
   let stopped = false
   let size: { rows: number; cols: number } | null = null
@@ -58,6 +60,8 @@ export function openTerminalSocket(
       if (socket !== next) return
       isOpen = true
       failures = 0
+      if (everOpened) events.onReopen()
+      everOpened = true
       status('open')
       if (size) write(encodeResize(size.rows, size.cols))
       write(encodeView(shown))
@@ -114,12 +118,13 @@ export function useTerminalSocket(
   machine: string,
   name: string,
   onOutput: (bytes: Uint8Array) => void,
-  onExit: (msg: string) => void
+  onExit: (msg: string) => void,
+  onReopen: () => void
 ): Omit<TerminalSocket, 'stop'> & { status: TerminalStatus } {
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const socket = useRef<TerminalSocket | null>(null)
-  const handlers = useRef({ onOutput, onExit })
-  handlers.current = { onOutput, onExit }
+  const handlers = useRef({ onOutput, onExit, onReopen })
+  handlers.current = { onOutput, onExit, onReopen }
   const size = useRef<{ rows: number; cols: number } | null>(null)
   const shown = useRef(true)
 
@@ -130,6 +135,7 @@ export function useTerminalSocket(
     const live = openTerminalSocket({ address, token }, machine, name, {
       onOutput: (bytes) => handlers.current.onOutput(bytes),
       onExit: (msg) => handlers.current.onExit(msg),
+      onReopen: () => handlers.current.onReopen(),
       onStatus: setStatus
     })
     if (size.current) live.resize(size.current.rows, size.current.cols)
