@@ -15,7 +15,7 @@ version=$(awk '/^\[package\]/{p=1;next} /^\[/{p=0} p && /^version *=/{gsub(/"/,"
 
 node scripts/build-terminal.mjs
 npx expo prebuild --platform android --clean
-(cd android && ./gradlew assembleRelease)
+(cd android && ./gradlew assembleRelease -PreactNativeArchitectures=arm64-v8a)
 
 out="$PWD/Yardbell_${version}_android.apk"
 cp android/app/build/outputs/apk/release/app-release.apk "$out"

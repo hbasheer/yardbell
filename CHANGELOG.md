@@ -5,6 +5,17 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.107] - 2026-11-26
+
+- **A new phone app.** The Android app is rebuilt as a native app, so it opens faster and has its own
+  screens: Home with every session across your machines, a session terminal with a key bar and quick
+  replies, and background notifications. Install it over the old app as an update, then pair once
+  more under **Settings, Connect a phone**. The phone needs Meshnet on to reach your server. The apk
+  is for 64-bit phones, Android 8 and later.
+- **Paired phones are listed in Settings** with a Remove button. A removed phone is signed out and
+  says so.
+- Dispatch and the Inbox come to the phone in a later update.
+
 ## [0.11.106] - 2026-11-25
 
 - **The apps fit the window at any interface size.** At 125% the page ran past the bottom and right
