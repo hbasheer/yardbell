@@ -383,7 +383,13 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
             None => {}
         }
     }
-    if req.method() != Method::GET && !term::origin_ok(req.headers()) {
+    let native_entry = req.method() == Method::POST
+        && (req.uri().path().starts_with("/app/pair/") || req.uri().path() == "/app/sign-in");
+    if native_entry {
+        if req.headers().contains_key(header::ORIGIN) && !term::origin_ok(req.headers()) {
+            return error(StatusCode::FORBIDDEN, "request came from another site");
+        }
+    } else if req.method() != Method::GET && !term::origin_ok(req.headers()) {
         return error(
             StatusCode::FORBIDDEN,
             "request did not come from the Yardbell page",
@@ -392,7 +398,8 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
     let path = req.uri().path();
     let public_handoff = (req.method() == Method::GET
         && (path.starts_with("/app/handoff/") || path == "/app/hello" || path == "/app/servers"))
-        || (req.method() == Method::POST && path.starts_with("/app/pair/"));
+        || (req.method() == Method::POST
+            && (path.starts_with("/app/pair/") || path == "/app/sign-in"));
     if path == "/login"
         || path == "/style.css"
         || path == "/favicon.svg"
@@ -437,6 +444,8 @@ pub fn asset(name: &str) -> Response {
 }
 
 pub const MONACO: &str = "vendor/monaco-0.55.1";
+
+const APP_API: u32 = 1;
 
 const APP_INDEX: &str = "app/index.html";
 
@@ -518,6 +527,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/app/handoff", post(handoff_new))
         .route("/app/handoff/{code}", get(handoff_redeem))
         .route("/app/pair/{code}", post(pair_redeem))
+        .route("/app/sign-in", post(app_sign_in))
         .route("/app/notifications", get(app_notifications))
         .route("/app/hello", get(app_hello))
         .route("/app/servers", get(app_servers))
@@ -794,7 +804,14 @@ async fn pair_redeem(
     AxState(app): AxState<Arc<AppState>>,
     UrlPath(code): UrlPath<String>,
     headers: HeaderMap,
+    body: axum::body::Bytes,
 ) -> Response {
+    let Ok(device) = device_name(&body) else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "send a JSON body like {\"device\": \"name\"}",
+        );
+    };
     let now = (app.clock)();
     let issued = {
         let mut codes = app.pairing.lock().expect("pairing lock");
@@ -809,11 +826,56 @@ async fn pair_redeem(
             "this pairing code is used or expired, show a new one in Settings",
         );
     }
-    (
-        app.jar(&headers).add(login_cookie()),
-        Json(json!({ "ok": true })),
-    )
-        .into_response()
+    let Some(name) = device else {
+        return (
+            app.jar(&headers).add(login_cookie()),
+            Json(json!({ "ok": true })),
+        )
+            .into_response();
+    };
+    match app.devices.issue(&name, now_secs()) {
+        Ok((view, token)) => {
+            Json(json!({ "ok": true, "token": token, "device": view })).into_response()
+        }
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+fn device_name(body: &[u8]) -> Result<Option<String>, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct Body {
+        device: Option<String>,
+    }
+    if body.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_slice::<Body>(body).map(|b| b.device)
+}
+
+#[derive(Deserialize)]
+struct AppSignIn {
+    passcode: String,
+    device: String,
+}
+
+async fn app_sign_in(
+    AxState(app): AxState<Arc<AppState>>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    Json(form): Json<AppSignIn>,
+) -> Response {
+    match app.auth.verify(&form.passcode, ip) {
+        Verdict::Locked => error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many attempts, try again in 5 minutes",
+        ),
+        Verdict::Wrong => error(StatusCode::UNAUTHORIZED, "wrong passcode"),
+        Verdict::Ok => match app.devices.issue(&form.device, now_secs()) {
+            Ok((view, token)) => {
+                Json(json!({ "ok": true, "token": token, "device": view })).into_response()
+            }
+            Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+        },
+    }
 }
 
 async fn handoff_new(AxState(app): AxState<Arc<AppState>>) -> Response {
@@ -959,6 +1021,7 @@ async fn app_about(AxState(app): AxState<Arc<AppState>>) -> Result<Response, Api
     let server = server_view(&app.config()?);
     let version = crate::about::VERSION;
     Ok(Json(json!({
+        "api": APP_API,
         "version": version,
         "build": page_build(),
         "machine": server.machine,

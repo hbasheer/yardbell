@@ -27,6 +27,8 @@ pub fn routes() -> Router<Arc<AppState>> {
         .route("/api/settings/pull-requests", post(pull_requests_save))
         .route("/api/settings/pull-requests/folders", get(pull_folders))
         .route("/api/settings/agents", post(add_agent))
+        .route("/api/settings/devices", get(devices))
+        .route("/api/settings/devices/{id}/revoke", post(device_revoke))
         .route("/api/settings/mcp/on", post(mcp_on))
         .route("/api/settings/mcp/off", post(mcp_off))
         .route("/api/settings/mcp/servers", post(mcp_servers))
@@ -545,6 +547,23 @@ async fn mcp_servers(
         }
     }
     Ok(Json(json!({ "ok": true })).into_response())
+}
+
+async fn devices(AxState(app): AxState<Arc<AppState>>) -> Response {
+    Json(json!({ "devices": app.devices.list() })).into_response()
+}
+
+async fn device_revoke(
+    AxState(app): AxState<Arc<AppState>>,
+    UrlPath(id): UrlPath<String>,
+) -> Result<Response, ApiError> {
+    if app.devices.revoke(&id).map_err(bad)? {
+        return Ok(Json(json!({ "ok": true })).into_response());
+    }
+    Err(ApiError(
+        StatusCode::NOT_FOUND,
+        "no paired phone with that id".into(),
+    ))
 }
 
 async fn mcp_off(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {

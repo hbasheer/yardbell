@@ -5740,3 +5740,128 @@ async fn live_socket_accepts_device_token_without_origin() {
     let (head, _) = open_live_with(addr, &format!("Authorization: Bearer {token}\r\n")).await;
     assert!(head.starts_with("HTTP/1.1 101"), "{head}");
 }
+
+fn native_post(uri: &str, body: Option<&str>) -> Request<Body> {
+    let mut b = Request::post(uri).header(header::HOST, "localhost:4000");
+    if let Some(body) = body {
+        b = b.header(header::CONTENT_TYPE, "application/json");
+        return b.body(Body::from(body.to_string())).unwrap();
+    }
+    b.body(Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn pairing_with_a_device_name_returns_a_token() {
+    let r = rig();
+    let code = new_pairing(&r.app);
+    let req = native_post(
+        &format!("/app/pair/{code}"),
+        Some(r#"{"device":"Pixel 8"}"#),
+    );
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["ok"], true);
+    assert!(
+        body["token"].as_str().unwrap().starts_with("ybd_"),
+        "{body}"
+    );
+    assert_eq!(body["device"]["name"], "Pixel 8");
+    assert_eq!(r.app.devices.list().len(), 1);
+}
+
+#[tokio::test]
+async fn pairing_without_a_body_is_unchanged() {
+    let r = rig();
+    let code = new_pairing(&r.app);
+    let (status, headers, body) =
+        send(&r.app, native_post(&format!("/app/pair/{code}"), None)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, r#"{"ok":true}"#);
+    assert!(headers.contains_key(header::SET_COOKIE));
+    assert!(r.app.devices.list().is_empty());
+}
+
+#[tokio::test]
+async fn pairing_from_another_site_is_refused() {
+    let r = rig();
+    let code = new_pairing(&r.app);
+    let mut req = native_post(&format!("/app/pair/{code}"), None);
+    req.headers_mut()
+        .insert(header::ORIGIN, "http://evil.example".parse().unwrap());
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn sign_in_with_passcode_returns_a_token() {
+    let r = rig();
+    let req = native_post(
+        "/app/sign-in",
+        Some(r#"{"passcode":"pw","device":"Pixel"}"#),
+    );
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        body["token"].as_str().unwrap().starts_with("ybd_"),
+        "{body}"
+    );
+    assert_eq!(body["device"]["name"], "Pixel");
+
+    let req = native_post(
+        "/app/sign-in",
+        Some(r#"{"passcode":"nope","device":"Pixel"}"#),
+    );
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"], "wrong passcode");
+}
+
+#[tokio::test]
+async fn devices_are_listed_and_revoked_from_settings() {
+    let r = rig();
+    let (view, _) = r.app.devices.issue("Pixel", 0).unwrap();
+    let c = cookie(&r.app).await;
+    let get = |c: &str| {
+        Request::get("/api/settings/devices")
+            .header(header::COOKIE, c.to_string())
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, get(&c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["devices"].as_array().unwrap().len(), 1);
+    assert_eq!(body["devices"][0]["name"], "Pixel");
+
+    let url = format!("/api/settings/devices/{}/revoke", view.id);
+    let (status, _, body) = post_json(&r.app, &c, &url, "{}").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, _, body) = send(&r.app, get(&c)).await;
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert!(body["devices"].as_array().unwrap().is_empty());
+
+    let (status, _, body) = post_json(&r.app, &c, &url, "{}").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"], "no paired phone with that id");
+}
+
+#[tokio::test]
+async fn about_reports_the_app_api_level() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _, body) = send(
+        &r.app,
+        Request::get("/app/about")
+            .header(header::COOKIE, c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["api"], 1);
+}
