@@ -1,3 +1,4 @@
+pub mod devices;
 pub mod inbox;
 
 use crate::config::{Config, PhoneNotifications};
