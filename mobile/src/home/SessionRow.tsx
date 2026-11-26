@@ -1,17 +1,16 @@
 import { useRouter } from 'expo-router'
 import { Pressable, Text, View } from 'react-native'
-import type { PairedServer } from '@/servers/store'
-import type { SessionView } from '@/state/types'
+import type { HomeSession } from '@/state/home'
 import { useTheme } from '@/theme/useTheme'
 
-export function SessionRow({ server, session }: { server: PairedServer; session: SessionView }) {
+export function SessionRow({ session }: { session: HomeSession }) {
   const theme = useTheme()
   const router = useRouter()
   const dot = session.stopped || session.stale ? theme.down : session.activity === 'blocked' ? theme.waiting : session.activity === 'active' ? theme.busy : theme.idle
   const open = () => {
     if (!session.attachable || !session.tmux) return
     router.push(
-      `/session/${encodeURIComponent(server.id)}/${encodeURIComponent(session.machine)}/${encodeURIComponent(session.tmux)}` as never
+      `/session/${encodeURIComponent(session.serverId)}/${encodeURIComponent(session.machine)}/${encodeURIComponent(session.tmux)}` as never
     )
   }
   const detail = [session.agent, session.branch, session.machine].filter(Boolean).join('  ·  ')

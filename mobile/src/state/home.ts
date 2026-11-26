@@ -1,11 +1,14 @@
 import type { PairedServer } from '../servers/store'
 import type { MachineView, SessionView, StateView } from './types'
 
+export type HomeSession = SessionView & { serverId: string }
+
 export type HomeSection = {
   kind: 'needs-you' | 'machine'
   title: string
   server?: string
-  sessions: SessionView[]
+  serverId?: string
+  sessions: HomeSession[]
   machine?: MachineView
 }
 
@@ -19,7 +22,9 @@ function byAttachableThenFolder(a: SessionView, b: SessionView): number {
 }
 
 export function homeSections(input: Input[]): HomeSection[] {
-  const waiting = input.flatMap(({ state }) => state.sessions.filter(needsYou))
+  const owned = (server: PairedServer, sessions: SessionView[]): HomeSession[] =>
+    sessions.map((s) => ({ ...s, serverId: server.id }))
+  const waiting = input.flatMap(({ server, state }) => owned(server, state.sessions.filter(needsYou)))
   const sections: HomeSection[] = []
   if (waiting.length > 0) sections.push({ kind: 'needs-you', title: 'Needs you', sessions: waiting })
 
@@ -29,11 +34,13 @@ export function homeSections(input: Input[]): HomeSection[] {
       sections.push({
         kind: 'machine',
         title: machine.name,
-        server: multiple ? server.id : undefined,
+        server: multiple ? server.machine : undefined,
+        serverId: server.id,
         machine,
-        sessions: state.sessions
-          .filter((s) => s.machine === machine.name && !needsYou(s))
-          .sort(byAttachableThenFolder)
+        sessions: owned(
+          server,
+          state.sessions.filter((s) => s.machine === machine.name && !needsYou(s))
+        ).sort(byAttachableThenFolder)
       })
     }
   }

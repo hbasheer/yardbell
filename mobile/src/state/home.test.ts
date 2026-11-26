@@ -59,6 +59,16 @@ describe('homeSections', () => {
     expect(sections[1].sessions.map((s) => s.id)).toEqual(['3', '2', '1'])
   })
 
+  test('same machine name on two servers keeps each session with its own server', () => {
+    const sections = homeSections([
+      { server: server('a'), state: state(['hp'], [session({ id: '1', machine: 'hp' }), session({ id: '2', machine: 'hp', activity: 'blocked' })]) },
+      { server: server('b'), state: state(['hp'], [session({ id: '3', machine: 'hp' }), session({ id: '4', machine: 'hp', activity: 'blocked' })]) }
+    ])
+    const ids = sections.flatMap((s) => s.sessions.map((x) => `${x.id}:${x.serverId}`))
+    expect(ids).toEqual(['2:a', '4:b', '1:a', '3:b'])
+    expect(sections.filter((s) => s.kind === 'machine').map((s) => s.serverId)).toEqual(['a', 'b'])
+  })
+
   test('server title only when more than one server', () => {
     const one = homeSections([{ server: server('a'), state: state(['mac'], []) }])
     expect(one[0].server).toBeUndefined()

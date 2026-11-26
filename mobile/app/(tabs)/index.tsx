@@ -55,9 +55,8 @@ export default function Home() {
     )
   }
 
-  const serverFor = (machine: string) =>
-    servers.find((s) => live[s.id]?.state?.machines.some((m) => m.name === machine)) ?? servers[0]
   const loadedAny = servers.some((s) => live[s.id]?.state)
+  const allUnreachable = servers.every((s) => live[s.id]?.connection === 'unreachable')
 
   return (
     <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ paddingBottom: 32 }}>
@@ -67,9 +66,9 @@ export default function Home() {
       {servers.map((server) => (
         <ConnectionBanner key={server.id} server={server.machine} connection={live[server.id]?.connection ?? 'reconnecting'} />
       ))}
-      {!loadedAny && <ActivityIndicator style={{ marginTop: 32 }} color={theme.mutedForeground} />}
+      {!loadedAny && !allUnreachable && <ActivityIndicator style={{ marginTop: 32 }} color={theme.mutedForeground} />}
       {sections.map((section) => (
-        <View key={`${section.kind}:${section.server ?? ''}:${section.title}`}>
+        <View key={`${section.kind}:${section.serverId ?? ''}:${section.title}`}>
           <MachineHeader section={section} />
           {section.sessions.length === 0 ? (
             <Text style={{ color: theme.mutedForeground, paddingHorizontal: 16, paddingVertical: 8, fontSize: 14 }}>
@@ -78,8 +77,7 @@ export default function Home() {
           ) : (
             section.sessions.map((session) => (
               <SessionRow
-                key={`${session.machine}:${session.id}`}
-                server={serverFor(session.machine)}
+                key={`${session.serverId}:${session.machine}:${session.id}`}
                 session={session}
               />
             ))
