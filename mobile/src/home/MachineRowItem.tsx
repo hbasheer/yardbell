@@ -2,6 +2,7 @@ import { Monitor, Server } from 'lucide-react-native'
 import { Text, View } from 'react-native'
 import type { MachineRow } from '@/state/views'
 import { machineSubtitle } from './presentation'
+import { ResourceLine } from './ResourceLine'
 import { ListRow } from '@/ui/ListRow'
 import { statusDotColor, type ConnectionState } from '@/ui/StatusDot'
 import { colors, fixedColors, radii, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
@@ -39,6 +40,7 @@ export function MachineRowItem({
       title={row.machine}
       subtitle={machineSubtitle(row)}
       subtitleColor={problemColor(row.status)}
+      detail={<ResourceLine row={row} />}
       leading={
         <View style={styles.tile}>
           <Icon size={17} color={colors.textPrimary} strokeWidth={1.8} />

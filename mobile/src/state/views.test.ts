@@ -312,3 +312,13 @@ describe('sessions outside tmux and last known', () => {
     })
   })
 })
+
+describe('machineRows health', () => {
+  const h = { mem_total_kb: 100, mem_used_kb: 50, agent_kb: 10, user_kb: 0, limit_kb: 0, limit_used_kb: 0, load1: 0.5 }
+  test('carried for a connected machine, dropped when down or unreachable', () => {
+    expect(machineRows([srv('a', [machine('mac', { health: h })], [])])[0].health).toEqual(h)
+    expect(machineRows([srv('a', [machine('mac')], [])])[0].health).toBeNull()
+    expect(machineRows([srv('a', [machine('mac', { up: false, health: h })], [])])[0].health).toBeNull()
+    expect(machineRows([srv('a', [machine('mac', { health: h })], [], 'unreachable')])[0].health).toBeNull()
+  })
+})

@@ -1,3 +1,4 @@
+import type { HealthView } from '../state/types'
 import { machineRows, type MachineRowStatus, type ServerState } from '../state/views'
 
 export type MachineBody = 'loading' | 'unreachable' | 'down' | 'empty' | 'no-match' | 'list'
@@ -7,6 +8,7 @@ export type MachineStatus = {
   reason: string | null
   sessions: number
   needsYou: number
+  health?: HealthView | null
 }
 
 export function machineStatus(entry: ServerState, machine: string): MachineStatus {
@@ -20,7 +22,7 @@ export function machineStatus(entry: ServerState, machine: string): MachineStatu
   if (!row) {
     return { status: 'down', reason: `${entry.server.machine} does not list ${machine}`, sessions: 0, needsYou: 0 }
   }
-  return { status: row.status, reason: row.reason, sessions: row.sessions, needsYou: row.needsYou }
+  return { status: row.status, reason: row.reason, sessions: row.sessions, needsYou: row.needsYou, health: row.health }
 }
 
 export function machineBody(

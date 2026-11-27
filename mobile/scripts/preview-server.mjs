@@ -106,6 +106,12 @@ const miniSessions = [
   })
 ]
 
+const GB = 1048576
+const health = (over) => ({
+  mem_total_kb: 32 * GB, mem_used_kb: 12 * GB, agent_kb: 4 * GB, user_kb: 7 * GB, limit_kb: 0, limit_used_kb: 0,
+  load1: 1.24, cpus: 8, disk_total_kb: 1000 * GB, disk_used_kb: 710 * GB, ...over
+})
+
 function machine(name, fields) {
   return { name, up: true, reason: null, last_seen: null, local: false, health: null, accounts: [], mesh_on: true, ...fields }
 }
@@ -116,7 +122,7 @@ const servers = [
     name: 'hp',
     version: '0.11.107',
     machines: [
-      machine('hp', { local: true }),
+      machine('hp', { local: true, health: health({ mem_used_kb: 28.5 * GB, agent_kb: 9 * GB, user_kb: 14 * GB, limit_kb: 24 * GB, limit_used_kb: 22 * GB, load1: 5.8, disk_used_kb: 880 * GB }) }),
       machine('nas', { up: false, reason: 'ssh: connect to host nas port 22: Connection timed out', last_seen: '2026-11-27T08:12:00+00:00' })
     ],
     sessions: hpSessions,
@@ -128,7 +134,7 @@ const servers = [
     port: Number(process.env.PREVIEW_PORT_B ?? 4211),
     name: 'mac-mini',
     version: '0.11.107',
-    machines: [machine('mac-mini', { local: true })],
+    machines: [machine('mac-mini', { local: true, health: health() })],
     sessions: miniSessions
   }
 ]

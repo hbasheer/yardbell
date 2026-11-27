@@ -44,6 +44,7 @@ import {
 } from './options'
 import { OptionsSheet } from './OptionsSheet'
 import { machineBody, machineStatus, stateLine } from './presentation'
+import { ResourceCard } from './ResourceCard'
 import { ExtrasSection } from './ExtrasSection'
 import { ServerMenus } from './ServerMenus'
 import { usePersisted } from './usePersisted'
@@ -237,6 +238,7 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
   const header = (
     <View>
       <PageTitle title={machine} subtitle={subtitle} onLayout={collapsing.onTitleLayout} />
+      <ResourceCard up={status.status === 'up'} health={status.health} />
       {outage && body === 'list' ? (
         <View style={styles.banner}>
           <WifiOff size={14} color={colors.statusAmber} strokeWidth={2} />

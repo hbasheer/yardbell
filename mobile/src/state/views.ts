@@ -1,6 +1,6 @@
 import type { PairedServer } from '../servers/store'
 import type { Connection } from './liveSocket'
-import type { EndedView, MachineView, PullView, SessionView, StateView } from './types'
+import type { EndedView, HealthView, MachineView, PullView, SessionView, StateView } from './types'
 
 export type ServerState = {
   server: PairedServer
@@ -42,6 +42,7 @@ export type MachineRow = {
   sessions: number
   needsYou: number
   outsideTmux: number
+  health?: HealthView | null
 }
 
 export type MachineExtras = {
@@ -244,7 +245,8 @@ export function machineRows(servers: ServerState[]): MachineRow[] {
         reason: rowReason(status, server, machine),
         sessions: mine.length,
         needsYou: mine.filter((s) => statusOf(s) === 'needs-you').length,
-        outsideTmux: outside.length
+        outsideTmux: outside.length,
+        health: status === 'up' ? (machine?.health ?? null) : null
       }
     })
   })

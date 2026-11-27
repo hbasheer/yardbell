@@ -1,10 +1,24 @@
 export type Activity = 'active' | 'idle' | 'blocked'
 
+export type HealthView = {
+  mem_total_kb: number
+  mem_used_kb: number
+  agent_kb: number
+  user_kb: number
+  limit_kb: number
+  limit_used_kb: number
+  load1: number
+  cpus?: number
+  disk_total_kb?: number
+  disk_used_kb?: number
+}
+
 export type MachineView = {
   name: string
   up: boolean
   reason: string | null
   local: boolean
+  health?: HealthView | null
 }
 
 export type PullView = {
