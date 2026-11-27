@@ -289,7 +289,7 @@ export type ReviewChanges = {
   moved: boolean
 }
 
-export type ReviewDiffLine = { k: 'hunk' | 'ctx' | 'add' | 'del'; o: number | null; n: number | null; t: string }
+export type ReviewDiffLine = { k: 'hunk' | 'ctx' | 'add' | 'del' | 'meta'; o: number | null; n: number | null; t: string }
 
 export type ReviewFilePage = {
   path: string

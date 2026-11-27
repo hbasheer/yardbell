@@ -3,7 +3,7 @@ import { FlatList, Pressable, ScrollView, StyleSheet, Text, View, type LayoutCha
 import * as Clipboard from 'expo-clipboard'
 import { Check, Copy } from 'lucide-react-native'
 import { Markdown } from '../markdown'
-import { colors, feedback, spacing, themedStyleSheet, typography, useColorScheme } from '../ui/theme'
+import { colors, feedback, radii, spacing, themedStyleSheet, typography, useColorScheme } from '../ui/theme'
 import { clampLine, clip, codeWidth, lineCountWord, LINE_HEIGHT, splitLines, textGutter } from './model'
 
 export type TextViewerProps = {
@@ -125,8 +125,8 @@ const styles = themedStyleSheet(() => ({
   bar: { minHeight: 40, flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.md, borderBottomWidth: StyleSheet.hairlineWidth, borderBottomColor: colors.borderSubtle },
   count: { color: colors.textMuted, fontSize: typography.metaSize },
   barEnd: { flexDirection: 'row', alignItems: 'center', gap: spacing.md },
-  toggle: { flexDirection: 'row', backgroundColor: colors.bgRaised, borderRadius: 8, padding: 2 },
-  toggleItem: { paddingHorizontal: spacing.md, paddingVertical: 4, borderRadius: 6 },
+  toggle: { flexDirection: 'row', backgroundColor: colors.bgRaised, borderRadius: radii.tile, padding: 2 },
+  toggleItem: { paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: radii.mark },
   toggleActive: { backgroundColor: colors.bgBase },
   toggleText: { color: colors.textMuted, fontSize: typography.metaSize, fontWeight: '600' },
   toggleTextActive: { color: colors.textPrimary },
@@ -140,6 +140,6 @@ const styles = themedStyleSheet(() => ({
   previewBody: { padding: spacing.lg },
   line: { height: LINE_HEIGHT, flexDirection: 'row', alignItems: 'center' },
   marked: { backgroundColor: colors.codeLineHighlight },
-  number: { height: LINE_HEIGHT, lineHeight: LINE_HEIGHT, paddingHorizontal: 6, textAlign: 'right', color: colors.diffLineNumber, fontFamily: typography.monoFamily, fontSize: typography.metaSize },
+  number: { height: LINE_HEIGHT, lineHeight: LINE_HEIGHT, paddingHorizontal: spacing.sm, textAlign: 'right', color: colors.diffLineNumber, fontFamily: typography.monoFamily, fontSize: typography.metaSize },
   code: { flex: 1, color: colors.textPrimary, fontFamily: typography.monoFamily, fontSize: typography.metaSize, lineHeight: LINE_HEIGHT }
 }))

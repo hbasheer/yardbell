@@ -7,6 +7,7 @@ import {
   diffGutter,
   layoutOf,
   MAX_CHARS,
+  hasChanges,
   moreLabel,
   parseHunk,
   splitLines,
@@ -83,8 +84,20 @@ describe('buildRows', () => {
     expect(rows.map((r) => r.kind)).toEqual(['line', 'line', 'line'])
   })
 
+  it('keeps a no newline marker as a meta row without numbers', () => {
+    const rows = buildRows([hunk('@@ -1,1 +1,1 @@'), del(1, 'a'), { k: 'meta', o: null, n: null, t: '\\ No newline at end of file' }, add(1, 'b')])
+    expect(rows[1]).toEqual({ kind: 'meta', key: 2, text: '\\ No newline at end of file' })
+  })
+
   it('shows a header it cannot read as a fold row', () => {
     expect(buildRows([hunk('odd')])[0]).toEqual({ kind: 'fold', key: 0, text: 'odd' })
+  })
+})
+
+describe('hasChanges', () => {
+  it('ignores hunk and meta lines', () => {
+    expect(hasChanges([hunk('@@ -1 +1 @@'), { k: 'meta', o: null, n: null, t: '\\ No newline at end of file' }])).toBe(false)
+    expect(hasChanges([add(1)])).toBe(true)
   })
 })
 

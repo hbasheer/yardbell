@@ -5,12 +5,13 @@ export const FOLD_HEIGHT = 32
 export const CHAR_WIDTH = 7.2
 export const MAX_CHARS = 1000
 const SIGN_WIDTH = 16
-const NUMBER_PAD = 14
+const NUMBER_PAD = 18
 
 export type Hunk = { oldStart: number; oldCount: number; newStart: number; newCount: number; section: string }
 
 export type DiffRow =
   | { kind: 'fold'; key: number; text: string }
+  | { kind: 'meta'; key: number; text: string }
   | { kind: 'line'; key: number; k: 'ctx' | 'add' | 'del'; o: number | null; n: number | null; t: string }
 
 export type Layout = { heights: number[]; offsets: number[]; total: number }
@@ -44,6 +45,10 @@ export function buildRows(lines: DiffLine[]): DiffRow[] {
   const rows: DiffRow[] = []
   let shownOld = 0
   lines.forEach((line, at) => {
+    if (line.k === 'meta') {
+      rows.push({ kind: 'meta', key: at, text: line.t })
+      return
+    }
     if (line.k !== 'hunk') {
       rows.push({ kind: 'line', key: at, k: line.k, o: line.o, n: line.n, t: line.t })
       if (line.o !== null) shownOld = line.o
@@ -63,6 +68,10 @@ export function buildRows(lines: DiffLine[]): DiffRow[] {
     shownOld = Math.max(shownOld, first - 1)
   })
   return rows
+}
+
+export function hasChanges(lines: DiffLine[]): boolean {
+  return lines.some((line) => line.k !== 'hunk' && line.k !== 'meta')
 }
 
 export function layoutOf(rows: DiffRow[]): Layout {

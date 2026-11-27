@@ -23,7 +23,7 @@ export type Changes = {
   truncated: boolean
 }
 
-export type DiffLineKind = 'hunk' | 'ctx' | 'add' | 'del'
+export type DiffLineKind = 'hunk' | 'ctx' | 'add' | 'del' | 'meta'
 
 export type DiffLine = { k: DiffLineKind; o: number | null; n: number | null; t: string }
 
