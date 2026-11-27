@@ -5,6 +5,32 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.110] - 2026-11-27
+
+- **Dispatch comes to the phone.** A new Dispatch tab lists your chats, with search and swipe to
+  delete, and Home's Feed shows the chats that wait for you or are working.
+  - Replies appear as Dispatch writes them, with formatting, code blocks and links. If you leave
+    the app mid-reply, the chat catches up when you come back.
+  - A step that waits for you rises over the message box, with Approve, Edit and Reject, and
+    **Approve all** when there are several.
+  - Session cards show the end of a session's screen and its numbered choices as buttons.
+  - Attach photos and files, type **@** to name a machine, session or folder, and **/** to insert
+    a saved prompt. The model and approval mode can be changed from the message box; they apply
+    from the next message.
+  - Dictate with the mic, and turn on **Speak replies** in the phone's Settings to hear new
+    replies, errors and blocked sessions read aloud.
+- **The Inbox is on the phone.** Proposals from your MCP clients wait there with Approve, Edit and
+  Reject, and Home shows how many are waiting.
+- **Saved prompts are on the phone.** Run, create, edit and delete them. Tapping one starts a new
+  chat; on the web a saved prompt still runs in the chat you have open.
+- **A phone notification when Dispatch needs you.** It comes once per chat until you open it, and
+  a new switch under **Settings, Phone notifications** turns it off.
+- **Home counts follow the server live.** Sessions, Dispatch steps and Inbox proposals update as
+  they change.
+- **The Proposals badge on the web is fixed.** It always showed 0.
+- **The phone needs a 0.11.110 server.** Update Yardbell on your server before you update the
+  phone.
+
 ## [0.11.109] - 2026-11-27
 
 - **A new phone app.** The Android app is rebuilt as a native app with its own screens:

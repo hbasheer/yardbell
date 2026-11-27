@@ -4720,7 +4720,7 @@ dependencies = [
 
 [[package]]
 name = "yardbell-android"
-version = "0.11.109"
+version = "0.11.110"
 dependencies = [
  "axum",
  "reqwest 0.12.28",
