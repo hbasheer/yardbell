@@ -1,3 +1,4 @@
+import { useQueryClient } from '@tanstack/react-query'
 import { useIsFocused, useRouter } from 'expo-router'
 import { ChevronLeft, ChevronRight, ExternalLink, MessageSquare, MoreHorizontal, Server, Square, SquareTerminal, Trash2, Workflow } from 'lucide-react-native'
 import { useRef, useState } from 'react'
@@ -22,14 +23,16 @@ import { clock, nodeState, runLabel, silentPass, type Definition, type Run, type
 import { NeedBox, type NeedAction } from './NeedBox'
 import { HistoryList, Section, StatusPill, StepMark, TokenBar, noteColor } from './parts'
 import { StepSheet } from './StepSheet'
-import { pipelinesKey, useGuardedTask, useRefetchOnChange, useRefetchWhenResumed, useRun } from './queries'
+import { runKey, useGuardedTask, useRefetchOnChange, useRefetchWhenResumed, useRun } from './queries'
 import {
   deleteRunConfirm,
   dropConfirm,
   heldText,
   historyRows,
   isEnded,
+  mergeRun,
   pipelineHref,
+  pipelinesHref,
   reachedSteps,
   reportParts,
   runChips,
@@ -48,11 +51,13 @@ const messageOf = (error: unknown) => (error instanceof Error ? error.message : 
 export function RunScreen({ server, runId, pipelineHint, multipleServers }: { server: PairedServer; runId: string; pipelineHint: string; multipleServers: boolean }) {
   useColorScheme()
   const router = useRouter()
+  const queryClient = useQueryClient()
+  const gone = useRef(false)
   const insets = useSafeAreaInsets()
   const focused = useIsFocused()
   const appActive = useAppActive()
-  const { busy, notice, setNotice, run } = useGuardedTask(server.id, [pipelinesKey(server.id)])
-  const poll = focused && appActive && busy === null
+  const { busy, notice, setNotice, run } = useGuardedTask(server.id, () => (gone.current ? [] : [runKey(server.id, runId)]))
+  const poll = focused && appActive && busy === null && !gone.current
   const query = useRun(server, runId, pipelineHint, poll)
   const { state } = useServerState(server)
   const [asking, setAsking] = useState<Asking | null>(null)
@@ -61,35 +66,42 @@ export function RunScreen({ server, runId, pipelineHint, multipleServers }: { se
   const [refreshing, setRefreshing] = useState(false)
   const menuRef = useRef<HostInstance>(null)
 
-  useRefetchOnChange(state?.runs_waiting, () => query.refetch().catch(() => {}))
+  useRefetchOnChange(state?.runs_waiting, () => !gone.current && query.refetch().catch(() => {}))
   useRefetchWhenResumed(poll, () => query.refetch().catch(() => {}))
 
   const r = query.data
   const d = r?.definition
   const ended = r ? isEnded(r) : false
 
+  const keep = (reply: Run) => queryClient.setQueryData<Run>(runKey(server.id, runId), (now) => mergeRun(now, reply))
+
   const act = async (action: NeedAction, value?: string | number): Promise<boolean> => {
     const id = runId
     const done = await run(action, async () => {
-      if (action === 'answer') await answerRun(server, id, String(value ?? ''))
-      else if (action === 'retry') await retryRun(server, id)
-      else if (action === 'accept-tool') await acceptTool(server, id)
-      else if (action === 'token-limit') await setTokenLimit(server, id, Number(value))
-      else await continueRun(server, id, action)
+      let reply: Run
+      if (action === 'answer') reply = await answerRun(server, id, String(value ?? ''))
+      else if (action === 'retry') reply = await retryRun(server, id)
+      else if (action === 'accept-tool') reply = await acceptTool(server, id)
+      else if (action === 'token-limit') reply = await setTokenLimit(server, id, Number(value))
+      else reply = await continueRun(server, id, action)
+      keep(reply)
       return true
     })
     return done === true
   }
 
+  const leave = () => (router.canGoBack() ? router.back() : router.replace(pipelinesHref(server.id) as never))
+
   const confirmAsked = () => {
     const ask = asking
     if (!ask || !r) return
-    if (ask.kind === 'drop') void run('drop', () => dropRun(server, runId))
+    if (ask.kind === 'drop') void run('drop', async () => keep(await dropRun(server, runId)))
     else if (ask.kind === 'stop') void run(`stop:${ask.terminal.name}`, () => stopRunSession(server, runId, ask.terminal.name))
     else
       void run('delete', async () => {
         await deleteRun(server, runId)
-        router.back()
+        gone.current = true
+        leave()
       })
   }
 

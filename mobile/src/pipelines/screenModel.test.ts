@@ -12,6 +12,7 @@ import {
   heldText,
   historyRows,
   markRun,
+  mergeRun,
   needBox,
   nextWords,
   nodeOrder,
@@ -32,7 +33,8 @@ import {
   transcriptParts,
   triggerIcon,
   waitingReason,
-  waitingRuns
+  waitingRuns,
+  withDefinition
 } from './screenModel'
 
 const step = (id: string, name: string, next: Step['next'], extra: Record<string, unknown> = {}): Step => ({ id, name, kind: 'agent', next, ...extra })
@@ -328,5 +330,23 @@ describe('run now', () => {
     expect(addItem('', 'YB-1')).toBe('YB-1')
     expect(addItem('YB-1, YB-2', 'YB-3')).toBe('YB-1 YB-2 YB-3')
     expect(addItem('yb-1', 'YB-1')).toBe('yb-1')
+  })
+})
+
+describe('cache updates after an action', () => {
+  it('keeps the live fields the action reply leaves out', () => {
+    const now = run({ state: 'waiting', terminals: [{ name: 't', machine: 'hp', label: 'T' }], tokens_used: 9 })
+    const merged = mergeRun(now, run({ state: 'running' }))
+    expect(merged.state).toBe('running')
+    expect(merged.terminals).toHaveLength(1)
+    expect(merged.tokens_used).toBe(9)
+    expect(mergeRun(undefined, now)).toBe(now)
+  })
+
+  it('puts the saved definition in the list', () => {
+    const list = { pipelines: [{ definition: def, runs: {} }, { definition: { ...def, id: 'q' }, runs: {} }], templates: [], settings: {}, machines: [], agents: [], default_agent: '', mcp_servers: [], gitlab_hosts: [], connectors: [] }
+    const next = withDefinition(list, { ...def, enabled: false })
+    expect(next?.pipelines.map((p) => p.definition.enabled)).toEqual([false, true])
+    expect(withDefinition(undefined, def)).toBeUndefined()
   })
 })

@@ -1,4 +1,4 @@
-import type { DiagramRef, ListedPipeline, RunStart, TranscriptItem } from './api'
+import type { DiagramRef, ListedPipeline, PipelineList, RunStart, TranscriptItem } from './api'
 import {
   ANSWERABLE,
   ENDED,
@@ -379,3 +379,10 @@ export const pipelinesHref = (serverId: string) => `/pipelines/${encodeURICompon
 export const pipelineHref = (serverId: string, id: string) => `${pipelinesHref(serverId)}/${encodeURIComponent(id)}`
 export const runHref = (serverId: string, runId: string, pipeline?: string) =>
   `${pipelinesHref(serverId)}/run/${encodeURIComponent(runId)}${pipeline ? `?p=${encodeURIComponent(pipeline)}` : ''}`
+
+export const mergeRun = (now: Run | undefined, reply: Run): Run => (now ? { ...now, ...reply } : reply)
+
+export function withDefinition(list: PipelineList | undefined, saved: Definition): PipelineList | undefined {
+  if (!list) return list
+  return { ...list, pipelines: list.pipelines.map((p) => (p.definition.id === saved.id ? { ...p, definition: saved } : p)) }
+}

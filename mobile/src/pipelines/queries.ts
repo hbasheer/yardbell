@@ -3,9 +3,10 @@ import { useEffect, useRef, useState } from 'react'
 import { routeIfSignedOut } from '../api/signedOut'
 import type { Notice } from '../changes/useChangesActions'
 import type { PairedServer } from '../servers/store'
-import { briefRuns, listPipelines, pipelineRuns } from './api'
-import { LIST_POLL_MS, runPollMs } from './screenModel'
-import { createTaskRunner, errorText } from './taskRunner'
+import { briefRuns, listPipelines, pipelineRuns, setPipelineEnabled, type PipelineList } from './api'
+import type { Definition } from './model'
+import { LIST_POLL_MS, runPollMs, withDefinition } from './screenModel'
+import { createTaskRunner, errorText, type TaskRunner } from './taskRunner'
 
 export const pipelinesKey = (serverId: string) => ['pipelines', serverId] as const
 export const listKey = (serverId: string) => [...pipelinesKey(serverId), 'list'] as const
@@ -89,7 +90,7 @@ export function useRefetchWhenResumed(poll: boolean, refetch: () => unknown) {
   }, [poll])
 }
 
-export function useGuardedTask(serverId: string, keys: QueryKey[]) {
+export function useGuardedTask(serverId: string, keys: () => QueryKey[]) {
   const queryClient = useQueryClient()
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -109,14 +110,14 @@ export function useGuardedTask(serverId: string, keys: QueryKey[]) {
         setBusy(name)
         setNotice(null)
       },
-      before: () => Promise.all(keysRef.current.map((queryKey) => queryClient.cancelQueries({ queryKey }))),
+      before: () => Promise.all(keysRef.current().map((queryKey) => queryClient.cancelQueries({ queryKey, exact: true }))),
       fail: (error) => {
         if (routeIfSignedOut(error, serverId)) return
         if (mounted.current) setNotice({ kind: 'error', text: errorText(error) })
       },
       end: () => {
         if (mounted.current) setBusy(null)
-        for (const queryKey of keysRef.current) queryClient.refetchQueries({ queryKey }).catch(() => {})
+        for (const queryKey of keysRef.current()) queryClient.refetchQueries({ queryKey, exact: true, type: 'active' }).catch(() => {})
       }
     }))
   )
@@ -128,4 +129,24 @@ export function useGuardedTask(serverId: string, keys: QueryKey[]) {
   }, [notice])
 
   return { busy, notice, setNotice, run }
+}
+
+export function useEnabledSwitch(serverId: string, run: TaskRunner) {
+  const queryClient = useQueryClient()
+  const [pending, setPending] = useState<Record<string, boolean>>({})
+  const valueOf = (d: Pick<Definition, 'id' | 'enabled'>) => pending[d.id] ?? d.enabled
+  const toggle = (server: PairedServer, d: Pick<Definition, 'id'>, on: boolean) => {
+    if (pending[d.id] !== undefined) return
+    setPending((now) => ({ ...now, [d.id]: on }))
+    void run(`enabled:${d.id}`, async () => {
+      const saved = await setPipelineEnabled(server, d.id, on)
+      queryClient.setQueryData<PipelineList>(listKey(serverId), (list) => withDefinition(list, saved))
+    }).finally(() =>
+      setPending((now) => {
+        const { [d.id]: _, ...rest } = now
+        return rest
+      })
+    )
+  }
+  return { valueOf, toggle }
 }

@@ -17,7 +17,7 @@ import { PullDownMenu } from '../ui/PullDownMenu'
 import { LoadErrorState, StateView } from '../ui/StateView'
 import { colors, feedback, radii, spacing, themedStyleSheet, typography, useColorScheme } from '../ui/theme'
 import { useAppActive } from '../ui/useAppActive'
-import { clearEndedRuns, pipelineHistory, setPipelineEnabled } from './api'
+import { clearEndedRuns, pipelineHistory } from './api'
 import {
   clock,
   describe,
@@ -30,7 +30,7 @@ import {
   type Run
 } from './model'
 import { Badge, KindTile, noteColor, RunDot, StepMark } from './parts'
-import { pipelinesKey, useGuardedTask, usePipelineList, usePipelineRuns, useRefetchOnChange, useRefetchWhenResumed } from './queries'
+import { listKey, pipelinesKey, runsKey, useEnabledSwitch, useGuardedTask, usePipelineList, usePipelineRuns, useRefetchOnChange, useRefetchWhenResumed } from './queries'
 import { RunNowSheet } from './RunNowSheet'
 import {
   askDispatchText,
@@ -55,7 +55,7 @@ export function PipelineScreen({ server, id, multipleServers }: { server: Paired
   const insets = useSafeAreaInsets()
   const focused = useIsFocused()
   const appActive = useAppActive()
-  const { busy, notice, setNotice, run } = useGuardedTask(server.id, [pipelinesKey(server.id)])
+  const { busy, notice, setNotice, run } = useGuardedTask(server.id, () => [listKey(server.id), runsKey(server.id, id)])
   const poll = focused && appActive && busy === null
   const list = usePipelineList(server, poll)
   const runsQuery = usePipelineRuns(server, id, poll)
@@ -86,7 +86,7 @@ export function PipelineScreen({ server, id, multipleServers }: { server: Paired
     setRefreshing(false)
   }
 
-  const setEnabled = (on: boolean) => d && run('enabled', () => setPipelineEnabled(server, d.id, on))
+  const enabled = useEnabledSwitch(server.id, run)
   const clearEnded = () =>
     run('clear', async () => {
       const out = await clearEndedRuns(server, id)
@@ -168,11 +168,11 @@ export function PipelineScreen({ server, id, multipleServers }: { server: Paired
             {triggerWords(d.trigger, list.data?.connectors ?? [])}
           </Text>
           <View style={styles.switchRow}>
-            <Text style={[styles.meta, d.enabled && styles.on]}>{d.enabled ? 'On' : 'Off'}</Text>
+            <Text style={[styles.meta, enabled.valueOf(d) && styles.on]}>{enabled.valueOf(d) ? 'On' : 'Off'}</Text>
             <Switch
-              value={d.enabled}
+              value={enabled.valueOf(d)}
               disabled={busy !== null}
-              onValueChange={(on) => void setEnabled(on)}
+              onValueChange={(on) => enabled.toggle(server, d, on)}
               trackColor={{ true: colors.accentBlue }}
               accessibilityLabel={`${d.name} on`}
             />
