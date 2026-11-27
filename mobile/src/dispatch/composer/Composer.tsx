@@ -17,7 +17,7 @@ import { AttachmentError, MAX_FILES, checkAttachments, prepareAttachments, type 
 import { deviceFiles } from '../files'
 import type { AskAttachment, Backend, SavedPrompt, TaskMark } from '../types'
 import { AttachmentStrip } from './AttachmentStrip'
-import { draftKey, loadDraft, saveDraft } from './drafts'
+import { asyncDrafts, draftKey, restoreText, saveDraft, switchDraft } from './drafts'
 import { MentionMenu } from './MentionMenu'
 import { ModelSheet } from './ModelSheet'
 import { APPROVALS, approvalOf, currentModel, modelChange, modelsFor, type ApprovalMode } from './models'
@@ -59,7 +59,16 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
   const safeBottom = useSafeAreaInsets().bottom
   const key = draftKey(server.id, conversationId)
 
-  const [text, setText] = useState(seed?.text ?? '')
+  const [draft, setDraft] = useState({ key, text: seed?.text ?? '' })
+  const text = draft.key === key ? draft.text : ''
+  const owned = useRef(draft)
+  const keyRef = useRef(key)
+  keyRef.current = key
+  const setText = useCallback((next: string | ((now: string) => string)) => {
+    const now = owned.current.key === keyRef.current ? owned.current.text : ''
+    owned.current = { key: keyRef.current, text: typeof next === 'function' ? next(now) : next }
+    setDraft(owned.current)
+  }, [])
   const [selection, setSelection] = useState({ start: (seed?.text ?? '').length, end: (seed?.text ?? '').length })
   const [files, setFiles] = useState<PickedFile[]>(seed?.files ?? [])
   const [error, setError] = useState<string | null>(seed?.error ?? null)
@@ -72,12 +81,11 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
   const [inputHeight, setInputHeight] = useState(MESSAGE_MIN_HEIGHT)
   const loaded = useRef(false)
   const sendingRef = useRef(false)
-  const latest = useRef({ key, text })
-  latest.current = { key, text }
   const seeded = useRef(seed?.text !== undefined)
   const first = useRef(true)
 
   useEffect(() => {
+    const previous = loaded.current ? owned.current : null
     loaded.current = false
     if (first.current) first.current = false
     else {
@@ -87,21 +95,29 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
       setNotice(null)
     }
     let live = true
-    loadDraft(key).then((saved) => {
+    switchDraft(asyncDrafts, previous, key).then((saved) => {
       if (!live) return
       loaded.current = true
       if (seeded.current) {
         seeded.current = false
         return
       }
-      setText(saved)
+      if (owned.current.key === key && owned.current.text) return
+      owned.current = { key, text: saved }
+      setDraft(owned.current)
       setSelection({ start: saved.length, end: saved.length })
     })
     return () => {
       live = false
-      if (loaded.current && !sendingRef.current) saveDraft(latest.current.key, latest.current.text)
     }
   }, [key])
+
+  useEffect(
+    () => () => {
+      if (loaded.current && !sendingRef.current) saveDraft(owned.current.key, owned.current.text)
+    },
+    []
+  )
 
   useEffect(() => {
     if (!loaded.current || (sending && !text)) return
@@ -200,8 +216,10 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
     setNotice(null)
     setError(null)
     const sent = { text, files, picked }
+    let cleared = false
     try {
       const attachments = await prepareAttachments(files, backend, deviceFiles)
+      cleared = true
       setText('')
       setFiles([])
       setPicked([])
@@ -209,10 +227,12 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
       saveDraft(key, '')
     } catch (e) {
       triggerError()
-      setText((now) => (now ? `${sent.text}\n${now}` : sent.text))
-      setFiles((now) => (now.length ? now : sent.files))
-      setPicked(sent.picked)
-      setSelection({ start: sent.text.length, end: sent.text.length })
+      if (cleared) {
+        setText((now) => restoreText(sent.text, now))
+        setFiles((now) => (now.length ? now : sent.files))
+        setPicked(sent.picked)
+        setSelection({ start: sent.text.length, end: sent.text.length })
+      }
       setError(messageOf(e, 'Could not send the message'))
     } finally {
       sendingRef.current = false

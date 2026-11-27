@@ -6,6 +6,11 @@ import type { ItemKind, MenuItem, MenuKind } from './triggers'
 
 const ICON: Record<ItemKind, LucideIcon> = { machine: Server, session: SquareTerminal, folder: Folder, task: Zap }
 
+function grouped(items: MenuItem[]): MenuItem[] {
+  const order = [...new Set(items.map((item) => item.group))]
+  return order.flatMap((group) => items.filter((item) => item.group === group))
+}
+
 type Props = { kind: MenuKind; items: MenuItem[]; loading: boolean; onPick: (item: MenuItem) => void }
 
 export function MentionMenu({ kind, items, loading, onPick }: Props) {
@@ -18,11 +23,11 @@ export function MentionMenu({ kind, items, loading, onPick }: Props) {
             {loading ? 'Loading' : kind === 'tasks' ? 'No saved prompt matches' : 'Nothing by that name'}
           </Text>
         ) : (
-          items.map((item, index) => {
+          grouped(items).map((item, index, list) => {
             const Icon = ICON[item.kind]
             return (
               <Fragment key={`${item.group}:${item.label}:${index}`}>
-                {index === 0 || items[index - 1].group !== item.group ? <Text style={styles.group}>{item.group}</Text> : null}
+                {index === 0 || list[index - 1].group !== item.group ? <Text style={styles.group}>{item.group}</Text> : null}
                 <Pressable
                   onPress={() => onPick(item)}
                   accessibilityRole="button"

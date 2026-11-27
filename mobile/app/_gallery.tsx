@@ -48,7 +48,7 @@ import {
   useColorScheme
 } from '@/ui/theme'
 
-const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars', 'steps-pending', 'steps-tools', 'steps-receipts', 'steps-edit', 'steps-already', 'steps-error', 'steps-busy', 'chat-markdown', 'chat-tools', 'chat-session', 'chat-pull', 'chat-group', 'chat-results', 'chat-review', 'chat-misc', 'composer-empty', 'composer-typing', 'composer-busy', 'composer-mention', 'composer-task', 'composer-files'] as const
+const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars', 'steps-pending', 'steps-tools', 'steps-receipts', 'steps-edit', 'steps-already', 'steps-error', 'steps-busy', 'chat-markdown', 'chat-tools', 'chat-session', 'chat-pull', 'chat-group', 'chat-results', 'chat-review', 'chat-misc', 'composer-empty', 'composer-typing', 'composer-busy', 'composer-mention', 'composer-task', 'composer-files', 'composer-unreadable'] as const
 type Section = (typeof SECTIONS)[number]
 type Overlay = 'action' | 'pulldown' | 'confirm' | 'drawer'
 

@@ -4,9 +4,9 @@ import { useServers } from '../../settings/useServers'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '../../ui/theme'
 import { Composer } from './Composer'
 
-export type ComposerGroup = 'empty' | 'typing' | 'busy' | 'mention' | 'task' | 'files'
+export type ComposerGroup = 'empty' | 'typing' | 'busy' | 'mention' | 'task' | 'files' | 'unreadable'
 
-export const COMPOSER_GROUPS: ComposerGroup[] = ['empty', 'typing', 'busy', 'mention', 'task', 'files']
+export const COMPOSER_GROUPS: ComposerGroup[] = ['empty', 'typing', 'busy', 'mention', 'task', 'files', 'unreadable']
 
 const sendLater = () => new Promise<void>((resolve) => setTimeout(resolve, 600))
 const sendFails = () => Promise.reject(new Error('Dispatch could not be reached. Your message is still here.'))
@@ -55,6 +55,13 @@ export function ComposerGallery({ group }: { group: ComposerGroup }) {
           <Composer {...common} onSend={sendFails} conversationId="gallery-fail" busy={false} seed={{ text: 'Stop yardbell-3 and start it again on mac-pro.' }} />
         </Slot>
       </>
+    )
+  }
+  if (group === 'unreadable') {
+    return (
+      <Slot title="Composer: tap Send, the attachment cannot be read: the text stays once, the file stays, the reason shows">
+          <Composer {...common} conversationId="gallery-unreadable" busy={false} seed={{ text: 'Summarise this file.', files: [{ uri: 'file:///missing/report.txt', name: 'report.txt', size: 1200 }] }} />
+        </Slot>
     )
   }
   if (group === 'mention') {

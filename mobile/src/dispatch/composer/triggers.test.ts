@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 import type { StateView } from '../../state/types'
 import type { SavedPrompt } from '../types'
 import { MENU_LIMIT, applyToken, findTrigger, nameItems, pickedTask, rank, taskItems } from './triggers'
-import { draftKey } from './drafts'
+import { draftKey, restoreText, switchDraft, type DraftStore } from './drafts'
 import { approvalOf, currentModel, filterModels, modelChange, modelsFor } from './models'
 
 describe('findTrigger', () => {
@@ -153,5 +153,48 @@ describe('settings helpers', () => {
   it('filters the picker by label or id', () => {
     expect(filterModels(modelsFor('claude'), 'son').map((m) => m.id)).toEqual(['sonnet'])
     expect(filterModels(modelsFor('claude'), '')).toHaveLength(4)
+  })
+})
+
+describe('switchDraft', () => {
+  const memory = (start: Record<string, string>): DraftStore & { data: Record<string, string> } => {
+    const data = { ...start }
+    return {
+      data,
+      get: async (key) => data[key] ?? '',
+      set: (key, text) => {
+        if (text.trim()) data[key] = text
+        else delete data[key]
+      }
+    }
+  }
+
+  it('saves chat A under its own key and loads chat B untouched', async () => {
+    const store = memory({ b: 'draft for B' })
+    const loaded = await switchDraft(store, { key: 'a', text: 'typed in A' }, 'b')
+    expect(store.data).toEqual({ a: 'typed in A', b: 'draft for B' })
+    expect(loaded).toBe('draft for B')
+  })
+
+  it('an empty chat A does not remove the draft of B', async () => {
+    const store = memory({ b: 'draft for B' })
+    expect(await switchDraft(store, { key: 'a', text: '' }, 'b')).toBe('draft for B')
+    expect(store.data).toEqual({ b: 'draft for B' })
+  })
+
+  it('writes nothing when there is no loaded previous chat or the key is the same', async () => {
+    const store = memory({ a: 'kept' })
+    await switchDraft(store, null, 'a')
+    await switchDraft(store, { key: 'a', text: '' }, 'a')
+    expect(store.data).toEqual({ a: 'kept' })
+  })
+})
+
+describe('restoreText', () => {
+  it('returns the original once when nothing was typed since', () => {
+    expect(restoreText('hello', '')).toBe('hello')
+  })
+  it('puts the original before text typed meanwhile', () => {
+    expect(restoreText('hello', 'more')).toBe('hello\nmore')
   })
 })
