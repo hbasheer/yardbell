@@ -1,5 +1,7 @@
 import { Inbox, Plus, Settings } from 'lucide-react-native'
 import { RefreshControl, ScrollView, Text, View } from 'react-native'
+import { ChatRow } from '@/dispatch/ChatRow'
+import type { ConversationRow } from '@/dispatch/listModel'
 import { inboxRows, inboxRowSubtitle } from '@/inbox/model'
 import { feedSections, machineRows, type MachineRow, type ServerSession, type ServerState } from '@/state/views'
 import { LIST_LEADING_INSET, ListGroup } from '@/ui/ListGroup'
@@ -20,6 +22,10 @@ type Props = {
   onOpenMachine: (row: MachineRow) => void
   onMachineMenu: (row: MachineRow) => void
   onOpenInbox: (serverId: string) => void
+  dispatchRows: ConversationRow[]
+  dispatchActive: number
+  onOpenChat: (row: ConversationRow) => void
+  onSeeDispatch: () => void
   onSeeAll: () => void
   onPair: () => void
 }
@@ -73,12 +79,32 @@ export function FeedTab(props: Props) {
             </ListGroup>
           </View>
         ) : null}
+        {props.dispatchRows.length > 0 ? (
+          <View>
+            <HomeSectionHeading
+              title="Dispatch"
+              count={props.dispatchActive}
+              first={inbox.length === 0}
+              link={{ label: 'See all', onPress: props.onSeeDispatch }}
+            />
+            <ListGroup surface="page" separatorInset={LIST_LEADING_INSET}>
+              {props.dispatchRows.map((row) => (
+                <ChatRow
+                  key={`${row.serverId}:${row.id}`}
+                  row={row}
+                  machine={props.servers.length > 1 ? row.machine : undefined}
+                  onPress={() => props.onOpenChat(row)}
+                />
+              ))}
+            </ListGroup>
+          </View>
+        ) : null}
         {sections.map((section, index) => (
           <View key={section.kind}>
             <HomeSectionHeading
               title={section.title}
               count={section.total}
-              first={index === 0 && inbox.length === 0}
+              first={index === 0 && inbox.length === 0 && props.dispatchRows.length === 0}
               link={{ label: 'See all', onPress: props.onSeeAll }}
             />
             <ListGroup surface="page" separatorInset={LIST_LEADING_INSET}>
@@ -88,7 +114,7 @@ export function FeedTab(props: Props) {
             </ListGroup>
           </View>
         ))}
-        <HomeSectionHeading title="Machines" count={rows.length} first={sections.length === 0 && inbox.length === 0} />
+        <HomeSectionHeading title="Machines" count={rows.length} first={sections.length === 0 && inbox.length === 0 && props.dispatchRows.length === 0} />
         <ListGroup surface="page" separatorInset={MACHINE_SEPARATOR_INSET}>
           {rows.map((row) => (
             <MachineRowItem key={row.key} row={row} local={isLocal(row)} onOpen={props.onOpenMachine} onMenu={props.onMachineMenu} />

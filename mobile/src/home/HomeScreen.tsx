@@ -1,9 +1,12 @@
 import { useQueryClient } from '@tanstack/react-query'
-import { useRouter } from 'expo-router'
-import { Gauge, LayoutList, SquareTerminal } from 'lucide-react-native'
+import { useIsFocused, useRouter } from 'expo-router'
+import { Gauge, LayoutList, MessagesSquare, SquareTerminal } from 'lucide-react-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, BackHandler, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
+import { ListScreen } from '@/dispatch/ListScreen'
+import { activeCount, dispatchHref, dispatchWaiting, feedPick, type ConversationRow } from '@/dispatch/listModel'
+import { useConversations } from '@/dispatch/useConversations'
 import { useNewSession } from '@/new-session/NewSessionProvider'
 import { ServerMenus } from '@/machine/ServerMenus'
 import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
@@ -23,7 +26,7 @@ import { machineHref, sessionHref } from './presentation'
 import { SessionsTab } from './SessionsTab'
 import { UsageTab } from './UsageTab'
 
-type TabId = 'feed' | 'sessions' | 'usage'
+type TabId = 'feed' | 'sessions' | 'dispatch' | 'usage'
 type Live = { state: StateView | undefined; connection: Connection }
 
 const FAB_CLEARANCE = 56 + spacing.lg
@@ -96,6 +99,12 @@ export function HomeScreen() {
   )
 
   const needsYou = useMemo(() => feedSections(entries).find((s) => s.kind === 'needs-you')?.total ?? 0, [entries])
+  const dispatchBadge = useMemo(() => dispatchWaiting(entries), [entries])
+  const focused = useIsFocused()
+  const waitingKey = entries.map((entry) => `${entry.server.id}:${entry.state?.waiting ?? 0}`).join(',')
+  const chats = useConversations(servers ?? [], focused && (tab === 'feed' || tab === 'dispatch'), waitingKey)
+  const dispatchRows = useMemo(() => feedPick(chats.rows), [chats.rows])
+  const dispatchActive = useMemo(() => activeCount(chats.rows), [chats.rows])
   const anyConnected = entries.some((e) => e.connection === 'connected')
 
   const select = (id: string) => {
@@ -108,6 +117,7 @@ export function HomeScreen() {
     const href = sessionHref(session)
     if (href) router.push(href as never)
   }
+  const openChat = (row: ConversationRow) => router.push(dispatchHref(row.serverId, row.id) as never)
   const openMachine = (row: MachineRow) =>
     router.push(machineHref(row) as never)
   const openSettings = () => router.push('/settings' as never)
@@ -131,6 +141,7 @@ export function HomeScreen() {
   const tabs: TabBarItem[] = [
     { id: 'feed', label: 'Feed', icon: LayoutList },
     { id: 'sessions', label: 'Sessions', icon: SquareTerminal, badge: needsYou },
+    { id: 'dispatch', label: 'Dispatch', icon: MessagesSquare, badge: dispatchBadge },
     { id: 'usage', label: 'Usage', icon: Gauge }
   ]
 
@@ -172,6 +183,10 @@ export function HomeScreen() {
             setMenuFor(row)
           }}
           onOpenInbox={(serverId) => router.push(inboxHref(serverId) as never)}
+          dispatchRows={dispatchRows}
+          dispatchActive={dispatchActive}
+          onOpenChat={openChat}
+          onSeeDispatch={() => select('dispatch')}
           onSeeAll={() => select('sessions')}
           onPair={pair}
         />
@@ -184,6 +199,18 @@ export function HomeScreen() {
             onOpenSettings={openSettings}
             onOpenSession={openSession}
             onReconnect={reconnectAll}
+          />
+        </View>
+      ) : null}
+      {visited.has('dispatch') ? (
+        <View style={[styles.pane, tab !== 'dispatch' && styles.hidden]}>
+          <ListScreen
+            servers={servers}
+            rows={chats.rows}
+            ready={chats.ready}
+            errors={chats.errors}
+            refresh={chats.refresh}
+            bottomPad={spacing.xl}
           />
         </View>
       ) : null}
