@@ -173,13 +173,18 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   downStatus.current = term.status
   const liveState = useRef(live.state)
   liveState.current = live.state
+  const target = useRef({ machine, name })
+  target.current = { machine, name }
+  const wasActive = useRef(appActive)
   useEffect(() => {
-    if (!appActive) return
-    if (shouldReconnectOnForeground(downStatus.current, liveState.current, machine, name)) {
+    const returned = appActive && !wasActive.current
+    wasActive.current = appActive
+    if (!returned) return
+    if (shouldReconnectOnForeground(downStatus.current, liveState.current, target.current.machine, target.current.name)) {
       setEnded(null)
       reconnectTerminal()
     }
-  }, [appActive, reconnectTerminal, machine, name])
+  }, [appActive, reconnectTerminal])
 
   const { view } = term
   useEffect(() => {

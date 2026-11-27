@@ -23,6 +23,8 @@ export type TerminalSocket = {
   stop: () => void
 }
 
+const RETRY_CHECK_TIMEOUT_MS = 5000
+
 type Target = { address: string; token: string }
 
 export function terminalUrl(address: string, machine: string, name: string): string {
@@ -43,6 +45,7 @@ export function openTerminalSocket(
   let everOpened = false
   let ended = false
   let exitPending = false
+  let generation = 0
   const budget = createExitBudget()
   let stopped = false
   let size: { rows: number; cols: number } | null = null
@@ -57,6 +60,7 @@ export function openTerminalSocket(
   const scheduleRetry = () => {
     failures += 1
     status('reconnecting')
+    if (timer) clearTimeout(timer)
     timer = setTimeout(connect, backoffMs(failures))
   }
 
@@ -74,12 +78,17 @@ export function openTerminalSocket(
     }
     exitPending = true
     status('reconnecting')
-    events
-      .canRetryAfterExit()
-      .catch(() => false)
+    const mine = generation
+    let giveUp: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<boolean>((resolve) => {
+      giveUp = setTimeout(() => resolve(false), RETRY_CHECK_TIMEOUT_MS)
+    })
+    Promise.race([events.canRetryAfterExit().catch(() => false), timeout])
       .then((retry) => {
+        clearTimeout(giveUp)
+        if (mine !== generation) return
         exitPending = false
-        if (stopped || ended || (socket !== from && socket !== null)) return
+        if (stopped || ended) return
         if (!retry) {
           finish(msg)
           return
@@ -94,6 +103,7 @@ export function openTerminalSocket(
   }
 
   const connect = () => {
+    if (timer) clearTimeout(timer)
     timer = null
     const next = new SocketImpl(terminalUrl(target.address, machine, name), undefined, {
       headers: { Authorization: `Bearer ${target.token}` }
@@ -144,6 +154,7 @@ export function openTerminalSocket(
     },
     reconnect() {
       if (stopped) return
+      generation += 1
       budget.reset()
       ended = false
       exitPending = false
@@ -159,6 +170,7 @@ export function openTerminalSocket(
     },
     stop() {
       stopped = true
+      generation += 1
       if (timer) clearTimeout(timer)
       timer = null
       socket?.close()
