@@ -134,6 +134,8 @@ fn announce_waiting(
 ) {
     let cfg_path = cfg_path.to_path_buf();
     let (state, phone, chats) = (state.clone(), phone.clone(), Arc::downgrade(dispatch));
+    let changed = state.clone();
+    dispatch.on_withdrawn(Arc::new(move || changed.touch()));
     dispatch.on_waiting(Arc::new(move |id, first| {
         state.touch();
         let (Some(chats), Ok(cfg)) = (chats.upgrade(), Config::load(&cfg_path)) else {

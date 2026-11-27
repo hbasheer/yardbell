@@ -92,6 +92,7 @@ pub struct Dispatch {
     shared: Arc<Shared>,
     memory: Memory,
     on_waiting: Mutex<Option<WaitingHook>>,
+    on_withdrawn: Mutex<Option<Arc<dyn Fn() + Send + Sync>>>,
     told: Mutex<HashSet<String>>,
 }
 
@@ -117,6 +118,7 @@ impl Dispatch {
             token: crate::mcp::new_token(),
             memory: Memory::new(&dir),
             on_waiting: Mutex::new(None),
+            on_withdrawn: Mutex::new(None),
             told: Mutex::new(HashSet::new()),
             shared: Arc::new(Shared {
                 dir,
@@ -132,6 +134,18 @@ impl Dispatch {
     // whether that is the first since the conversation was last opened.
     pub fn on_waiting(&self, hook: WaitingHook) {
         *self.on_waiting.lock().expect("dispatch hook lock") = Some(hook);
+    }
+
+    // Called after a new message withdrew the steps that were waiting.
+    pub fn on_withdrawn(&self, hook: Arc<dyn Fn() + Send + Sync>) {
+        *self.on_withdrawn.lock().expect("dispatch hook lock") = Some(hook);
+    }
+
+    fn withdrawn(&self) {
+        let hook = self.on_withdrawn.lock().expect("dispatch hook lock").clone();
+        if let Some(hook) = hook {
+            hook();
+        }
     }
 
     pub fn opened(&self, id: &str) {

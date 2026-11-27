@@ -347,6 +347,7 @@ impl Dispatch {
             cancel.clone(),
             tx.clone(),
         )?;
+        self.withdrawn();
         if let Err(e) = attachments::write(&files) {
             if let Some(c) = self.shared.lock().get_mut(&id) {
                 c.stored.events.pop();
@@ -1698,5 +1699,34 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
             .unwrap_err();
         assert_eq!(refused, refusal);
         assert!(!rec.join("args").exists(), "Codex never started");
+    }
+
+    #[tokio::test]
+    async fn a_new_message_tells_the_hook_after_withdrawing_waiting_steps() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = fake_claude(dir.path(), "true");
+        let id = conversation(&dispatch, "fix it on hp").await;
+        for _ in 0..2 {
+            dispatch
+                .propose(&id, "start_session", start_input(), By::Dispatch, None, None)
+                .unwrap();
+        }
+        assert_eq!(dispatch.waiting(), 2);
+        let calls = Arc::new(AtomicUsize::new(0));
+        let seen = calls.clone();
+        let probe = Arc::new(dispatch);
+        let at = Arc::downgrade(&probe);
+        probe.on_withdrawn(Arc::new(move || {
+            let waiting = at.upgrade().map_or(99, |d| d.waiting());
+            seen.store(waiting + 1, Ordering::SeqCst);
+        }));
+        let (_, rx) = probe
+            .ask(Some(&id), "never mind", 4000, &DispatchSettings::default(), None)
+            .await
+            .unwrap();
+        drain(rx).await;
+        assert_eq!(probe.waiting(), 0);
+        assert_eq!(calls.load(Ordering::SeqCst), 1, "hook ran once the count was 0");
     }
 }

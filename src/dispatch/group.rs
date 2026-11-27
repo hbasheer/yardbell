@@ -1600,4 +1600,54 @@ mod tests {
         assert_eq!(parse("YARDBELL RESULT\nstatus: maybe\nEND RESULT"), None);
         assert_eq!(parse("no block here"), None);
     }
+
+    #[tokio::test]
+    async fn opening_a_group_with_waiting_children_tells_the_hook_once_until_opened() {
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = fake_claude(dir.path(), "true");
+        let id = conversation(&dispatch, "try three ways").await;
+        let calls = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let seen = calls.clone();
+        dispatch.on_waiting(std::sync::Arc::new(move |id, first| {
+            seen.lock().unwrap().push((id.to_string(), first));
+        }));
+        let starts = [
+            ChildStart::Ask(None),
+            ChildStart::Ask(None),
+            ChildStart::Refuse {
+                reason: REFUSED.into(),
+                rule: None,
+            },
+        ];
+        dispatch.open_group(&id, &three(), &starts).unwrap();
+        assert_eq!(*calls.lock().unwrap(), [(id.clone(), true)]);
+        assert_eq!(dispatch.waiting_in(&id).unwrap().1, 2);
+        dispatch.open_group(&id, &three(), &starts).unwrap();
+        assert_eq!(calls.lock().unwrap()[1], (id.clone(), false));
+        dispatch.opened(&id);
+        dispatch.open_group(&id, &three(), &starts).unwrap();
+        assert_eq!(calls.lock().unwrap()[2], (id, true));
+    }
+
+    #[tokio::test]
+    async fn a_group_of_children_that_all_run_or_are_refused_does_not_tell_the_hook() {
+        let dir = tempfile::tempdir().unwrap();
+        let dispatch = fake_claude(dir.path(), "true");
+        let id = conversation(&dispatch, "try three ways").await;
+        let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let seen = calls.clone();
+        dispatch.on_waiting(std::sync::Arc::new(move |_, _| {
+            seen.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let starts = [
+            ChildStart::Run(None),
+            ChildStart::Run(None),
+            ChildStart::Refuse {
+                reason: REFUSED.into(),
+                rule: None,
+            },
+        ];
+        dispatch.open_group(&id, &three(), &starts).unwrap();
+        assert_eq!(calls.load(std::sync::atomic::Ordering::SeqCst), 0);
+    }
 }

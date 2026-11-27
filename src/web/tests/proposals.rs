@@ -767,3 +767,92 @@ async fn the_dispatch_push_can_be_turned_off() {
     let (_, state) = step_get(&r, &c, "/state").await;
     assert_eq!(state["waiting"], 1);
 }
+
+fn quiet(changes: &mut tokio::sync::watch::Receiver<u64>) {
+    changes.borrow_and_update();
+}
+
+#[tokio::test]
+async fn deciding_a_step_touches_the_state_and_lowers_the_count() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = r.app.dispatch.open_conversation("Decide");
+    let step = step_in(&r, &id)["id"].as_str().unwrap().to_string();
+    let mut changes = r.app.state.changes();
+    quiet(&mut changes);
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/actions/{step}"),
+        json!({ "decision": "reject" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changes.has_changed().unwrap());
+    assert_eq!(r.app.dispatch.waiting(), 0);
+}
+
+#[tokio::test]
+async fn rejecting_all_steps_touches_the_state() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = r.app.dispatch.open_conversation("Decide all");
+    step_in(&r, &id);
+    step_in(&r, &id);
+    let mut changes = r.app.state.changes();
+    quiet(&mut changes);
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/actions"),
+        json!({ "decision": "reject" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changes.has_changed().unwrap());
+    assert_eq!(r.app.dispatch.waiting(), 0);
+}
+
+#[tokio::test]
+async fn deciding_a_group_touches_the_state_and_opening_it_pushes_once() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = r.app.dispatch.open_conversation("A group");
+    let plan = crate::dispatch::plan_group(json!({
+        "title": "Two ways",
+        "gather": "",
+        "timeout_minutes": 30,
+        "children": [
+            { "label": "A", "machine": "hp", "folder": "app", "branch": "a", "new_branch": true, "prompt": "Do a." },
+            { "label": "B", "machine": "hp", "folder": "app", "branch": "b", "new_branch": true, "prompt": "Do b." },
+        ],
+    }))
+    .unwrap();
+    let mut changes = r.app.state.changes();
+    quiet(&mut changes);
+    let opened = r
+        .app
+        .dispatch
+        .open_group(
+            &id,
+            &plan,
+            &[
+                crate::dispatch::ChildStart::Ask(None),
+                crate::dispatch::ChildStart::Ask(None),
+            ],
+        )
+        .unwrap();
+    assert!(changes.has_changed().unwrap());
+    assert_eq!(pushes(&r), vec!["2 steps wait for you in A group"]);
+    quiet(&mut changes);
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/groups/{}", opened.group),
+        json!({ "decision": "reject" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changes.has_changed().unwrap());
+    assert_eq!(r.app.dispatch.waiting(), 0);
+}
