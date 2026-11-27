@@ -1,5 +1,5 @@
 export type UsageWindow = { label: string; short?: string; used?: number; resets_at?: number; status?: string }
-export type UsageProvider = { id: string; name: string; windows: UsageWindow[] }
+export type UsageProvider = { id: string; name: string; windows: UsageWindow[]; status?: string; message?: string }
 export type UsageReply = {
   providers?: UsageProvider[]
   windows?: UsageWindow[]
@@ -11,7 +11,7 @@ export type MeterTone = 'ok' | 'warn' | 'critical'
 export function providersOf(reply: UsageReply | null | undefined): UsageProvider[] {
   if (!reply) return []
   if (Array.isArray(reply.providers)) {
-    return reply.providers.map((p) => ({ ...p, windows: p.windows ?? [] })).filter((p) => p.windows.length > 0)
+    return reply.providers.map((p) => ({ ...p, windows: p.windows ?? [] })).filter((p) => p.windows.length > 0 || Boolean(p.message))
   }
   const out: UsageProvider[] = []
   if (reply.windows?.length) out.push({ id: 'claude', name: 'Claude', windows: reply.windows })

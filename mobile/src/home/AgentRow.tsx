@@ -33,7 +33,7 @@ export function AgentRow({ session, onOpen }: { session: ServerSession; onOpen: 
       onPress={() => onOpen(session)}
       detail={
         <>
-          <Text style={styles.preview} numberOfLines={2}>
+          <Text style={styles.preview} numberOfLines={2} ellipsizeMode="tail">
             <Text style={[styles.word, { color: stateColor(status) }]}>{STATE_WORD[status]}</Text>
             {rest ? ` · ${rest}` : ''}
           </Text>

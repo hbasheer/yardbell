@@ -5,14 +5,16 @@ const NOW = 1_800_000_000_000
 const at = (secondsFromNow: number) => NOW / 1000 + secondsFromNow
 
 describe('providersOf', () => {
-  test('uses providers and drops those without windows', () => {
+  test('keeps providers that have a message and drops empty ones', () => {
     const out = providersOf({
       providers: [
         { id: 'claude', name: 'Claude', windows: [{ label: '5 hour', used: 0.5 }] },
-        { id: 'codex', name: 'Codex', windows: [] }
+        { id: 'codex', name: 'Codex', windows: [], status: 'signed_out', message: 'Not signed in' },
+        { id: 'gemini', name: 'Gemini', windows: [] }
       ]
     })
-    expect(out.map((p) => p.id)).toEqual(['claude'])
+    expect(out.map((p) => p.id)).toEqual(['claude', 'codex'])
+    expect(out[1].message).toBe('Not signed in')
   })
 
   test('falls back to the older claude and codex fields', () => {

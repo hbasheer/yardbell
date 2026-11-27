@@ -165,7 +165,8 @@ const usage = {
         { label: '5 hour', short: '5h', used: 0.18, resets_at: now + 4 * 3600, status: 'allowed' },
         { label: 'Weekly', short: '7d', used: 0.34, resets_at: now + 5 * 86400, status: 'allowed' }
       ]
-    }
+    },
+    { id: 'gemini', name: 'Gemini', windows: [], status: 'signed_out', message: 'Not signed in' }
   ]
 }
 

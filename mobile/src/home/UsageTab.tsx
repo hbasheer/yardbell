@@ -60,11 +60,13 @@ function Meter({ window, nowMs }: { window: UsageWindow; nowMs: number }) {
 }
 
 function ProviderCard({ provider, nowMs, separated }: { provider: UsageProvider; nowMs: number; separated: boolean }) {
-  const tight = tightestWindow(provider.windows, nowMs)
-  const percent = percentOf(tight, nowMs)
-  const subtitle = isPast(tight, nowMs)
-    ? 'Limits have reset'
-    : `${tight.label} limit at ${percent}%`
+  const tight = provider.windows.length > 0 ? tightestWindow(provider.windows, nowMs) : null
+  const subtitle =
+    tight === null
+      ? (provider.message ?? '')
+      : isPast(tight, nowMs)
+        ? 'Limits have reset'
+        : `${tight.label} limit at ${percentOf(tight, nowMs)}%`
   return (
     <View style={[styles.card, separated && styles.cardSeparated]}>
       <View style={styles.head}>
