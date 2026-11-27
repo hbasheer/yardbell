@@ -29,6 +29,9 @@
   #notice.show { display: flex; }
   #notice .btn { height: 30px; background: #2563eb; border-color: #2563eb; color: #ffffff; }
   #notice:not(.ask) .btn { display: none; }
+  #gone { position: fixed; left: 50%; top: 12px; transform: translateX(-50%); display: none; align-items: center; gap: 10px; padding: 8px 8px 8px 14px; border: 1px solid var(--term-edge); border-radius: 8px; background: var(--term-raise); color: var(--term-ink); font-size: 13px; box-shadow: 0 8px 24px rgb(0 0 0 / 0.2); z-index: 30; }
+  #gone.show { display: flex; }
+  #gone .btn { height: 30px; background: #2563eb; border-color: #2563eb; color: #ffffff; touch-action: manipulation; }
   #text-view { position: fixed; inset: 0; display: none; flex-direction: column; background: var(--term-bg); z-index: 20; }
   #text-view.show { display: flex; }
   #text-view pre { flex: 1; margin: 0; padding: 12px; overflow: auto; font: 13px/1.5 "JetBrains Mono", ui-monospace, Menlo, monospace; color: var(--term-ink); white-space: pre-wrap; overflow-wrap: anywhere; user-select: text; -webkit-user-select: text; }
@@ -44,6 +47,7 @@
 </div>
 <div id="term"></div>
 <div id="notice" role="status"><span id="notice-text"></span><button class="btn" type="button" id="notice-copy">Copy</button></div>
+<div id="gone" role="status"><span>Session ended</span><button class="btn" type="button">Reconnect</button></div>
 <div id="text-view" role="dialog" aria-label="Screen text">
   <div class="bar">
     <span class="name"><strong>Screen text</strong><span> select any part, or copy all</span></span>
