@@ -35,6 +35,7 @@ import { StatusDot } from '@/ui/StatusDot'
 import { SwipeCell } from '@/ui/SwipeCell'
 import { TabBar } from '@/ui/TabBar'
 import { TabStrip } from '@/ui/TabStrip'
+import { CODE_GROUPS, CodeGallery, type CodeGroup } from '@/code/CodeGallery'
 import { CARD_GROUPS, CardsGallery, type CardGroup } from '@/dispatch/cards/CardsGallery'
 import { COMPOSER_GROUPS, ComposerGallery, type ComposerGroup } from '@/dispatch/composer/ComposerGallery'
 import { STEP_GROUPS, StepGallery, type StepGroup } from '@/steps/StepGallery'
@@ -48,7 +49,7 @@ import {
   useColorScheme
 } from '@/ui/theme'
 
-const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars', 'steps-pending', 'steps-tools', 'steps-receipts', 'steps-edit', 'steps-already', 'steps-error', 'steps-busy', 'chat-markdown', 'chat-tools', 'chat-session', 'chat-pull', 'chat-group', 'chat-results', 'chat-review', 'chat-misc', 'composer-empty', 'composer-typing', 'composer-busy', 'composer-mention', 'composer-task', 'composer-files', 'composer-unreadable'] as const
+const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars', 'steps-pending', 'steps-tools', 'steps-receipts', 'steps-edit', 'steps-already', 'steps-error', 'steps-busy', 'chat-markdown', 'chat-tools', 'chat-session', 'chat-pull', 'chat-group', 'chat-results', 'chat-review', 'chat-misc', 'composer-empty', 'composer-typing', 'composer-busy', 'composer-mention', 'composer-task', 'composer-files', 'composer-unreadable', 'code-small', 'code-big', 'code-binary', 'code-cut', 'code-long', 'code-markdown', 'code-jump'] as const
 type Section = (typeof SECTIONS)[number]
 type Overlay = 'action' | 'pulldown' | 'confirm' | 'drawer'
 
@@ -69,6 +70,11 @@ function composerGroup(section: Section): ComposerGroup | null {
 function cardGroup(section: Section): CardGroup | null {
   const group = section.startsWith('chat-') ? section.slice(5) : null
   return CARD_GROUPS.find((name) => name === group) ?? null
+}
+
+function codeGroup(section: Section): CodeGroup | null {
+  const group = section.startsWith('code-') ? section.slice(5) : null
+  return CODE_GROUPS.find((name) => name === group) ?? null
 }
 
 function Block({ title, children, flush = false }: { title: string; children: ReactNode; flush?: boolean }) {
@@ -143,6 +149,11 @@ export default function Gallery() {
         {SECTIONS.map((section) => {
           const group = cardGroup(section)
           return group && show(section) ? <CardsGallery key={section} group={group} /> : null
+        })}
+
+        {SECTIONS.map((section) => {
+          const group = codeGroup(section)
+          return group && show(section) ? <CodeGallery key={section} group={group} /> : null
         })}
 
         {SECTIONS.map((section) => {
