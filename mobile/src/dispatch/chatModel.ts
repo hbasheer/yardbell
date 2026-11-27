@@ -82,6 +82,12 @@ export function waitingText(n: number): string {
   return `${n} steps wait for your approval. Sending a new message withdraws them, so Dispatch can propose again.`
 }
 
+export function isOlder(shown: string, updated: string): boolean {
+  const a = Date.parse(shown)
+  const b = Date.parse(updated)
+  return !Number.isNaN(a) && !Number.isNaN(b) && b < a
+}
+
 export function hasNews(shown: { updated: string; count: number }, conversation: Pick<Conversation, 'updated' | 'events'>): boolean {
   return conversation.updated !== shown.updated || conversation.events.length > shown.count
 }

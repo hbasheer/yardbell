@@ -23,6 +23,7 @@ import {
 } from './api'
 import {
   hasNews,
+  isOlder,
   mergeStreamed,
   replaceAt,
   replaceSteps,
@@ -83,6 +84,7 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
   const stream = useRef<AbortController | null>(null)
   const following = useRef<AbortController | null>(null)
   const alive = useRef(true)
+  const generation = useRef(0)
   const callbacks = useRef({ onCreated, onMoved })
   callbacks.current = { onCreated, onMoved }
 
@@ -92,6 +94,21 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
     eventsRef.current = next
     setEvents(next)
   }, [])
+
+  // A reply sent before a change made here, or older than what is shown, would bring back a step
+  // that was just decided, so it is dropped and the next load brings the current list.
+  const local = useCallback(
+    (change: (list: DispatchEvent[]) => DispatchEvent[]) => {
+      generation.current += 1
+      update(change)
+    },
+    [update]
+  )
+
+  const isFresh = useCallback(
+    (conversation: Conversation, asked: number) => asked === generation.current && !isOlder(shown.current.updated, conversation.updated),
+    []
+  )
 
   const setBusy = useCallback((on: boolean) => {
     busyRef.current = on
@@ -133,16 +150,21 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
       setBusy(true)
       const controller = new AbortController()
       following.current = controller
+      let asked = generation.current
       try {
         const done = await followTurn(server, cid, {
           signal: controller.signal,
           onUpdate: (conversation) => {
-            if (alive.current && idRef.current === cid && conversation.busy) adopt(conversation)
+            if (!alive.current || idRef.current !== cid || !conversation.busy) return
+            if (isFresh(conversation, asked)) adopt(conversation)
+            asked = generation.current
           }
         })
         if (done && alive.current && idRef.current === cid) {
-          adopt(done)
+          const current = isFresh(done, asked)
+          if (current) adopt(done)
           setBusy(false)
+          if (!current) void loadRef.current()
         }
       } catch (error) {
         if (alive.current) {
@@ -154,16 +176,18 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
         if (phase.current === 'following') phase.current = 'idle'
       }
     },
-    [server, adopt, fail, setBusy]
+    [server, adopt, fail, setBusy, isFresh]
   )
 
   const load = useCallback(async () => {
     const cid = idRef.current
     if (!cid) return
+    const asked = generation.current
     try {
       const conversation = await getConversation(server, cid)
       if (!alive.current || idRef.current !== cid) return
       setLoadError(null)
+      if (!isFresh(conversation, asked)) return
       if (phase.current === 'sending' || phase.current === 'streaming') {
         update((list) => replaceSteps(list, conversation.events))
         return
@@ -178,13 +202,16 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
     } finally {
       if (alive.current) setLoading(false)
     }
-  }, [server, adopt, follow, update, setBusy])
+  }, [server, adopt, follow, update, setBusy, isFresh])
+  const loadRef = useRef(load)
+  loadRef.current = load
 
   const syncSteps = useCallback(
     async (cid: string, before: DispatchEvent[]) => {
+      const asked = generation.current
       try {
         const conversation = await getConversation(server, cid)
-        if (!alive.current || idRef.current !== cid) return
+        if (!alive.current || idRef.current !== cid || asked !== generation.current) return
         const withdrawn = withdrawnCount(before, conversation.events)
         update((list) => replaceSteps(list, conversation.events))
         if (withdrawn > 0) setNotice({ tone: 'info', text: withdrawnText(withdrawn) })
@@ -199,8 +226,8 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
     async ({ text, attachments, task }: SendPayload) => {
       if (busyRef.current || phase.current !== 'idle') throw new Error(BUSY_TEXT)
       const before = eventsRef.current
-      const local = sentEvent(text, attachments, task)
-      update((list) => [...list, local])
+      const sent = sentEvent(text, attachments, task)
+      local((list) => [...list, sent])
       phase.current = 'sending'
       setBusy(true)
       setNotice(null)
@@ -235,7 +262,7 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
         if (!started) {
           phase.current = 'idle'
           stream.current = null
-          update((list) => list.filter((e) => e !== local))
+          update((list) => list.filter((e) => e !== sent))
           setBusy(false)
           if (routeIfSignedOut(error, server.id)) return
           void load()
@@ -248,14 +275,14 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
       if (!alive.current) return
       phase.current = 'idle'
       if (!started || !cid) {
-        update((list) => list.filter((e) => e !== local))
+        update((list) => list.filter((e) => e !== sent))
         setBusy(false)
         void load()
-        return
+        throw new Error('The server closed the reply before it started. Check the chat, then send again.')
       }
       void follow(cid)
     },
-    [server, update, setBusy, syncSteps, follow, load]
+    [server, update, local, setBusy, syncSteps, follow, load]
   )
 
   const stop = useCallback(async () => {
@@ -329,11 +356,10 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
   const settle = useCallback(
     async (error: unknown) => {
       if (routeIfSignedOut(error, server.id)) return true
-      if (isAlreadyDecided(error)) {
-        setNotice({ tone: 'info', text: settledText(messageOf(error)) })
-        await load()
-      }
-      return false
+      if (!isAlreadyDecided(error)) return false
+      setNotice({ tone: 'info', text: settledText(messageOf(error)) })
+      await load()
+      return true
     },
     [server.id, load]
   )
@@ -356,46 +382,46 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
       decide: (step, decision, input, again) =>
         guard(async () => {
           const out = await decideStep(server, cid(), step.id, { decision, ...(input ? { input } : {}), ...(again ? { again } : {}) })
-          update((list) => replaceSteps(list, [out]))
+          local((list) => replaceSteps(list, [out]))
         }),
       answer: (index, key) =>
         guard(async () => {
           const out = await answerSession(server, cid(), index, key)
-          update((list) => replaceAt(list, index, out))
+          local((list) => replaceAt(list, index, out))
         }),
       review: (index, child) =>
         guard(async () => {
           const step = await requestReview(server, cid(), index, child)
-          update((list) => mergeStreamed(list, step))
+          local((list) => mergeStreamed(list, step))
         }),
       scan: (index, kind) =>
         guard(async () => {
           const here = cid()
           const out = await startScan(server, { conversation: here, card: index, kind })
           if (out.conversation !== here) callbacks.current.onMoved(out.conversation)
-          else update((list) => mergeStreamed(list, out.step))
+          else local((list) => mergeStreamed(list, out.step))
         }),
       sendPull: (index) =>
         guard(async () => {
           const out = await sendToSession(server, cid(), index)
-          update((list) => mergeStreamed(replaceAt(list, index, out.card), out.step))
+          local((list) => mergeStreamed(replaceAt(list, index, out.card), out.step))
         }),
       settleReview: (index, body) =>
         guard(async () => {
           const out = await decideReview(server, cid(), index, body)
-          if ('step' in out) update((list) => mergeStreamed(replaceAt(list, index, out.card), out.step))
-          else update((list) => replaceAt(list, index, out))
+          if ('step' in out) local((list) => mergeStreamed(replaceAt(list, index, out.card), out.step))
+          else local((list) => replaceAt(list, index, out))
         }),
       loadTargets: (index) => reviewTargets(server, cid(), index).then((r) => r.sessions),
       decideGroup: (group, decision) =>
         guard(async () => {
           const out = await decideGroup(server, cid(), group, decision)
-          update((list) => replaceSteps(list, out))
+          local((list) => replaceSteps(list, out))
           return out
         }),
       saveVersion: (prompt, text) => savePrompt(server, { name: prompt.name, text, replacing: prompt.name })
     }
-  }, [server, update, settle])
+  }, [server, local, settle])
 
   const decideEvery = useCallback(
     async (decision: Decision) => {
@@ -403,14 +429,14 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
       if (!cid) return
       try {
         const out = await decideAll(server, cid, decision)
-        update((list) => replaceSteps(list, out))
+        local((list) => replaceSteps(list, out))
       } catch (error) {
         if (await settle(error)) return
         setNotice({ tone: 'error', text: `Could not ${decision === 'approve' ? 'approve' : 'reject'} the steps: ${messageOf(error)}` })
         await load()
       }
     },
-    [server, update, settle, load]
+    [server, local, settle, load]
   )
 
   return {

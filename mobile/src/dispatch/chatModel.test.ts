@@ -5,6 +5,7 @@ import {
   dockOf,
   elapsed,
   hasNews,
+  isOlder,
   liveLookup,
   mergeStreamed,
   pendingSteps,
@@ -115,6 +116,15 @@ describe('hasNews', () => {
     expect(hasNews({ updated: 't1', count: 2 }, { updated: 't1', events: [user('a'), user('b')] })).toBe(false)
     expect(hasNews({ updated: 't1', count: 2 }, { updated: 't2', events: [user('a'), user('b')] })).toBe(true)
     expect(hasNews({ updated: 't1', count: 1 }, { updated: 't1', events: [user('a'), user('b')] })).toBe(true)
+  })
+})
+
+describe('isOlder', () => {
+  it('spots a reply older than what is shown, across time zones', () => {
+    expect(isOlder('2026-11-27T21:10:05+03:00', '2026-11-27T21:10:01+03:00')).toBe(true)
+    expect(isOlder('2026-11-27T21:10:05+03:00', '2026-11-27T18:10:06Z')).toBe(false)
+    expect(isOlder('2026-11-27T21:10:05+03:00', '2026-11-27T21:10:05+03:00')).toBe(false)
+    expect(isOlder('', '2026-11-27T21:10:05+03:00')).toBe(false)
   })
 })
 

@@ -178,7 +178,7 @@ export type FollowOptions = {
   onUpdate?: (conversation: Conversation) => void
 }
 
-const worthRetrying = (error: unknown) => error instanceof UnreachableError || (error instanceof ServerError && error.status >= 500)
+export const SERVER_ERROR_LIMIT = 5
 
 export async function followTurn(
   server: PairedServer,
@@ -186,14 +186,20 @@ export async function followTurn(
   options: FollowOptions = {}
 ): Promise<Conversation | null> {
   const { signal, intervalMs = POLL_MS, onUpdate } = options
+  let serverErrors = 0
   while (!signal?.aborted) {
     try {
       const conversation = await getConversation(server, id)
+      serverErrors = 0
       if (signal?.aborted) return null
       onUpdate?.(conversation)
       if (!conversation.busy) return conversation
     } catch (error) {
-      if (!worthRetrying(error)) throw error
+      // A restart answers 5xx for a moment, but a server that keeps failing would leave the chat
+      // busy for good, so after a few in a row the error is shown.
+      const failing = error instanceof ServerError && error.status >= 500
+      if (!failing && !(error instanceof UnreachableError)) throw error
+      if (failing && ++serverErrors >= SERVER_ERROR_LIMIT) throw error
     }
     await pause(intervalMs, signal)
   }

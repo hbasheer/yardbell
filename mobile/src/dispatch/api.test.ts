@@ -3,7 +3,7 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('expo/fetch', () => ({ fetch: vi.fn() }))
 
 import { ServerError, UnreachableError } from '../api/client'
-import { ask, attachmentSource, followTurn, isAlreadyDecided } from './api'
+import { ask, attachmentSource, followTurn, isAlreadyDecided, SERVER_ERROR_LIMIT } from './api'
 import type { DispatchEvent } from './types'
 
 const server = { id: 'http://h:1', address: 'http://h:1', token: 'ybd_t', machine: 'M', deviceId: '1' }
@@ -126,6 +126,23 @@ describe('followTurn', () => {
       const done = await followTurn(server, 'abc', { intervalMs: 1 })
       expect(done?.busy).toBe(false)
       expect(calls).toBe(3)
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
+  it('gives up after a run of server errors so the chat does not stay busy', async () => {
+    const original = globalThis.fetch
+    let calls = 0
+    globalThis.fetch = vi.fn(async () => {
+      calls += 1
+      return new Response(JSON.stringify({ error: 'database is locked' }), { status: 500 })
+    }) as unknown as typeof fetch
+    try {
+      const error = await followTurn(server, 'abc', { intervalMs: 1 }).catch((e) => e)
+      expect(error).toBeInstanceOf(ServerError)
+      expect((error as ServerError).status).toBe(500)
+      expect(calls).toBe(SERVER_ERROR_LIMIT)
     } finally {
       globalThis.fetch = original
     }
