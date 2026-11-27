@@ -1,6 +1,7 @@
 import { useQuery } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PairedServer } from '../servers/store'
+import { UnreachableError } from '../api/client'
 import { createGuard } from './guard'
 import { listChanges } from './api'
 
@@ -21,14 +22,19 @@ export function useChangesList(server: PairedServer, machine: string, root: stri
 
 export type Notice = { kind: 'error' | 'info'; text: string }
 
-const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
+export function messageOf(error: unknown): string {
+  if (error instanceof UnreachableError) return `${error.message} Git may still be running on the machine. Check again shortly.`
+  return error instanceof Error ? error.message : String(error)
+}
 
-export function useGuardedActions(afterEach: () => void) {
+export function useGuardedActions(before: () => Promise<unknown>, afterEach: () => void) {
   const guard = useRef(createGuard()).current
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
   const after = useRef(afterEach)
   after.current = afterEach
+  const prepare = useRef(before)
+  prepare.current = before
   const mounted = useRef(true)
   useEffect(() => {
     mounted.current = true
@@ -43,6 +49,7 @@ export function useGuardedActions(afterEach: () => void) {
       setBusy(name)
       setNotice(null)
       try {
+        await prepare.current().catch(() => {})
         return await task()
       } catch (error) {
         if (mounted.current) setNotice({ kind: 'error', text: messageOf(error) })

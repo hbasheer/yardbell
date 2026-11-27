@@ -1,4 +1,5 @@
 import * as Clipboard from 'expo-clipboard'
+import { useQueryClient } from '@tanstack/react-query'
 import { useIsFocused, useRouter } from 'expo-router'
 import {
   ArrowDown,
@@ -53,7 +54,7 @@ import {
   uniquePaths
 } from './model'
 import { NoticeBanner } from './NoticeBanner'
-import { useChangesList, useGuardedActions } from './useChangesActions'
+import { changesKey, useChangesList, useGuardedActions } from './useChangesActions'
 
 const DONE: Record<GitAction, string> = { push: 'Pushed', pull: 'Pulled', fetch: 'Fetched' }
 
@@ -66,12 +67,17 @@ export function ChangesScreen({ server, machine, root, multipleServers }: { serv
   const keyboard = useKeyboardHeight().height
   const focused = useIsFocused()
   const appActive = useAppActive()
-  const polling = focused && appActive
+  const queryClient = useQueryClient()
+  const key = changesKey(server.id, machine, root)
+  const { busy, notice, setNotice, run } = useGuardedActions(
+    () => queryClient.cancelQueries({ queryKey: key }),
+    () => {
+      queryClient.refetchQueries({ queryKey: key }).catch(() => {})
+    }
+  )
+  const polling = focused && appActive && busy === null
   const query = useChangesList(server, machine, root, polling)
   const { data, refetch } = query
-  const { busy, notice, setNotice, run } = useGuardedActions(() => {
-    refetch({ cancelRefetch: false }).catch(() => {})
-  })
 
   const wasPolling = useRef(polling)
   useEffect(() => {
@@ -203,7 +209,7 @@ export function ChangesScreen({ server, machine, root, multipleServers }: { serv
     { label: 'Pull', icon: ArrowDown, status: behind ? String(behind) : undefined, disabled: inflight, onPress: () => git('pull') },
     { label: 'Push', icon: ArrowUp, status: ahead ? String(ahead) : undefined, disabled: inflight, onPress: () => git('push') }
   ]
-  const moreActions: ActionSheetAction[] = [...remoteActions, { label: 'Refresh', icon: RotateCw, onPress: () => refetch().catch(() => {}) }]
+  const moreActions: ActionSheetAction[] = [...remoteActions, { label: 'Refresh', icon: RotateCw, disabled: inflight, onPress: () => refetch().catch(() => {}) }]
   const splitActions: ActionSheetAction[] = [
     { label: 'Commit', icon: Check, disabled: inflight || !canCommit, onPress: () => requestCommit('commit') },
     { label: 'Commit & Push', icon: ArrowUp, disabled: inflight || !canCommit, onPress: () => requestCommit('push') },
