@@ -4,6 +4,9 @@ import {
   buildNewSessionBody,
   folderLabel,
   isValidBranchName,
+  makeGate,
+  setupWarning,
+  startingNote,
   joinPath,
   parentPath,
   projectFolders,
@@ -91,5 +94,27 @@ describe('projectFolders', () => {
       session('nas', '/p/other')
     ]
     expect(projectFolders(sessions, 'hp')).toEqual(['/p/alpha', '/p/zeta'])
+  })
+})
+
+describe('start guards', () => {
+  it('lets only one start through until it leaves', () => {
+    const gate = makeGate()
+    expect(gate.enter()).toBe(true)
+    expect(gate.enter()).toBe(false)
+    gate.leave()
+    expect(gate.enter()).toBe(true)
+  })
+
+  it('warns only when setup reported a failure', () => {
+    const started = { machine: 'hp', name: 'a-1', path: '/a', created: true, repo: '/a' }
+    expect(setupWarning(started)).toBeNull()
+    expect(setupWarning({ ...started, setup: { ok: true } })).toBeNull()
+    expect(setupWarning({ ...started, setup: { ok: false } })).toMatch(/setup failed/)
+  })
+
+  it('says a new branch can take a minute', () => {
+    expect(startingNote({ kind: 'new', name: 'x', base: 'main' })).toMatch(/take a minute/)
+    expect(startingNote({ kind: 'stay' })).not.toMatch(/minute/)
   })
 })

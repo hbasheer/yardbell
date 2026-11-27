@@ -43,7 +43,40 @@ export type Branches = {
 
 export type NewSessionOpen = { serverId?: string; machine?: string; folder?: string }
 
-export type Started = { machine: string; name: string; path: string; created: boolean; repo: string }
+export type Started = {
+  machine: string
+  name: string
+  path: string
+  created: boolean
+  repo: string
+  setup?: { ok?: boolean }
+}
+
+export const START_TIMEOUT_MS = 120_000
+
+export function setupWarning(started: Started): string | null {
+  return started.setup && started.setup.ok === false ? 'The worktree setup failed. The agent started anyway.' : null
+}
+
+export function startingNote(branch: BranchChoice): string {
+  return branch.kind === 'new'
+    ? 'Creating the branch and running setup can take a minute.'
+    : 'Starting the agent. This can take a few seconds.'
+}
+
+export function makeGate() {
+  let busy = false
+  return {
+    enter(): boolean {
+      if (busy) return false
+      busy = true
+      return true
+    },
+    leave(): void {
+      busy = false
+    }
+  }
+}
 
 export function isValidBranchName(name: string): boolean {
   return /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(name) && !name.includes('..')

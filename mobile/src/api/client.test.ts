@@ -168,3 +168,12 @@ test('newSession posts the body and surfaces the server message', async () => {
   expect(error).toBeInstanceOf(ServerError)
   expect(error.message).toBe('hp has no folder /a')
 })
+
+test('newSession allows two minutes for branch and setup work', async () => {
+  const timeout = vi.spyOn(AbortSignal, 'timeout')
+  const ok = vi.fn(async () => json({ machine: 'hp', name: 'a-1', path: '/a', created: false, repo: '/a' }))
+  const body = { machine: 'hp', path: '/a', agent: 'claude', resume: false, wait: false } as const
+  await newSession(server, body, ok as unknown as typeof fetch)
+  expect(timeout).toHaveBeenCalledWith(120_000)
+  timeout.mockRestore()
+})

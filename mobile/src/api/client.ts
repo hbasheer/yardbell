@@ -1,5 +1,5 @@
 import { normalizeAddress, parsePairingLink } from '../pairing/link'
-import type { Branches, Listing, NewSessionBody, Started } from '../new-session/request'
+import { START_TIMEOUT_MS, type Branches, type Listing, type NewSessionBody, type Started } from '../new-session/request'
 import type { PairedServer } from '../servers/store'
 
 const TIMEOUT_MS = 15_000
@@ -42,7 +42,7 @@ type Target = PairedServer | { address: string }
 async function send<T>(
   address: string,
   path: string,
-  init: { method: string; body?: unknown; token?: string },
+  init: { method: string; body?: unknown; token?: string; timeoutMs?: number },
   fetchImpl: typeof fetch
 ): Promise<T> {
   const headers: Record<string, string> = { Accept: 'application/json' }
@@ -56,7 +56,7 @@ async function send<T>(
       method: init.method,
       headers,
       body: init.body === undefined ? undefined : JSON.stringify(init.body),
-      signal: AbortSignal.timeout(TIMEOUT_MS)
+      signal: AbortSignal.timeout(init.timeoutMs ?? TIMEOUT_MS)
     })
     text = await response.text()
   } catch {
@@ -97,8 +97,8 @@ export class ApiClient {
     return send<T>(this.address, path, { method: 'GET', token: this.token }, this.fetchImpl)
   }
 
-  post<T>(path: string, body?: unknown): Promise<T> {
-    return send<T>(this.address, path, { method: 'POST', body, token: this.token }, this.fetchImpl)
+  post<T>(path: string, body?: unknown, timeoutMs?: number): Promise<T> {
+    return send<T>(this.address, path, { method: 'POST', body, token: this.token, timeoutMs }, this.fetchImpl)
   }
 }
 
@@ -153,7 +153,7 @@ export async function signIn(
 const machinePath = (machine: string) => `/machines/${encodeURIComponent(machine)}`
 
 export function newSession(server: PairedServer, body: NewSessionBody, fetchImpl?: typeof fetch): Promise<Started> {
-  return new ApiClient(server, fetchImpl).post<Started>('/sessions', body)
+  return new ApiClient(server, fetchImpl).post<Started>('/sessions', body, START_TIMEOUT_MS)
 }
 
 export function browseFolder(server: PairedServer, machine: string, path: string): Promise<Listing> {

@@ -1,5 +1,5 @@
 import { useQueries, useQuery } from '@tanstack/react-query'
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, Pressable, Text, TextInput, View } from 'react-native'
 import { ArrowUp, Folder, FolderGit2, GitBranch, GitBranchPlus, Server } from 'lucide-react-native'
 import { browseFolder, folderBranches, installedAgents, newSession } from '../api/client'
@@ -22,6 +22,9 @@ import {
   folderLabel,
   isValidBranchName,
   joinPath,
+  makeGate,
+  setupWarning,
+  startingNote,
   parentPath,
   projectFolders,
   startBlocker,
@@ -84,6 +87,8 @@ export function NewSessionSheet({ visible, request, servers, onClose, onAfterClo
   const [agent, setAgent] = useState<string | null>(null)
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [warned, setWarned] = useState<{ server: PairedServer; started: Started; warning: string } | null>(null)
+  const gate = useRef(makeGate()).current
 
   const machine = target?.machine ?? ''
   const root = useQuery({
@@ -144,18 +149,26 @@ export function NewSessionSheet({ visible, request, servers, onClose, onAfterClo
   }
 
   const start = async () => {
-    if (!server || blocker || sending) return
+    if (warned) return onStarted(warned.server, warned.started)
+    if (!server || blocker || !gate.enter()) return
     setSending(true)
     setError(null)
     try {
       const started = await newSession(server, buildNewSessionBody(choice))
       triggerSuccess()
+      const warning = setupWarning(started)
+      if (warning) {
+        setWarned({ server, started, warning })
+        setSending(false)
+        gate.leave()
+        return
+      }
       onStarted(server, started)
     } catch (e) {
       triggerError()
       setError(e instanceof Error ? e.message : 'Could not start the session')
-    } finally {
       setSending(false)
+      gate.leave()
     }
   }
 
@@ -179,6 +192,8 @@ export function NewSessionSheet({ visible, request, servers, onClose, onAfterClo
           chosenAgent={chosenAgent}
           noMachines={options.length === 0}
           sending={sending}
+          note={sending ? startingNote(effectiveBranch) : null}
+          warning={warned?.warning ?? null}
           blocker={blocker}
           error={error}
           onClose={onClose}
@@ -270,6 +285,8 @@ function MainPage(props: {
   chosenAgent: string
   noMachines: boolean
   sending: boolean
+  note: string | null
+  warning: string | null
   blocker: string | null
   error: string | null
   onClose: () => void
@@ -280,7 +297,7 @@ function MainPage(props: {
   onStart: () => void
 }) {
   useColorScheme()
-  const disabled = props.blocker !== null || props.sending
+  const disabled = (props.blocker !== null && !props.warning) || props.sending
   return (
     <View>
       <SheetHeader title="New session" subtitle={props.machine || undefined} onClose={props.onClose} />
@@ -329,6 +346,8 @@ function MainPage(props: {
           ) : (
             <AgentTiles agents={props.agents} selected={props.chosenAgent} onPick={props.onAgent} />
           )}
+          {props.note ? <Text style={styles.note}>{props.note}</Text> : null}
+          {props.warning ? <Text style={styles.error}>{props.warning}</Text> : null}
           {props.error ? (
             <Text style={styles.error} accessibilityRole="alert">
               {props.error}
@@ -345,7 +364,7 @@ function MainPage(props: {
             {props.sending ? (
               <ActivityIndicator size="small" color={colors.bgBase} />
             ) : (
-              <Text style={styles.startLabel}>{props.blocker ?? 'Start'}</Text>
+              <Text style={styles.startLabel}>{props.warning ? 'Open session' : (props.blocker ?? 'Start')}</Text>
             )}
           </Pressable>
         </View>

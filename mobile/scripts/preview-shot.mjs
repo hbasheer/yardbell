@@ -1,3 +1,4 @@
+// Option --click "<visible text>" (repeatable, applied in order, 1.2 s wait after each) taps the smallest element whose text is exactly that, before the screenshot.
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,6 +16,7 @@ const option = (name, fallback) => {
 const width = option('width', 400)
 const height = option('height', 860)
 const wait = option('wait', 4000)
+const clicks = rest.flatMap((arg, at) => (arg === '--click' ? [rest[at + 1]] : []))
 const port = 9300 + Math.floor(Math.random() * 500)
 
 const profile = mkdtempSync(join(tmpdir(), 'yardbell-shot-'))
@@ -63,6 +65,41 @@ try {
   await call('browsingContext.setViewport', { context, viewport: { width, height } })
   await call('browsingContext.navigate', { context, url, wait: 'complete' })
   await sleep(wait)
+  for (const text of clicks) {
+    const found = await call('script.evaluate', {
+      expression: `(() => {
+        const want = ${JSON.stringify(text)}
+        let best = null
+        for (const el of document.querySelectorAll('body *')) {
+          if ((el.textContent || '').trim() !== want) continue
+          const r = el.getBoundingClientRect()
+          if (!r.width || !r.height) continue
+          if (!best || r.width * r.height <= best.w * best.h) best = { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height }
+        }
+        return best ? JSON.stringify(best) : ''
+      })()`,
+      target: { context },
+      awaitPromise: false
+    })
+    const where = found.result?.value ? JSON.parse(found.result.value) : null
+    if (!where) throw new Error(`--click: nothing shows the text "${text}"`)
+    await call('input.performActions', {
+      context,
+      actions: [
+        {
+          type: 'pointer',
+          id: 'mouse',
+          parameters: { pointerType: 'mouse' },
+          actions: [
+            { type: 'pointerMove', x: Math.round(where.x), y: Math.round(where.y) },
+            { type: 'pointerDown', button: 0 },
+            { type: 'pointerUp', button: 0 }
+          ]
+        }
+      ]
+    })
+    await sleep(1200)
+  }
   const { data } = await call('browsingContext.captureScreenshot', { context })
   writeFileSync(out, Buffer.from(data, 'base64'))
   console.log(`wrote ${out}`)
