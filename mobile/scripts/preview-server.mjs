@@ -130,7 +130,12 @@ const servers = [
 
 function stateFor(server) {
   return {
-    agents: [],
+    agents: [
+      { name: 'claude', label: 'Claude Code' },
+      { name: 'codex', label: 'Codex' },
+      { name: 'gemini', label: 'Gemini' },
+      { name: 'opencode', label: 'OpenCode' }
+    ],
     default_agent: 'claude',
     machines: server.machines,
     folders: [],
@@ -175,6 +180,50 @@ function json(res, status, body) {
   res.end(JSON.stringify(body))
 }
 
+const tree = {
+  '/home/dev': ['Projects', 'Documents', 'Downloads'],
+  '/home/dev/Projects': ['yardbell', 'feedgest', 'sama', 'eitjar', 'notes'],
+  '/home/dev/Projects/feedgest': ['app', 'mobile']
+}
+const gitDirs = new Set(['/home/dev/Projects/yardbell', '/home/dev/Projects/feedgest/app', '/home/dev/Projects/sama'])
+
+function machineApi(req, res, kind) {
+  const url = new URL(req.url, 'http://x')
+  if (kind === 'agents') return json(res, 200, { installed: ['claude', 'codex', 'gemini'] })
+  const at = url.searchParams.get('path') || '/home/dev/Projects'
+  if (kind === 'branches') {
+    return json(res, 200, {
+      current: 'main',
+      default_base: 'main',
+      local: ['main', 'mobile-app', 'orca-style-ui', 'feature/long-branch-name-for-the-feed-importer'],
+      remote: ['origin-fix-dedup'],
+      worktrees: { 'orca-style-ui': '/home/dev/Projects/yardbell-worktrees/orca-style-ui' }
+    })
+  }
+  const entries = (tree[at] ?? []).map((name) => {
+    const git = gitDirs.has(`${at}/${name}`)
+    return { name, git, branch: git ? 'main' : '' }
+  })
+  json(res, 200, {
+    path: at,
+    git: gitDirs.has(at),
+    branch: gitDirs.has(at) ? 'main' : '',
+    linked: false,
+    entries,
+    recent: ['/home/dev/Projects/sama', '/home/dev/Projects/notes']
+  })
+}
+
+function startSession(req, res, server) {
+  let raw = ''
+  req.on('data', (chunk) => (raw += chunk))
+  req.on('end', () => {
+    const body = JSON.parse(raw || '{}')
+    if (body.path === '/home/dev/Projects/notes') return json(res, 400, { error: `${body.machine} has no folder ${body.path}` })
+    json(res, 200, { machine: body.machine, name: 'new-1', path: body.path, created: !!body.new_branch, repo: body.path })
+  })
+}
+
 function handler(server) {
   return (req, res) => {
     const path = new URL(req.url, 'http://x').pathname
@@ -185,6 +234,9 @@ function handler(server) {
     if (!(req.headers.authorization ?? '').startsWith('Bearer ')) return json(res, 401, { error: 'sign in again' })
     if (path === '/app/about') return json(res, 200, { machine: server.name, api: 1, version: server.version })
     if (path === '/state') return json(res, 200, stateFor(server))
+    const machinePart = path.match(/^\/machines\/([^/]+)\/(browse|branches|agents)$/)
+    if (machinePart) return machineApi(req, res, machinePart[2])
+    if (path === '/sessions' && req.method === 'POST') return startSession(req, res, server)
     if (path === '/dispatch/usage' || path === '/dispatch/usage/refresh') return json(res, 200, usage)
     json(res, 404, { error: 'not found' })
   }

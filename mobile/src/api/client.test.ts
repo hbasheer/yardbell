@@ -5,6 +5,7 @@ import {
   ServerTooOldError,
   SignedOutError,
   UnreachableError,
+  newSession,
   pair,
   signIn
 } from './client'
@@ -150,4 +151,20 @@ test('signIn posts the passcode without Authorization and normalizes the address
   expect(url).toBe('http://100.64.0.10:4000/app/sign-in')
   expect(init.body).toBe(JSON.stringify({ passcode: '1234', device: 'Pixel' }))
   expect((init.headers as Record<string, string>).Authorization).toBeUndefined()
+})
+
+test('newSession posts the body and surfaces the server message', async () => {
+  const body = { machine: 'hp', path: '/a', agent: 'claude', resume: false, wait: false } as const
+  const ok = vi.fn(async () => json({ machine: 'hp', name: 'a-1', path: '/a', created: false, repo: '/a' }))
+  const started = await newSession(server, body, ok as unknown as typeof fetch)
+  expect(started.name).toBe('a-1')
+  const [url, init] = ok.mock.calls[0] as unknown as [string, RequestInit]
+  expect(url).toBe('http://h:1/sessions')
+  expect(init.method).toBe('POST')
+  expect(JSON.parse(init.body as string)).toEqual(body)
+
+  const refused = vi.fn(async () => json({ error: 'hp has no folder /a' }, 400))
+  const error = await failure(newSession(server, body, refused as unknown as typeof fetch))
+  expect(error).toBeInstanceOf(ServerError)
+  expect(error.message).toBe('hp has no folder /a')
 })

@@ -6,6 +6,7 @@ import { PermissionsAndroid, Platform } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SignedOutError } from '@/api/client'
 import { routeIfSignedOut } from '@/api/signedOut'
+import { NewSessionProvider } from '@/new-session/NewSessionProvider'
 import { routeForLink } from '@/notifications/route'
 import { listServers, onServersChanged } from '@/servers/store'
 import '@/preview/seed'
@@ -86,7 +87,9 @@ export default function RootLayout() {
     <GestureHandlerRootView style={{ flex: 1 }}>
       <QueryClientProvider client={queryClient}>
         <StatusBar style="auto" />
-        <Stack screenOptions={{ headerShown: false }} />
+        <NewSessionProvider>
+          <Stack screenOptions={{ headerShown: false }} />
+        </NewSessionProvider>
       </QueryClientProvider>
     </GestureHandlerRootView>
   )

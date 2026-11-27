@@ -45,7 +45,11 @@ export type ServerView = {
   version: string
 }
 
+export type AgentView = { name: string; label: string }
+
 export type StateView = {
+  agents?: AgentView[]
+  default_agent?: string
   machines: MachineView[]
   sessions: SessionView[]
   server?: ServerView | null

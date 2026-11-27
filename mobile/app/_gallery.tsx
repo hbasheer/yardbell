@@ -15,6 +15,7 @@ import {
   Plus,
   Trash2
 } from 'lucide-react-native'
+import { useNewSession } from '@/new-session/NewSessionProvider'
 import { ActionSheet, type ActionSheetAction } from '@/ui/ActionSheet'
 import { AgentGlyph } from '@/ui/AgentGlyph'
 import { BottomSearchBar } from '@/ui/BottomSearchBar'
@@ -73,9 +74,12 @@ export default function Gallery() {
   const [tab, setTab] = useState('feed')
   const [log, setLog] = useState('')
   const menuAnchor = useRef(null)
+  const newSession = useNewSession()
 
   useEffect(() => {
     if (isOverlay(params.open)) setOverlay(params.open)
+    if (params.open === 'new-session') newSession.open()
+    if (params.open === 'new-session-preset') newSession.open({ machine: 'hp', folder: '/home/dev/Projects/feedgest/app' })
   }, [params.open])
 
   if (!__DEV__) return <Redirect href="/" />
@@ -330,6 +334,12 @@ export default function Gallery() {
                 </Text>
                 <Text style={styles.chip} onPress={() => setOverlay('drawer')}>
                   Drawer
+                </Text>
+                <Text style={styles.chip} onPress={() => newSession.open()}>
+                  New session
+                </Text>
+                <Text style={styles.chip} onPress={() => newSession.open({ machine: 'hp', folder: '/home/dev/Projects/feedgest/app' })}>
+                  New session (hp preset)
                 </Text>
                 <View ref={menuAnchor}>
                   <NavBarButton icon={MoreHorizontal} accessibilityLabel="Menu" onPress={() => setOverlay('pulldown')} />

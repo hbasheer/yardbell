@@ -1,4 +1,5 @@
 import { normalizeAddress, parsePairingLink } from '../pairing/link'
+import type { Branches, Listing, NewSessionBody, Started } from '../new-session/request'
 import type { PairedServer } from '../servers/store'
 
 const TIMEOUT_MS = 15_000
@@ -147,4 +148,23 @@ export async function signIn(
   const address = normalizeAddress(addressInput)
   const reply = await requestPairing(address, '/app/sign-in', { passcode, device: deviceName }, fetchImpl)
   return finishPairing(address, reply, fetchImpl)
+}
+
+const machinePath = (machine: string) => `/machines/${encodeURIComponent(machine)}`
+
+export function newSession(server: PairedServer, body: NewSessionBody, fetchImpl?: typeof fetch): Promise<Started> {
+  return new ApiClient(server, fetchImpl).post<Started>('/sessions', body)
+}
+
+export function browseFolder(server: PairedServer, machine: string, path: string): Promise<Listing> {
+  const query = path ? `?path=${encodeURIComponent(path)}` : ''
+  return new ApiClient(server).get<Listing>(`${machinePath(machine)}/browse${query}`)
+}
+
+export function folderBranches(server: PairedServer, machine: string, path: string): Promise<Branches> {
+  return new ApiClient(server).get<Branches>(`${machinePath(machine)}/branches?path=${encodeURIComponent(path)}`)
+}
+
+export function installedAgents(server: PairedServer, machine: string): Promise<{ installed: string[] }> {
+  return new ApiClient(server).get<{ installed: string[] }>(`${machinePath(machine)}/agents`)
 }
