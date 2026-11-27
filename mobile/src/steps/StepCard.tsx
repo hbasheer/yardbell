@@ -49,6 +49,7 @@ import {
   stepState,
   stepTitle,
   trail,
+  wantsAgain,
   whereLine,
   type Draft,
   type Tone
@@ -82,7 +83,7 @@ const ICONS: Record<string, ComponentType<IconProps>> = {
 
 export type StepCardProps = {
   step: ActionEvent
-  onDecide: (decision: Decision, editedInput?: Record<string, unknown>) => Promise<void>
+  onDecide: (decision: Decision, editedInput?: Record<string, unknown>, again?: boolean) => Promise<void>
   onOpenSession?: (machine: string, name: string) => void
   machines?: string[]
   agents?: AgentChoice[]
@@ -137,7 +138,7 @@ function PendingCard({ step, onDecide, machines, agents, bodyMaxHeight = 320 }: 
     setBusy(decision)
     setError(null)
     try {
-      await onDecide(decision, input)
+      await onDecide(decision, input, wantsAgain(step, decision))
       setEditing(false)
     } catch (caught) {
       if (isAlreadyDecided(caught)) {
@@ -224,7 +225,7 @@ function PendingCard({ step, onDecide, machines, agents, bodyMaxHeight = 320 }: 
           <StepEditor
             form={form}
             title={stepTitle(step)}
-            approveLabel={step.already ? 'Review again' : step.by === 'you' ? label : 'Approve'}
+            approveLabel={label}
             draft={draft}
             was={was}
             error={error}

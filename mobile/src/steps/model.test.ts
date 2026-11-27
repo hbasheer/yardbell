@@ -17,6 +17,7 @@ import {
   stepState,
   stepTitle,
   trail,
+  wantsAgain,
   whereLine
 } from './model'
 
@@ -121,6 +122,15 @@ describe('buttons and badges', () => {
     expect(badge(step('stop_session', {}), 'rejected').label).toBe('Rejected')
     expect(badge(step('stop_session', {}), 'withdrawn').label).toBe('Withdrawn')
     expect(badge(step('stop_session', {}), 'failed')).toEqual({ label: 'Failed', tone: 'error' })
+  })
+})
+
+describe('review again', () => {
+  it('asks the server to claim the review only when approving a step that was already reviewed', () => {
+    const reviewed = step('start_session', {}, { review: { name: 'a' }, already: { text: 'Reviewed 10:02.' } })
+    expect(wantsAgain(reviewed, 'approve')).toBe(true)
+    expect(wantsAgain(reviewed, 'reject')).toBe(false)
+    expect(wantsAgain(step('start_session', {}, { review: { name: 'a' } }), 'approve')).toBe(false)
   })
 })
 

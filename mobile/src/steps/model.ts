@@ -219,6 +219,10 @@ export function approveLabel(step: ActionEvent): string {
   return step.by === 'you' ? mineWords(step).go : 'Approve'
 }
 
+export function wantsAgain(step: ActionEvent, decision: Decision): boolean {
+  return decision === 'approve' && Boolean(step.already)
+}
+
 export function rejectLabel(step: ActionEvent): string {
   return step.by === 'you' ? 'Cancel' : 'Reject'
 }
