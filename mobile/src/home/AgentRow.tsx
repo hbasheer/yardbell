@@ -5,14 +5,14 @@ import { AgentGlyph } from '@/ui/AgentGlyph'
 import { ListRow } from '@/ui/ListRow'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 
-const STATE_WORD: Record<SessionStatus, string> = {
+export const STATE_WORD: Record<SessionStatus, string> = {
   'needs-you': 'Needs you',
   working: 'Working',
   idle: 'Idle',
   stopped: 'Stopped'
 }
 
-function stateColor(status: SessionStatus): string {
+export function stateColor(status: SessionStatus): string {
   if (status === 'needs-you') return colors.agentQuestionText
   if (status === 'stopped') return colors.statusRed
   return colors.textSecondary

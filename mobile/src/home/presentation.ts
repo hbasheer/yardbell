@@ -14,3 +14,8 @@ export function machineSubtitle(row: MachineRow): string {
 export function previewParts(session: Pick<ServerSession, 'ticket' | 'branch'>): string {
   return [session.ticket, session.branch].filter((part) => part && part !== '-').join(' · ')
 }
+
+export function sessionHref(session: Pick<ServerSession, 'serverId' | 'machine' | 'tmux'>): string | null {
+  if (!session.tmux) return null
+  return `/session/${encodeURIComponent(session.serverId)}/${encodeURIComponent(session.machine)}/${encodeURIComponent(session.tmux)}`
+}

@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { machineSubtitle, previewParts } from './presentation'
+import { machineSubtitle, previewParts, sessionHref } from './presentation'
 import type { MachineRow } from '@/state/views'
 
 const row = (fields: Partial<MachineRow>): MachineRow => ({
@@ -38,5 +38,14 @@ describe('previewParts', () => {
     expect(previewParts({ ticket: 'YB-1', branch: 'main' })).toBe('YB-1 · main')
     expect(previewParts({ ticket: '', branch: '-' })).toBe('')
     expect(previewParts({ branch: 'dev' })).toBe('dev')
+  })
+})
+
+describe('sessionHref', () => {
+  test('encodes each part and needs a tmux name', () => {
+    expect(sessionHref({ serverId: 'http://a:1', machine: 'my box', tmux: 'x/y' })).toBe(
+      '/session/http%3A%2F%2Fa%3A1/my%20box/x%2Fy'
+    )
+    expect(sessionHref({ serverId: 'a', machine: 'hp', tmux: null })).toBeNull()
   })
 })

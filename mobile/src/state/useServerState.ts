@@ -1,9 +1,10 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useSyncExternalStore } from 'react'
 import { AppState } from 'react-native'
 import { ApiClient } from '../api/client'
 import type { PairedServer } from '../servers/store'
-import { openLiveSocket, type Connection, type LiveSocket } from './liveSocket'
+import type { Connection } from './liveSocket'
+import { liveStore } from './liveStore'
 import type { StateView } from './types'
 
 export const stateKey = (serverId: string) => ['state', serverId] as const
@@ -21,36 +22,32 @@ export function useServerState(server: PairedServer): {
   connection: Connection
   reconnect: () => void
 } {
-  const socketRef = useRef<LiveSocket | null>(null)
   const queryClient = useQueryClient()
-  const [connection, setConnection] = useState<Connection>('reconnecting')
   const query = useQuery(stateQuery(server))
+  const { id, address, token } = server
 
   useEffect(() => {
-    const live = openLiveSocket(
-      { address: server.address, token: server.token },
-      {
-        onChange: () => {
-          queryClient.refetchQueries({ queryKey: stateKey(server.id) }).catch(() => {})
-        },
-        onConnection: setConnection
-      }
-    )
-    socketRef.current = live
+    const release = liveStore.acquire({ id, address, token }, () => {
+      queryClient.refetchQueries({ queryKey: stateKey(id) }).catch(() => {})
+    })
     const subscription = AppState.addEventListener('change', (status) => {
-      if (status === 'active') live.reconnectNow()
+      if (status === 'active') liveStore.reconnectNow(id)
     })
     return () => {
       subscription.remove()
-      live.stop()
-      socketRef.current = null
+      release()
     }
-  }, [server.id, server.address, server.token, queryClient])
+  }, [id, address, token, queryClient])
+
+  const connection = useSyncExternalStore(
+    useCallback((listener) => liveStore.subscribe(id, listener), [id]),
+    () => liveStore.connection(id)
+  )
 
   const reconnect = useCallback(() => {
-    socketRef.current?.restart()
-    queryClient.refetchQueries({ queryKey: stateKey(server.id) }).catch(() => {})
-  }, [queryClient, server.id])
+    liveStore.restart(id)
+    queryClient.refetchQueries({ queryKey: stateKey(id) }).catch(() => {})
+  }, [queryClient, id])
 
   return { state: query.data, connection, reconnect }
 }

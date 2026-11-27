@@ -1,24 +1,23 @@
-import * as Clipboard from 'expo-clipboard'
 import { useQueryClient } from '@tanstack/react-query'
 import { useRouter } from 'expo-router'
-import { Copy, Gauge, LayoutList, RefreshCw, SquareTerminal, Trash2 } from 'lucide-react-native'
+import { Gauge, LayoutList, SquareTerminal } from 'lucide-react-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ActivityIndicator, BackHandler, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { useNewSession } from '@/new-session/NewSessionProvider'
-import { forgetServer, listServers, onServersChanged, type PairedServer } from '@/servers/store'
+import { ServerMenus } from '@/machine/ServerMenus'
+import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
 import type { Connection } from '@/state/liveSocket'
 import type { StateView } from '@/state/types'
 import { useServerState } from '@/state/useServerState'
 import { feedSections, type MachineRow, type ServerSession, type ServerState } from '@/state/views'
-import { ActionSheet, type ActionSheetAction } from '@/ui/ActionSheet'
-import { ConfirmModal } from '@/ui/ConfirmModal'
 import { Fab } from '@/ui/Fab'
 import { TAB_BAR_HEIGHT, TabBar, type TabBarItem } from '@/ui/TabBar'
 import { triggerMediumImpact } from '@/ui/haptics'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { EmptyHero } from './EmptyHero'
 import { FeedTab } from './FeedTab'
+import { sessionHref } from './presentation'
 import { SessionsTab } from './SessionsTab'
 import { UsageTab } from './UsageTab'
 
@@ -59,8 +58,6 @@ export function HomeScreen() {
   const [visited, setVisited] = useState<Set<TabId>>(new Set(['feed']))
   const [refreshing, setRefreshing] = useState(false)
   const [menuFor, setMenuFor] = useState<MachineRow | null>(null)
-  const [forgetFor, setForgetFor] = useState<MachineRow | null>(null)
-  const [forgetError, setForgetError] = useState<string | null>(null)
 
   useEffect(() => {
     listServers()
@@ -106,10 +103,8 @@ export function HomeScreen() {
   }
 
   const openSession = (session: ServerSession) => {
-    if (!session.tmux) return
-    router.push(
-      `/session/${encodeURIComponent(session.serverId)}/${encodeURIComponent(session.machine)}/${encodeURIComponent(session.tmux)}` as never
-    )
+    const href = sessionHref(session)
+    if (href) router.push(href as never)
   }
   const openMachine = (row: MachineRow) =>
     router.push(`/machine/${encodeURIComponent(row.serverId)}/${encodeURIComponent(row.machine)}` as never)
@@ -130,28 +125,6 @@ export function HomeScreen() {
   const serverOf = (row: MachineRow | null) => servers?.find((s) => s.id === row?.serverId)
 
   const menuServer = serverOf(menuFor)
-  const menuActions: ActionSheetAction[] = menuFor && menuServer
-    ? [
-        { label: 'Reconnect', icon: RefreshCw, onPress: () => reconnects.current[menuServer.id]?.() },
-        {
-          label: 'Copy address',
-          icon: Copy,
-          onPress: () => {
-            Clipboard.setStringAsync(menuServer.address).catch((error) => console.error('Could not copy the address', error))
-          }
-        },
-        { label: 'Forget server', icon: Trash2, destructive: true, closeBeforePress: true, onPress: () => setForgetFor(menuFor) }
-      ]
-    : []
-
-  const forgetTarget = serverOf(forgetFor)
-  const forget = () => {
-    if (!forgetTarget) return
-    forgetServer(forgetTarget.id).catch((error) => {
-      console.error('Could not forget server', error)
-      setForgetError(error instanceof Error ? error.message : String(error))
-    })
-  }
 
   const tabs: TabBarItem[] = [
     { id: 'feed', label: 'Feed', icon: LayoutList },
@@ -225,29 +198,12 @@ export function HomeScreen() {
         onPress={() => newSession.open()}
       />
       <TabBar tabs={tabs} active={tab} bottomInset={insets.bottom} onSelect={select} />
-      <ActionSheet
-        visible={menuFor !== null}
+      <ServerMenus
+        server={menuServer}
         title={menuFor?.machine}
-        message={menuServer?.address}
-        actions={menuActions}
+        visible={menuFor !== null}
         onClose={() => setMenuFor(null)}
-      />
-      <ConfirmModal
-        visible={forgetFor !== null && forgetTarget !== undefined}
-        title={`Forget ${forgetTarget?.machine ?? 'server'}?`}
-        message="You can pair again later."
-        confirmLabel="Forget"
-        destructive
-        onConfirm={forget}
-        onCancel={() => setForgetFor(null)}
-      />
-      <ConfirmModal
-        visible={forgetError !== null}
-        title="Could not forget the server"
-        message={forgetError ?? undefined}
-        cancelLabel={null}
-        confirmLabel="OK"
-        onCancel={() => setForgetError(null)}
+        onReconnect={() => menuServer && reconnects.current[menuServer.id]?.()}
       />
     </View>
   )
