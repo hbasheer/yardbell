@@ -22,7 +22,7 @@ Download the file for your system from the
 | Linux | `Yardbell_<version>_amd64.AppImage` |
 | Debian and Ubuntu | `Yardbell_<version>_amd64.deb` |
 | Fedora and openSUSE | `Yardbell-<version>-1.x86_64.rpm` |
-| Android 7 and later | `Yardbell_<version>_android.apk` |
+| Android 8 and later | `Yardbell_<version>_android.apk` |
 
 - **macOS.** Open the `.dmg` and drag Yardbell to Applications. The app is not notarized by
   Apple, so macOS blocks the first launch. On macOS 14 and earlier, right-click Yardbell in
@@ -35,15 +35,15 @@ Download the file for your system from the
   `sudo zypper install ./Yardbell-<version>-1.x86_64.rpm`. Arch and Omarchy need `webkit2gtk-4.1`
   (`sudo pacman -S webkit2gtk-4.1`).
 - **Android.** Open the `.apk` on the phone and allow installing from your browser or file app
-  when Android asks. Then, on a computer, open Yardbell's **Settings → Connect a phone** and press
-  **Show pairing code**; in the app tap **Scan a pairing code** and point the camera at it. The
-  phone signs in without the passcode (each code works once, for five minutes) and remembers the
-  server. The phone must be on the same mesh VPN. Once it knows one server, the start screen lists
-  the others it finds under **On your mesh**, where signing in takes only the passcode; it keeps
-  offering a server you removed. The app shows the server's own pages, so the dashboard, terminals,
-  Workspace and Dispatch work as in a browser, kept clear of the phone's status bar and the keyboard; the
-  back gesture returns to the server list. It also shows the notifications, see
-  [Phone notifications](#phone-notifications).
+  when Android asks. If you have the older Yardbell app, install over it as an update. Then, on a
+  computer, open Yardbell's **Settings → Connect a phone** and press **Show pairing code**; in the
+  app tap **Scan a pairing code** and point the camera at it. Pair once more after updating, because
+  the new app does not keep the old sign-in. The phone signs in without the passcode (each code
+  works once, for five minutes) and remembers the server. The phone must have Meshnet on. This
+  release has Home, which lists your sessions, the session terminal with a key bar and quick
+  replies, and notifications, see [Phone notifications](#phone-notifications). Dispatch and the
+  Inbox come in a later update. The phones you have paired are listed in Settings, where you can
+  remove one.
 - **iPhone and Windows.** There is no app yet. On an iPhone, open the dashboard in the browser, see
   [Terminal and phone](usage.md#terminal-and-phone).
 

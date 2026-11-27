@@ -1,0 +1,6 @@
+{
+  "platforms": ["android"],
+  "android": {
+    "modules": ["dev.yardbell.notify.YardbellNotifyModule"]
+  }
+}

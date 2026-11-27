@@ -6,7 +6,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { cn } from '@/lib/class-names'
 import { confirmAction } from '@/lib/confirm'
-import { api } from '@/pipelines/model'
+import { ago, api } from '@/pipelines/model'
 import type { SettingsData } from './Integrations'
 import { saved } from './saved'
 import { catalogFor } from '@/lib/agent-models'
@@ -137,7 +137,58 @@ export function PhoneSection({ data, reload }: Props) {
   )
 }
 
+type PairedPhone = { id: string; name: string; paired_at: number; last_seen: number | null }
+
+const lastSeen = (at: number | null) => {
+  if (!at) return 'Not seen yet'
+  const since = ago(new Date(at * 1000).toISOString())
+  return since === 'just now' ? 'Last seen just now' : `Last seen ${since} ago`
+}
+
+function PairedPhones({ phones, reload }: { phones: PairedPhone[] | null; reload: () => void }) {
+  const remove = async (phone: PairedPhone) => {
+    if (!(await confirmAction({ title: `Remove ${phone.name}? It will need to pair again.`, confirm: 'Remove', danger: true }))) return
+    try {
+      await api('POST', `/api/settings/devices/${encodeURIComponent(phone.id)}/revoke`)
+      saved(`${phone.name} removed.`)
+    } catch (e) {
+      fail(e)
+    }
+    reload()
+  }
+  if (!phones) return null
+  return (
+    <div className="grid gap-3">
+      <h3 className="text-[13px] font-medium">Paired phones</h3>
+      {phones.length === 0 ? (
+        <p className="text-xs text-muted-foreground">No phone is paired with this server.</p>
+      ) : (
+        <ul className="grid divide-y divide-border rounded-xl border border-border bg-card">
+          {phones.map((p) => (
+            <li key={p.id} className="flex items-center justify-between gap-3 px-4 py-3">
+              <div className="grid min-w-0 gap-0.5">
+                <span className="truncate text-[13px] font-medium">{p.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  Paired {new Date(p.paired_at * 1000).toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} · {lastSeen(p.last_seen)}
+                </span>
+              </div>
+              <Button size="sm" variant="outline" aria-label={`Remove ${p.name}`} onClick={() => remove(p)}>
+                Remove
+              </Button>
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  )
+}
+
 export function PairSection() {
+  const [phones, setPhones] = useState<PairedPhone[] | null>(null)
+  const loadPhones = () => api<{ devices: PairedPhone[] }>('GET', '/api/settings/devices').then((r) => setPhones(r.devices), fail)
+  useEffect(() => {
+    loadPhones()
+  }, [])
   const [pair, setPair] = useState<{ qr_svg: string; server: string; ends: number } | null>(null)
   const [left, setLeft] = useState(0)
   const [message, setMessage] = useState('')
@@ -155,7 +206,11 @@ export function PairSection() {
     }
     tick()
     const t = setInterval(tick, 1000)
-    return () => clearInterval(t)
+    const refresh = setInterval(loadPhones, 5000)
+    return () => {
+      clearInterval(t)
+      clearInterval(refresh)
+    }
   }, [pair])
   const show = async () => {
     setBusy(true)
@@ -175,6 +230,7 @@ export function PairSection() {
       }
       setMessage('')
       setPair({ qr_svg: out.qr_svg, server: out.server, ends: Date.now() + out.expires_in * 1000 })
+      loadPhones()
     } catch (e) {
       setPair(null)
       setMessage((e as Error).message)
@@ -234,6 +290,7 @@ export function PairSection() {
           </Button>
         </div>
       </div>
+      <PairedPhones phones={phones} reload={loadPhones} />
     </Section>
   )
 }

@@ -12,7 +12,7 @@ use crate::snapshot;
 use crate::state::{PortStatus, State};
 use crate::term;
 use crate::viewers::{Plan, Viewers};
-use axum::extract::ws::{Message, WebSocket, WebSocketUpgrade};
+use axum::extract::ws::{close_code, CloseFrame, Message, WebSocket, WebSocketUpgrade};
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path as UrlPath, Request, State as AxState};
 use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::middleware::{self, Next};
@@ -21,7 +21,7 @@ use axum::routing::{get, post};
 use axum::{Extension, Form, Json, Router};
 use axum_extra::extract::cookie::{Cookie, Key, SameSite, SignedCookieJar};
 use base64::Engine;
-use futures::StreamExt;
+use futures::{SinkExt, StreamExt};
 use rand::Rng;
 use serde::Deserialize;
 use serde_json::{json, Value};
@@ -74,6 +74,7 @@ pub struct AppState {
     pub folders: Folders,
     pub settings: Arc<Settings>,
     pub phone: Arc<Phone>,
+    pub devices: Arc<crate::phone::devices::Devices>,
     pub dispatch: Arc<Dispatch>,
     pub usage: Arc<crate::usage::Usage>,
     pub triggers: Arc<crate::triggers::Triggers>,
@@ -155,8 +156,12 @@ impl AppState {
                 Key::generate()
             }
         };
+        let devices = Arc::new(crate::phone::devices::Devices::load(
+            cfg_path.with_file_name("devices.json"),
+        ));
         AppState {
             cfg_path,
+            devices,
             state,
             ports,
             sessions,
@@ -329,6 +334,37 @@ fn wants_json(req: &Request) -> bool {
     req.method() != Method::GET || accept.contains("json") || req.uri().path() == "/state"
 }
 
+#[derive(Clone)]
+pub struct DeviceAuth(pub String);
+
+const SIGNED_OUT: &str = "this phone was signed out, pair it again";
+
+type SignedOut = std::pin::Pin<Box<dyn std::future::Future<Output = ()> + Send>>;
+
+// The token is only checked when a socket opens, so an open socket of a revoked phone has to be
+// closed when the revocation happens.
+fn until_signed_out(app: &AppState, device: Option<Extension<DeviceAuth>>) -> SignedOut {
+    match device {
+        Some(Extension(DeviceAuth(id))) => Box::pin(app.devices.until_revoked(id)),
+        None => Box::pin(std::future::pending()),
+    }
+}
+
+fn signed_out_frame() -> Message {
+    Message::Close(Some(CloseFrame {
+        code: close_code::POLICY,
+        reason: SIGNED_OUT.into(),
+    }))
+}
+
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(header::AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+}
+
 async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Next) -> Response {
     let ip = req
         .extensions()
@@ -352,7 +388,25 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
     if req.method() == Method::GET && req.uri().path() == "/oauth/mcp/callback" {
         return next.run(req).await;
     }
-    if req.method() != Method::GET && !term::origin_ok(req.headers()) {
+    if let Some(token) = bearer(req.headers()) {
+        match app.devices.check(token, now_secs()) {
+            Some(id) => {
+                req.extensions_mut().insert(DeviceAuth(id));
+                return next.run(req).await;
+            }
+            None if !logged_in(&app.jar(req.headers())) => {
+                return error(StatusCode::UNAUTHORIZED, SIGNED_OUT);
+            }
+            None => {}
+        }
+    }
+    let native_entry = req.method() == Method::POST
+        && (req.uri().path().starts_with("/app/pair/") || req.uri().path() == "/app/sign-in");
+    if native_entry {
+        if req.headers().contains_key(header::ORIGIN) && !term::origin_ok(req.headers()) {
+            return error(StatusCode::FORBIDDEN, "request came from another site");
+        }
+    } else if req.method() != Method::GET && !term::origin_ok(req.headers()) {
         return error(
             StatusCode::FORBIDDEN,
             "request did not come from the Yardbell page",
@@ -361,7 +415,8 @@ async fn guard(AxState(app): AxState<Arc<AppState>>, mut req: Request, next: Nex
     let path = req.uri().path();
     let public_handoff = (req.method() == Method::GET
         && (path.starts_with("/app/handoff/") || path == "/app/hello" || path == "/app/servers"))
-        || (req.method() == Method::POST && path.starts_with("/app/pair/"));
+        || (req.method() == Method::POST
+            && (path.starts_with("/app/pair/") || path == "/app/sign-in"));
     if path == "/login"
         || path == "/style.css"
         || path == "/favicon.svg"
@@ -406,6 +461,8 @@ pub fn asset(name: &str) -> Response {
 }
 
 pub const MONACO: &str = "vendor/monaco-0.55.1";
+
+const APP_API: u32 = 1;
 
 const APP_INDEX: &str = "app/index.html";
 
@@ -487,6 +544,7 @@ pub fn router(app: Arc<AppState>) -> Router {
         .route("/app/handoff", post(handoff_new))
         .route("/app/handoff/{code}", get(handoff_redeem))
         .route("/app/pair/{code}", post(pair_redeem))
+        .route("/app/sign-in", post(app_sign_in))
         .route("/app/notifications", get(app_notifications))
         .route("/app/hello", get(app_hello))
         .route("/app/servers", get(app_servers))
@@ -763,7 +821,14 @@ async fn pair_redeem(
     AxState(app): AxState<Arc<AppState>>,
     UrlPath(code): UrlPath<String>,
     headers: HeaderMap,
+    body: axum::body::Bytes,
 ) -> Response {
+    let Ok(device) = device_name(&body) else {
+        return error(
+            StatusCode::BAD_REQUEST,
+            "send a JSON body like {\"device\": \"name\"}",
+        );
+    };
     let now = (app.clock)();
     let issued = {
         let mut codes = app.pairing.lock().expect("pairing lock");
@@ -778,11 +843,56 @@ async fn pair_redeem(
             "this pairing code is used or expired, show a new one in Settings",
         );
     }
-    (
-        app.jar(&headers).add(login_cookie()),
-        Json(json!({ "ok": true })),
-    )
-        .into_response()
+    let Some(name) = device else {
+        return (
+            app.jar(&headers).add(login_cookie()),
+            Json(json!({ "ok": true })),
+        )
+            .into_response();
+    };
+    match app.devices.issue(&name, now_secs()) {
+        Ok((view, token)) => {
+            Json(json!({ "ok": true, "token": token, "device": view })).into_response()
+        }
+        Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+    }
+}
+
+fn device_name(body: &[u8]) -> Result<Option<String>, serde_json::Error> {
+    #[derive(Deserialize)]
+    struct Body {
+        device: Option<String>,
+    }
+    if body.is_empty() {
+        return Ok(None);
+    }
+    serde_json::from_slice::<Body>(body).map(|b| b.device)
+}
+
+#[derive(Deserialize)]
+struct AppSignIn {
+    passcode: String,
+    device: String,
+}
+
+async fn app_sign_in(
+    AxState(app): AxState<Arc<AppState>>,
+    Extension(ClientIp(ip)): Extension<ClientIp>,
+    Json(form): Json<AppSignIn>,
+) -> Response {
+    match app.auth.verify(&form.passcode, ip) {
+        Verdict::Locked => error(
+            StatusCode::TOO_MANY_REQUESTS,
+            "too many attempts, try again in 5 minutes",
+        ),
+        Verdict::Wrong => error(StatusCode::UNAUTHORIZED, "wrong passcode"),
+        Verdict::Ok => match app.devices.issue(&form.device, now_secs()) {
+            Ok((view, token)) => {
+                Json(json!({ "ok": true, "token": token, "device": view })).into_response()
+            }
+            Err(e) => error(StatusCode::INTERNAL_SERVER_ERROR, &e),
+        },
+    }
 }
 
 async fn handoff_new(AxState(app): AxState<Arc<AppState>>) -> Response {
@@ -879,24 +989,34 @@ const LIVE_SETTLE: Duration = Duration::from_millis(100);
 
 async fn state_live(
     AxState(app): AxState<Arc<AppState>>,
+    device: Option<Extension<DeviceAuth>>,
     headers: HeaderMap,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    if !term::origin_ok(&headers) {
+    if device.is_none() && !term::origin_ok(&headers) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
             "origin does not match host".into(),
         ));
     }
     let changes = app.state.changes();
-    Ok(ws.on_upgrade(move |socket| live(socket, changes)))
+    let signed_out = until_signed_out(&app, device);
+    Ok(ws.on_upgrade(move |socket| live(socket, changes, signed_out)))
 }
 
 // Tells an open page that the state changed, and the page fetches /state as it always did. The
 // machines of one poll finish close together, so a short pause lets one message cover them.
-async fn live(mut socket: WebSocket, mut changes: tokio::sync::watch::Receiver<u64>) {
+async fn live(
+    mut socket: WebSocket,
+    mut changes: tokio::sync::watch::Receiver<u64>,
+    mut signed_out: SignedOut,
+) {
     loop {
         tokio::select! {
+            _ = &mut signed_out => {
+                let _ = socket.send(signed_out_frame()).await;
+                return;
+            }
             changed = changes.changed() => {
                 if changed.is_err() {
                     return;
@@ -927,6 +1047,7 @@ async fn app_about(AxState(app): AxState<Arc<AppState>>) -> Result<Response, Api
     let server = server_view(&app.config()?);
     let version = crate::about::VERSION;
     Ok(Json(json!({
+        "api": APP_API,
         "version": version,
         "build": page_build(),
         "machine": server.machine,
@@ -2595,11 +2716,12 @@ async fn forget(AxState(app): AxState<Arc<AppState>>, UrlPath(id): UrlPath<Strin
 
 async fn term_ws(
     AxState(app): AxState<Arc<AppState>>,
+    device: Option<Extension<DeviceAuth>>,
     headers: HeaderMap,
     UrlPath((machine, name)): UrlPath<(String, String)>,
     ws: WebSocketUpgrade,
 ) -> Result<Response, ApiError> {
-    if !term::origin_ok(&headers) {
+    if device.is_none() && !term::origin_ok(&headers) {
         return Err(ApiError(
             StatusCode::FORBIDDEN,
             "origin does not match host".into(),
@@ -2625,7 +2747,8 @@ async fn term_ws(
     } else {
         term::EXIT_MESSAGE
     };
-    Ok(ws.on_upgrade(move |socket| run_terminal(socket, argv, exit_message, control)))
+    let signed_out = until_signed_out(&app, device);
+    Ok(ws.on_upgrade(move |socket| run_terminal(socket, argv, exit_message, control, signed_out)))
 }
 
 // A swipe arrives as many small scroll frames, and each one is an ssh round trip, so whatever
@@ -2683,12 +2806,18 @@ pub async fn run_terminal(
     argv: Vec<String>,
     exit_message: &'static str,
     control: Option<term::Control>,
+    signed_out: SignedOut,
 ) {
-    let (tx, rx) = socket.split();
-    let rx = rx.filter_map(|msg| std::future::ready(msg.ok()));
+    let (mut tx, rx) = socket.split();
+    let mut rx = rx
+        .filter_map(|msg| std::future::ready(msg.ok()))
+        .take_until(signed_out);
     match term::spawn(&argv, 24, 80) {
-        Ok(pty) => term::bridge(tx, rx, pty, exit_message, control).await,
+        Ok(pty) => term::bridge(&mut tx, &mut rx, pty, exit_message, control).await,
         Err(e) => tracing::error!(error = %e, "terminal spawn failed"),
+    }
+    if rx.is_stopped() {
+        let _ = tx.send(signed_out_frame()).await;
     }
 }
 

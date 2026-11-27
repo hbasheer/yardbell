@@ -3548,10 +3548,14 @@ async fn open_live(
     cookie: &str,
     origin: &str,
 ) -> (String, tokio::net::TcpStream) {
+    open_live_with(addr, &format!("Origin: {origin}\r\nCookie: {cookie}\r\n")).await
+}
+
+async fn open_live_with(addr: SocketAddr, headers: &str) -> (String, tokio::net::TcpStream) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let mut socket = tokio::net::TcpStream::connect(addr).await.unwrap();
     let req = format!(
-        "GET /state/live HTTP/1.1\r\nHost: {addr}\r\nOrigin: {origin}\r\nCookie: {cookie}\r\n\
+        "GET /state/live HTTP/1.1\r\nHost: {addr}\r\n{headers}\
          Connection: Upgrade\r\nUpgrade: websocket\r\nSec-WebSocket-Version: 13\r\n\
          Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\n\r\n"
     );
@@ -5657,4 +5661,240 @@ async fn keep_awake_is_saved_applied_and_shown_in_the_state() {
     let shown: serde_json::Value = serde_json::from_str(&body).unwrap();
     assert_eq!(shown["keep_awake"]["mode"], "off");
     assert_eq!(shown["keep_awake"]["holding"], false);
+}
+
+fn bearer_req(method: &str, uri: &str, token: &str, body: Body) -> Request<Body> {
+    Request::builder()
+        .method(method)
+        .uri(uri)
+        .header(header::HOST, "localhost:4000")
+        .header(header::AUTHORIZATION, format!("Bearer {token}"))
+        .header(header::CONTENT_TYPE, "application/json")
+        .header(header::ACCEPT, "application/json")
+        .body(body)
+        .unwrap()
+}
+
+async fn through_router(app: &Arc<AppState>, req: Request<Body>) -> (StatusCode, String) {
+    let res = router(app.clone()).oneshot(req).await.unwrap();
+    let status = res.status();
+    let body = res.into_body().collect().await.unwrap().to_bytes();
+    (status, String::from_utf8_lossy(&body).into_owned())
+}
+
+#[tokio::test]
+async fn device_token_reads_state_without_cookie_or_origin() {
+    let r = rig();
+    let (_, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    let (status, body) =
+        through_router(&r.app, bearer_req("GET", "/state", &token, Body::empty())).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+}
+
+#[tokio::test]
+async fn device_token_posts_without_origin() {
+    let r = rig();
+    let (_, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    let req = bearer_req(
+        "POST",
+        "/sessions/hp/x/keys",
+        &token,
+        Body::from(json!({ "keys": "y" }).to_string()),
+    );
+    let (status, body) = through_router(&r.app, req).await;
+    assert_ne!(status, StatusCode::FORBIDDEN, "{body}");
+    assert_ne!(status, StatusCode::UNAUTHORIZED, "{body}");
+}
+
+#[tokio::test]
+async fn revoked_token_is_refused() {
+    let r = rig();
+    let (view, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    r.app.devices.revoke(&view.id).unwrap();
+    let (status, body) =
+        through_router(&r.app, bearer_req("GET", "/state", &token, Body::empty())).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"], "this phone was signed out, pair it again");
+}
+
+#[tokio::test]
+async fn cookie_post_still_needs_origin() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let req = Request::post("/sessions/hp/x/keys")
+        .header(header::HOST, "localhost:4000")
+        .header(header::COOKIE, c)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(json!({ "keys": "y" }).to_string()))
+        .unwrap();
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn live_socket_accepts_device_token_without_origin() {
+    let r = rig();
+    let (_, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    let addr = serve(&r).await;
+    let (head, _) = open_live_with(addr, &format!("Authorization: Bearer {token}\r\n")).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+}
+
+#[tokio::test]
+async fn revoking_a_phone_closes_its_live_socket() {
+    use tokio::io::AsyncReadExt;
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (view, token) = r.app.devices.issue("Pixel", 0).unwrap();
+    let (_, other) = r.app.devices.issue("Tablet", 0).unwrap();
+    let addr = serve(&r).await;
+    let (head, mut socket) =
+        open_live_with(addr, &format!("Authorization: Bearer {token}\r\n")).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+    let (head, mut kept) =
+        open_live_with(addr, &format!("Authorization: Bearer {other}\r\n")).await;
+    assert!(head.starts_with("HTTP/1.1 101"), "{head}");
+
+    let url = format!("/api/settings/devices/{}/revoke", view.id);
+    let (status, body) = settings_post(&r, &c, &url, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    let mut first = [0u8; 1];
+    tokio::time::timeout(Duration::from_secs(2), socket.read_exact(&mut first))
+        .await
+        .expect("the revoked phone's socket stayed open")
+        .unwrap();
+    assert_eq!(first[0], 0x88, "a close frame");
+
+    r.app.state.forget("hp:hp-x");
+    let text = tokio::time::timeout(Duration::from_secs(2), next_text(&mut kept))
+        .await
+        .expect("the other phone's socket stopped hearing changes");
+    assert!(text.parse::<u64>().is_ok(), "{text}");
+}
+
+fn native_post(uri: &str, body: Option<&str>) -> Request<Body> {
+    let mut b = Request::post(uri).header(header::HOST, "localhost:4000");
+    if let Some(body) = body {
+        b = b.header(header::CONTENT_TYPE, "application/json");
+        return b.body(Body::from(body.to_string())).unwrap();
+    }
+    b.body(Body::empty()).unwrap()
+}
+
+#[tokio::test]
+async fn pairing_with_a_device_name_returns_a_token() {
+    let r = rig();
+    let code = new_pairing(&r.app);
+    let req = native_post(
+        &format!("/app/pair/{code}"),
+        Some(r#"{"device":"Pixel 8"}"#),
+    );
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["ok"], true);
+    assert!(
+        body["token"].as_str().unwrap().starts_with("ybd_"),
+        "{body}"
+    );
+    assert_eq!(body["device"]["name"], "Pixel 8");
+    assert_eq!(r.app.devices.list().len(), 1);
+}
+
+#[tokio::test]
+async fn pairing_without_a_body_is_unchanged() {
+    let r = rig();
+    let code = new_pairing(&r.app);
+    let (status, headers, body) =
+        send(&r.app, native_post(&format!("/app/pair/{code}"), None)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body, r#"{"ok":true}"#);
+    assert!(headers.contains_key(header::SET_COOKIE));
+    assert!(r.app.devices.list().is_empty());
+}
+
+#[tokio::test]
+async fn pairing_from_another_site_is_refused() {
+    let r = rig();
+    let code = new_pairing(&r.app);
+    let mut req = native_post(&format!("/app/pair/{code}"), None);
+    req.headers_mut()
+        .insert(header::ORIGIN, "http://evil.example".parse().unwrap());
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "{body}");
+}
+
+#[tokio::test]
+async fn sign_in_with_passcode_returns_a_token() {
+    let r = rig();
+    let req = native_post(
+        "/app/sign-in",
+        Some(r#"{"passcode":"pw","device":"Pixel"}"#),
+    );
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert!(
+        body["token"].as_str().unwrap().starts_with("ybd_"),
+        "{body}"
+    );
+    assert_eq!(body["device"]["name"], "Pixel");
+
+    let req = native_post(
+        "/app/sign-in",
+        Some(r#"{"passcode":"nope","device":"Pixel"}"#),
+    );
+    let (status, body) = through_router(&r.app, req).await;
+    assert_eq!(status, StatusCode::UNAUTHORIZED, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"], "wrong passcode");
+}
+
+#[tokio::test]
+async fn devices_are_listed_and_revoked_from_settings() {
+    let r = rig();
+    let (view, _) = r.app.devices.issue("Pixel", 0).unwrap();
+    let c = cookie(&r.app).await;
+    let get = |c: &str| {
+        Request::get("/api/settings/devices")
+            .header(header::COOKIE, c.to_string())
+            .body(Body::empty())
+            .unwrap()
+    };
+    let (status, _, body) = send(&r.app, get(&c)).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["devices"].as_array().unwrap().len(), 1);
+    assert_eq!(body["devices"][0]["name"], "Pixel");
+
+    let url = format!("/api/settings/devices/{}/revoke", view.id);
+    let (status, _, body) = post_json(&r.app, &c, &url, "{}").await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let (_, _, body) = send(&r.app, get(&c)).await;
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert!(body["devices"].as_array().unwrap().is_empty());
+
+    let (status, _, body) = post_json(&r.app, &c, &url, "{}").await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["error"], "no paired phone with that id");
+}
+
+#[tokio::test]
+async fn about_reports_the_app_api_level() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (status, _, body) = send(
+        &r.app,
+        Request::get("/app/about")
+            .header(header::COOKIE, c)
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let body: Value = serde_json::from_str(&body).unwrap();
+    assert_eq!(body["api"], 1);
 }

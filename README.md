@@ -8,8 +8,8 @@ Aider and more) runs where and for which ticket, and which local port opens the 
 working on. It opens a full terminal into any session from your desktop or your phone, and puts
 several side by side in a Workspace, next to their files and changes. It can also do the work for
 you: Dispatch starts agents from a sentence, and pipelines carry a ticket or a merge request through
-steps you define and stop only when they need you. Nothing is installed on the machines it manages: it is one Rust binary with a
-plain HTML UI, plus apps for macOS, Linux and Android.
+steps you define and stop only when they need you. Nothing is installed on the machines it manages:
+it is one Rust binary with a web UI built in, plus apps for macOS, Linux and Android.
 
 ![The dashboard: one machine with six agent sessions, their pull requests and states, and the shared sidebar with the Usage card at its foot](docs/screenshots/dashboard.png)
 
@@ -120,11 +120,11 @@ Get the file for your system from the
 | Linux | `Yardbell_<version>_amd64.AppImage` |
 | Debian and Ubuntu | `Yardbell_<version>_amd64.deb` |
 | Fedora and openSUSE | `Yardbell-<version>-1.x86_64.rpm` |
-| Android 7 and later | `Yardbell_<version>_android.apk` |
+| Android 8 and later | `Yardbell_<version>_android.apk` |
 
 The desktop app can run the Yardbell server itself (**Run one on this machine**) or connect to one
-that is already running. The Android app pairs by scanning a code from **Settings → Connect a phone**.
-On an iPhone, open the dashboard in the browser. Install steps for each system are in
+that is already running. The Android app pairs by scanning a code from **Settings → Connect a
+phone**, and needs Meshnet on to reach your server. On an iPhone, open the dashboard in the browser. Install steps for each system are in
 [the apps](docs/apps.md).
 
 ## Quick start
@@ -161,6 +161,14 @@ Then add the other machines from **Add machine** in the UI, or list them in `yar
   do, build pipelines, and connect outside tools, with examples.
 - [Configuration](docs/configuration.md): every setting in `yardbell.yml`.
 - [Troubleshooting](docs/troubleshooting.md) and [Development](docs/development.md).
+
+## Credits
+
+Yardbell's interface owes a lot to [Orca](https://github.com/stablyai/orca) by Lovecast Inc. The
+web UI's layout, theme and components, and the design of the phone app, are adapted from Orca's
+code under its MIT License. Thank you to the Orca team for building it in the open. Their copyright
+notice, and those of the other projects Yardbell includes, are in
+[THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 
 ## License
 
