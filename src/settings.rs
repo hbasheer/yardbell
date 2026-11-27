@@ -93,6 +93,8 @@ pub struct PhoneEdit {
     #[serde(default = "on")]
     pub proposals: bool,
     #[serde(default = "on")]
+    pub dispatch: bool,
+    #[serde(default = "on")]
     pub pull_ci_failed: bool,
     #[serde(default = "on")]
     pub pull_conflicts: bool,
@@ -595,6 +597,7 @@ impl Settings {
         phone.pipeline_waiting = edit.pipeline_waiting;
         phone.pipeline_finished = edit.pipeline_finished;
         phone.proposals = edit.proposals;
+        phone.dispatch = edit.dispatch;
         phone.pull_ci_failed = edit.pull_ci_failed;
         phone.pull_conflicts = edit.pull_conflicts;
         phone.pull_ready = edit.pull_ready;

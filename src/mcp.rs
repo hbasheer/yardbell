@@ -511,6 +511,7 @@ async fn client_proposal(
         ));
     }
     let proposal = app.proposals.add(&tool, input, from, chrono::Local::now());
+    app.state.touch();
     if cfg.phone_notifications.proposals && app.proposals.should_push(std::time::Instant::now()) {
         app.phone.inbox.add(&[crate::phone::Push {
             title: "Yardbell proposals".into(),

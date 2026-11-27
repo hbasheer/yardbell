@@ -177,6 +177,7 @@ impl World for Fake {
             mesh: None,
             server: None,
             proposals: 0,
+            waiting: 0,
         }
     }
 

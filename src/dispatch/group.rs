@@ -698,6 +698,9 @@ impl Dispatch {
         for event in std::iter::once(&group).chain(&events) {
             self.shared.send_live(id, event);
         }
+        if events.iter().any(|e| e["status"] == "pending") {
+            self.gained_waiting(id);
+        }
         Ok(Opened {
             group: group_id,
             steps,
@@ -944,6 +947,7 @@ mod tests {
             mesh: None,
             server: None,
             proposals: 0,
+            waiting: 0,
         }
     }
 

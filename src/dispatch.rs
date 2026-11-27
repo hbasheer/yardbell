@@ -55,7 +55,7 @@ pub use usage::ClaudeAccount;
 use crate::config::RunsOn;
 use crate::shell::Runner;
 use serde_json::{json, Value};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use store::{load, now, Conversation, Shared, Stored};
@@ -91,7 +91,11 @@ pub struct Dispatch {
     token: String,
     shared: Arc<Shared>,
     memory: Memory,
+    on_waiting: Mutex<Option<WaitingHook>>,
+    told: Mutex<HashSet<String>>,
 }
+
+pub type WaitingHook = Arc<dyn Fn(&str, bool) + Send + Sync>;
 
 impl Dispatch {
     // Voice transcription runs its local commands through the same runner, so tests fake it.
@@ -112,6 +116,8 @@ impl Dispatch {
             commands: Mutex::new(HashMap::new()),
             token: crate::mcp::new_token(),
             memory: Memory::new(&dir),
+            on_waiting: Mutex::new(None),
+            told: Mutex::new(HashSet::new()),
             shared: Arc::new(Shared {
                 dir,
                 chats,
@@ -119,6 +125,45 @@ impl Dispatch {
                 codex_usage: Mutex::new(codex_usage),
                 codex_home: backend::codex::home(),
             }),
+        }
+    }
+
+    // Called with a conversation's id each time it gains a step that waits for the person, and
+    // whether that is the first since the conversation was last opened.
+    pub fn on_waiting(&self, hook: WaitingHook) {
+        *self.on_waiting.lock().expect("dispatch hook lock") = Some(hook);
+    }
+
+    pub fn opened(&self, id: &str) {
+        self.told.lock().expect("dispatch told lock").remove(id);
+    }
+
+    pub fn waiting(&self) -> usize {
+        self.shared
+            .lock()
+            .values()
+            .map(|c| actions::pending(&c.stored.events).count())
+            .sum()
+    }
+
+    pub fn waiting_in(&self, id: &str) -> Option<(String, usize)> {
+        let chats = self.shared.lock();
+        let c = chats.get(id)?;
+        Some((
+            c.stored.title.clone(),
+            actions::pending(&c.stored.events).count(),
+        ))
+    }
+
+    fn gained_waiting(&self, id: &str) {
+        let hook = self.on_waiting.lock().expect("dispatch hook lock").clone();
+        if let Some(hook) = hook {
+            let first = self
+                .told
+                .lock()
+                .expect("dispatch told lock")
+                .insert(id.to_string());
+            hook(id, first);
         }
     }
 
@@ -318,6 +363,9 @@ impl Dispatch {
             Ok(())
         })?;
         self.shared.send_live(id, &event);
+        if by != By::You {
+            self.gained_waiting(id);
+        }
         Ok(event)
     }
 
@@ -842,6 +890,7 @@ mod tests {
             mesh: None,
             server: None,
             proposals: 0,
+            waiting: 0,
         }
     }
 

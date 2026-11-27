@@ -126,6 +126,39 @@ pub struct Services {
     pub releases: crate::about::Fetch,
 }
 
+fn announce_waiting(
+    cfg_path: &std::path::Path,
+    state: &State,
+    phone: &Arc<Phone>,
+    dispatch: &Arc<Dispatch>,
+) {
+    let cfg_path = cfg_path.to_path_buf();
+    let (state, phone, chats) = (state.clone(), phone.clone(), Arc::downgrade(dispatch));
+    dispatch.on_waiting(Arc::new(move |id, first| {
+        state.touch();
+        let (Some(chats), Ok(cfg)) = (chats.upgrade(), Config::load(&cfg_path)) else {
+            return;
+        };
+        if !first || !cfg.phone_notifications.dispatch {
+            return;
+        }
+        let Some((title, waiting)) = chats.waiting_in(id) else {
+            return;
+        };
+        let message = match waiting {
+            1 => format!("1 step waits for you in {title}"),
+            n => format!("{n} steps wait for you in {title}"),
+        };
+        phone.inbox.add(&[crate::phone::Push {
+            title: "Dispatch".into(),
+            message,
+            tags: vec![],
+            priority: 3,
+            click: crate::phone::base_url(&cfg).map(|base| format!("{base}/dispatch?c={id}")),
+        }]);
+    }));
+}
+
 impl AppState {
     pub fn new(cfg_path: PathBuf, services: Services, cfg: &Config, clock: Clock) -> AppState {
         let Services {
@@ -159,6 +192,7 @@ impl AppState {
         let devices = Arc::new(crate::phone::devices::Devices::load(
             cfg_path.with_file_name("devices.json"),
         ));
+        announce_waiting(&cfg_path, &state, &phone, &dispatch);
         AppState {
             cfg_path,
             devices,
@@ -959,6 +993,7 @@ async fn state_json(
     view.mesh = Some(app.host_mesh.check(&cfg).await);
     view.server = Some(server_view(&cfg));
     view.proposals = app.proposals.waiting();
+    view.waiting = app.dispatch.waiting();
     with_reviews(&app, &mut view);
     let projects = projects_api::group(&cfg, &view);
     let reply = StateReply {
@@ -1440,8 +1475,10 @@ async fn dispatch_get(
     AxState(app): AxState<Arc<AppState>>,
     UrlPath(id): UrlPath<String>,
 ) -> Result<Response, ApiError> {
+    let id = conversation_id(&id)?;
+    app.dispatch.opened(id);
     app.dispatch
-        .get(conversation_id(&id)?)
+        .get(id)
         .map(|c| Json(c).into_response())
         .ok_or_else(|| ApiError(StatusCode::NOT_FOUND, "no such conversation".into()))
 }
@@ -1749,6 +1786,7 @@ async fn dispatch_decide(
     Json(req): Json<Decision>,
 ) -> Result<Response, ApiError> {
     let event = decide(&app, conversation_id(&id)?, step_id(&action)?, &req).await?;
+    app.state.touch();
     Ok(Json(event).into_response())
 }
 
@@ -1774,6 +1812,7 @@ async fn dispatch_decide_all(
             Err(e) => return Err(e),
         }
     }
+    app.state.touch();
     Ok(Json(decided).into_response())
 }
 
@@ -1799,6 +1838,7 @@ async fn dispatch_decide_group(
             Err(e) => return Err(e),
         }
     }
+    app.state.touch();
     Ok(Json(decided).into_response())
 }
 

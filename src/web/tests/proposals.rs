@@ -663,3 +663,107 @@ async fn approving_a_proposal_cannot_pass_a_command() {
     assert_eq!(done["result"]["ok"], false, "{done}");
     still_waiting(&r, &run);
 }
+
+fn step_in(r: &Rig, id: &str) -> serde_json::Value {
+    r.app
+        .dispatch
+        .propose(
+            id,
+            "stop_session",
+            json!({ "machine": "hp", "name": "hp-app" }),
+            crate::dispatch::By::Dispatch,
+            None,
+            None,
+        )
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_proposal_and_a_waiting_step_both_touch_the_state() {
+    let r = rig();
+    mcp_on(&r);
+    let mut changes = r.app.state.changes();
+    changes.borrow_and_update();
+    proposed_phone(&r, 3).await;
+    assert!(changes.has_changed().unwrap());
+    changes.borrow_and_update();
+    let id = r.app.dispatch.open_conversation("Fix the login");
+    assert!(!changes.has_changed().unwrap());
+    step_in(&r, &id);
+    assert!(changes.has_changed().unwrap());
+}
+
+#[tokio::test]
+async fn state_counts_waiting_steps_across_conversations() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (_, state) = step_get(&r, &c, "/state").await;
+    assert_eq!(state["waiting"], 0);
+    assert_eq!(state["proposals"], 0);
+    let (one, two) = (
+        r.app.dispatch.open_conversation("One"),
+        r.app.dispatch.open_conversation("Two"),
+    );
+    step_in(&r, &one);
+    step_in(&r, &one);
+    step_in(&r, &two);
+    let (_, state) = step_get(&r, &c, "/state").await;
+    assert_eq!(state["waiting"], 3);
+}
+
+#[tokio::test]
+async fn dispatch_pushes_once_per_conversation_until_it_is_opened() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = r.app.dispatch.open_conversation("Fix the login");
+    let other = r.app.dispatch.open_conversation("Other chat");
+    step_in(&r, &id);
+    step_in(&r, &id);
+    assert_eq!(pushes(&r), vec!["1 step waits for you in Fix the login"]);
+    step_in(&r, &other);
+    assert_eq!(pushes(&r).len(), 2);
+    step_get(&r, &c, &format!("/dispatch/conversations/{id}")).await;
+    step_in(&r, &id);
+    let sent = pushes(&r);
+    assert_eq!(sent.len(), 3);
+    assert_eq!(sent[2], "3 steps wait for you in Fix the login");
+}
+
+#[tokio::test]
+async fn a_step_the_person_asked_for_does_not_push() {
+    let r = rig();
+    let id = r.app.dispatch.open_conversation("Scan");
+    r.app
+        .dispatch
+        .propose(
+            &id,
+            "start_session",
+            json!({}),
+            crate::dispatch::By::You,
+            None,
+            None,
+        )
+        .unwrap();
+    assert!(pushes(&r).is_empty());
+}
+
+#[tokio::test]
+async fn the_dispatch_push_can_be_turned_off() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let mut cfg = saved(&r);
+    cfg.phone_notifications.dispatch = false;
+    std::fs::write(
+        r._dir.path().join("yardbell.yml"),
+        serde_yaml::to_string(&cfg).unwrap(),
+    )
+    .unwrap();
+    let mut changes = r.app.state.changes();
+    changes.borrow_and_update();
+    let id = r.app.dispatch.open_conversation("Quiet");
+    step_in(&r, &id);
+    assert!(pushes(&r).is_empty());
+    assert!(changes.has_changed().unwrap());
+    let (_, state) = step_get(&r, &c, "/state").await;
+    assert_eq!(state["waiting"], 1);
+}
