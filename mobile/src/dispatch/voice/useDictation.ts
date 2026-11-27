@@ -5,7 +5,7 @@ import { routeIfSignedOut } from '../../api/signedOut'
 import type { PairedServer } from '../../servers/store'
 import { triggerError, triggerSelection } from '../../ui/haptics'
 import { transcribe } from '../api'
-import { MAX_RECORDING_MS, NOTHING_HEARD, RECORDING_MIME, onRelease, tooShort, type MicMode } from './model'
+import { MAX_RECORDING_MS, NOTHING_HEARD, RECORDING_MIME, abortsOnBackground, onRelease, tooShort, type MicMode } from './model'
 
 export type DictationPhase = 'idle' | 'starting' | 'recording' | 'transcribing'
 
@@ -29,6 +29,7 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
   const alive = useRef(true)
   const startedAt = useRef(0)
   const abortStart = useRef(false)
+  const permissionPending = useRef(false)
   const handlers = useRef({ onText, onProblem, onDenied })
   handlers.current = { onText, onProblem, onDenied }
 
@@ -76,8 +77,14 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
     setPhase('starting')
     let prepared = false
     try {
-      let permission = await getRecordingPermissionsAsync()
-      if (!permission.granted) permission = await requestRecordingPermissionsAsync()
+      permissionPending.current = true
+      let permission
+      try {
+        permission = await getRecordingPermissionsAsync()
+        if (!permission.granted) permission = await requestRecordingPermissionsAsync()
+      } finally {
+        permissionPending.current = false
+      }
       if (!permission.granted) {
         setPhase('idle')
         handlers.current.onDenied()
@@ -133,7 +140,7 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
 
   useEffect(() => {
     const subscription = AppState.addEventListener('change', (next) => {
-      if (next !== 'background' || (phaseRef.current !== 'recording' && phaseRef.current !== 'starting')) return
+      if (next !== 'background' || !abortsOnBackground(phaseRef.current, permissionPending.current)) return
       clearLimit()
       stopAfterStart.current = false
       abortStart.current = true

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DispatchEvent } from '../types'
-import { HOLD_MS, MIN_RECORDING_MS, eventKey, insertAtCursor, keysOf, micHint, micMode, onRelease, parseSpeak, speechFor, speechPieces, spokenText, takeNew, tooShort } from './model'
+import { HOLD_MS, abortsOnBackground, MIN_RECORDING_MS, eventKey, insertAtCursor, keysOf, micHint, micMode, onRelease, parseSpeak, speechFor, speechPieces, spokenText, takeNew, tooShort } from './model'
 
 const assistant = (text: string): DispatchEvent => ({ role: 'assistant', text })
 const user = (text: string): DispatchEvent => ({ role: 'user', text })
@@ -129,7 +129,7 @@ describe('takeNew', () => {
     expect(takeNew([user('a'), assistant('reply')], first.seen).say).toEqual([])
   })
 
-  it('neither repeats nor skips when a poll returns a shorter or reordered list', () => {
+  it('neither repeats nor skips when a poll returns a shorter list, then a longer one', () => {
     const spoken = takeNew([user('a'), assistant('one'), assistant('two')], new Set())
     expect(spoken.say).toEqual(['one', 'two'])
     expect(takeNew([user('a'), assistant('one')], spoken.seen).say).toEqual([])
@@ -143,6 +143,16 @@ describe('takeNew', () => {
 
   it('starts from nothing for a new chat', () => {
     expect(takeNew([user('a'), assistant('hi')], new Set()).say).toEqual(['hi'])
+  })
+})
+
+describe('abortsOnBackground', () => {
+  it('stops a recording but leaves the permission prompt alone', () => {
+    expect(abortsOnBackground('recording', false)).toBe(true)
+    expect(abortsOnBackground('starting', true)).toBe(false)
+    expect(abortsOnBackground('starting', false)).toBe(true)
+    expect(abortsOnBackground('idle', false)).toBe(false)
+    expect(abortsOnBackground('transcribing', false)).toBe(false)
   })
 })
 

@@ -126,3 +126,6 @@ export const MIN_RECORDING_MS = 300
 export const tooShort = (startedAt: number, now: number): boolean => now - startedAt < MIN_RECORDING_MS
 
 export const parseSpeak = (raw: string | null): boolean => raw === '1'
+
+export const abortsOnBackground = (phase: 'idle' | 'starting' | 'recording' | 'transcribing', permissionPending: boolean): boolean =>
+  phase === 'recording' || (phase === 'starting' && !permissionPending)
