@@ -185,6 +185,7 @@ let socket = null;
 let attempt = 0;
 let ended = false;
 let wipe = false;
+let retryTimer = 0;
 let exits = [];
 const EXIT_BUDGET = 3;
 const EXIT_WINDOW = 60000;
@@ -192,7 +193,7 @@ const gone = document.getElementById("gone");
 
 async function stillRunning() {
   try {
-    const res = await fetch("/state", { headers: { Accept: "application/json" }, credentials: "same-origin" });
+    const res = await fetch("/state", { headers: { Accept: "application/json" }, credentials: "same-origin", signal: AbortSignal.timeout(5000) });
     if (!res.ok) return false;
     const view = await res.json();
     return (view.sessions || []).some((s) => s.machine === parts[1] && s.tmux === parts[2] && s.attachable && !s.stale && !s.stopped);
@@ -210,7 +211,7 @@ async function onExit(msg) {
     ended = false;
     wipe = true;
     document.getElementById("banner").style.display = "inline";
-    setTimeout(connect, RETRY[Math.min(attempt++, RETRY.length - 1)]);
+    scheduleConnect();
     return;
   }
   term.write(`\r\n\x1b[33m[${msg}]\x1b[0m\r\n`);
@@ -219,6 +220,7 @@ async function onExit(msg) {
 
 function reconnectNow() {
   gone.classList.remove("show");
+  clearTimeout(retryTimer);
   exits = [];
   attempt = 0;
   ended = false;
@@ -226,6 +228,11 @@ function reconnectNow() {
   connect();
 }
 gone.querySelector("button").addEventListener("click", reconnectNow);
+
+function scheduleConnect() {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(connect, RETRY[Math.min(attempt++, RETRY.length - 1)]);
+}
 
 function send(frame) {
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame));
@@ -274,6 +281,11 @@ function resize() {
 }
 
 function connect() {
+  if (socket) {
+    socket.onclose = null;
+    socket.onmessage = null;
+    socket.close();
+  }
   const proto = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${proto}://${location.host}${location.pathname}/ws`);
   socket.binaryType = "arraybuffer";
@@ -299,7 +311,7 @@ function connect() {
   socket.onclose = () => {
     if (ended) return;
     document.getElementById("banner").style.display = "inline";
-    setTimeout(connect, RETRY[Math.min(attempt++, RETRY.length - 1)]);
+    scheduleConnect();
   };
 }
 
