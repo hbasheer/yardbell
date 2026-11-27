@@ -75,8 +75,8 @@ const styles = themedStyleSheet(() => ({
     position: 'absolute',
     right: -5,
     bottom: -5,
-    width: 10,
-    height: 10,
+    width: 14,
+    height: 14,
     borderRadius: radii.pill,
     borderWidth: 2,
     borderColor: colors.bgPanel

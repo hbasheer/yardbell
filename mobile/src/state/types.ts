@@ -71,7 +71,15 @@ export type ServerView = {
   version: string
 }
 
-export type AgentView = { name: string; label: string }
+export type AgentView = { name: string; label: string; read_only?: boolean }
+
+export type FolderView = {
+  machine: string
+  label: string
+  path: string
+  branch: string
+  worktree?: boolean
+}
 
 export type StateView = {
   agents?: AgentView[]
@@ -79,5 +87,8 @@ export type StateView = {
   machines: MachineView[]
   sessions: SessionView[]
   ended?: EndedView[]
+  folders?: FolderView[]
+  proposals?: number
+  waiting?: number
   server?: ServerView | null
 }

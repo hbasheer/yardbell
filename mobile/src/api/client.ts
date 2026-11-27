@@ -3,7 +3,7 @@ import { START_TIMEOUT_MS, type Branches, type Listing, type NewSessionBody, typ
 import type { PairedServer } from '../servers/store'
 
 const TIMEOUT_MS = 15_000
-const MIN_VERSION = '0.11.109'
+const MIN_VERSION = '0.11.110'
 const PRE_APP_API_REFUSAL = 'request did not come from the Yardbell page'
 
 export class SignedOutError extends Error {
@@ -99,6 +99,10 @@ export class ApiClient {
 
   post<T>(path: string, body?: unknown, timeoutMs?: number): Promise<T> {
     return send<T>(this.address, path, { method: 'POST', body, token: this.token, timeoutMs }, this.fetchImpl)
+  }
+
+  delete<T>(path: string): Promise<T> {
+    return send<T>(this.address, path, { method: 'DELETE', token: this.token }, this.fetchImpl)
   }
 }
 

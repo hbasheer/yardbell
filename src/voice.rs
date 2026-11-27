@@ -68,6 +68,8 @@ fn extension(mime: &str) -> &'static str {
     match mime.split(';').next().unwrap_or("").trim() {
         "audio/ogg" | "application/ogg" => "ogg",
         "audio/mp4" | "video/mp4" | "audio/m4a" | "audio/x-m4a" => "m4a",
+        "audio/3gpp" | "video/3gpp" | "audio/3gp" => "3gp",
+        "audio/aac" | "audio/x-aac" => "aac",
         "audio/mpeg" => "mp3",
         "audio/wav" | "audio/x-wav" | "audio/wave" => "wav",
         "audio/flac" | "audio/x-flac" => "flac",
@@ -853,6 +855,41 @@ mod tests {
         .await;
         assert!(ok, "{message}");
         assert!(message.contains("all in place"), "{message}");
+    }
+
+    #[test]
+    fn what_an_android_phone_records_keeps_its_container_name() {
+        for (mime, ext) in [
+            ("audio/mp4", "m4a"),
+            ("audio/mp4; codecs=mp4a.40.2", "m4a"),
+            ("audio/3gpp", "3gp"),
+            ("audio/aac", "aac"),
+            ("audio/webm;codecs=opus", "webm"),
+        ] {
+            assert_eq!(extension(mime), ext, "for {mime}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_phone_recording_is_converted_from_its_own_container() {
+        let fake = FakeRunner::default();
+        fake.stub("ffmpeg", Output::ok_with(""));
+        fake.stub("whisper-cli", Output::ok_with("check the machines"));
+        for mime in ["audio/mp4", "audio/3gpp"] {
+            transcribe(
+                &fake,
+                &local_settings(),
+                &ModelStore::default(),
+                &secrets(),
+                b"x",
+                mime,
+            )
+            .await
+            .unwrap();
+        }
+        let calls = fake.calls();
+        assert!(calls[0].iter().any(|a| a.ends_with("recording.m4a")));
+        assert!(calls[2].iter().any(|a| a.ends_with("recording.3gp")));
     }
 
     #[test]

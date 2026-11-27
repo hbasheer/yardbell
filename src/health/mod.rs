@@ -567,6 +567,7 @@ mod tests {
                 mesh: None,
                 server: None,
                 proposals: 0,
+                waiting: 0,
             },
             screens: BTreeMap::new(),
             pulls: vec![],

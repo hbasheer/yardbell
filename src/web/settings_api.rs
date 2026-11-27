@@ -105,6 +105,7 @@ async fn show(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError
             "pipeline_waiting": phone.pipeline_waiting,
             "pipeline_finished": phone.pipeline_finished,
             "proposals": phone.proposals,
+            "dispatch": phone.dispatch,
             "pull_ci_failed": phone.pull_ci_failed,
             "pull_conflicts": phone.pull_conflicts,
             "pull_ready": phone.pull_ready,

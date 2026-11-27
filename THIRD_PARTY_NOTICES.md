@@ -70,19 +70,23 @@ The direct npm dependencies of `mobile/` and their licences:
 | @xterm/addon-fit | MIT |
 | @xterm/xterm | MIT |
 | expo | MIT |
+| expo-audio | MIT |
 | expo-build-properties | MIT |
 | expo-camera | MIT |
 | expo-clipboard | MIT |
 | expo-constants | MIT |
 | expo-device | MIT |
 | expo-document-picker | MIT |
+| expo-file-system | MIT |
 | expo-haptics | MIT |
 | expo-image-picker | MIT |
 | expo-router | MIT |
 | expo-secure-store | MIT |
+| expo-speech | MIT |
 | expo-splash-screen | MIT |
 | expo-status-bar | MIT |
 | lucide-react-native | ISC |
+| markdown-it | MIT |
 | react | MIT |
 | react-dom | MIT |
 | react-native | MIT |
@@ -94,6 +98,7 @@ The direct npm dependencies of `mobile/` and their licences:
 | react-native-web | MIT |
 | react-native-webview | MIT |
 | react-native-worklets | MIT |
+| remend | Apache-2.0 |
 
 ## Terminal fonts
 

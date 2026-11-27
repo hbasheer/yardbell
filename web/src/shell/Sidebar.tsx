@@ -233,7 +233,7 @@ function OptionsMenu({ state }: { state: YardbellState | null }) {
 }
 
 export function Sidebar({ page, go, state, live, theme, cycleTheme, onSearch, onCollapse, tree, onNewSession, width, onWidth }: Props) {
-  const proposals = state?.proposals?.length ?? 0
+  const proposals = state?.proposals ?? 0
   const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor
   const [folded, setFolded] = useState(() => localStorage.getItem(FOLDED_KEY) === '1')
   const [adding, setAdding] = useState(false)

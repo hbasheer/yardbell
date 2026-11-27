@@ -26,7 +26,7 @@ describe('pairWithLink', () => {
   it('returns the message of a ServerTooOldError and saves nothing', async () => {
     const d = deps({ pair: vi.fn().mockRejectedValue(new ServerTooOldError('hp')) })
     const result = await pairWithLink('yardbell://pair?server=a&code=x', d)
-    expect(result).toEqual({ ok: false, message: 'Update Yardbell on hp to 0.11.109 or later' })
+    expect(result).toEqual({ ok: false, message: 'Update Yardbell on hp to 0.11.110 or later' })
     expect(d.saveServer).not.toHaveBeenCalled()
   })
 })

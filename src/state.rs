@@ -156,6 +156,9 @@ pub struct StateView {
     // Proposals from MCP clients waiting for the person, for the sidebar's badge.
     #[serde(default)]
     pub proposals: usize,
+    // Dispatch steps waiting for the person, across conversations.
+    #[serde(default)]
+    pub waiting: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -442,6 +445,7 @@ impl State {
             mesh: None,
             server: None,
             proposals: 0,
+            waiting: 0,
         };
         for m in &cfg.machines {
             let status = inner.statuses.get(&m.name);

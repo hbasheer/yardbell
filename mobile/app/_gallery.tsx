@@ -35,6 +35,9 @@ import { StatusDot } from '@/ui/StatusDot'
 import { SwipeCell } from '@/ui/SwipeCell'
 import { TabBar } from '@/ui/TabBar'
 import { TabStrip } from '@/ui/TabStrip'
+import { CARD_GROUPS, CardsGallery, type CardGroup } from '@/dispatch/cards/CardsGallery'
+import { COMPOSER_GROUPS, ComposerGallery, type ComposerGroup } from '@/dispatch/composer/ComposerGallery'
+import { STEP_GROUPS, StepGallery, type StepGroup } from '@/steps/StepGallery'
 import {
   colors,
   radii,
@@ -45,12 +48,27 @@ import {
   useColorScheme
 } from '@/ui/theme'
 
-const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars'] as const
+const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars', 'steps-pending', 'steps-tools', 'steps-receipts', 'steps-edit', 'steps-already', 'steps-error', 'steps-busy', 'chat-markdown', 'chat-tools', 'chat-session', 'chat-pull', 'chat-group', 'chat-results', 'chat-review', 'chat-misc', 'composer-empty', 'composer-typing', 'composer-busy', 'composer-mention', 'composer-task', 'composer-files', 'composer-unreadable'] as const
 type Section = (typeof SECTIONS)[number]
 type Overlay = 'action' | 'pulldown' | 'confirm' | 'drawer'
 
 function isOverlay(value: unknown): value is Overlay {
   return value === 'action' || value === 'pulldown' || value === 'confirm' || value === 'drawer'
+}
+
+function stepGroup(section: Section): StepGroup | null {
+  const group = section.startsWith('steps-') ? section.slice(6) : null
+  return STEP_GROUPS.find((name) => name === group) ?? null
+}
+
+function composerGroup(section: Section): ComposerGroup | null {
+  const group = section.startsWith('composer-') ? section.slice(9) : null
+  return COMPOSER_GROUPS.find((name) => name === group) ?? null
+}
+
+function cardGroup(section: Section): CardGroup | null {
+  const group = section.startsWith('chat-') ? section.slice(5) : null
+  return CARD_GROUPS.find((name) => name === group) ?? null
 }
 
 function Block({ title, children, flush = false }: { title: string; children: ReactNode; flush?: boolean }) {
@@ -117,6 +135,20 @@ export default function Gallery() {
           ))}
         </View>
         {log ? <Text style={styles.log}>Last action: {log}</Text> : null}
+
+        {SECTIONS.map((section) => {
+          const group = stepGroup(section)
+          return group && show(section) ? <StepGallery key={section} group={group} /> : null
+        })}
+        {SECTIONS.map((section) => {
+          const group = cardGroup(section)
+          return group && show(section) ? <CardsGallery key={section} group={group} /> : null
+        })}
+
+        {SECTIONS.map((section) => {
+          const group = composerGroup(section)
+          return group && show(section) ? <ComposerGallery key={section} group={group} /> : null
+        })}
 
         {show('navigation') ? (
           <>

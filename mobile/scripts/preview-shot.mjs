@@ -1,5 +1,5 @@
 // Option --click "<visible text>" (repeatable, applied in order, 1.2 s wait after each) taps the smallest element whose text is exactly that, before the screenshot.
-// Prefix the value with "label:" to match an accessibility label instead of text, with "hold:" to press and hold (long-press) the text, or with "type:" to type the rest into the focused field.
+// Prefix the value with "swipe:" to drag the text left, "label:" to match an accessibility label instead of text, with "hold:" to press and hold (long-press) the text, with "type:" to type the rest into the focused field, or "wait:<ms>" to wait.
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -67,6 +67,10 @@ try {
   await call('browsingContext.navigate', { context, url, wait: 'complete' })
   await sleep(wait)
   for (const target of clicks) {
+    if (target.startsWith('wait:')) {
+      await sleep(Number(target.slice(5)))
+      continue
+    }
     if (target.startsWith('type:')) {
       const keys = [...target.slice(5)].flatMap((value) => [
         { type: 'keyDown', value },
@@ -78,7 +82,8 @@ try {
     }
     const byLabel = target.startsWith('label:')
     const hold = target.startsWith('hold:')
-    const text = byLabel ? target.slice(6) : hold ? target.slice(5) : target
+    const swipe = target.startsWith('swipe:')
+    const text = byLabel ? target.slice(6) : hold ? target.slice(5) : swipe ? target.slice(6) : target
     const found = await call('script.evaluate', {
       expression: `(() => {
         const want = ${JSON.stringify(text)}
@@ -117,6 +122,7 @@ try {
             { type: 'pointerMove', x: Math.round(where.x), y: Math.round(where.y) },
             { type: 'pointerDown', button: 0 },
             ...(hold ? [{ type: 'pause', duration: 700 }] : []),
+            ...(swipe ? [{ type: 'pointerMove', x: Math.round(where.x) - 50, y: Math.round(where.y), duration: 150 }, { type: 'pointerMove', x: Math.round(where.x) - 120, y: Math.round(where.y), duration: 150 }] : []),
             { type: 'pointerUp', button: 0 }
           ]
         }

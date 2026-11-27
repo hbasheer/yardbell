@@ -71,7 +71,8 @@ const PHONE_MAIN: [string, string][] = [
   ['memory', 'Memory at 95%'],
   ['pipeline_waiting', 'Pipeline needs you'],
   ['pipeline_finished', 'Pipeline finished'],
-  ['proposals', 'Proposals from MCP clients']
+  ['proposals', 'Proposals from MCP clients'],
+  ['dispatch', 'Dispatch steps waiting for you']
 ]
 const PHONE_PULLS: [string, string][] = [
   ['pull_ci_failed', 'CI failed'],
