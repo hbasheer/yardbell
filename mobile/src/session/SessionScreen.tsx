@@ -1,4 +1,4 @@
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router'
 import { ChevronLeft, Eraser, ExternalLink, Info, MoreHorizontal, Square, Terminal, Type } from 'lucide-react-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
@@ -10,7 +10,8 @@ import * as Clipboard from 'expo-clipboard'
 import { machineHref } from '@/home/presentation'
 import { useNewSession } from '@/new-session/NewSessionProvider'
 import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
-import { useServerState } from '@/state/useServerState'
+import { stateKey, useServerState } from '@/state/useServerState'
+import type { StateView as ServerStateView } from '@/state/types'
 import { statusOf, type ServerState } from '@/state/views'
 import { AddCustomKeySheet } from '@/terminal/AddCustomKeySheet'
 import { AttachStatus } from '@/terminal/AttachStatus'
@@ -27,12 +28,13 @@ import { SmartKeys } from '@/terminal/SmartKeys'
 import { useTerminalPrefs } from '@/terminal/terminalPrefs'
 import { useAttach } from '@/terminal/useAttach'
 import { terminalHtml } from '@/terminal/terminalHtml'
+import { isListedLive, shouldReconnectOnForeground } from '@/terminal/reconnect'
 import { useTerminalSocket } from '@/terminal/useTerminalSocket'
 import { ActionSheet, type ActionSheetAction } from '@/ui/ActionSheet'
 import { ConfirmModal } from '@/ui/ConfirmModal'
 import { NAV_BAR_HEIGHT, NavBar } from '@/ui/NavBar'
 import { NavBarButton } from '@/ui/NavBarButton'
-import { OfflineState, StateView } from '@/ui/StateView'
+import { OfflineState, StateButton, StateView } from '@/ui/StateView'
 import { StatusDot } from '@/ui/StatusDot'
 import { TabStrip } from '@/ui/TabStrip'
 import { PullDownMenu } from '@/ui/PullDownMenu'
@@ -153,7 +155,31 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
     [toPage]
   )
   const onReopen = useCallback(() => toPage({ type: 'reset' }), [toPage])
-  const term = useTerminalSocket(server, machine, name, onOutput, onExit, onReopen)
+  const queryClient = useQueryClient()
+  const canRetryAfterExit = useCallback(async () => {
+    await queryClient.refetchQueries({ queryKey: stateKey(serverId) }).catch(() => {})
+    return isListedLive(queryClient.getQueryData<ServerStateView>(stateKey(serverId)), machine, name)
+  }, [queryClient, serverId, machine, name])
+  const term = useTerminalSocket(server, machine, name, onOutput, onExit, onReopen, canRetryAfterExit)
+
+  const { reconnect: reconnectTerminal } = term
+  const reconnectNow = useCallback(() => {
+    setEnded(null)
+    live.reconnect()
+    reconnectTerminal()
+  }, [live.reconnect, reconnectTerminal])
+
+  const downStatus = useRef(term.status)
+  downStatus.current = term.status
+  const liveState = useRef(live.state)
+  liveState.current = live.state
+  useEffect(() => {
+    if (!appActive) return
+    if (shouldReconnectOnForeground(downStatus.current, liveState.current, machine, name)) {
+      setEnded(null)
+      reconnectTerminal()
+    }
+  }, [appActive, reconnectTerminal, machine, name])
 
   const { view } = term
   useEffect(() => {
@@ -414,6 +440,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
       {banner && (
         <View style={styles.banner}>
           <Text style={styles.bannerText}>{banner}</Text>
+          {ended && <StateButton label="Reconnect" onPress={reconnectNow} inRow />}
         </View>
       )}
       <View style={{ flex: 1 }}>
@@ -438,7 +465,8 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
                 icon={Terminal}
                 title={body.title}
                 message={body.message}
-                action={{ label: 'Back', onPress: () => router.back() }}
+                action={{ label: 'Reconnect', onPress: reconnectNow }}
+                secondaryAction={{ label: 'Back', onPress: () => router.back() }}
               />
             )}
           </View>
@@ -540,7 +568,7 @@ const styles = themedStyleSheet(() => ({
   title: { color: colors.textPrimary, fontSize: 16, fontWeight: '600', maxWidth: '100%' },
   statusRow: { flexDirection: 'row', alignItems: 'center', gap: 5, maxWidth: '100%' },
   statusText: { color: colors.textSecondary, fontSize: 12, flexShrink: 1 },
-  banner: { paddingHorizontal: spacing.lg, paddingVertical: 6, backgroundColor: colors.bgRaised },
-  bannerText: { color: colors.textPrimary, fontSize: 13 },
+  banner: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: spacing.sm, paddingHorizontal: spacing.lg, paddingVertical: 6, backgroundColor: colors.bgRaised },
+  bannerText: { flexShrink: 1, color: colors.textPrimary, fontSize: 13 },
   gone: { backgroundColor: colors.bgBase }
 }))

@@ -139,6 +139,62 @@ describe('openTerminalSocket', () => {
     expect(events.onStatus).toHaveBeenLastCalledWith('ended')
   })
 
+  test('an exit frame for a session still listed reconnects with backoff and says reconnecting', async () => {
+    const { events } = start()
+    events.canRetryAfterExit = vi.fn(async () => true)
+    latest().open()
+    latest().receive('{"t":"exit","msg":"session ended or machine unreachable"}')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(events.onExit).not.toHaveBeenCalled()
+    expect(events.onStatus).toHaveBeenLastCalledWith('reconnecting')
+    vi.advanceTimersByTime(1000)
+    expect(FakeSocket.all).toHaveLength(2)
+    latest().open()
+    expect(events.onReopen).toHaveBeenCalled()
+  })
+
+  test('the third exit within a minute ends the session', async () => {
+    const { events } = start()
+    events.canRetryAfterExit = vi.fn(async () => true)
+    for (let i = 0; i < 2; i++) {
+      latest().open()
+      latest().receive('{"t":"exit","msg":"x"}')
+      await Promise.resolve()
+      await Promise.resolve()
+      vi.advanceTimersByTime(1000)
+    }
+    latest().open()
+    latest().receive('{"t":"exit","msg":"x"}')
+    expect(events.onExit).toHaveBeenCalledWith('x')
+    expect(events.onStatus).toHaveBeenLastCalledWith('ended')
+  })
+
+  test('an exit frame for a session no longer listed ends it', async () => {
+    const { events } = start()
+    events.canRetryAfterExit = vi.fn(async () => false)
+    latest().open()
+    latest().receive('{"t":"exit","msg":"gone"}')
+    await Promise.resolve()
+    await Promise.resolve()
+    expect(events.onExit).toHaveBeenCalledWith('gone')
+    expect(events.onStatus).toHaveBeenLastCalledWith('ended')
+    vi.advanceTimersByTime(60_000)
+    expect(FakeSocket.all).toHaveLength(1)
+  })
+
+  test('reconnect after ended connects at once and restores the budget', () => {
+    const { events, socket } = start()
+    latest().open()
+    latest().receive('{"t":"exit","msg":"x"}')
+    socket.reconnect()
+    expect(FakeSocket.all).toHaveLength(2)
+    expect(events.onStatus).toHaveBeenLastCalledWith('connecting')
+    latest().open()
+    expect(events.onReopen).toHaveBeenCalled()
+    expect(events.onStatus).toHaveBeenLastCalledWith('open')
+  })
+
   test('binary frames are passed on as output', () => {
     const { events } = start()
     latest().open()

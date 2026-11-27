@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { PairedServer } from '../servers/store'
 import { backoffMs, type SocketCtor } from '../state/liveSocket'
+import { createExitBudget } from './reconnect'
 import { decodeServer, encodeInput, encodeResize, encodeScroll, encodeView } from './protocol'
 
 export type TerminalStatus = 'connecting' | 'open' | 'reconnecting' | 'ended'
@@ -10,6 +11,7 @@ export type TerminalEvents = {
   onExit: (msg: string) => void
   onStatus: (status: TerminalStatus) => void
   onReopen: () => void
+  canRetryAfterExit?: () => Promise<boolean>
 }
 
 export type TerminalSocket = {
@@ -17,6 +19,7 @@ export type TerminalSocket = {
   resize: (rows: number, cols: number) => void
   scroll: (lines: number) => void
   view: (on: boolean) => void
+  reconnect: () => void
   stop: () => void
 }
 
@@ -39,6 +42,8 @@ export function openTerminalSocket(
   let isOpen = false
   let everOpened = false
   let ended = false
+  let exitPending = false
+  const budget = createExitBudget()
   let stopped = false
   let size: { rows: number; cols: number } | null = null
   let shown = true
@@ -47,6 +52,45 @@ export function openTerminalSocket(
 
   const write = (frame: string) => {
     if (isOpen && socket) socket.send(frame)
+  }
+
+  const scheduleRetry = () => {
+    failures += 1
+    status('reconnecting')
+    timer = setTimeout(connect, backoffMs(failures))
+  }
+
+  const finish = (msg: string) => {
+    ended = true
+    events.onExit(msg)
+    status('ended')
+  }
+
+  const exitFrame = (from: WebSocket, msg: string) => {
+    const withinBudget = budget.recordExit(Date.now())
+    if (!withinBudget || !events.canRetryAfterExit) {
+      finish(msg)
+      return
+    }
+    exitPending = true
+    status('reconnecting')
+    events
+      .canRetryAfterExit()
+      .catch(() => false)
+      .then((retry) => {
+        exitPending = false
+        if (stopped || ended || (socket !== from && socket !== null)) return
+        if (!retry) {
+          finish(msg)
+          return
+        }
+        if (socket === from) {
+          socket = null
+          isOpen = false
+          from.close()
+        }
+        scheduleRetry()
+      })
   }
 
   const connect = () => {
@@ -73,18 +117,14 @@ export function openTerminalSocket(
         events.onOutput(frame.bytes)
         return
       }
-      ended = true
-      events.onExit(frame.msg)
-      status('ended')
+      exitFrame(next, frame.msg)
     }
     next.onclose = () => {
       if (socket !== next || stopped) return
       socket = null
       isOpen = false
-      if (ended) return
-      failures += 1
-      status('reconnecting')
-      timer = setTimeout(connect, backoffMs(failures))
+      if (ended || exitPending) return
+      scheduleRetry()
     }
   }
 
@@ -101,6 +141,21 @@ export function openTerminalSocket(
     view(on) {
       shown = on
       write(encodeView(on))
+    },
+    reconnect() {
+      if (stopped) return
+      budget.reset()
+      ended = false
+      exitPending = false
+      failures = 0
+      if (timer) clearTimeout(timer)
+      timer = null
+      const old = socket
+      socket = null
+      isOpen = false
+      old?.close()
+      status('connecting')
+      connect()
     },
     stop() {
       stopped = true
@@ -119,12 +174,13 @@ export function useTerminalSocket(
   name: string,
   onOutput: (bytes: Uint8Array) => void,
   onExit: (msg: string) => void,
-  onReopen: () => void
+  onReopen: () => void,
+  canRetryAfterExit?: () => Promise<boolean>
 ): Omit<TerminalSocket, 'stop'> & { status: TerminalStatus } {
   const [status, setStatus] = useState<TerminalStatus>('connecting')
   const socket = useRef<TerminalSocket | null>(null)
-  const handlers = useRef({ onOutput, onExit, onReopen })
-  handlers.current = { onOutput, onExit, onReopen }
+  const handlers = useRef({ onOutput, onExit, onReopen, canRetryAfterExit })
+  handlers.current = { onOutput, onExit, onReopen, canRetryAfterExit }
   const size = useRef<{ rows: number; cols: number } | null>(null)
   const shown = useRef(true)
 
@@ -136,6 +192,7 @@ export function useTerminalSocket(
       onOutput: (bytes) => handlers.current.onOutput(bytes),
       onExit: (msg) => handlers.current.onExit(msg),
       onReopen: () => handlers.current.onReopen(),
+      canRetryAfterExit: () => handlers.current.canRetryAfterExit?.() ?? Promise.resolve(false),
       onStatus: setStatus
     })
     if (size.current) live.resize(size.current.rows, size.current.cols)
@@ -158,7 +215,8 @@ export function useTerminalSocket(
       view(on: boolean) {
         shown.current = on
         socket.current?.view(on)
-      }
+      },
+      reconnect: () => socket.current?.reconnect()
     }),
     []
   )
