@@ -5,6 +5,13 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.108] - 2026-11-27
+
+- **A terminal comes back on its own.** When the connection to a session dropped, the terminal said
+  "session ended or machine unreachable" and stayed dead until the app was reloaded, even with the
+  session still running. It now reconnects by itself while the session is listed, and shows a
+  Reconnect button when the session has really ended.
+
 ## [0.11.107] - 2026-11-27
 
 - **The Workspace's Files tree stays as you left it.** It reloaded every few seconds and folded every
