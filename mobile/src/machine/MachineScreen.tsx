@@ -3,6 +3,7 @@ import { useLocalSearchParams, useRouter } from 'expo-router'
 import {
   ChevronLeft,
   ExternalLink,
+  FileDiff,
   FolderOpen,
   FolderTree,
   GitBranch,
@@ -17,6 +18,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Animated, Linking, Pressable, SectionList, StyleSheet, Text, View, type HostInstance } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { sessionHref } from '@/home/presentation'
+import { pickerHref, placeHref } from '@/places/model'
 import { useNewSession } from '@/new-session/NewSessionProvider'
 import { useStopSession } from '@/session/useStopSession'
 import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
@@ -190,6 +192,14 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
     }
     const branch = session.branch && session.branch !== '-' ? session.branch : null
     const path = session.path ?? session.cwd
+    const root = [session.path, session.cwd].find((p) => p?.startsWith('/'))
+    if (root) {
+      actions.push({
+        label: 'Changes',
+        icon: FileDiff,
+        onPress: () => router.push(placeHref('changes', server.id, machine, root) as never)
+      })
+    }
     if (branch) {
       actions.push({
         label: 'Copy branch',
@@ -361,6 +371,7 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
         anchorRef={moreRef}
         onClose={() => setMenuOpen(false)}
         onReconnect={reconnect}
+        before={[{ label: 'Changes', icon: FileDiff, onPress: () => router.push(pickerHref('changes', server.id, machine) as never) }]}
       />
       <ActionSheet
         visible={rowMenu !== null}

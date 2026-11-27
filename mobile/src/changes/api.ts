@@ -51,6 +51,8 @@ export type PathAction = 'stage' | 'unstage' | 'discard'
 
 export type DiffRequest = { root: string; path: string; staged: boolean; from?: number; context?: number }
 
+const GIT_TIMEOUT_MS = 120_000
+
 const base = (machine: string) => `/machines/${encodeURIComponent(machine)}/changes`
 
 const query = (params: Record<string, string | number | boolean | undefined>) =>
@@ -79,7 +81,7 @@ export function commitChanges(
   message: string,
   input: CommitInput
 ): Promise<{ sha: string; short: string }> {
-  return new ApiClient(server).post(`${base(machine)}/commit`, { root, message, ...input })
+  return new ApiClient(server).post(`${base(machine)}/commit`, { root, message, ...input }, GIT_TIMEOUT_MS)
 }
 
 export function changePaths(
@@ -93,5 +95,5 @@ export function changePaths(
 }
 
 export function gitAction(server: PairedServer, machine: string, action: GitAction, root: string): Promise<{ ok: boolean }> {
-  return new ApiClient(server).post(`${base(machine)}/${action}`, { root })
+  return new ApiClient(server).post(`${base(machine)}/${action}`, { root }, GIT_TIMEOUT_MS)
 }

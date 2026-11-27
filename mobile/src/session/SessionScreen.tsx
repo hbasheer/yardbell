@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router'
-import { ChevronLeft, Eraser, ExternalLink, Info, MoreHorizontal, Square, Terminal, Type } from 'lucide-react-native'
+import { ChevronLeft, Eraser, ExternalLink, FileDiff, Info, MoreHorizontal, Square, Terminal, Type } from 'lucide-react-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppState, Keyboard, KeyboardAvoidingView, Linking, Pressable, StyleSheet, Text, View, type HostInstance } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -8,6 +8,7 @@ import { WebView, type WebViewMessageEvent } from 'react-native-webview'
 import { ApiClient } from '@/api/client'
 import * as Clipboard from 'expo-clipboard'
 import { machineHref } from '@/home/presentation'
+import { placeHref } from '@/places/model'
 import { useNewSession } from '@/new-session/NewSessionProvider'
 import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
 import { stateKey, useServerState } from '@/state/useServerState'
@@ -356,6 +357,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
     onPress: () => session && stopSession.ask(session)
   }
   const pullUrl = session?.pull?.url
+  const sessionRoot = [session?.path, session?.cwd].find((p) => p?.startsWith('/'))
   const menuGroups: ActionSheetAction[][] = [
     [
       { label: 'Session details', icon: Info, disabled: !session, onPress: () => setDetailsOpen(true) },
@@ -371,6 +373,13 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
             }
           ]
         : []),
+      {
+        label: 'Changes',
+        icon: FileDiff,
+        disabled: !sessionRoot,
+        hint: sessionRoot ? undefined : 'No folder known',
+        onPress: () => sessionRoot && router.push(placeHref('changes', serverId, machine, sessionRoot) as never)
+      },
       { label: 'Text size', icon: Type, status: `${fontSize}`, closeBeforePress: true, onPress: () => setSizeOpen(true) }
     ],
     [stop]
