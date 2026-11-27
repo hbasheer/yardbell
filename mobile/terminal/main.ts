@@ -1,7 +1,11 @@
 import { FitAddon } from '@xterm/addon-fit'
 import { Terminal, type ITheme } from '@xterm/xterm'
 
-type FromApp = { type: 'output'; b64: string } | { type: 'theme'; colors: ITheme } | { type: 'reset' }
+type FromApp =
+  | { type: 'output'; b64: string }
+  | { type: 'theme'; colors: ITheme }
+  | { type: 'reset' }
+  | { type: 'fontSize'; size: number }
 type ToApp =
   | { type: 'input'; d: string }
   | { type: 'resize'; rows: number; cols: number }
@@ -63,6 +67,7 @@ function handle(message: FromApp) {
     term.options.theme = message.colors
     document.documentElement.style.background = message.colors.background ?? ''
   } else if (message.type === 'reset') term.reset()
+  else if (message.type === 'fontSize') setFontSize(message.size)
 }
 
 // The app's messages reach the page on window or on document depending on the platform, and one

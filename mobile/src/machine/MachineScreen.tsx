@@ -1,5 +1,4 @@
 import * as Clipboard from 'expo-clipboard'
-import { useQueryClient } from '@tanstack/react-query'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import {
   ChevronLeft,
@@ -17,9 +16,9 @@ import {
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Animated, Linking, Pressable, SectionList, StyleSheet, Text, View, type HostInstance } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { ApiClient } from '@/api/client'
 import { sessionHref } from '@/home/presentation'
 import { useNewSession } from '@/new-session/NewSessionProvider'
+import { useStopSession } from '@/session/useStopSession'
 import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
 import { useServerState } from '@/state/useServerState'
 import { machineSections, statusOf, type ServerSession, type ServerState } from '@/state/views'
@@ -95,7 +94,6 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
   useColorScheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
-  const queryClient = useQueryClient()
   const newSession = useNewSession()
   const live = useServerState(server)
   const entry: ServerState = useMemo(
@@ -115,7 +113,7 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
   const [optionsOpen, setOptionsOpen] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [rowMenu, setRowMenu] = useState<ServerSession | null>(null)
-  const [stopFor, setStopFor] = useState<ServerSession | null>(null)
+  const stopSession = useStopSession(server)
   const [failure, setFailure] = useState<{ title: string; message: string } | null>(null)
   const moreRef = useRef<HostInstance>(null)
   const listRef = useRef<SectionList<Row, Section>>(null)
@@ -161,17 +159,6 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
   const reconnect = () => live.reconnect()
   const refreshing = live.connection === 'reconnecting' && live.state !== undefined
   const outage = live.state !== undefined && (live.connection !== 'connected' || status.status === 'down')
-
-  const stop = () => {
-    const target = stopFor
-    if (!target?.tmux) return
-    new ApiClient(server)
-      .post(`/sessions/${encodeURIComponent(target.machine)}/${encodeURIComponent(target.tmux)}/stop`)
-      .then(() => queryClient.refetchQueries({ queryKey: ['state', server.id] }))
-      .catch((error) =>
-        setFailure({ title: 'Could not stop the session', message: error instanceof Error ? error.message : String(error) })
-      )
-  }
 
   const rowActions = (session: ServerSession): ActionSheetAction[] => {
     const openable = session.attachable && Boolean(session.tmux)
@@ -223,7 +210,7 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
         icon: Square,
         destructive: true,
         closeBeforePress: true,
-        onPress: () => setStopFor(session)
+        onPress: () => stopSession.ask(session)
       })
     }
     return actions
@@ -366,15 +353,7 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
         actions={rowMenu ? rowActions(rowMenu) : []}
         onClose={() => setRowMenu(null)}
       />
-      <ConfirmModal
-        visible={stopFor !== null}
-        title="Stop this session?"
-        message={stopFor ? `${sessionTitle(stopFor)} on ${stopFor.machine} will be stopped.` : undefined}
-        confirmLabel="Stop"
-        destructive
-        onConfirm={stop}
-        onCancel={() => setStopFor(null)}
-      />
+      {stopSession.modals}
       <ConfirmModal
         visible={failure !== null}
         title={failure?.title ?? ''}
