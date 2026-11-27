@@ -1,5 +1,5 @@
-import * as SecureStore from 'expo-secure-store'
 import { setServers } from '../../modules/yardbell-notify'
+import { getItem, setItem } from './storage'
 
 export type PairedServer = {
   id: string
@@ -13,7 +13,7 @@ const KEY = 'servers'
 const listeners = new Set<(servers: PairedServer[]) => void>()
 
 export async function listServers(): Promise<PairedServer[]> {
-  const raw = await SecureStore.getItemAsync(KEY)
+  const raw = await getItem(KEY)
   if (!raw) return []
   try {
     return JSON.parse(raw) as PairedServer[]
@@ -23,7 +23,7 @@ export async function listServers(): Promise<PairedServer[]> {
 }
 
 async function write(servers: PairedServer[]): Promise<void> {
-  await SecureStore.setItemAsync(KEY, JSON.stringify(servers))
+  await setItem(KEY, JSON.stringify(servers))
   setServers(servers.map(({ address, token }) => ({ address, token })))
   for (const fn of listeners) fn(servers)
 }

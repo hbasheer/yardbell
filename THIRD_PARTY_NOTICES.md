@@ -64,19 +64,29 @@ The direct npm dependencies of `mobile/` and their licences:
 
 | Package | Licence |
 |---|---|
+| @expo/metro-runtime | MIT |
+| @react-native-async-storage/async-storage | MIT |
 | @tanstack/react-query | MIT |
 | @xterm/addon-fit | MIT |
 | @xterm/xterm | MIT |
 | expo | MIT |
 | expo-build-properties | MIT |
 | expo-camera | MIT |
+| expo-clipboard | MIT |
 | expo-constants | MIT |
+| expo-haptics | MIT |
 | expo-router | MIT |
 | expo-secure-store | MIT |
 | expo-status-bar | MIT |
+| lucide-react-native | ISC |
 | react | MIT |
 | react-dom | MIT |
 | react-native | MIT |
+| react-native-gesture-handler | MIT |
+| react-native-reanimated | MIT |
 | react-native-safe-area-context | MIT |
 | react-native-screens | MIT |
+| react-native-svg | MIT |
+| react-native-web | MIT |
 | react-native-webview | MIT |
+| react-native-worklets | MIT |

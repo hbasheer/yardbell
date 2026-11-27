@@ -7,7 +7,11 @@ import { SignedOutError } from '@/api/client'
 import { routeIfSignedOut } from '@/api/signedOut'
 import { routeForLink } from '@/notifications/route'
 import { listServers, onServersChanged } from '@/servers/store'
+import '@/preview/seed'
+import { startAppearance } from '@/ui/theme'
 import { addOpenListener, getInitialLink, start as startNotifications } from '../modules/yardbell-notify'
+
+startAppearance()
 
 const queryClient = new QueryClient({
   defaultOptions: {

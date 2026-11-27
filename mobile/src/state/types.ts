@@ -7,17 +7,35 @@ export type MachineView = {
   local: boolean
 }
 
+export type PullView = {
+  forge: string
+  number: number
+  url: string
+  title: string
+  state: string
+  draft: boolean
+  review: string
+  ci?: string
+  head?: string
+  base?: string
+}
+
 export type SessionView = {
   id: string
   machine: string
   agent: string
   folder: string
+  ticket?: string
   branch: string
   activity: Activity
   attachable: boolean
   tmux: string | null
   stale: boolean
   stopped?: string | null
+  pull?: PullView | null
+  path?: string
+  cwd?: string
+  worktree?: boolean
 }
 
 export type ServerView = {

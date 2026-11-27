@@ -1,31 +1,22 @@
-export const colors = {
-  light: {
-    background: '#ffffff',
-    foreground: '#0a0a0a',
-    muted: '#f5f5f5',
-    mutedForeground: '#696969',
-    border: '#e5e5e5',
-    accent: '#f5f5f5',
-    accentForeground: '#171717',
-    idle: '#696969',
-    busy: '#eab308',
-    waiting: '#ea580c',
-    down: '#e40014'
-  },
-  dark: {
-    background: '#0a0a0a',
-    foreground: '#f0f0f0',
-    muted: '#262626',
-    mutedForeground: '#acacac',
-    border: 'rgba(255, 255, 255, 0.07)',
-    accent: '#404040',
-    accentForeground: '#f0f0f0',
-    idle: '#acacac',
-    busy: '#eab308',
-    waiting: '#f97316',
-    down: '#ff6568'
+import { palettes, type Palette } from '../ui/theme/palette'
+
+function legacy(p: Palette) {
+  return {
+    background: p.bgBase,
+    foreground: p.textPrimary,
+    muted: p.bgRaised,
+    mutedForeground: p.textSecondary,
+    border: p.borderSubtle,
+    accent: p.bgRaised,
+    accentForeground: p.textPrimary,
+    idle: p.textSecondary,
+    busy: p.statusAmber,
+    waiting: p.agentQuestion,
+    down: p.statusRed
   }
 }
+
+export const colors = { light: legacy(palettes.light), dark: legacy(palettes.dark) }
 
 const ansiDark = {
   black: '#1d1f21',

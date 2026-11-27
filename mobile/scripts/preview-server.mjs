@@ -1,0 +1,237 @@
+import { spawn } from 'node:child_process'
+import { createHash } from 'node:crypto'
+import { createServer } from 'node:http'
+
+const WEB_PORT = Number(process.env.PREVIEW_WEB_PORT ?? 8099)
+const HOST = process.env.PREVIEW_HOST ?? '127.0.0.1'
+
+const now = Math.floor(Date.now() / 1000)
+
+function pull(number, state, extra = {}) {
+  return {
+    forge: 'github',
+    number,
+    url: `https://github.com/acme/yardbell/pull/${number}`,
+    title: extra.title ?? `Change ${number}`,
+    state,
+    draft: false,
+    review: 'none',
+    ci: 'passing',
+    failed: [],
+    head: '',
+    base: 'main',
+    mergeable: 'mergeable',
+    ...extra
+  }
+}
+
+function session(machine, n, fields) {
+  const folder = fields.folder
+  return {
+    id: `${machine}:${n}`,
+    machine,
+    agent: 'claude',
+    pid: 4000 + n,
+    folder,
+    ticket: '',
+    branch: 'main',
+    activity: 'idle',
+    attachable: true,
+    tmux: `${folder}-${n}`,
+    stale: false,
+    ports: [],
+    path: `/home/dev/Projects/${folder}`,
+    cwd: '',
+    worktree: false,
+    ...fields
+  }
+}
+
+const hpSessions = [
+  session('hp', 1, {
+    folder: 'yardbell',
+    ticket: 'YB-214',
+    branch: 'mobile-app',
+    activity: 'blocked',
+    cwd: '/home/dev/Projects/yardbell/mobile',
+    pull: pull(412, 'open', { title: 'Phone app redesign', review: 'changes_requested', ci: 'failing', failed: ['android build'] })
+  }),
+  session('hp', 2, {
+    folder: 'yardbell-orca-style-ui',
+    ticket: 'YB-214',
+    branch: 'orca-style-ui',
+    activity: 'active',
+    worktree: true,
+    path: '/home/dev/Projects/yardbell-worktrees/orca-style-ui',
+    pull: pull(415, 'open', { title: 'Theme tokens and web preview', draft: true, ci: 'pending' })
+  }),
+  session('hp', 3, {
+    folder: 'yardbell',
+    branch: 'main',
+    agent: 'codex',
+    activity: 'idle',
+    pull: pull(398, 'merged', { title: 'Revoke closes sockets', review: 'approved' })
+  }),
+  session('hp', 4, {
+    folder: 'feedgest',
+    ticket: 'INL-88',
+    branch: 'inl-88-fix-import-dedup-for-very-long-branch-names-in-the-feed',
+    activity: 'active',
+    path: '/home/dev/Projects/feedgest/app',
+    pull: pull(77, 'closed', { title: 'Dedup imports' })
+  }),
+  session('hp', 5, { folder: 'sama', branch: 'wip-audio', activity: 'idle', attachable: false, tmux: null }),
+  session('hp', 6, { folder: 'eitjar', branch: 'main', activity: 'idle', stale: true }),
+  session('hp', 7, {
+    folder: 'commslayer-checkout-flow-rewrite-with-a-long-name',
+    ticket: 'COM-1234',
+    branch: 'com-1234-fix-webhook-dedup',
+    activity: 'idle',
+    stopped: 'exited 0',
+    worktree: true,
+    pull: pull(2210, 'open', { title: 'Fix webhook dedup', review: 'approved' })
+  })
+]
+
+const miniSessions = [
+  session('mac-mini', 1, { folder: 'eitjar', branch: 'main', agent: 'claude', activity: 'idle' }),
+  session('mac-mini', 2, {
+    folder: 'feedgest',
+    ticket: 'INL-91',
+    branch: 'inl-91-mobile-share',
+    activity: 'blocked',
+    pull: pull(80, 'open', { title: 'Share sheet', review: 'review_required' })
+  })
+]
+
+function machine(name, fields) {
+  return { name, up: true, reason: null, last_seen: null, local: false, health: null, accounts: [], mesh_on: true, ...fields }
+}
+
+const servers = [
+  {
+    port: Number(process.env.PREVIEW_PORT_A ?? 4210),
+    name: 'hp',
+    version: '0.11.107',
+    machines: [
+      machine('hp', { local: true }),
+      machine('nas', { up: false, reason: 'ssh: connect to host nas port 22: Connection timed out', last_seen: '2026-11-27T08:12:00+00:00' })
+    ],
+    sessions: hpSessions
+  },
+  {
+    port: Number(process.env.PREVIEW_PORT_B ?? 4211),
+    name: 'mac-mini',
+    version: '0.11.107',
+    machines: [machine('mac-mini', { local: true })],
+    sessions: miniSessions
+  }
+]
+
+function stateFor(server) {
+  return {
+    agents: [],
+    default_agent: 'claude',
+    machines: server.machines,
+    folders: [],
+    sessions: server.sessions,
+    ended: [],
+    host_terminal: { enabled: false },
+    mesh: null,
+    server: { machine: server.name, address: `http://${HOST}:${server.port}`, version: server.version },
+    proposals: []
+  }
+}
+
+const usage = {
+  providers: [
+    {
+      id: 'claude',
+      name: 'Claude',
+      windows: [
+        { label: '5 hour', short: '5h', used: 0.62, resets_at: now + 2 * 3600 + 14 * 60, status: 'allowed' },
+        { label: 'Weekly', short: '7d', used: 0.88, resets_at: now + 3 * 86400, status: 'allowed_warning' }
+      ]
+    },
+    {
+      id: 'codex',
+      name: 'Codex',
+      windows: [
+        { label: '5 hour', short: '5h', used: 0.18, resets_at: now + 4 * 3600, status: 'allowed' },
+        { label: 'Weekly', short: '7d', used: 0.34, resets_at: now + 5 * 86400, status: 'allowed' }
+      ]
+    }
+  ]
+}
+
+const cors = {
+  'Access-Control-Allow-Origin': '*',
+  'Access-Control-Allow-Headers': 'Authorization, Content-Type, Accept',
+  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+}
+
+function json(res, status, body) {
+  res.writeHead(status, { ...cors, 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(body))
+}
+
+function handler(server) {
+  return (req, res) => {
+    const path = new URL(req.url, 'http://x').pathname
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204, cors)
+      return res.end()
+    }
+    if (!(req.headers.authorization ?? '').startsWith('Bearer ')) return json(res, 401, { error: 'sign in again' })
+    if (path === '/app/about') return json(res, 200, { machine: server.name, api: 1, version: server.version })
+    if (path === '/state') return json(res, 200, stateFor(server))
+    if (path === '/dispatch/usage' || path === '/dispatch/usage/refresh') return json(res, 200, usage)
+    json(res, 404, { error: 'not found' })
+  }
+}
+
+function acceptSocket(req, socket) {
+  const key = req.headers['sec-websocket-key']
+  if (!key || new URL(req.url, 'http://x').pathname !== '/state/live') return socket.destroy()
+  const accept = createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
+  socket.write(
+    `HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: ${accept}\r\n\r\n`
+  )
+  socket.on('data', () => {})
+  socket.on('error', () => {})
+}
+
+const listening = servers.map(
+  (server) =>
+    new Promise((resolve, reject) => {
+      const http = createServer(handler(server))
+      http.on('upgrade', acceptSocket)
+      http.once('error', reject)
+      http.listen(server.port, HOST, () => {
+        console.log(`mock ${server.name} on http://${HOST}:${server.port}`)
+        resolve(http)
+      })
+    })
+)
+
+const mocks = await Promise.all(listening)
+
+if (process.argv.includes('--mock-only')) {
+  console.log('mock servers only')
+} else {
+  const expo = spawn(new URL('../node_modules/.bin/expo', import.meta.url).pathname, ['start', '--web', '--port', String(WEB_PORT)], {
+    stdio: 'inherit',
+    env: { ...process.env, EXPO_NO_TELEMETRY: '1' }
+  })
+  const stop = () => {
+    expo.kill('SIGTERM')
+    for (const mock of mocks) mock.close()
+  }
+  expo.on('exit', (code) => {
+    for (const mock of mocks) mock.close()
+    process.exit(code ?? 0)
+  })
+  process.on('SIGINT', stop)
+  process.on('SIGTERM', stop)
+  console.log(`preview: http://${HOST}:${WEB_PORT}/?preview=1`)
+}
