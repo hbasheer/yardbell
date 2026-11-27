@@ -1,9 +1,10 @@
-import { Plus, Settings } from 'lucide-react-native'
+import { Inbox, Plus, Settings } from 'lucide-react-native'
 import { RefreshControl, ScrollView, Text, View } from 'react-native'
+import { inboxRows, inboxRowSubtitle } from '@/inbox/model'
 import { feedSections, machineRows, type MachineRow, type ServerSession, type ServerState } from '@/state/views'
 import { LIST_LEADING_INSET, ListGroup } from '@/ui/ListGroup'
 import { ListRow } from '@/ui/ListRow'
-import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
+import { colors, fixedColors, radii, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { AgentRow } from './AgentRow'
 import { HomeHeader, HeaderIconButton } from './HomeHeader'
 import { HomeSectionHeading } from './HomeSectionHeading'
@@ -18,6 +19,7 @@ type Props = {
   onOpenSession: (session: ServerSession) => void
   onOpenMachine: (row: MachineRow) => void
   onMachineMenu: (row: MachineRow) => void
+  onOpenInbox: (serverId: string) => void
   onSeeAll: () => void
   onPair: () => void
 }
@@ -26,6 +28,7 @@ export function FeedTab(props: Props) {
   useColorScheme()
   const sections = feedSections(props.servers)
   const rows = machineRows(props.servers)
+  const inbox = inboxRows(props.servers)
   const isLocal = (row: MachineRow) =>
     props.servers.find((s) => s.server.id === row.serverId)?.state?.machines.find((m) => m.name === row.machine)?.local ?? false
 
@@ -47,12 +50,35 @@ export function FeedTab(props: Props) {
           />
         }
       >
+        {inbox.length > 0 ? (
+          <View style={styles.inbox}>
+            <ListGroup surface="page" separatorInset={LIST_LEADING_INSET}>
+              {inbox.map((row) => (
+                <ListRow
+                  key={row.serverId}
+                  title="Inbox"
+                  subtitle={inboxRowSubtitle(row, props.servers.length)}
+                  subtitleLines={1}
+                  leading={<Inbox size={18} color={colors.textSecondary} strokeWidth={2} />}
+                  accessory={
+                    <View style={styles.count}>
+                      <Text style={styles.countText}>{row.waiting > 99 ? '99+' : row.waiting}</Text>
+                    </View>
+                  }
+                  navigates
+                  accessibilityLabel={`Inbox, ${inboxRowSubtitle(row, props.servers.length)}`}
+                  onPress={() => props.onOpenInbox(row.serverId)}
+                />
+              ))}
+            </ListGroup>
+          </View>
+        ) : null}
         {sections.map((section, index) => (
           <View key={section.kind}>
             <HomeSectionHeading
               title={section.title}
               count={section.total}
-              first={index === 0}
+              first={index === 0 && inbox.length === 0}
               link={{ label: 'See all', onPress: props.onSeeAll }}
             />
             <ListGroup surface="page" separatorInset={LIST_LEADING_INSET}>
@@ -62,7 +88,7 @@ export function FeedTab(props: Props) {
             </ListGroup>
           </View>
         ))}
-        <HomeSectionHeading title="Machines" count={rows.length} first={sections.length === 0} />
+        <HomeSectionHeading title="Machines" count={rows.length} first={sections.length === 0 && inbox.length === 0} />
         <ListGroup surface="page" separatorInset={MACHINE_SEPARATOR_INSET}>
           {rows.map((row) => (
             <MachineRowItem key={row.key} row={row} local={isLocal(row)} onOpen={props.onOpenMachine} onMenu={props.onMachineMenu} />
@@ -84,5 +110,16 @@ export function FeedTab(props: Props) {
 const styles = themedStyleSheet(() => ({
   fill: { flex: 1 },
   content: { paddingHorizontal: spacing.lg },
+  inbox: { marginTop: spacing.xs },
+  count: {
+    minWidth: 22,
+    height: 22,
+    paddingHorizontal: 7,
+    borderRadius: radii.pill,
+    backgroundColor: colors.statusAmber,
+    alignItems: 'center',
+    justifyContent: 'center'
+  },
+  countText: { fontSize: 12, fontWeight: '700', color: fixedColors.black, fontVariant: ['tabular-nums'] },
   hint: { marginTop: spacing.md, fontSize: 13, color: colors.textMuted, textAlign: 'center' }
 }))

@@ -18,6 +18,7 @@ import { triggerMediumImpact } from '@/ui/haptics'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { EmptyHero } from './EmptyHero'
 import { FeedTab } from './FeedTab'
+import { inboxHref } from '@/inbox/model'
 import { machineHref, sessionHref } from './presentation'
 import { SessionsTab } from './SessionsTab'
 import { UsageTab } from './UsageTab'
@@ -170,6 +171,7 @@ export function HomeScreen() {
             triggerMediumImpact()
             setMenuFor(row)
           }}
+          onOpenInbox={(serverId) => router.push(inboxHref(serverId) as never)}
           onSeeAll={() => select('sessions')}
           onPair={pair}
         />
