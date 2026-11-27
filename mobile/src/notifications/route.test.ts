@@ -53,4 +53,11 @@ describe('routeForLink', () => {
     expect(routeForLink('http://10.0.0.9:4000/proposals', [s, other])).toBe('/inbox/http%3A%2F%2F10.0.0.9%3A4000')
     expect(routeForLink('http://10.0.0.9:40000/proposals', [s, other])).toBe('/')
   })
+
+  it('needs a path, query or fragment boundary after the server address', () => {
+    const short = { ...s, address: 'http://100.64.0.10:400', id: 'http://100.64.0.10:400' }
+    expect(routeForLink('http://100.64.0.10:4000/proposals', [short])).toBe('/')
+    expect(routeForLink('http://100.64.0.10:400/proposals', [short])).toBe('/inbox/http%3A%2F%2F100.64.0.10%3A400')
+    expect(routeForLink('http://100.64.0.10:400?x=1', [short])).toBe('/')
+  })
 })

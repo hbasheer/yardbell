@@ -13,6 +13,7 @@ import {
   proposedPrompt,
   replaceAt,
   replaceSteps,
+  streamStalled,
   runsOnText,
   sentEvent,
   settledText,
@@ -232,5 +233,22 @@ describe('words', () => {
   it('turns the server refusal into a sentence', () => {
     expect(settledText('this step was already approved')).toBe('This step was already approved.')
     expect(settledText('')).toBe('Already decided.')
+  })
+})
+
+describe('streamStalled', () => {
+  it('keeps a stream that is busy and recently heard from', () => {
+    expect(streamStalled(1000, 20_000, true)).toBe(false)
+    expect(streamStalled(1000, 20_000, null)).toBe(false)
+  })
+
+  it('drops it when the server says the turn is over', () => {
+    expect(streamStalled(19_000, 20_000, false)).toBe(true)
+  })
+
+  it('drops it after 30 seconds without a line, whatever the server says', () => {
+    expect(streamStalled(0, 29_999, true)).toBe(false)
+    expect(streamStalled(0, 30_000, true)).toBe(true)
+    expect(streamStalled(0, 45_000, null)).toBe(true)
   })
 })

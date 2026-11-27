@@ -2,6 +2,7 @@ import { useFocusEffect } from 'expo-router'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppState } from 'react-native'
 import { routeIfSignedOut } from '../api/signedOut'
+import { useAppActive } from '../ui/useAppActive'
 import type { PairedServer } from '../servers/store'
 import {
   answerSession,
@@ -29,6 +30,8 @@ import {
   replaceSteps,
   sentEvent,
   settledText,
+  STREAM_CHECK_MS,
+  streamStalled,
   withdrawnCount,
   withdrawnText
 } from './chatModel'
@@ -84,6 +87,8 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
   const stream = useRef<AbortController | null>(null)
   const following = useRef<AbortController | null>(null)
   const alive = useRef(true)
+  const openedNext = useRef(true)
+  const foreground = useAppActive()
   const generation = useRef(0)
   const callbacks = useRef({ onCreated, onMoved })
   callbacks.current = { onCreated, onMoved }
@@ -184,7 +189,9 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
     if (!cid) return
     const asked = generation.current
     try {
-      const conversation = await getConversation(server, cid)
+      const opened = openedNext.current
+      openedNext.current = false
+      const conversation = await getConversation(server, cid, opened)
       if (!alive.current || idRef.current !== cid) return
       setLoadError(null)
       if (!isFresh(conversation, asked)) return
@@ -235,6 +242,19 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
       stream.current = controller
       let cid = idRef.current
       let started = false
+      let lastLineAt = Date.now()
+      let watchdog: ReturnType<typeof setInterval> | undefined
+      const watch = (conversationId: string) => {
+        watchdog = setInterval(() => {
+          void (async () => {
+            const serverBusy = await getConversation(server, conversationId).then(
+              (c) => c.busy,
+              () => null
+            )
+            if (stream.current === controller && streamStalled(lastLineAt, Date.now(), serverBusy)) controller.abort()
+          })()
+        }, STREAM_CHECK_MS)
+      }
       try {
         await ask(
           server,
@@ -242,6 +262,8 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
           {
             signal: controller.signal,
             onConversation: (next) => {
+              lastLineAt = Date.now()
+              if (!started) watch(next)
               started = true
               phase.current = 'streaming'
               setStreaming(true)
@@ -254,6 +276,7 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
               void syncSteps(next, before)
             },
             onEvent: (event) => {
+              lastLineAt = Date.now()
               if (alive.current) update((list) => mergeStreamed(list, event))
             }
           }
@@ -269,6 +292,7 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
           throw error
         }
       } finally {
+        clearInterval(watchdog)
         if (stream.current === controller) stream.current = null
         if (alive.current) setStreaming(false)
       }
@@ -326,6 +350,7 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
     phase.current = 'idle'
     idRef.current = routeId
     shown.current = { updated: '', count: 0 }
+    openedNext.current = true
     eventsRef.current = []
     setEvents([])
     setMeta(EMPTY_META)
@@ -338,12 +363,19 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
 
   useFocusEffect(
     useCallback(() => {
+      openedNext.current = true
       resume(false)
+    }, [resume])
+  )
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!foreground) return
       const timer = setInterval(() => {
         if (phase.current === 'idle' && !busyRef.current) void load()
       }, CATCH_UP_MS)
       return () => clearInterval(timer)
-    }, [resume, load])
+    }, [load, foreground])
   )
 
   useEffect(() => {

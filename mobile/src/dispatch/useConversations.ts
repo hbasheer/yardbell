@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { routeIfSignedOut } from '@/api/signedOut'
+import { useAppActive } from '@/ui/useAppActive'
 import type { PairedServer } from '@/servers/store'
 import { listConversations } from './api'
 import type { ConversationRow } from './listModel'
@@ -12,6 +13,8 @@ type Loaded = { rows: ConversationRow[]; error: string | null }
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
 export function useConversations(servers: readonly PairedServer[], active: boolean, waitingKey: string) {
+  const foreground = useAppActive()
+  const polling = active && foreground
   const [loaded, setLoaded] = useState<Record<string, Loaded>>({})
   const inFlight = useRef(false)
   const serversRef = useRef(servers)
@@ -47,11 +50,11 @@ export function useConversations(servers: readonly PairedServer[], active: boole
 
   const serverKey = servers.map((server) => server.id).join(',')
   useEffect(() => {
-    if (!active) return
+    if (!polling) return
     void refresh()
     const timer = setInterval(() => void refresh(), REFRESH_MS)
     return () => clearInterval(timer)
-  }, [active, refresh, serverKey])
+  }, [polling, refresh, serverKey])
 
   const firstWaiting = useRef(true)
   useEffect(() => {

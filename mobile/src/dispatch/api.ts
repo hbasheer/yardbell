@@ -34,8 +34,8 @@ export function listConversations(server: PairedServer): Promise<ConversationSum
   return client(server).get('/dispatch/conversations')
 }
 
-export function getConversation(server: PairedServer, id: string): Promise<Conversation> {
-  return client(server).get(conversationPath(id))
+export function getConversation(server: PairedServer, id: string, opened = false): Promise<Conversation> {
+  return client(server).get(conversationPath(id, opened ? '?opened=1' : ''))
 }
 
 export function attachmentSource(server: PairedServer, id: string, file: string) {

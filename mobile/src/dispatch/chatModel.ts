@@ -186,3 +186,12 @@ export function settledText(message: string): string {
   const sentence = text.charAt(0).toUpperCase() + text.slice(1)
   return /[.!?]$/.test(sentence) ? sentence : `${sentence}.`
 }
+
+export const STREAM_CHECK_MS = 15_000
+export const STREAM_SILENT_MS = 30_000
+
+// A silent link gives expo/fetch nothing to throw on, so a stream is dropped once the server says
+// the turn is over, or when nothing has arrived for too long to be a working turn.
+export function streamStalled(lastLineAt: number, now: number, serverBusy: boolean | null): boolean {
+  return serverBusy === false || now - lastLineAt >= STREAM_SILENT_MS
+}

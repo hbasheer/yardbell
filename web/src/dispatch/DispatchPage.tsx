@@ -203,7 +203,7 @@ export function DispatchPage({ onOpenSession }: { onOpenSession: (machine: strin
       return
     }
     try {
-      const convo = await api<Conversation>('GET', `/dispatch/conversations/${encodeURIComponent(id)}`)
+      const convo = await api<Conversation>('GET', `/dispatch/conversations/${encodeURIComponent(id)}?opened=1`)
       if (currentRef.current !== id) return
       events.current = convo.events.slice()
       shown.current = { count: convo.events.length, updated: convo.updated }

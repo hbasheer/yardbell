@@ -1473,12 +1473,23 @@ fn conversation_id(id: &str) -> Result<&str, ApiError> {
     ))
 }
 
+#[derive(Deserialize)]
+struct DispatchGetQuery {
+    #[serde(default)]
+    opened: Option<String>,
+}
+
+// Only an explicit open re-arms the phone push; the pages' own polls must not, or a chat on screen
+// would undo the once-until-opened limit.
 async fn dispatch_get(
     AxState(app): AxState<Arc<AppState>>,
     UrlPath(id): UrlPath<String>,
+    axum::extract::Query(q): axum::extract::Query<DispatchGetQuery>,
 ) -> Result<Response, ApiError> {
     let id = conversation_id(&id)?;
-    app.dispatch.opened(id);
+    if q.opened.is_some() {
+        app.dispatch.opened(id);
+    }
     app.dispatch
         .get(id)
         .map(|c| Json(c).into_response())
@@ -1653,6 +1664,7 @@ async fn dispatch_delete(
     app.dispatch
         .delete(conversation_id(&id)?)
         .map_err(|e| ApiError(StatusCode::CONFLICT, e))?;
+    app.state.touch();
     Ok(Json(json!({ "ok": true })).into_response())
 }
 
@@ -1661,6 +1673,7 @@ async fn dispatch_clear(AxState(app): AxState<Arc<AppState>>) -> Result<Response
         .dispatch
         .clear()
         .map_err(|e| ApiError(StatusCode::INTERNAL_SERVER_ERROR, e))?;
+    app.state.touch();
     Ok(Json(json!({ "kept": kept })).into_response())
 }
 

@@ -16,10 +16,12 @@ function dispatchRoute(server: PairedServer, query: string): string {
   return `/dispatch/${encodeURIComponent(server.id)}/${encodeURIComponent(conversation)}`
 }
 
+const atBoundary = (next: string) => next === '' || next === '/' || next === '?' || next === '#'
+
 export function routeForLink(link: string, servers: PairedServer[]): string {
   for (const server of servers) {
     const base = server.address.replace(/\/+$/, '')
-    if (!link.startsWith(base)) continue
+    if (!link.startsWith(base) || !atBoundary(link.charAt(base.length))) continue
     const rest = link.slice(base.length)
     const [path, query = ''] = rest.split('#')[0].split('?')
     if (path === '/proposals' || path === '/proposals/') return `/inbox/${encodeURIComponent(server.id)}`

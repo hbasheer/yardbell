@@ -125,7 +125,13 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
   const sendRef = useRef(send)
   sendRef.current = send
   useEffect(() => {
-    if (!run || routeId !== 'new' || ran.current || !prompts.data) return
+    if (!run || routeId !== 'new' || ran.current) return
+    if (prompts.isError && !prompts.data) {
+      setRunError(`Could not load the saved prompts to run "${run}": ${messageOf(prompts.error)}`)
+      return
+    }
+    if (!prompts.data) return
+    setRunError(null)
     ran.current = true
     const prompt = promptToRun(prompts.data, run)
     if (!prompt) {
@@ -135,7 +141,7 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
     sendRef.current({ text: prompt.text, attachments: [], task: { name: prompt.name, version: prompt.version } }).catch((error) =>
       setRunError(`Could not run "${prompt.name}": ${messageOf(error)}`)
     )
-  }, [run, routeId, prompts.data])
+  }, [run, routeId, prompts.data, prompts.isError, prompts.error])
 
   const confirmDelete = async () => {
     setDeleting(false)

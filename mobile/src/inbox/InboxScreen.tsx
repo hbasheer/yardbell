@@ -8,9 +8,11 @@ import type { Decision } from '@/dispatch/types'
 import type { PairedServer } from '@/servers/store'
 import { useServerState } from '@/state/useServerState'
 import { StepCard } from '@/steps/StepCard'
+import { sessionHref } from '@/home/presentation'
 import { ConfirmModal } from '@/ui/ConfirmModal'
 import { NavBar, NavBarSubtitleText } from '@/ui/NavBar'
 import { NavBarButton } from '@/ui/NavBarButton'
+import { useAppActive } from '@/ui/useAppActive'
 import { LoadErrorState, StateView } from '@/ui/StateView'
 import { colors, feedback, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { clearDecided, decideProposal, deleteProposal, listProposals, type Proposal } from './api'
@@ -33,18 +35,22 @@ export function InboxScreen({ server, serverCount }: { server: PairedServer; ser
   const [deleting, setDeleting] = useState<Proposal | null>(null)
   const [clearing, setClearing] = useState(false)
   const seen = useRef('')
+  const latest = useRef(0)
+  const foreground = useAppActive()
 
   const load = useCallback(
     async (opened: boolean) => {
+      const asked = ++latest.current
       try {
         const list = await listProposals(server, opened)
+        if (asked !== latest.current) return
         setLoadError(null)
         const key = JSON.stringify(list.proposals)
         if (key === seen.current) return
         seen.current = key
         setProposals(list.proposals)
       } catch (error) {
-        if (routeIfSignedOut(error, server.id)) return
+        if (asked !== latest.current || routeIfSignedOut(error, server.id)) return
         setLoadError(messageOf(error))
       }
     },
@@ -53,10 +59,11 @@ export function InboxScreen({ server, serverCount }: { server: PairedServer; ser
 
   useFocusEffect(
     useCallback(() => {
+      if (!foreground) return
       void load(true)
       const timer = setInterval(() => void load(false), REFRESH_MS)
       return () => clearInterval(timer)
-    }, [load])
+    }, [load, foreground])
   )
 
   const waitingOnServer = state?.proposals
@@ -68,6 +75,11 @@ export function InboxScreen({ server, serverCount }: { server: PairedServer; ser
   const sections = useMemo(() => sectionsFor(proposals ?? [], tab), [proposals, tab])
   const machines = useMemo(() => state?.machines.map((machine) => machine.name), [state])
   const agents = useMemo(() => state?.agents?.map(({ name, label }) => ({ name, label })), [state])
+
+  const openSession = (machine: string, name: string) => {
+    const href = sessionHref({ serverId: server.id, machine, tmux: name })
+    if (href) router.push(href as never)
+  }
 
   const decide = (proposal: Proposal) => async (decision: Decision, input?: Record<string, unknown>) => {
     try {
@@ -158,7 +170,7 @@ export function InboxScreen({ server, serverCount }: { server: PairedServer; ser
                   </View>
                   {section.proposals.map((proposal) => (
                     <View key={proposal.id} style={styles.item}>
-                      <StepCard step={proposal} onDecide={decide(proposal)} machines={machines} agents={agents} />
+                      <StepCard step={proposal} onDecide={decide(proposal)} onOpenSession={openSession} machines={machines} agents={agents} />
                       <Pressable
                         style={({ pressed }) => [styles.delete, pressed && styles.pressed]}
                         onPress={() => setDeleting(proposal)}

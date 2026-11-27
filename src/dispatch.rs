@@ -738,6 +738,7 @@ impl Dispatch {
                 }
             }
         }
+        self.opened(id);
         let _ = std::fs::remove_file(self.mcp_config_file(id));
         let _ = std::fs::remove_dir_all(self.evidence_dir(id));
         let _ = std::fs::remove_dir_all(attachments::folder(&self.shared.dir, id));

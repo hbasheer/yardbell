@@ -724,9 +724,35 @@ async fn dispatch_pushes_once_per_conversation_until_it_is_opened() {
     assert_eq!(pushes(&r).len(), 2);
     step_get(&r, &c, &format!("/dispatch/conversations/{id}")).await;
     step_in(&r, &id);
+    assert_eq!(pushes(&r).len(), 2, "a plain read is a poll, not an open");
+    step_get(&r, &c, &format!("/dispatch/conversations/{id}?opened=1")).await;
+    step_in(&r, &id);
     let sent = pushes(&r);
     assert_eq!(sent.len(), 3);
-    assert_eq!(sent[2], "3 steps wait for you in Fix the login");
+    assert_eq!(sent[2], "4 steps wait for you in Fix the login");
+}
+
+#[tokio::test]
+async fn deleting_and_clearing_chats_touch_the_state() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let id = r.app.dispatch.open_conversation("Gone");
+    r.app.dispatch.open_conversation("Cleared");
+    let mut changes = r.app.state.changes();
+    quiet(&mut changes);
+    let (status, _) = step_post(
+        &r,
+        &c,
+        &format!("/dispatch/conversations/{id}/delete"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changes.has_changed().unwrap());
+    quiet(&mut changes);
+    let (status, _) = step_post(&r, &c, "/dispatch/clear", json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(changes.has_changed().unwrap());
 }
 
 #[tokio::test]

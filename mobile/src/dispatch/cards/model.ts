@@ -229,15 +229,6 @@ export function groupTrail(group: GroupEvent): string {
 
 export const pendingSteps = (states: ChildState[]): ActionEvent[] => states.flatMap((s) => (s.key === 'pending' && s.step ? [s.step] : []))
 
-export function failedStarts(decided: ActionEvent[]): number {
-  return decided.filter((s) => s.result && !s.result.ok).length
-}
-
-export function failedWords(decided: ActionEvent[]): string {
-  const failed = failedStarts(decided)
-  return failed ? `${failed} of ${plural(decided.length, 'child', 'children')} failed to start. Each row says why.` : ''
-}
-
 const RESULT: Record<string, Badge> = {
   done: { label: 'Done', tone: 'ok' },
   partial: { label: 'Partly done', tone: 'warn' },
