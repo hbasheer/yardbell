@@ -108,6 +108,7 @@ mod tests {
             mesh: None,
             server: None,
             proposals: 0,
+            waiting: 0,
         }
     }
 
