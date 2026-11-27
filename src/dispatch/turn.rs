@@ -1709,7 +1709,14 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
         let id = conversation(&dispatch, "fix it on hp").await;
         for _ in 0..2 {
             dispatch
-                .propose(&id, "start_session", start_input(), By::Dispatch, None, None)
+                .propose(
+                    &id,
+                    "start_session",
+                    start_input(),
+                    By::Dispatch,
+                    None,
+                    None,
+                )
                 .unwrap();
         }
         assert_eq!(dispatch.waiting(), 2);
@@ -1722,11 +1729,21 @@ echo '{{"type":"turn.completed","usage":{{"input_tokens":1,"output_tokens":1}}}}
             seen.store(waiting + 1, Ordering::SeqCst);
         }));
         let (_, rx) = probe
-            .ask(Some(&id), "never mind", 4000, &DispatchSettings::default(), None)
+            .ask(
+                Some(&id),
+                "never mind",
+                4000,
+                &DispatchSettings::default(),
+                None,
+            )
             .await
             .unwrap();
         drain(rx).await;
         assert_eq!(probe.waiting(), 0);
-        assert_eq!(calls.load(Ordering::SeqCst), 1, "hook ran once the count was 0");
+        assert_eq!(
+            calls.load(Ordering::SeqCst),
+            1,
+            "hook ran once the count was 0"
+        );
     }
 }

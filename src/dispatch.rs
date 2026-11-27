@@ -142,7 +142,11 @@ impl Dispatch {
     }
 
     fn withdrawn(&self) {
-        let hook = self.on_withdrawn.lock().expect("dispatch hook lock").clone();
+        let hook = self
+            .on_withdrawn
+            .lock()
+            .expect("dispatch hook lock")
+            .clone();
         if let Some(hook) = hook {
             hook();
         }
