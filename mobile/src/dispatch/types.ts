@@ -130,6 +130,7 @@ export type ReviewOf = {
   path?: string
   scan?: string
   pull?: PullRef
+  pin?: ReviewPin
 }
 
 export type ReviewOutcome = {
@@ -149,8 +150,13 @@ export type ReviewEvent = {
   summary?: string
   findings?: Finding[]
   outcome?: ReviewOutcome
+  path?: string
+  evidence?: ReviewShot[]
+  read_changed?: ReviewStanding
   at?: string
 }
+
+export type ReviewShot = { finding: number; name: string; file?: string; width?: number; height?: number; error?: string }
 
 export type PullCheck = { name: string; url?: string; log?: string }
 

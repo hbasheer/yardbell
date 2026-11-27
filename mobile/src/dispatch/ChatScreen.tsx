@@ -100,6 +100,8 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
 
   const source = useCallback((file: string) => (chat.id ? attachmentSource(server, chat.id, file) : null), [server, chat.id])
 
+  const reviewing = useMemo(() => ({ server, conversation: chat.id }), [server, chat.id])
+
   const dock = useMemo(() => dockOf(chat.events), [chat.events])
   const shown = shownPending(dock.steps, chosen)
   const live = useMemo(() => liveLookup(state), [state])
@@ -193,6 +195,7 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
         onShowStep={setChosen}
         onOpenSession={openSession}
         source={source}
+        review={reviewing}
       />
     )
 

@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { counts, dispatchApi, dispatchFixtures } from './preview-dispatch.mjs'
+import { addReviewChat, reviewApi } from './preview-review.mjs'
 import { runsWaiting, step3Api, step3Fixtures } from './preview-step3.mjs'
 
 const WEB_PORT = Number(process.env.PREVIEW_WEB_PORT ?? 8099)
@@ -252,7 +253,8 @@ function handler(server) {
       res.writeHead(204, cors)
       return res.end()
     }
-    if (!(req.headers.authorization ?? '').startsWith('Bearer ')) return json(res, 401, { error: 'sign in again' })
+    const webImage = req.method === 'GET' && /\/reviews\/\d+\/evidence\/[^/]+$/.test(path)
+    if (!webImage && !(req.headers.authorization ?? '').startsWith('Bearer ')) return json(res, 401, { error: 'sign in again' })
     if (path === '/app/about') return json(res, 200, { machine: server.name, api: 1, version: server.version })
     if (path === '/state') return json(res, 200, stateFor(server))
     const machinePart = path.match(/^\/machines\/([^/]+)\/(browse|branches|agents)$/)
@@ -291,6 +293,7 @@ function handler(server) {
     if (path === '/sessions' && req.method === 'POST') return startSession(req, res, server)
     if (path === '/dispatch/usage' || path === '/dispatch/usage/refresh') return json(res, 200, usage)
     if (await step3Api(req, res, server.step3, { json })) return
+    if (await reviewApi(req, res, { json, cors })) return
     if (await dispatchApi(req, res, server.dispatch, { json, cors })) return
     json(res, 404, { error: 'not found' })
   }
@@ -310,6 +313,7 @@ function acceptSocket(req, socket) {
 for (const server of servers) {
   server.dispatch = dispatchFixtures(server.name)
   server.step3 = step3Fixtures(server.dispatch, server.name)
+  addReviewChat(server.dispatch, server.name)
 }
 
 const listening = servers.map(

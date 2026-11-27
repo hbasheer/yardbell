@@ -2,6 +2,7 @@ import { ArrowDown, Check } from 'lucide-react-native'
 import { memo, useCallback, useMemo, useRef, useState } from 'react'
 import { FlatList, Pressable, StyleSheet, Text, View, type NativeScrollEvent, type NativeSyntheticEvent } from 'react-native'
 import { Markdown } from '../markdown'
+import type { PairedServer } from '../servers/store'
 import { StepCard } from '../steps/StepCard'
 import type { AgentChoice } from '../steps/StepEditor'
 import { colors, feedback, radii, spacing, themedStyleSheet, useColorScheme } from '../ui/theme'
@@ -40,6 +41,7 @@ export type TranscriptProps = {
   onShowStep: (id: string) => void
   onOpenSession: (machine: string, name: string) => void
   source: (file: string) => Source | null
+  review?: { server: PairedServer; conversation: string | null }
 }
 
 export function Transcript(props: TranscriptProps) {
@@ -103,6 +105,7 @@ export function Transcript(props: TranscriptProps) {
             onShowStep={props.onShowStep}
             onOpenSession={props.onOpenSession}
             source={props.source}
+            review={props.review}
           />
         )
     }
@@ -155,9 +158,10 @@ type BlockProps = {
   onShowStep: (id: string) => void
   onOpenSession: (machine: string, name: string) => void
   source: (file: string) => Source | null
+  review?: { server: PairedServer; conversation: string | null }
 }
 
-const BlockView = memo(function BlockView({ block, running, streaming, events, steps, actions, live, machines, agents, prompts, shownStep, onShowStep, onOpenSession, source }: BlockProps) {
+const BlockView = memo(function BlockView({ block, running, streaming, events, steps, actions, live, machines, agents, prompts, shownStep, onShowStep, onOpenSession, source, review: reviewing }: BlockProps) {
   const index = block.key
   const answer = useCallback((key: string) => actions.answer(index, key), [actions, index])
   const review = useCallback(() => actions.review(index), [actions, index])
@@ -216,7 +220,7 @@ const BlockView = memo(function BlockView({ block, running, streaming, events, s
       body = <SessionCard event={event} onAnswer={answer} onOpen={onOpenSession} onReview={review} onScan={scan} />
       break
     case 'review':
-      body = <ReviewCard event={event} onSettle={settle} loadTargets={loadTargets} />
+      body = <ReviewCard event={event} view={reviewing?.conversation ? { server: reviewing.server, conversation: reviewing.conversation, card: index } : undefined} onSettle={settle} loadTargets={loadTargets} />
       break
     case 'pull':
       body = <PullCard event={event} step={event.sent?.step ? steps.get(event.sent.step) : null} onSend={sendPull} onOpen={onOpenSession} />
