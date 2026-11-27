@@ -5,6 +5,12 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.107] - 2026-11-27
+
+- **The Workspace's Files tree stays as you left it.** It reloaded every few seconds and folded every
+  open folder. The commit message you were typing in Changes was wiped on the same beat, and a file
+  search started again.
+
 ## [0.11.106] - 2026-11-25
 
 - **The apps fit the window at any interface size.** At 125% the page ran past the bottom and right
