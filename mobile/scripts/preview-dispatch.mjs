@@ -16,7 +16,7 @@ function rolesTour() {
     { role: 'tool_result', name: 'list_folders', text: 'Error: machine nas is down', is_error: true },
     { role: 'tool', name: 'read_session', input: { machine: 'hp', name: 'yardbell-1' } },
     { role: 'assistant', text: 'I checked **hp** and **nas**. `nas` is down, so I will use `hp`.\n\n- Repository: `yardbell`\n- Branch: `fix-webhook-dedup`\n\n```\ncargo test dedup -- --nocapture\n```' },
-    step('a1000001', 'start_session', { machine: 'hp', folder: 'yardbell', agent: 'claude', branch: 'fix-webhook-dedup', new_branch: true, task: longTask }, { status: 'approved', decided: minutes(3), result: { ok: true, text: 'Started yardbell-3 on hp', session: { machine: 'hp', name: 'yardbell-3' } } }),
+    step('a1000001', 'start_session', { machine: 'hp', folder: 'yardbell', agent: 'claude', branch: 'fix-webhook-dedup', new_branch: true, prompt: longTask }, { status: 'approved', decided: minutes(3), result: { ok: true, text: 'Started yardbell-3 on hp', session: { machine: 'hp', name: 'yardbell-3' } } }),
     step('a1000002', 'send_to_session', { machine: 'hp', name: 'yardbell-3', text: 'Also run the whole spec folder before you push.' }, { status: 'edited', by: 'dispatch', decided: minutes(3), original: { machine: 'hp', name: 'yardbell-3', text: 'Run the specs.' }, result: { ok: true, text: 'Sent', at: minutes(3) } }),
     step('a1000003', 'stop_session', { machine: 'hp', name: 'yardbell-9' }, { status: 'rejected', by: 'you', decided: minutes(2) }),
     step('a1000004', 'push_branch', { machine: 'hp', folder: 'yardbell', branch: 'fix-webhook-dedup' }, { status: 'withdrawn', decided: minutes(2) }),
@@ -39,8 +39,8 @@ function groupChat() {
     { role: 'user', text: 'Run the dead code scan on the three apps and gather the results.' },
     { role: 'assistant', text: 'I will scan each app in its own session and gather the answers here.' },
     { role: 'group', id: 'g1000001', title: 'Dead code scan on three apps', gather: true, minutes: 30, status: 'waiting', follow: true, children: [{ label: 'yardbell', step: 'a2000001' }, { label: 'feedgest', step: 'a2000002' }, { label: 'sama', refused: 'Your rule does not allow scans on sama', rule: 'No scans on sama' }] },
-    step('a2000001', 'start_session', { machine: 'hp', folder: 'yardbell', agent: 'claude', task: 'Scan for dead code.' }, { group: 'g1000001', label: 'yardbell' }),
-    step('a2000002', 'start_session', { machine: 'hp', folder: 'feedgest', agent: 'codex', task: 'Scan for dead code.' }, { group: 'g1000001', label: 'feedgest' }),
+    step('a2000001', 'start_session', { machine: 'hp', folder: 'yardbell', agent: 'claude', prompt: 'Scan for dead code.' }, { group: 'g1000001', label: 'yardbell' }),
+    step('a2000002', 'start_session', { machine: 'hp', folder: 'feedgest', agent: 'codex', prompt: 'Scan for dead code.' }, { group: 'g1000001', label: 'feedgest' }),
     { role: 'results', group: 'g0000000', title: 'Test gap scan', why: 'Two of three apps finished.', gather: true, follow: false, children: [{ label: 'yardbell', started: true, name: 'yardbell-5', machine: 'hp', path: '/home/dev/Projects/yardbell', branch: 'main', state: 'ended', result: { status: 'done', summary: 'Found 6 untested functions.', details: [{ text: 'src/dispatch.rs: 3' }, { text: 'src/proposals.rs: 3' }] } }, { label: 'feedgest', started: true, name: 'feedgest-2', machine: 'hp', branch: 'main', state: 'blocked', screen: 'Waiting for an answer', result: { status: 'running', summary: 'Still reading.' } }, { label: 'sama', started: false, result: { status: 'failed', summary: 'The folder was not found.' } }] }
   ]
 }
@@ -49,7 +49,7 @@ function pendingChat() {
   return [
     { role: 'user', text: 'Start a session on yardbell for the dedup fix and tell the other one to stop waiting on CI.' },
     { role: 'assistant', text: 'I would like to do two things. Both need your approval.' },
-    step('a3000001', 'start_session', { machine: 'hp', folder: 'yardbell', agent: 'claude', branch: 'fix-webhook-dedup', new_branch: true, task: longTask }),
+    step('a3000001', 'start_session', { machine: 'hp', folder: 'yardbell', agent: 'claude', branch: 'fix-webhook-dedup', new_branch: true, prompt: longTask }),
     step('a3000002', 'send_to_session', { machine: 'hp', name: 'yardbell-1', text: 'Stop waiting for CI and merge main into your branch instead.' })
   ]
 }

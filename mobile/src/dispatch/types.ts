@@ -41,13 +41,13 @@ export type ActionEvent = {
   from?: string
   at?: string
   decided?: string
-  rule?: string
+  rule?: { action?: string; machine?: string; folder?: string; approval?: string }
   original?: Record<string, unknown>
   result?: StepResult
   review?: unknown
   group?: string
   label?: string
-  already?: boolean
+  already?: { text?: string; conversation?: string }
   told?: boolean
 }
 

@@ -35,6 +35,7 @@ import { StatusDot } from '@/ui/StatusDot'
 import { SwipeCell } from '@/ui/SwipeCell'
 import { TabBar } from '@/ui/TabBar'
 import { TabStrip } from '@/ui/TabStrip'
+import { STEP_GROUPS, StepGallery, type StepGroup } from '@/steps/StepGallery'
 import {
   colors,
   radii,
@@ -45,12 +46,17 @@ import {
   useColorScheme
 } from '@/ui/theme'
 
-const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars'] as const
+const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars', 'steps-pending', 'steps-tools', 'steps-receipts', 'steps-edit', 'steps-already', 'steps-error', 'steps-busy'] as const
 type Section = (typeof SECTIONS)[number]
 type Overlay = 'action' | 'pulldown' | 'confirm' | 'drawer'
 
 function isOverlay(value: unknown): value is Overlay {
   return value === 'action' || value === 'pulldown' || value === 'confirm' || value === 'drawer'
+}
+
+function stepGroup(section: Section): StepGroup | null {
+  const group = section.startsWith('steps-') ? section.slice(6) : null
+  return STEP_GROUPS.find((name) => name === group) ?? null
 }
 
 function Block({ title, children, flush = false }: { title: string; children: ReactNode; flush?: boolean }) {
@@ -117,6 +123,11 @@ export default function Gallery() {
           ))}
         </View>
         {log ? <Text style={styles.log}>Last action: {log}</Text> : null}
+
+        {SECTIONS.map((section) => {
+          const group = stepGroup(section)
+          return group && show(section) ? <StepGallery key={section} group={group} /> : null
+        })}
 
         {show('navigation') ? (
           <>
