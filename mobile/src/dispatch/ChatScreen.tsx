@@ -22,6 +22,7 @@ import { backendNote, dockOf, liveLookup, shownPending, starters, trackedRows } 
 import { Intro, SessionsStrip } from './chatParts'
 import { Composer } from './composer'
 import { BUSY_DELETE, dispatchHref, newChatHref, promptsHref } from './listModel'
+import { promptToRun } from './prompts/model'
 import { PendingDock } from './PendingDock'
 import { Transcript } from './Transcript'
 import type { TriggerList } from './types'
@@ -32,7 +33,7 @@ const DOCK_BODY_TYPING = 72
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-export function ChatScreen({ server, routeId, serverCount }: { server: PairedServer; routeId: string; serverCount: number }) {
+export function ChatScreen({ server, routeId, run, serverCount }: { server: PairedServer; routeId: string; run?: string; serverCount: number }) {
   useColorScheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
@@ -47,7 +48,7 @@ export function ChatScreen({ server, routeId, serverCount }: { server: PairedSer
   const [triggers, setTriggers] = useState<TriggerList | null>(null)
   const menuRef = useRef<HostInstance>(null)
 
-  const onCreated = useCallback((id: string) => router.setParams({ id }), [router])
+  const onCreated = useCallback((id: string) => router.setParams({ id, run: undefined }), [router])
   const onMoved = useCallback((id: string) => router.push(dispatchHref(server.id, id) as never), [router, server.id])
   const chat = useConversation(server, routeId, onCreated, onMoved)
   const { reload } = chat
@@ -114,6 +115,23 @@ export function ChatScreen({ server, routeId, serverCount }: { server: PairedSer
     [chat.send, queryClient, server.id]
   )
 
+  const [runError, setRunError] = useState<string | null>(null)
+  const ran = useRef(false)
+  const sendRef = useRef(send)
+  sendRef.current = send
+  useEffect(() => {
+    if (!run || routeId !== 'new' || ran.current || !prompts.data) return
+    ran.current = true
+    const prompt = promptToRun(prompts.data, run)
+    if (!prompt) {
+      setRunError(`The saved prompt "${run}" no longer exists.`)
+      return
+    }
+    sendRef.current({ text: prompt.text, attachments: [], task: { name: prompt.name, version: prompt.version } }).catch((error) =>
+      setRunError(`Could not run "${prompt.name}": ${messageOf(error)}`)
+    )
+  }, [run, routeId, prompts.data])
+
   const confirmDelete = async () => {
     setDeleting(false)
     if (!chat.id) return
@@ -137,7 +155,8 @@ export function ChatScreen({ server, routeId, serverCount }: { server: PairedSer
   ]
 
   const intro = chat.id === null && chat.events.length === 0
-  const notice = deleteError ? { tone: 'error' as const, text: deleteError } : chat.notice
+  const failure = deleteError ?? runError
+  const notice = failure ? { tone: 'error' as const, text: failure } : chat.notice
 
   let body
   if (intro) body = <Intro prompts={starters(prompts.data ?? [])} runsOn={runsOn.data} onPick={(text) => setFill({ text, at: Date.now() })} />
@@ -191,6 +210,7 @@ export function ChatScreen({ server, routeId, serverCount }: { server: PairedSer
           <Pressable
             onPress={() => {
               setDeleteError(null)
+              setRunError(null)
               chat.dismissNotice()
             }}
             hitSlop={10}

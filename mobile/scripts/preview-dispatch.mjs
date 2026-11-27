@@ -87,6 +87,7 @@ export function dispatchFixtures(serverName) {
   const prompts = [
     { name: 'Fix a bug', text: 'Find the failing test first. Change the smallest amount of code that makes it pass.', version: 2, builtin: true, customised: true },
     { name: 'Stuck pull requests', text: 'List pull requests that have had no activity for a day and say why each is stuck.', version: 1, builtin: true },
+    { name: 'Summarise the day', text: 'Summarise what every session did today.', version: 1, builtin: true, hidden: true },
     { name: 'Review the open branch', text: 'Start a review of the branch the session is on and report the findings.', version: 1 },
     { name: 'A saved prompt with a very long name that has to be cut by the list', text: 'Short text.', version: 1 }
   ]
@@ -221,11 +222,14 @@ export async function dispatchApi(req, res, fx, { json, cors }) {
   }
   if (path === '/dispatch/tasks/delete' && method === 'POST') {
     const body = await read(req)
-    fx.prompts = fx.prompts.filter((p) => p.name !== body.name)
+    const gone = fx.prompts.find((p) => p.name === body.name)
+    if (gone?.builtin) gone.hidden = true
+    else fx.prompts = fx.prompts.filter((p) => p.name !== body.name)
     json(res, 200, fx.prompts)
     return true
   }
   if (path === '/dispatch/tasks/restore' && method === 'POST') {
+    for (const p of fx.prompts) if (p.builtin) Object.assign(p, { hidden: undefined, customised: undefined, version: 1 })
     json(res, 200, fx.prompts)
     return true
   }
