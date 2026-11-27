@@ -32,7 +32,10 @@ const config: ExpoConfig = {
   },
   plugins: [
     'expo-router',
-    ['expo-splash-screen', { backgroundColor: '#0a0a0a', image: './assets/icon.png', imageWidth: 160 }],
+    [
+      'expo-splash-screen',
+      { backgroundColor: '#ffffff', image: './assets/icon.png', imageWidth: 160, dark: { backgroundColor: '#0a0a0a' } }
+    ],
     ['expo-camera', { cameraPermission: "Scan the pairing code shown in Yardbell's Settings", recordAudioAndroid: false }],
     'expo-secure-store',
     ['expo-build-properties', { android: { minSdkVersion: 26, targetSdkVersion: 35, usesCleartextTraffic: true } }],

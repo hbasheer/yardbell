@@ -172,11 +172,15 @@ export function NewSessionSheet({ visible, request, servers, onClose, onAfterClo
     }
   }
 
+  const close = () => {
+    if (!sending) onClose()
+  }
+
   const goBack = () => setPage(page === 'new-branch' ? 'branch' : 'main')
   const serverLabel = (serverId: string) => servers.find((s) => s.id === serverId)?.machine ?? serverId
 
   return (
-    <BottomDrawer visible={visible} onClose={onClose} onAfterClose={onAfterClose}>
+    <BottomDrawer visible={visible} onClose={close} onAfterClose={onAfterClose}>
       {page === 'main' ? (
         <MainPage
           machine={machine}
@@ -196,7 +200,7 @@ export function NewSessionSheet({ visible, request, servers, onClose, onAfterClo
           warning={warned?.warning ?? null}
           blocker={blocker}
           error={error}
-          onClose={onClose}
+          onClose={close}
           onMachine={() => setPage('machine')}
           onFolder={() => setPage('folder')}
           onBranch={() => setPage('branch')}

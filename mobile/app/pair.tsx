@@ -31,6 +31,14 @@ export default function Pair() {
   const inFlight = useRef(false)
   const decoding = useRef(false)
   const lastTarget = useRef<string | null>(null)
+  const timers = useRef<ReturnType<typeof setTimeout>[]>([])
+
+  useEffect(
+    () => () => {
+      for (const timer of timers.current) clearTimeout(timer)
+    },
+    []
+  )
 
   const leave = useCallback(() => {
     if (router.canGoBack()) router.back()
@@ -48,7 +56,7 @@ export default function Pair() {
       if (outcome.ok) {
         triggerSuccess()
         setPhase('connected')
-        setTimeout(() => router.replace('/'), CONNECTED_BEAT_MS)
+        timers.current.push(setTimeout(() => router.dismissTo('/'), CONNECTED_BEAT_MS))
         return
       }
       inFlight.current = false
@@ -63,11 +71,13 @@ export default function Pair() {
       if (decoding.current || inFlight.current) return
       decoding.current = true
       setDecoded(true)
-      setTimeout(() => {
-        decoding.current = false
-        setDecoded(false)
-        attempt(data)
-      }, DECODE_BEAT_MS)
+      timers.current.push(
+        setTimeout(() => {
+          decoding.current = false
+          setDecoded(false)
+          attempt(data)
+        }, DECODE_BEAT_MS)
+      )
     },
     [attempt]
   )

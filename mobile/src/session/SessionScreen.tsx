@@ -173,6 +173,13 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   const send = useCallback(
     (bytes: string) => {
       term.send(bytes)
+      clearLive()
+    },
+    [term.send, clearLive]
+  )
+  const sendLive = useCallback(
+    (bytes: string) => {
+      term.send(bytes)
       if (endsLine(bytes)) clearLive()
     },
     [term.send, clearLive]
@@ -459,7 +466,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
         <AttachStatus state={attach.state} onDismiss={attach.dismiss} />
         <LiveInput
           disabled={!terminalShown}
-          onBytes={send}
+          onBytes={sendLive}
           onTypedChar={onTypedChar}
           resetSignal={liveReset}
           onAttach={attach.pickPhoto}

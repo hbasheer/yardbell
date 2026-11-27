@@ -60,7 +60,11 @@ export function useAttach(server: PairedServer, machine: string, name: string, t
   const pickFile = useCallback(
     () =>
       attach(async () => {
-        const picked = await DocumentPicker.getDocumentAsync({ copyToCacheDirectory: true, multiple: false })
+        const picked = await DocumentPicker.getDocumentAsync({
+          type: ['image/*', 'application/pdf', 'text/*'],
+          copyToCacheDirectory: true,
+          multiple: false
+        })
         const asset = picked.canceled ? undefined : picked.assets[0]
         return asset ? { uri: asset.uri, name: asset.name, size: asset.size } : null
       }),

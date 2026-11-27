@@ -9,7 +9,7 @@ import { ServerMenus } from '@/machine/ServerMenus'
 import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
 import type { Connection } from '@/state/liveSocket'
 import type { StateView } from '@/state/types'
-import { useServerState } from '@/state/useServerState'
+import { stateKey, useServerState } from '@/state/useServerState'
 import { feedSections, type MachineRow, type ServerSession, type ServerState } from '@/state/views'
 import { Fab } from '@/ui/Fab'
 import { TAB_BAR_HEIGHT, TabBar, type TabBarItem } from '@/ui/TabBar'
@@ -118,7 +118,7 @@ export function HomeScreen() {
   const refresh = async () => {
     setRefreshing(true)
     for (const entry of entries) if (entry.connection !== 'connected') reconnects.current[entry.server.id]?.()
-    await queryClient.refetchQueries({ queryKey: ['state'] }).catch(() => {})
+    await Promise.all(entries.map((entry) => queryClient.refetchQueries({ queryKey: stateKey(entry.server.id) }))).catch(() => {})
     setRefreshing(false)
   }
 

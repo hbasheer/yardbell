@@ -69,6 +69,12 @@ describe('machineBody', () => {
     expect(machineBody(entry({ connection: 'unreachable' }), 'hp', '', 1)).toBe('list')
   })
 
+  test('no visible sessions while the server is not connected is unreachable, not empty', () => {
+    const none = state({ sessions: [] })
+    expect(machineBody(entry({ state: none, connection: 'unreachable' }), 'hp', '', 0)).toBe('unreachable')
+    expect(machineBody(entry({ state: none, connection: 'reconnecting' }), 'hp', '', 0)).toBe('unreachable')
+  })
+
   test('hidden stopped sessions leave an empty list, not a no-match', () => {
     const stopped = entry({ state: state({ sessions: [{ ...session('a'), stopped: 'exited 0' }] }) })
     expect(machineBody(stopped, 'hp', '', 0)).toBe('empty')

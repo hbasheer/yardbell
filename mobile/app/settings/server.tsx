@@ -4,7 +4,7 @@ import { Plus } from 'lucide-react-native'
 import { useState } from 'react'
 import { SettingsFooter, SettingsScreen } from '@/settings/SettingsScreen'
 import { useServers } from '@/settings/useServers'
-import { forgetServer, type PairedServer } from '@/servers/store'
+import { forgetServer, listServers, type PairedServer } from '@/servers/store'
 import { stateQuery } from '@/state/useServerState'
 import { ConfirmModal } from '@/ui/ConfirmModal'
 import { ListGroup } from '@/ui/ListGroup'
@@ -21,7 +21,8 @@ function ServerDetails({ server }: { server: PairedServer }) {
   const forget = () => {
     setConfirming(false)
     forgetServer(server.id)
-      .then(() => router.back())
+      .then(listServers)
+      .then((remaining) => (remaining.length === 0 ? router.replace('/pair') : router.back()))
       .catch((error) => {
         console.error('Could not forget server', error)
         setFailure(error instanceof Error ? error.message : String(error))

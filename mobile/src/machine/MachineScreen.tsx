@@ -248,9 +248,7 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
   const clear = () => setQuery('')
   let empty = null
   if (body === 'loading') empty = <StateView loading title="Loading sessions" />
-  else if (body === 'unreachable')
-    empty = <OfflineState machineName={machine} message={status.reason ?? undefined} onReconnect={reconnect} />
-  else if (body === 'down')
+  else if (body === 'unreachable' || body === 'down')
     empty = <OfflineState machineName={machine} message={status.reason ?? undefined} onReconnect={reconnect} />
   else if (body === 'empty')
     empty = (
