@@ -41,7 +41,9 @@ export type StepTranscript = {
   transcript?: { dropped?: number; skipped?: number; cut?: boolean; files: string[]; items: TranscriptItem[] }
 }
 
-export type RunStart = { tickets: string[]; prs: string[] }
+export type DiagramRef = { machine: string; folder: string; dir: string }
+
+export type RunStart = { tickets?: string[]; prs?: string[]; diagram?: DiagramRef }
 
 const client = (server: PairedServer) => new ApiClient(server)
 const pipelinePath = (id: string, rest = '') => `/api/pipelines/${encodeURIComponent(id)}${rest}`
@@ -73,6 +75,10 @@ export function startRuns(server: PairedServer, id: string, body: RunStart): Pro
 
 export function openTickets(server: PairedServer): Promise<{ tickets: OpenTicket[] }> {
   return client(server).get('/api/pipelines/tickets')
+}
+
+export function listDiagrams(server: PairedServer): Promise<{ diagrams: DiagramRef[] }> {
+  return client(server).get('/api/diagrams')
 }
 
 export function clearEndedRuns(server: PairedServer, id: string): Promise<{ deleted: string[] }> {

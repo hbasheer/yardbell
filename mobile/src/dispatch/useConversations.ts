@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { routeIfSignedOut } from '@/api/signedOut'
 import { useAppActive } from '@/ui/useAppActive'
 import type { PairedServer } from '@/servers/store'
+import { briefRuns } from '@/pipelines/api'
 import { listConversations } from './api'
 import type { ConversationRow } from './listModel'
-import { sortRows } from './listModel'
+import { pipelinedIds, sortRows } from './listModel'
 
 export const REFRESH_MS = 5000
 
@@ -27,8 +28,10 @@ export function useConversations(servers: readonly PairedServer[], active: boole
       const results = await Promise.all(
         serversRef.current.map(async (server): Promise<[string, Loaded | null]> => {
           try {
-            const list = await listConversations(server)
-            return [server.id, { rows: list.map((chat) => ({ ...chat, serverId: server.id, machine: server.machine })), error: null }]
+            const [list, runs] = await Promise.all([listConversations(server), briefRuns(server).catch(() => ({ runs: [] }))])
+            const pipelined = pipelinedIds(runs.runs)
+            const rows = list.map((chat) => ({ ...chat, serverId: server.id, machine: server.machine, pipeline: pipelined.has(chat.id) }))
+            return [server.id, { rows, error: null }]
           } catch (error) {
             if (routeIfSignedOut(error, server.id)) return [server.id, null]
             return [server.id, { rows: [], error: messageOf(error) }]

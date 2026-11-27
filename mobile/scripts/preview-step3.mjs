@@ -286,7 +286,20 @@ function definitions() {
     trigger: { kind: 'gitlab_reviewer', host: 'gitlab.acme.dev' },
     steps: [step('understand', 'Understand', 'agent', { pass: 'security' }, { instructions: 'Read the merge request and say what it does.', read_only: true, machine: { pick: ['hp', 'mac-mini'] }, workspace: { kind: 'new' } }), step('security', 'Security', 'agent', { pass: 'report' }, { instructions: 'Look for security problems.', read_only: true, machine: { name: 'hp' }, workspace: { kind: 'copy', from: 'understand' } }), step('report', 'Report', 'report', {})]
   }
-  return [implement, nightly, reviews]
+  const idea = {
+    id: 'try-an-idea',
+    name: 'Try an idea',
+    version: 3,
+    enabled: true,
+    start: 'build',
+    trigger: { kind: 'manual' },
+    steps: [
+      step('build', 'Build it', 'agent', { pass: 'lint' }, { instructions: 'Build what the ticket or diagram asks for.', machine: { name: 'hp' }, workspace: { kind: 'new' } }),
+      step('lint', 'Lint', 'command', { pass: 'tell', fail: 'build' }, { command: 'npm run lint', approved: 'npm run lint' }),
+      step('tell', 'Tell me', 'report', {})
+    ]
+  }
+  return [implement, nightly, reviews, idea]
 }
 
 const subject = (id, title) => ({ ticket: { id, title, url: `https://linear.app/acme/issue/${id}` } })
@@ -294,6 +307,7 @@ const subject = (id, title) => ({ ticket: { id, title, url: `https://linear.app/
 function runs(defs) {
   const implement = defs[0]
   const reviews = defs[2]
+  const idea = defs[3]
   const base = (id, def, fields) => ({
     id,
     pipeline: def.id,
@@ -426,6 +440,26 @@ function runs(defs) {
       steps: { understand: { outcome: 'pass', started: minutes(3099), ended: minutes(3050), runs: 1, report: 'The merge request fixes webhook dedup.' } },
       history: [{ at: minutes(3000), step: 'security', note: 'Dropped by you' }]
     }),
+    base('run-lint', idea, {
+      state: 'waiting',
+      step: 'lint',
+      step_since: minutes(4),
+      started: minutes(25),
+      started_by: 'you',
+      subject: {},
+      waiting: { kind: 'failed', step: 'lint', reason: 'Lint failed with exit code 1', screen: "> npm run lint\n\n/src/pipelines/RunScreen.tsx\n  42:7  error  'unused' is assigned a value but never used  no-unused-vars\n\n1 problem (1 error, 0 warnings)" },
+      steps: {
+        build: { outcome: 'pass', started: minutes(24), ended: minutes(6), runs: 1, machine: 'hp', session: 'build-idea-7' },
+        lint: { started: minutes(5), ended: minutes(4), runs: 1, machine: 'hp', ran: { command: 'npm run lint', passed: false } }
+      },
+      history: [
+        { at: minutes(25), note: 'started by you' },
+        { at: minutes(6), step: 'build', outcome: 'pass' },
+        { at: minutes(4), step: 'lint' }
+      ],
+      tokens: {},
+      tokens_used: 52000
+    }),
     base('run-review-waiting', reviews, {
       state: 'waiting',
       step: 'understand',
@@ -463,6 +497,9 @@ function pipelineApi(fx, path, url, method, body, json, res) {
       gitlab_hosts: ['gitlab.acme.dev'],
       connectors: CONNECTORS
     }), true
+  }
+  if (path === '/api/diagrams') {
+    return json(res, 200, { version: 1, machines: [], agents: [], default_agent: 'claude', diagrams: [{ machine: 'hp', folder: 'yardbell', dir: 'login-flow-20261120-101010' }, { machine: 'mac-mini', folder: 'feedgest', dir: 'feed_ranking-20261118-090000' }] }), true
   }
   if (path === '/api/pipelines/tickets') {
     return json(res, 200, { tickets: [{ linear_id: 'l1', id: 'YB-240', title: 'Show insights from the machine row menu', url: 'https://linear.app/acme/issue/YB-240', state: 'Todo', running_in: [] }, { linear_id: 'l2', id: 'YB-214', title: 'Phone app step 3: changes and files', url: 'https://linear.app/acme/issue/YB-214', state: 'In Progress', running_in: ['implement-my-tickets'] }] }), true
@@ -776,7 +813,7 @@ export function runsWaiting(fx) {
   return fx.pipelines.runs.filter(asksForYou).length
 }
 
-const OWNED = /^\/(machines\/[^/]+\/(changes|files|file)(\/|$)|api\/(pipelines|runs|triggers|settings\/phone)|dispatch\/(memory|tasks\/(history|diff|versions\/restore))|sessions\/[^/]+\/[^/]+\/insights$)/
+const OWNED = /^\/(machines\/[^/]+\/(changes|files|file)(\/|$)|api\/(pipelines|runs|triggers|diagrams$|settings\/phone)|dispatch\/(memory|tasks\/(history|diff|versions\/restore))|sessions\/[^/]+\/[^/]+\/insights$)/
 
 export async function step3Api(req, res, fx, { json }) {
   const url = new URL(req.url, 'http://x')

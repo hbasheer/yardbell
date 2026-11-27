@@ -1,4 +1,5 @@
-import { Text } from 'react-native'
+import { Workflow } from 'lucide-react-native'
+import { Text, View } from 'react-native'
 import { AgentGlyph } from '@/ui/AgentGlyph'
 import { ListRow } from '@/ui/ListRow'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
@@ -21,7 +22,7 @@ export function ChatRow({
   return (
     <ListRow
       title={row.title || 'Untitled chat'}
-      accessibilityLabel={`${row.title || 'Untitled chat'}, ${word}${rest ? `, ${rest}` : ''}`}
+      accessibilityLabel={`${row.title || 'Untitled chat'}, ${word}${rest ? `, ${rest}` : ''}${row.pipeline ? ', a pipeline run' : ''}`}
       leading={<AgentGlyph activity={GLYPH[chatState(row)]} />}
       onPress={onPress}
       detail={
@@ -30,10 +31,13 @@ export function ChatRow({
             <Text style={[styles.word, state === 'waiting' && styles.waiting, state === 'idle' && styles.muted]}>{word}</Text>
             {rest ? ` · ${rest}` : ''}
           </Text>
-          {footer ? (
-            <Text style={styles.footer} numberOfLines={1}>
-              {footer}
-            </Text>
+          {footer || row.pipeline ? (
+            <View style={styles.footerRow}>
+              {row.pipeline ? <Workflow size={12} color={colors.textMuted} strokeWidth={2} accessibilityLabel="A pipeline run" /> : null}
+              <Text style={styles.footer} numberOfLines={1}>
+                {footer || 'Pipeline run'}
+              </Text>
+            </View>
           ) : null}
         </>
       }
@@ -46,5 +50,6 @@ const styles = themedStyleSheet(() => ({
   word: { fontWeight: '600' },
   waiting: { color: colors.agentQuestionText },
   muted: { fontWeight: '400', color: colors.textSecondary },
-  footer: { fontSize: 12, color: colors.textMuted, marginTop: spacing.xxs }
+  footerRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: spacing.xxs },
+  footer: { flexShrink: 1, fontSize: 12, color: colors.textMuted }
 }))

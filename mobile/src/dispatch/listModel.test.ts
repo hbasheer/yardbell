@@ -9,6 +9,7 @@ import {
   filterRows,
   footerOf,
   groupByServer,
+  pipelinedIds,
   sortRows,
   stateWord,
   timeAgo,
@@ -102,5 +103,11 @@ describe('misc', () => {
   })
   it('encodes the route', () => {
     expect(dispatchHref('a b', 'x/1')).toBe('/dispatch/a%20b/x%2F1')
+  })
+})
+
+describe('pipelinedIds', () => {
+  it('collects the conversations that pipeline runs started', () => {
+    expect([...pipelinedIds([{ conversation: 'c1' }, { conversation: '' }, {}, { conversation: 'c1' }, { conversation: 'c2' }])]).toEqual(['c1', 'c2'])
   })
 })

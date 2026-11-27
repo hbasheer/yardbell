@@ -35,7 +35,7 @@ const DOCK_BODY_TYPING = 72
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-export function ChatScreen({ server, routeId, run, serverCount }: { server: PairedServer; routeId: string; run?: string; serverCount: number }) {
+export function ChatScreen({ server, routeId, run, ask, serverCount }: { server: PairedServer; routeId: string; run?: string; ask?: string; serverCount: number }) {
   useColorScheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
@@ -144,6 +144,13 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
       setRunError(`Could not run "${prompt.name}": ${messageOf(error)}`)
     )
   }, [run, routeId, prompts.data, prompts.isError, prompts.error])
+
+  const asked = useRef(false)
+  useEffect(() => {
+    if (!ask || routeId !== 'new' || asked.current) return
+    asked.current = true
+    setFill({ text: ask, at: Date.now() })
+  }, [ask, routeId])
 
   const confirmDelete = async () => {
     setDeleting(false)

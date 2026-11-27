@@ -89,7 +89,7 @@ export type Run = BriefRun & {
   report?: string
   pull?: { number: number; url: string }
   place?: { machine?: string; branch?: string }
-  terminals?: { name: string; machine: string; label: string; current?: boolean }[]
+  terminals?: { name: string; machine: string; label: string; step?: string; current?: boolean }[]
   sessions_left?: { name: string; machine: string }[]
   teardown_problem?: string
 }
