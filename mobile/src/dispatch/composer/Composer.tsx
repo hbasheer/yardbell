@@ -12,7 +12,8 @@ import { bottomBarPadding } from '../../ui/bottomInset'
 import { triggerError, triggerSelection } from '../../ui/haptics'
 import { colors, feedback, radii, spacing, themedStyleSheet, useColorScheme } from '../../ui/theme'
 import { useKeyboardHeight } from '../../ui/useKeyboardHeight'
-import { getDispatchSettings, listPrompts, setDispatchSettings } from '../api'
+import { listPrompts } from '../api'
+import { getServerSettings, setDispatchSettings } from '../../settings/serverApi'
 import { AttachmentError, MAX_FILES, checkAttachments, prepareAttachments, type PickedFile } from '../attachments'
 import { deviceFiles } from '../files'
 import type { AskAttachment, Backend, SavedPrompt, TaskMark } from '../types'
@@ -147,7 +148,7 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
     staleTime: 15_000,
     enabled: trigger?.kind === 'tasks'
   })
-  const settings = useQuery({ queryKey: ['dispatch', 'settings', server.id], queryFn: () => getDispatchSettings(server), staleTime: 15_000 })
+  const settings = useQuery({ queryKey: ['dispatch', 'settings', server.id], queryFn: () => getServerSettings(server), staleTime: 15_000 })
   const dispatch = settings.data?.dispatch
 
   const items = useMemo(() => {

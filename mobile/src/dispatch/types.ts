@@ -1,3 +1,5 @@
+import type { Activity, PullView } from '../state/types'
+
 export type Backend = 'claude' | 'codex'
 
 export type TaskMark = { name: string; version: number }
@@ -191,10 +193,6 @@ export type DispatchEvent =
 
 export type StreamLine = DispatchEvent | { role: 'conversation'; id: string } | { role: 'done' }
 
-export type TriggerState = { trigger: { name: string; enabled: boolean } }
-
-export type TriggerList = { triggers: TriggerState[] }
-
 export type ReviewTarget = { machine: string; name: string; agent?: string; branch?: string; path?: string }
 
 export type Trigger = {
@@ -269,4 +267,93 @@ export type AskRequest = {
   task?: TaskMark
   improve?: ImproveMark
   attachments?: AskAttachment[]
+}
+
+export type ReviewFileStat = {
+  path: string
+  old_path?: string
+  status: string
+  added?: number | null
+  removed?: number | null
+  binary: boolean
+  untracked: boolean
+}
+
+export type ReviewChanges = {
+  base: string
+  merge_base: string
+  head: string
+  files: ReviewFileStat[]
+  truncated: boolean
+  reviewed_head: string | null
+  moved: boolean
+}
+
+export type ReviewDiffLine = { k: 'hunk' | 'ctx' | 'add' | 'del'; o: number | null; n: number | null; t: string }
+
+export type ReviewFilePage = {
+  path: string
+  binary: boolean
+  notes?: string[]
+  lines: ReviewDiffLine[]
+  from: number
+  next: number
+  total: number
+  cut: boolean
+}
+
+export type ScanFiles = { folder: string; files: string[] }
+
+export type ReviewStanding = 'same' | 'moved' | 'uncommitted' | 'unknown'
+
+export type ReviewPin = { head?: string; top?: string; changes?: string; error?: string }
+
+export type ReviewCommit = { standing: ReviewStanding; now: ReviewPin }
+
+export type InsightPeriod = { state: 'working' | 'waiting' | 'idle'; from: string; to: string | null; seconds: number }
+
+export type InsightMark = { at: string; kind: 'tool' | 'test' | 'pull' | string; text?: string; ok?: boolean | null; url?: string }
+
+export type InsightTimeline = {
+  machine: string
+  name: string
+  agent: string
+  folder: string
+  branch: string
+  since: string
+  started: boolean
+  ended: string | null
+  periods: InsightPeriod[]
+  totals: { working: number; waiting: number; idle: number }
+  runs: InsightMark[]
+  dropped: number
+}
+
+export type InsightPart = {
+  asked?: string[]
+  question?: string
+  stopped_at?: string
+  summary?: string
+  said?: string
+  did: { tool: string; what: string }[]
+  files?: string[]
+  more?: number
+}
+
+export type Insights = {
+  machine: string
+  name: string
+  live: boolean
+  attachable: boolean
+  activity: Activity | null
+  work: { title?: string; first_prompt?: string; screen?: string; [key: string]: unknown } | null
+  parts: { before?: InsightPart; periods: InsightPart[] } | null
+  timeline: InsightTimeline | null
+  earlier: Omit<InsightMark, 'at'>[]
+  scrollback_error: string | null
+  task: string
+  conversation: string | null
+  pull: PullView | null
+  suggest: string
+  from?: { name: string; version: number; current: number }
 }

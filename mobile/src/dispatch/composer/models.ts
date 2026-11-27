@@ -1,4 +1,4 @@
-import type { DispatchSettings } from '../api'
+import type { DispatchSettings } from '../../settings/serverApi'
 
 export type ModelChoice = { id: string; label: string; description?: string }
 

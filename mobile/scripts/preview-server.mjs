@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
 import { counts, dispatchApi, dispatchFixtures } from './preview-dispatch.mjs'
+import { runsWaiting, step3Api, step3Fixtures } from './preview-step3.mjs'
 
 const WEB_PORT = Number(process.env.PREVIEW_WEB_PORT ?? 8099)
 const HOST = process.env.PREVIEW_HOST ?? '127.0.0.1'
@@ -162,7 +163,8 @@ function stateFor(server) {
     mesh: null,
     server: { machine: server.name, address: `http://${HOST}:${server.port}`, version: server.version },
     proposals,
-    waiting
+    waiting,
+    runs_waiting: runsWaiting(server.step3)
   }
 }
 
@@ -288,6 +290,7 @@ function handler(server) {
     }
     if (path === '/sessions' && req.method === 'POST') return startSession(req, res, server)
     if (path === '/dispatch/usage' || path === '/dispatch/usage/refresh') return json(res, 200, usage)
+    if (await step3Api(req, res, server.step3, { json })) return
     if (await dispatchApi(req, res, server.dispatch, { json, cors })) return
     json(res, 404, { error: 'not found' })
   }
@@ -304,7 +307,10 @@ function acceptSocket(req, socket) {
   socket.on('error', () => {})
 }
 
-for (const server of servers) server.dispatch = dispatchFixtures(server.name)
+for (const server of servers) {
+  server.dispatch = dispatchFixtures(server.name)
+  server.step3 = step3Fixtures(server.dispatch, server.name)
+}
 
 const listening = servers.map(
   (server) =>

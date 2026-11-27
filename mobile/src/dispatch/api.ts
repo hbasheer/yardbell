@@ -11,14 +11,18 @@ import type {
   DispatchEvent,
   PromptDiff,
   PromptHistory,
+  Insights,
+  ReviewChanges,
+  ReviewCommit,
+  ReviewFilePage,
+  ScanFiles,
   PullEvent,
   ReviewEvent,
   ReviewTarget,
   RunsOn,
   SavedPrompt,
   SessionEvent,
-  StreamLine,
-  TriggerList
+  StreamLine
 } from './types'
 
 const POLL_MS = 2000
@@ -255,14 +259,6 @@ export function reviewTargets(server: PairedServer, id: string, card: number): P
   return client(server).get(conversationPath(id, `/reviews/${card}/sessions`))
 }
 
-export function getTriggers(server: PairedServer): Promise<TriggerList> {
-  return client(server).get('/api/triggers')
-}
-
-export function setTriggerEnabled(server: PairedServer, name: string, enabled: boolean): Promise<TriggerList> {
-  return client(server).post('/api/triggers/enable', { name, enabled })
-}
-
 export function reviewSession(
   server: PairedServer,
   machine: string,
@@ -321,32 +317,38 @@ export function restorePromptVersion(
   return client(server).post('/dispatch/tasks/versions/restore', { name, version })
 }
 
-export type DispatchSettings = {
-  instructions?: string
-  agent?: string
-  runs_on?: string
-  model?: string
-  codex_model?: string
-  approval?: string
-  rules?: unknown[]
+export type FilePageRequest = { file: string; from?: number; line?: number }
+
+const pageQuery = ({ file, from, line }: FilePageRequest) =>
+  `file=${encodeURIComponent(file)}&from=${from ?? 0}${line === undefined ? '' : `&line=${line}`}`
+
+export function reviewChanges(server: PairedServer, id: string, card: number): Promise<ReviewChanges> {
+  return client(server).get(conversationPath(id, `/reviews/${card}/diff`))
 }
 
-export async function setDispatchSettings(server: PairedServer, change: Partial<DispatchSettings>): Promise<void> {
-  const api = client(server)
-  const current = await api.get<{ dispatch?: DispatchSettings }>('/api/settings')
-  const d = current.dispatch ?? {}
-  await api.post('/api/settings/dispatch', {
-    instructions: d.instructions ?? '',
-    agent: d.agent ?? '',
-    runs_on: d.runs_on ?? 'claude',
-    model: d.model ?? '',
-    codex_model: d.codex_model ?? '',
-    ...(d.approval ? { approval: d.approval } : {}),
-    rules: d.rules ?? [],
-    ...change
-  })
+export function reviewFilePage(server: PairedServer, id: string, card: number, request: FilePageRequest): Promise<ReviewFilePage> {
+  return client(server).get(conversationPath(id, `/reviews/${card}/diff?${pageQuery(request)}`))
 }
 
-export function getDispatchSettings(server: PairedServer): Promise<{ dispatch?: DispatchSettings }> {
-  return client(server).get('/api/settings')
+export function reviewCommit(server: PairedServer, id: string, card: number): Promise<ReviewCommit> {
+  return client(server).get(conversationPath(id, `/reviews/${card}/commit`))
+}
+
+export function scanFiles(server: PairedServer, id: string, card: number): Promise<ScanFiles> {
+  return client(server).get(conversationPath(id, `/reviews/${card}/files`))
+}
+
+export function scanFilePage(server: PairedServer, id: string, card: number, request: FilePageRequest): Promise<ReviewFilePage> {
+  return client(server).get(conversationPath(id, `/reviews/${card}/files?${pageQuery(request)}`))
+}
+
+export function evidenceSource(server: PairedServer, id: string, card: number, file: string) {
+  return {
+    uri: `${server.address}${conversationPath(id, `/reviews/${card}/evidence/${encodeURIComponent(file)}`)}`,
+    headers: { Authorization: `Bearer ${server.token}` }
+  }
+}
+
+export function sessionInsights(server: PairedServer, machine: string, name: string): Promise<Insights> {
+  return client(server).get(`/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}/insights`)
 }

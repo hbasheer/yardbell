@@ -3,7 +3,20 @@ import { describe, expect, it, vi } from 'vitest'
 vi.mock('expo/fetch', () => ({ fetch: vi.fn() }))
 
 import { ServerError, UnreachableError } from '../api/client'
-import { ask, attachmentSource, followTurn, isAlreadyDecided, SERVER_ERROR_LIMIT } from './api'
+import {
+  ask,
+  attachmentSource,
+  evidenceSource,
+  followTurn,
+  isAlreadyDecided,
+  reviewChanges,
+  reviewCommit,
+  reviewFilePage,
+  scanFilePage,
+  scanFiles,
+  SERVER_ERROR_LIMIT,
+  sessionInsights
+} from './api'
 import type { DispatchEvent } from './types'
 
 const server = { id: 'http://h:1', address: 'http://h:1', token: 'ybd_t', machine: 'M', deviceId: '1' }
@@ -173,5 +186,47 @@ describe('attachmentSource', () => {
       uri: 'http://h:1/dispatch/conversations/abc/attachments/1-a%20b.png',
       headers: { Authorization: 'Bearer ybd_t' }
     })
+  })
+})
+
+describe('review panel and insights clients', () => {
+  const urls = async (run: () => Promise<unknown>) => {
+    const fetchMock = vi.fn(async () => new Response('{}', { status: 200 }))
+    vi.stubGlobal('fetch', fetchMock)
+    try {
+      await run()
+    } finally {
+      vi.unstubAllGlobals()
+    }
+    return (fetchMock.mock.calls[0] as unknown as [string])[0]
+  }
+
+  it('reads the review changes, a file page, and the commit standing', async () => {
+    expect(await urls(() => reviewChanges(server, 'c1', 3))).toBe('http://h:1/dispatch/conversations/c1/reviews/3/diff')
+    expect(await urls(() => reviewFilePage(server, 'c1', 3, { file: 'src/a b.rs', from: 400 }))).toBe(
+      'http://h:1/dispatch/conversations/c1/reviews/3/diff?file=src%2Fa%20b.rs&from=400'
+    )
+    expect(await urls(() => reviewFilePage(server, 'c1', 3, { file: 'a.rs', line: 88 }))).toBe(
+      'http://h:1/dispatch/conversations/c1/reviews/3/diff?file=a.rs&from=0&line=88'
+    )
+    expect(await urls(() => reviewCommit(server, 'c1', 3))).toBe('http://h:1/dispatch/conversations/c1/reviews/3/commit')
+  })
+
+  it('reads the scan files and a page of one', async () => {
+    expect(await urls(() => scanFiles(server, 'c1', 4))).toBe('http://h:1/dispatch/conversations/c1/reviews/4/files')
+    expect(await urls(() => scanFilePage(server, 'c1', 4, { file: 'a.rs', from: 400 }))).toBe(
+      'http://h:1/dispatch/conversations/c1/reviews/4/files?file=a.rs&from=400'
+    )
+  })
+
+  it('points an image at the evidence route with the bearer token', () => {
+    expect(evidenceSource(server, 'c1', 3, 'shot 1.png')).toEqual({
+      uri: 'http://h:1/dispatch/conversations/c1/reviews/3/evidence/shot%201.png',
+      headers: { Authorization: 'Bearer ybd_t' }
+    })
+  })
+
+  it('reads a session\'s insights', async () => {
+    expect(await urls(() => sessionInsights(server, 'dev box', 'yb-1'))).toBe('http://h:1/sessions/dev%20box/yb-1/insights')
   })
 })

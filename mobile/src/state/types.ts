@@ -90,5 +90,6 @@ export type StateView = {
   folders?: FolderView[]
   proposals?: number
   waiting?: number
+  runs_waiting?: number
   server?: ServerView | null
 }
