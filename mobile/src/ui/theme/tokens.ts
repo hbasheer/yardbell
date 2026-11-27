@@ -25,3 +25,12 @@ export const typography = {
 export const feedback = { pressedOpacity: 0.7, disabledOpacity: 0.4 } as const
 
 export const pressedStyle = { opacity: feedback.pressedOpacity } as const
+
+export const fixedColors = { black: '#000000', white: '#ffffff', scrim: 'rgba(0, 0, 0, 0.55)' } as const
+
+export const agentColors = {
+  working: '#eab308',
+  done: '#10b981',
+  failed: '#ef4444',
+  idle: 'rgba(115, 115, 115, 0.4)'
+} as const

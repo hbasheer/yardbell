@@ -3,6 +3,7 @@ import { Stack, useRouter, useSegments } from 'expo-router'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect, useRef, useState } from 'react'
 import { PermissionsAndroid, Platform } from 'react-native'
+import { GestureHandlerRootView } from 'react-native-gesture-handler'
 import { SignedOutError } from '@/api/client'
 import { routeIfSignedOut } from '@/api/signedOut'
 import { routeForLink } from '@/notifications/route'
@@ -24,7 +25,7 @@ const queryClient = new QueryClient({
   })
 })
 
-const PUBLIC_ROUTES = ['pair', 'sign-in', 'signed-out']
+const PUBLIC_ROUTES = ['pair', 'sign-in', 'signed-out', ...(__DEV__ ? ['_gallery'] : [])]
 
 function useRouteGuard() {
   const router = useRouter()
@@ -82,9 +83,11 @@ export default function RootLayout() {
   const hasServers = useRouteGuard()
   useNotifications(hasServers)
   return (
-    <QueryClientProvider client={queryClient}>
-      <StatusBar style="auto" />
-      <Stack screenOptions={{ headerShown: false }} />
-    </QueryClientProvider>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <QueryClientProvider client={queryClient}>
+        <StatusBar style="auto" />
+        <Stack screenOptions={{ headerShown: false }} />
+      </QueryClientProvider>
+    </GestureHandlerRootView>
   )
 }
