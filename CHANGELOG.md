@@ -5,16 +5,38 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
-## [0.11.107] - 2026-11-26
+## [0.11.109] - 2026-11-27
 
-- **A new phone app.** The Android app is rebuilt as a native app, so it opens faster and has its own
-  screens: Home with every session across your machines, a session terminal with a key bar and quick
-  replies, and background notifications. Install it over the old app as an update, then pair once
-  more under **Settings, Connect a phone**. The phone needs Meshnet on to reach your server. The apk
-  is for 64-bit phones, Android 8 and later.
+- **A new phone app.** The Android app is rebuilt as a native app with its own screens:
+  - Home with Feed, Sessions and Usage tabs, your machines with their memory, CPU and disk, and a
+    new session button.
+  - A screen per machine with its sessions by project, search, and actions to open a pull request,
+    copy a branch or stop a session.
+  - A session screen with tabs for the machine's other sessions, a key row with Ctrl, Alt, arrows,
+    paste and your own keys, quick replies, a live input field and photo or file attach.
+  - Start a session from the phone: pick the machine, folder, branch and agent.
+  - Sessions running outside tmux can be moved into tmux or stopped. Light and dark themes,
+    background notifications, and a terminal that reconnects on its own.
+
+  Install it over the old app as an update, then pair once more under **Settings, Connect a
+  phone**. The phone needs Meshnet on to reach your server. The apk is for 64-bit phones, Android 8
+  and later.
 - **Paired phones are listed in Settings** with a Remove button. A removed phone is signed out and
   says so.
 - Dispatch and the Inbox come to the phone in a later update.
+
+## [0.11.108] - 2026-11-27
+
+- **A terminal comes back on its own.** When the connection to a session dropped, the terminal said
+  "session ended or machine unreachable" and stayed dead until the app was reloaded, even with the
+  session still running. It now reconnects by itself while the session is listed, and shows a
+  Reconnect button when the session has really ended.
+
+## [0.11.107] - 2026-11-27
+
+- **The Workspace's Files tree stays as you left it.** It reloaded every few seconds and folded every
+  open folder. The commit message you were typing in Changes was wiped on the same beat, and a file
+  search started again.
 
 ## [0.11.106] - 2026-11-25
 

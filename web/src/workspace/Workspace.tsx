@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Bot, Columns2, Copy, FileText, Globe, LayoutGrid, MessageSquare, PanelRight, Pencil, Plus, Rows2, Square, SquareTerminal, X } from 'lucide-react'
 import { cn } from '@/lib/class-names'
 import type { YardbellState } from '@/lib/state'
@@ -503,7 +503,11 @@ export function Workspace({
   const sp = currentSpace(layout)
   const focused = sp ? focusedGroup(sp) : null
   const lastPlace = useRef<Place | null>(null)
-  const place = placeOfSpace(layout.current) ?? placeOfItem(focused ? activeItem(focused) : null, state) ?? (layout.current === SHARED ? lastPlace.current : null)
+  const found = placeOfSpace(layout.current) ?? placeOfItem(focused ? activeItem(focused) : null, state) ?? (layout.current === SHARED ? lastPlace.current : null)
+  const placeMachine = found?.machine
+  const placePath = found?.path
+  // The state poll rebuilds the place every few seconds; the panels reset on a new object, so keep one per folder.
+  const place = useMemo(() => (placeMachine && placePath ? { machine: placeMachine, path: placePath } : null), [placeMachine, placePath])
   if (place) lastPlace.current = place
   const ctx = useRef({ place, focused })
   ctx.current = { place, focused }
