@@ -1,37 +1,75 @@
 import { CameraView, useCameraPermissions } from 'expo-camera'
-import { Link, useLocalSearchParams, useRouter } from 'expo-router'
+import { useLocalSearchParams, useRouter } from 'expo-router'
+import { Camera, QrCode } from 'lucide-react-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { Linking, Pressable, Text, View } from 'react-native'
+import { BackHandler, Linking, View } from 'react-native'
 import { pairDeps } from '@/pairing/deps'
 import { parsePairingLink } from '@/pairing/link'
+import { CenteredMessage, PairFrame } from '@/pairing/PairFrame'
 import { pairWithLink } from '@/pairing/pairFlow'
-import { useTheme } from '@/theme/useTheme'
+import { PairError, PairProgress } from '@/pairing/PairProgress'
+import { PairSteps } from '@/pairing/PairSteps'
+import { ScanReticle } from '@/pairing/ScanReticle'
+import { ActionButton } from '@/ui/ActionButton'
+import { triggerSuccess } from '@/ui/haptics'
+import { colors, fixedColors, radii, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
+
+const CONNECTED_BEAT_MS = 700
+const DECODE_BEAT_MS = 180
+
+type Phase = 'idle' | 'connecting' | 'connected'
 
 export default function Pair() {
-  const theme = useTheme()
+  useColorScheme()
   const router = useRouter()
   const { link } = useLocalSearchParams<{ link?: string }>()
   const [permission, requestPermission] = useCameraPermissions()
-  const [busy, setBusy] = useState(false)
+  const [phase, setPhase] = useState<Phase>('idle')
   const [error, setError] = useState<string | null>(null)
+  const [confirmed, setConfirmed] = useState(false)
+  const [decoded, setDecoded] = useState(false)
   const inFlight = useRef(false)
+  const decoding = useRef(false)
+  const lastTarget = useRef<string | null>(null)
+
+  const leave = useCallback(() => {
+    if (router.canGoBack()) router.back()
+    else router.replace('/')
+  }, [router])
 
   const attempt = useCallback(
     async (target: string) => {
       if (inFlight.current) return
       inFlight.current = true
-      setBusy(true)
+      lastTarget.current = target
+      setPhase('connecting')
       setError(null)
       const outcome = await pairWithLink(target, pairDeps)
       if (outcome.ok) {
-        router.replace('/')
+        triggerSuccess()
+        setPhase('connected')
+        setTimeout(() => router.replace('/'), CONNECTED_BEAT_MS)
         return
       }
       inFlight.current = false
-      setBusy(false)
+      setPhase('idle')
       setError(outcome.message)
     },
     [router]
+  )
+
+  const onScanned = useCallback(
+    (data: string) => {
+      if (decoding.current || inFlight.current) return
+      decoding.current = true
+      setDecoded(true)
+      setTimeout(() => {
+        decoding.current = false
+        setDecoded(false)
+        attempt(data)
+      }, DECODE_BEAT_MS)
+    },
+    [attempt]
   )
 
   const linkTarget = useMemo(() => {
@@ -42,7 +80,6 @@ export default function Pair() {
       return { error: e instanceof Error ? e.message : 'That is not a Yardbell pairing code' }
     }
   }, [link])
-  const [confirmed, setConfirmed] = useState(false)
 
   useEffect(() => {
     setConfirmed(false)
@@ -53,82 +90,116 @@ export default function Pair() {
     if (permission && !permission.granted && permission.canAskAgain) requestPermission()
   }, [permission, requestPermission])
 
-  const text = { color: theme.foreground, fontSize: 16 }
-  const passcodeLink = (
-    <Link href="/sign-in" style={{ color: theme.foreground, fontSize: 16, textDecorationLine: 'underline', marginTop: 16 }}>
-      Sign in with the passcode instead
-    </Link>
-  )
+  const confirming = Boolean(link && linkTarget?.address && !confirmed)
 
-  if (link && linkTarget?.address && !confirmed) {
+  useEffect(() => {
+    if (!confirming) return
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => {
+      leave()
+      return true
+    })
+    return () => subscription.remove()
+  }, [confirming, leave])
+
+  const passcodeButton = <ActionButton variant="ghost" label="Sign in with the passcode instead" onPress={() => router.push('/sign-in')} />
+
+  if (confirming && link) {
     return (
-      <View style={{ flex: 1, padding: 24, justifyContent: 'center', backgroundColor: theme.background }}>
-        <Text style={{ fontSize: 20, fontWeight: '600', color: theme.foreground }}>Pair with {linkTarget.address}?</Text>
-        <Text style={{ ...text, marginTop: 8, color: theme.mutedForeground }}>
-          Only pair with a Yardbell server you run yourself.
-        </Text>
-        <Pressable
-          onPress={() => {
-            setConfirmed(true)
-            attempt(link)
-          }}
-          style={{ marginTop: 24, padding: 12, borderRadius: 8, backgroundColor: theme.accent }}
-        >
-          <Text style={{ color: theme.accentForeground, fontSize: 16, textAlign: 'center' }}>Pair</Text>
-        </Pressable>
-        <Pressable onPress={() => router.replace('/')} style={{ marginTop: 12, padding: 12 }}>
-          <Text style={{ ...text, textAlign: 'center' }}>Cancel</Text>
-        </Pressable>
-      </View>
+      <PairFrame>
+        <CenteredMessage title="Pair with this server?" message={`${linkTarget?.address}. Only pair with a Yardbell server you run yourself.`}>
+          <View style={styles.actions}>
+            <ActionButton
+              label="Pair"
+              fullWidth
+              onPress={() => {
+                setConfirmed(true)
+                attempt(link)
+              }}
+            />
+            <ActionButton variant="ghost" label="Cancel" fullWidth onPress={leave} />
+          </View>
+        </CenteredMessage>
+      </PairFrame>
+    )
+  }
+
+  if (phase !== 'idle') {
+    return (
+      <PairFrame back={false}>
+        <PairProgress done={phase === 'connected'} title="Connecting" />
+      </PairFrame>
+    )
+  }
+
+  if (error && linkTarget?.error) {
+    return (
+      <PairFrame>
+        <CenteredMessage title="Could not read the code">
+          <PairError message={error} />
+          <View style={styles.actions}>
+            <ActionButton label="Scan the code" fullWidth onPress={() => router.replace('/pair')} />
+            {passcodeButton}
+          </View>
+        </CenteredMessage>
+      </PairFrame>
+    )
+  }
+
+  if (error) {
+    return (
+      <PairFrame>
+        <CenteredMessage title="Could not pair">
+          <PairError message={error} />
+          <View style={styles.actions}>
+            <ActionButton label="Try again" fullWidth onPress={() => (link ? attempt(link) : setError(null))} />
+            {passcodeButton}
+          </View>
+        </CenteredMessage>
+      </PairFrame>
     )
   }
 
   if (!link && permission && !permission.granted && !permission.canAskAgain) {
     return (
-      <View style={{ flex: 1, padding: 24, justifyContent: 'center', backgroundColor: theme.background }}>
-        <Text style={text}>Yardbell needs the camera to scan the pairing code</Text>
-        <Pressable
-          onPress={() => Linking.openSettings()}
-          style={{ marginTop: 16, padding: 12, borderRadius: 8, backgroundColor: theme.accent }}
-        >
-          <Text style={{ color: theme.accentForeground, fontSize: 16, textAlign: 'center' }}>Open settings</Text>
-        </Pressable>
-        {passcodeLink}
-      </View>
+      <PairFrame>
+        <CenteredMessage title="Camera access needed" message="Yardbell uses the camera to scan the pairing code shown on your computer.">
+          <View style={styles.actions}>
+            <ActionButton icon={Camera} label="Open settings" onPress={() => Linking.openSettings()} />
+            {passcodeButton}
+          </View>
+        </CenteredMessage>
+      </PairFrame>
     )
   }
 
   return (
-    <View style={{ flex: 1, padding: 24, justifyContent: 'center', backgroundColor: theme.background }}>
-      <Text style={{ ...text, marginBottom: 16 }}>
-        Point at the code in Yardbell &gt; Settings &gt; Connect a phone
-      </Text>
-      {!link && permission?.granted && (
-        <CameraView
-          style={{ aspectRatio: 1, borderRadius: 12, overflow: 'hidden' }}
-          barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
-          active={!busy}
-          onBarcodeScanned={busy || error ? undefined : ({ data }) => attempt(data)}
-        />
-      )}
-      {busy && <Text style={{ ...text, marginTop: 16, color: theme.mutedForeground }}>Pairing...</Text>}
-      {error && (
-        <>
-          <Text style={{ marginTop: 16, fontSize: 16, color: theme.down }}>{error}</Text>
-          {!linkTarget?.error && (
-            <Pressable
-              onPress={() => {
-                setError(null)
-                if (link) attempt(link)
-              }}
-              style={{ marginTop: 12, padding: 12, borderRadius: 8, backgroundColor: theme.accent }}
-            >
-              <Text style={{ color: theme.accentForeground, fontSize: 16, textAlign: 'center' }}>Try again</Text>
-            </Pressable>
-          )}
-        </>
-      )}
-      {passcodeLink}
-    </View>
+    <PairFrame>
+      <PairSteps />
+      <View style={styles.card}>
+        {!link && permission?.granted ? (
+          <>
+            <CameraView
+              style={styles.camera}
+              barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
+              onBarcodeScanned={({ data }) => onScanned(data)}
+            />
+            <ScanReticle decoded={decoded} />
+          </>
+        ) : (
+          <View style={styles.placeholder}>
+            <QrCode size={28} color={colors.textMuted} strokeWidth={1.75} />
+          </View>
+        )}
+      </View>
+      <View style={styles.footer}>{passcodeButton}</View>
+    </PairFrame>
   )
 }
+
+const styles = themedStyleSheet(() => ({
+  card: { flex: 1, borderRadius: radii.surface, overflow: 'hidden', backgroundColor: fixedColors.black },
+  camera: { flex: 1 },
+  placeholder: { flex: 1, alignItems: 'center', justifyContent: 'center' },
+  actions: { alignSelf: 'stretch', alignItems: 'center', maxWidth: 360, gap: spacing.sm, marginTop: spacing.lg },
+  footer: { alignItems: 'center', marginTop: spacing.md }
+}))

@@ -1,12 +1,16 @@
-import { Link, useRouter } from 'expo-router'
+import { useRouter } from 'expo-router'
 import { useState } from 'react'
-import { Pressable, Text, TextInput, View } from 'react-native'
+import { KeyboardAvoidingView, Platform, View } from 'react-native'
 import { pairDeps } from '@/pairing/deps'
+import { CenteredMessage, PairFrame } from '@/pairing/PairFrame'
 import { signInWithPasscode } from '@/pairing/pairFlow'
-import { useTheme } from '@/theme/useTheme'
+import { PairError } from '@/pairing/PairProgress'
+import { ActionButton } from '@/ui/ActionButton'
+import { PageField } from '@/ui/PageField'
+import { spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 
 export default function SignIn() {
-  const theme = useTheme()
+  useColorScheme()
   const router = useRouter()
   const [address, setAddress] = useState('')
   const [passcode, setPasscode] = useState('')
@@ -23,54 +27,44 @@ export default function SignIn() {
     else setError(outcome.message)
   }
 
-  const input = {
-    borderWidth: 1,
-    borderColor: theme.border,
-    borderRadius: 8,
-    padding: 12,
-    fontSize: 16,
-    color: theme.foreground,
-    backgroundColor: theme.muted,
-    marginTop: 8
-  }
-
   return (
-    <View style={{ flex: 1, padding: 24, justifyContent: 'center', backgroundColor: theme.background }}>
-      <Text style={{ fontSize: 24, fontWeight: '600', color: theme.foreground }}>Sign in with the passcode</Text>
-      <TextInput
-        value={address}
-        onChangeText={setAddress}
-        placeholder="100.64.0.10:4000"
-        placeholderTextColor={theme.mutedForeground}
-        autoCapitalize="none"
-        autoCorrect={false}
-        keyboardType="url"
-        style={{ ...input, marginTop: 24 }}
-      />
-      <TextInput
-        value={passcode}
-        onChangeText={setPasscode}
-        placeholder="Passcode"
-        placeholderTextColor={theme.mutedForeground}
-        secureTextEntry
-        autoCapitalize="none"
-        autoCorrect={false}
-        onSubmitEditing={submit}
-        style={input}
-      />
-      {error && <Text style={{ marginTop: 12, fontSize: 16, color: theme.down }}>{error}</Text>}
-      <Pressable
-        onPress={submit}
-        disabled={busy}
-        style={{ marginTop: 16, padding: 12, borderRadius: 8, backgroundColor: theme.accent, opacity: busy ? 0.6 : 1 }}
-      >
-        <Text style={{ color: theme.accentForeground, fontSize: 16, textAlign: 'center' }}>
-          {busy ? 'Signing in...' : 'Sign in'}
-        </Text>
-      </Pressable>
-      <Link href="/pair" style={{ color: theme.foreground, fontSize: 16, textDecorationLine: 'underline', marginTop: 16 }}>
-        Scan the pairing code instead
-      </Link>
-    </View>
+    <PairFrame>
+      <KeyboardAvoidingView style={styles.fill} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <CenteredMessage title="Sign in with the passcode" message="Enter the address of your Yardbell server and its passcode.">
+          <View style={styles.form}>
+            <PageField
+              value={address}
+              onChangeText={setAddress}
+              placeholder="100.64.0.10:4000"
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="url"
+              accessibilityLabel="Server address"
+            />
+            <PageField
+              value={passcode}
+              onChangeText={setPasscode}
+              placeholder="Passcode"
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              onSubmitEditing={submit}
+              accessibilityLabel="Passcode"
+            />
+            {error ? <PairError message={error} /> : null}
+            <View style={styles.actions}>
+              <ActionButton label="Sign in" busy={busy} fullWidth onPress={submit} />
+              <ActionButton variant="ghost" label="Scan the pairing code instead" onPress={() => router.replace('/pair')} />
+            </View>
+          </View>
+        </CenteredMessage>
+      </KeyboardAvoidingView>
+    </PairFrame>
   )
 }
+
+const styles = themedStyleSheet(() => ({
+  fill: { flex: 1 },
+  form: { alignSelf: 'stretch', maxWidth: 360, width: '100%', gap: spacing.sm, marginTop: spacing.lg },
+  actions: { alignItems: 'center', gap: spacing.sm, marginTop: spacing.sm }
+}))

@@ -1,5 +1,6 @@
 import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { Stack, useRouter, useSegments } from 'expo-router'
+import * as SplashScreen from 'expo-splash-screen'
 import { StatusBar } from 'expo-status-bar'
 import { useEffect, useRef, useState } from 'react'
 import { PermissionsAndroid, Platform } from 'react-native'
@@ -13,7 +14,10 @@ import '@/preview/seed'
 import { startAppearance } from '@/ui/theme'
 import { addOpenListener, getInitialLink, start as startNotifications } from '../modules/yardbell-notify'
 
-startAppearance()
+SplashScreen.preventAutoHideAsync().catch((error) => console.error('Could not hold the splash screen', error))
+startAppearance().finally(() => {
+  SplashScreen.hideAsync().catch((error) => console.error('Could not hide the splash screen', error))
+})
 
 const queryClient = new QueryClient({
   defaultOptions: {

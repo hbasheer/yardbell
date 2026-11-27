@@ -1,18 +1,36 @@
-import { Stack } from 'expo-router'
-import { ScrollView, Text } from 'react-native'
+import { Text, View } from 'react-native'
 import { notices } from '@/about/notices'
-import { useTheme } from '@/theme/useTheme'
+import { SettingsScreen } from '@/settings/SettingsScreen'
+import { SectionHeader } from '@/ui/SectionHeader'
+import { colors, radii, spacing, themedStyleSheet, typography, useColorScheme } from '@/ui/theme'
+
+const sections = notices
+  .split(/\n(?=## )/)
+  .map((block) => {
+    const [heading, ...rest] = block.split('\n')
+    return { title: heading.replace(/^#+\s*/, ''), body: rest.join('\n').replace(/^```.*\n?/gm, '').replace(/`/g, '').replace(/^### /gm, '').trim() }
+  })
+  .filter((section) => section.title !== 'Third-party notices' || section.body)
 
 export default function Licences() {
-  const theme = useTheme()
+  useColorScheme()
   return (
-    <ScrollView style={{ flex: 1, backgroundColor: theme.background }} contentContainerStyle={{ padding: 16 }}>
-      <Stack.Screen
-        options={{ headerShown: true, title: 'Licences', headerStyle: { backgroundColor: theme.background }, headerTintColor: theme.foreground }}
-      />
-      <Text selectable style={{ color: theme.foreground, fontSize: 13, fontFamily: 'monospace' }}>
-        {notices}
-      </Text>
-    </ScrollView>
+    <SettingsScreen title="Licences">
+      {sections.map((section, index) => (
+        <View key={section.title}>
+          <SectionHeader title={section.title} first={index === 0} />
+          <View style={styles.card}>
+            <Text selectable style={styles.text}>
+              {section.body}
+            </Text>
+          </View>
+        </View>
+      ))}
+    </SettingsScreen>
   )
 }
+
+const styles = themedStyleSheet(() => ({
+  card: { alignSelf: 'stretch', padding: spacing.lg, borderRadius: radii.surface, backgroundColor: colors.bgPanel },
+  text: { fontSize: 12, lineHeight: 17, color: colors.textSecondary, fontFamily: typography.monoFamily }
+}))

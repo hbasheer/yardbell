@@ -1,11 +1,13 @@
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import { useEffect, useState } from 'react'
-import { Pressable, Text, View } from 'react-native'
+import { View } from 'react-native'
+import { CenteredMessage, PairFrame } from '@/pairing/PairFrame'
 import { forgetServer, listServers } from '@/servers/store'
-import { useTheme } from '@/theme/useTheme'
+import { ActionButton } from '@/ui/ActionButton'
+import { spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 
 export default function SignedOut() {
-  const theme = useTheme()
+  useColorScheme()
   const router = useRouter()
   const { server } = useLocalSearchParams<{ server?: string }>()
   const [machine, setMachine] = useState<string | null>(null)
@@ -23,21 +25,20 @@ export default function SignedOut() {
       })
   }, [server])
 
-  function pairAgain() {
-    router.replace('/pair')
-  }
-
   return (
-    <View style={{ flex: 1, padding: 24, justifyContent: 'center', backgroundColor: theme.background }}>
-      <Text style={{ fontSize: 20, fontWeight: '600', color: theme.foreground }}>
-        This phone was signed out of {machine ?? '...'}.
-      </Text>
-      <Pressable
-        onPress={pairAgain}
-        style={{ marginTop: 24, padding: 12, borderRadius: 8, backgroundColor: theme.accent }}
+    <PairFrame back={false}>
+      <CenteredMessage
+        title={`Signed out of ${machine ?? '...'}`}
+        message="This phone no longer has access. Pair it again to see its sessions."
       >
-        <Text style={{ color: theme.accentForeground, fontSize: 16, textAlign: 'center' }}>Pair again</Text>
-      </Pressable>
-    </View>
+        <View style={styles.actions}>
+          <ActionButton label="Pair again" fullWidth onPress={() => router.replace('/pair')} />
+        </View>
+      </CenteredMessage>
+    </PairFrame>
   )
 }
+
+const styles = themedStyleSheet(() => ({
+  actions: { alignSelf: 'stretch', alignItems: 'center', maxWidth: 360, marginTop: spacing.lg }
+}))
