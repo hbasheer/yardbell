@@ -5,6 +5,7 @@ import type { LucideIcon } from 'lucide-react-native'
 import { tabBadgeLabel } from './tabBadge'
 import { colors, fixedColors, radii, spacing, themedStyleSheet, useColorScheme } from './theme'
 import { useReducedMotionEnabled } from './useReducedMotionEnabled'
+import { bottomBarPadding } from './bottomInset'
 
 export const TAB_BAR_HEIGHT = 52
 const EASE_OUT = Easing.bezier(0.23, 1, 0.32, 1)
@@ -20,7 +21,7 @@ export function TabBar(props: {
   useColorScheme()
   return (
     <View
-      style={[styles.bar, { paddingBottom: Math.max(props.bottomInset, spacing.lg) }]}
+      style={[styles.bar, { paddingBottom: bottomBarPadding(props.bottomInset) }]}
       accessibilityRole={Platform.OS === 'ios' ? 'tabbar' : 'tablist'}
     >
       {props.tabs.map((tab) => (

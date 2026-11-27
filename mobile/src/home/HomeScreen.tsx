@@ -13,6 +13,7 @@ import { stateKey, useServerState } from '@/state/useServerState'
 import { feedSections, type MachineRow, type ServerSession, type ServerState } from '@/state/views'
 import { Fab } from '@/ui/Fab'
 import { TAB_BAR_HEIGHT, TabBar, type TabBarItem } from '@/ui/TabBar'
+import { bottomBarPadding } from '@/ui/bottomInset'
 import { triggerMediumImpact } from '@/ui/haptics'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { EmptyHero } from './EmptyHero'
@@ -149,7 +150,7 @@ export function HomeScreen() {
   }
 
   const bottomPad = spacing.xl + FAB_CLEARANCE
-  const tabBottom = TAB_BAR_HEIGHT + Math.max(insets.bottom, spacing.lg)
+  const tabBottom = TAB_BAR_HEIGHT + bottomBarPadding(insets.bottom)
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>

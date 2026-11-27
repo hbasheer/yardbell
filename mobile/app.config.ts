@@ -40,6 +40,7 @@ const config: ExpoConfig = {
     'expo-secure-store',
     ['expo-build-properties', { android: { minSdkVersion: 26, targetSdkVersion: 35, usesCleartextTraffic: true } }],
     './plugins/withReleaseSigning',
+    './plugins/withNavigationBarContrast',
     './modules/yardbell-notify/app.plugin.js'
   ]
 }

@@ -8,6 +8,7 @@ import { SHEET_CURVE } from './motion'
 import { colors, feedback, fixedColors, radii, spacing, themedStyleSheet, useColorScheme } from './theme'
 import { useKeyboardHeight } from './useKeyboardHeight'
 import { useReducedMotionEnabled } from './useReducedMotionEnabled'
+import { bottomBarPadding } from './bottomInset'
 
 const FADE_ID = 'bottom-search-bar-fade'
 const BUTTON_SIZE = 44
@@ -76,7 +77,7 @@ export function BottomSearchBar({
     <View
       style={[
         styles.bar,
-        keyboardUp ? { bottom: keyboardHeight, paddingBottom: spacing.sm } : { paddingBottom: Math.max(bottomInset, spacing.lg) }
+        keyboardUp ? { bottom: keyboardHeight, paddingBottom: spacing.sm } : { paddingBottom: bottomBarPadding(bottomInset) }
       ]}
       onLayout={(event) => setBarHeight(event.nativeEvent.layout.height)}
     >

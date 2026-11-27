@@ -32,6 +32,7 @@ import { isListedLive, shouldReconnectOnForeground } from '@/terminal/reconnect'
 import { useTerminalSocket } from '@/terminal/useTerminalSocket'
 import { ActionSheet, type ActionSheetAction } from '@/ui/ActionSheet'
 import { ConfirmModal } from '@/ui/ConfirmModal'
+import { bottomBarPadding } from '@/ui/bottomInset'
 import { NAV_BAR_HEIGHT, NavBar } from '@/ui/NavBar'
 import { NavBarButton } from '@/ui/NavBarButton'
 import { OfflineState, StateButton, StateView } from '@/ui/StateView'
@@ -477,7 +478,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
           </View>
         )}
       </View>
-      <View style={[styles.dock, { paddingBottom: keyboard.height > 0 ? 0 : insets.bottom }]}>
+      <View style={[styles.dock, { paddingBottom: keyboard.height > 0 ? 0 : bottomBarPadding(insets.bottom) }]}>
         <KeyRow
           latches={latches}
           keyboardUp={keyboard.height > 0}

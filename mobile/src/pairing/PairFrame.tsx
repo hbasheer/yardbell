@@ -5,13 +5,14 @@ import { Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { NavBarButton } from '@/ui/NavBarButton'
+import { bottomBarPadding } from '@/ui/bottomInset'
 
 export function PairFrame({ children, back = true }: { children: ReactNode; back?: boolean }) {
   useColorScheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
   return (
-    <View style={[styles.frame, { paddingTop: insets.top + spacing.sm, paddingBottom: insets.bottom + spacing.sm }]}>
+    <View style={[styles.frame, { paddingTop: insets.top + spacing.sm, paddingBottom: bottomBarPadding(insets.bottom) + spacing.xs }]}>
       {back && router.canGoBack() ? (
         <View style={styles.back}>
           <NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => router.back()} />

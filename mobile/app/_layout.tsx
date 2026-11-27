@@ -2,6 +2,7 @@ import { QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-qu
 import { Stack, useRouter, useSegments } from 'expo-router'
 import * as SplashScreen from 'expo-splash-screen'
 import { StatusBar } from 'expo-status-bar'
+import { useSystemBars } from '@/ui/useSystemBars'
 import { useEffect, useRef, useState } from 'react'
 import { PermissionsAndroid, Platform } from 'react-native'
 import { GestureHandlerRootView } from 'react-native-gesture-handler'
@@ -11,7 +12,7 @@ import { NewSessionProvider } from '@/new-session/NewSessionProvider'
 import { routeForLink } from '@/notifications/route'
 import { listServers, onServersChanged } from '@/servers/store'
 import '@/preview/seed'
-import { startAppearance } from '@/ui/theme'
+import { startAppearance, useColorScheme } from '@/ui/theme'
 import { settleWithin } from '@/ui/theme/settleWithin'
 import { addOpenListener, getInitialLink, start as startNotifications } from '../modules/yardbell-notify'
 
@@ -89,10 +90,12 @@ function useNotifications(hasServers: boolean | null) {
 export default function RootLayout() {
   const hasServers = useRouteGuard()
   useNotifications(hasServers)
+  useSystemBars()
+  const scheme = useColorScheme()
   return (
     <GestureHandlerRootView style={{ flex: 1 }}>
       <QueryClientProvider client={queryClient}>
-        <StatusBar style="auto" />
+        <StatusBar style={scheme === 'dark' ? 'light' : 'dark'} />
         <NewSessionProvider>
           <Stack screenOptions={{ headerShown: false }} />
         </NewSessionProvider>

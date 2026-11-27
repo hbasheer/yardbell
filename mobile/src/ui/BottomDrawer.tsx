@@ -8,6 +8,7 @@ import { bottomDrawerOffset, bottomDrawerScrim, bottomDrawerTravel } from './mot
 import { colors, fixedColors, radii, spacing, themedStyleSheet, useColorScheme } from './theme'
 import { hideDrawer, showDrawer, useBottomDrawerDrag } from './useBottomDrawerDrag'
 import { useDrawerReducedMotion } from './useReducedMotionEnabled'
+import { bottomBarPadding } from './bottomInset'
 import { useKeyboardHeight } from './useKeyboardHeight'
 
 const HANDLE_AREA_HEIGHT = spacing.sm + 5 + spacing.md
@@ -114,7 +115,7 @@ function MountedBottomDrawer({
 
   const sheetMaxHeight = Math.max(0, screenHeight - insets.top - spacing.lg - (fillAvailable ? 0 : keyboardInset))
   const fillHeight = fillAvailable ? Math.max(0, screenHeight - insets.top - spacing.lg - keyboardInset) : undefined
-  const contentCap = Math.max(0, sheetMaxHeight - (insets.bottom + spacing.lg) - HANDLE_AREA_HEIGHT)
+  const contentCap = Math.max(0, sheetMaxHeight - (bottomBarPadding(insets.bottom) + spacing.md) - HANDLE_AREA_HEIGHT)
 
   const handle = (
     <GestureDetector gesture={handlePanGesture}>
@@ -150,7 +151,7 @@ function MountedBottomDrawer({
   )
 
   return (
-    <Modal visible transparent animationType="none" statusBarTranslucent onRequestClose={dismiss}>
+    <Modal visible transparent animationType="none" statusBarTranslucent navigationBarTranslucent onRequestClose={dismiss}>
       <Animated.View
         pointerEvents={visible ? 'auto' : 'none'}
         style={styles.overlay}
@@ -172,7 +173,7 @@ function MountedBottomDrawer({
                   maxHeight: sheetMaxHeight,
                   height: fillHeight,
                   marginBottom: fillAvailable ? keyboardInset : 0,
-                  paddingBottom: fillAvailable && keyboardInset > 0 ? spacing.sm : insets.bottom + spacing.lg
+                  paddingBottom: fillAvailable && keyboardInset > 0 ? spacing.sm : bottomBarPadding(insets.bottom) + spacing.md
                 },
                 drawerStyle
               ]}
