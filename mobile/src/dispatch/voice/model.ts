@@ -100,14 +100,29 @@ export function speechFor(event: DispatchEvent): string | null {
   return null
 }
 
-export function takeNew(events: readonly DispatchEvent[], seen: number): { say: string[]; seen: number } {
-  const from = Math.min(seen, events.length)
+export function eventKey(event: DispatchEvent, index: number): string {
+  const id = (event as { id?: string }).id
+  if (id) return `${event.role}:${id}`
+  const said = 'text' in event ? event.text : event.role === 'session' ? `${event.machine}/${event.name}/${event.state}` : ''
+  return `${event.role}:${said}:${index}`
+}
+
+export const keysOf = (events: readonly DispatchEvent[]): Set<string> => new Set(events.map(eventKey))
+
+export function takeNew(events: readonly DispatchEvent[], seen: ReadonlySet<string>): { say: string[]; seen: Set<string> } {
+  const next = new Set(seen)
   const say: string[] = []
-  for (const event of events.slice(from)) {
+  events.forEach((event, index) => {
+    const key = eventKey(event, index)
+    if (next.has(key)) return
+    next.add(key)
     const text = speechFor(event)
     if (text) say.push(text)
-  }
-  return { say, seen: events.length }
+  })
+  return { say, seen: next }
 }
+
+export const MIN_RECORDING_MS = 300
+export const tooShort = (startedAt: number, now: number): boolean => now - startedAt < MIN_RECORDING_MS
 
 export const parseSpeak = (raw: string | null): boolean => raw === '1'

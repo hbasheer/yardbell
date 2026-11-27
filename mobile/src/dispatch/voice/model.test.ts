@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DispatchEvent } from '../types'
-import { HOLD_MS, insertAtCursor, micHint, micMode, onRelease, parseSpeak, speechFor, speechPieces, spokenText, takeNew } from './model'
+import { HOLD_MS, MIN_RECORDING_MS, eventKey, insertAtCursor, keysOf, micHint, micMode, onRelease, parseSpeak, speechFor, speechPieces, spokenText, takeNew, tooShort } from './model'
 
 const assistant = (text: string): DispatchEvent => ({ role: 'assistant', text })
 const user = (text: string): DispatchEvent => ({ role: 'user', text })
@@ -116,25 +116,40 @@ describe('speechFor', () => {
 })
 
 describe('takeNew', () => {
-  it('speaks what arrived after the count, never the history', () => {
+  it('speaks what arrived after the history, never the history', () => {
     const history = [user('a'), assistant('old reply')]
-    expect(takeNew(history, history.length)).toEqual({ say: [], seen: 2 })
+    const base = keysOf(history)
+    expect(takeNew(history, base).say).toEqual([])
     const grown = [...history, user('b'), assistant('new reply'), blocked]
-    expect(takeNew(grown, 2)).toEqual({ say: ['new reply', 'Session yardbell-3 on hp is waiting for an answer.'], seen: 5 })
+    expect(takeNew(grown, base).say).toEqual(['new reply', 'Session yardbell-3 on hp is waiting for an answer.'])
   })
 
-  it('does not repeat when the list is replaced by one of the same length', () => {
-    const list = [user('a'), assistant('reply')]
-    const again = takeNew([user('a'), assistant('reply')], takeNew(list, 1).seen)
-    expect(again.say).toEqual([])
+  it('does not repeat when the list is replaced by an equal one', () => {
+    const first = takeNew([user('a'), assistant('reply')], new Set())
+    expect(takeNew([user('a'), assistant('reply')], first.seen).say).toEqual([])
   })
 
-  it('copes with a list that shrank', () => {
-    expect(takeNew([user('a')], 4)).toEqual({ say: [], seen: 1 })
+  it('neither repeats nor skips when a poll returns a shorter or reordered list', () => {
+    const spoken = takeNew([user('a'), assistant('one'), assistant('two')], new Set())
+    expect(spoken.say).toEqual(['one', 'two'])
+    expect(takeNew([user('a'), assistant('one')], spoken.seen).say).toEqual([])
+    expect(takeNew([user('a'), assistant('one'), assistant('two'), assistant('three')], spoken.seen).say).toEqual(['three'])
   })
 
-  it('starts from zero for a new chat', () => {
-    expect(takeNew([user('a'), assistant('hi')], 0).say).toEqual(['hi'])
+  it('keys events with an id by role and id', () => {
+    const a: DispatchEvent = { role: 'action', id: 'x1', tool: 't', input: {}, status: 'pending' }
+    expect(eventKey(a, 3)).toBe(eventKey(a, 9))
+  })
+
+  it('starts from nothing for a new chat', () => {
+    expect(takeNew([user('a'), assistant('hi')], new Set()).say).toEqual(['hi'])
+  })
+})
+
+describe('tooShort', () => {
+  it('discards a tap but keeps a real recording', () => {
+    expect(tooShort(1000, 1000 + MIN_RECORDING_MS - 1)).toBe(true)
+    expect(tooShort(1000, 1000 + MIN_RECORDING_MS)).toBe(false)
   })
 })
 

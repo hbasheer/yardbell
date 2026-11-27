@@ -2,7 +2,7 @@ import { useFocusEffect } from 'expo-router'
 import * as Speech from 'expo-speech'
 import { useCallback, useEffect, useRef } from 'react'
 import type { DispatchEvent } from '../types'
-import { speechPieces, takeNew } from './model'
+import { keysOf, speechPieces, takeNew } from './model'
 import { useSpeakReplies } from './speakPrefs'
 
 export function stopSpeaking(): void {
@@ -11,7 +11,7 @@ export function stopSpeaking(): void {
 
 export function useSpokenReplies(events: readonly DispatchEvent[], ready: boolean, startsEmpty: boolean) {
   const [on] = useSpeakReplies()
-  const seen = useRef<number | null>(null)
+  const seen = useRef<Set<string> | null>(null)
   const focused = useRef(false)
   const wanted = useRef(on)
   wanted.current = on
@@ -34,7 +34,7 @@ export function useSpokenReplies(events: readonly DispatchEvent[], ready: boolea
 
   useEffect(() => {
     if (!ready) return
-    if (seen.current === null) seen.current = startsEmpty ? 0 : events.length
+    if (seen.current === null) seen.current = startsEmpty ? new Set() : keysOf(events)
     const next = takeNew(events, seen.current)
     seen.current = next.seen
     if (!wanted.current || !focused.current) return

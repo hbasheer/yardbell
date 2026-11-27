@@ -1,11 +1,11 @@
 import { RecordingPresets, getRecordingPermissionsAsync, requestRecordingPermissionsAsync, setAudioModeAsync, useAudioRecorder } from 'expo-audio'
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Platform } from 'react-native'
+import { AppState, Platform } from 'react-native'
 import { routeIfSignedOut } from '../../api/signedOut'
 import type { PairedServer } from '../../servers/store'
 import { triggerError, triggerSelection } from '../../ui/haptics'
 import { transcribe } from '../api'
-import { MAX_RECORDING_MS, NOTHING_HEARD, RECORDING_MIME, onRelease, type MicMode } from './model'
+import { MAX_RECORDING_MS, NOTHING_HEARD, RECORDING_MIME, onRelease, tooShort, type MicMode } from './model'
 
 export type DictationPhase = 'idle' | 'starting' | 'recording' | 'transcribing'
 
@@ -27,6 +27,8 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
   const stopAfterStart = useRef(false)
   const limit = useRef<ReturnType<typeof setTimeout> | null>(null)
   const alive = useRef(true)
+  const startedAt = useRef(0)
+  const abortStart = useRef(false)
   const handlers = useRef({ onText, onProblem, onDenied })
   handlers.current = { onText, onProblem, onDenied }
 
@@ -44,7 +46,14 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
     clearLimit()
     setPhase('transcribing')
     try {
-      await recorder.stop()
+      const short = tooShort(startedAt.current, Date.now())
+      await recorder.stop().catch((error) => {
+        if (!short) throw error
+      })
+      if (short) {
+        await setAudioModeAsync({ allowsRecording: false }).catch(() => {})
+        return
+      }
       const uri = recorder.uri
       await setAudioModeAsync({ allowsRecording: false }).catch(() => {})
       if (!uri) throw new Error('The recording was not saved. Try again.')
@@ -63,7 +72,9 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
   }, [recorder, server, setPhase])
 
   const start = useCallback(async () => {
+    abortStart.current = false
     setPhase('starting')
+    let prepared = false
     try {
       let permission = await getRecordingPermissionsAsync()
       if (!permission.granted) permission = await requestRecordingPermissionsAsync()
@@ -73,8 +84,14 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
         return
       }
       await setAudioModeAsync({ allowsRecording: true, playsInSilentMode: true })
+      prepared = true
       await recorder.prepareToRecordAsync()
+      if (!alive.current || abortStart.current) {
+        await recorder.stop().catch(() => {})
+        return
+      }
       recorder.record()
+      startedAt.current = Date.now()
       triggerSelection()
       setPhase('recording')
       limit.current = setTimeout(() => {
@@ -86,6 +103,7 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
         void finish()
       }
     } catch (error) {
+      if (prepared) await recorder.stop().catch(() => {})
       setPhase('idle')
       triggerError()
       handlers.current.onProblem(`The microphone did not start: ${messageOf(error)}`)
@@ -112,6 +130,19 @@ export function useDictation(server: PairedServer, { mode, onText, onProblem, on
     if (action === 'stop-after-start') stopAfterStart.current = true
     else if (action === 'stop') void finish()
   }, [mode, finish])
+
+  useEffect(() => {
+    const subscription = AppState.addEventListener('change', (next) => {
+      if (next !== 'background' || (phaseRef.current !== 'recording' && phaseRef.current !== 'starting')) return
+      clearLimit()
+      stopAfterStart.current = false
+      abortStart.current = true
+      if (phaseRef.current === 'recording') void recorder.stop().catch(() => {})
+      void setAudioModeAsync({ allowsRecording: false }).catch(() => {})
+      setPhase('idle')
+    })
+    return () => subscription.remove()
+  }, [recorder, setPhase])
 
   useEffect(() => {
     alive.current = true
