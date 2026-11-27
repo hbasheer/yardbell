@@ -192,7 +192,7 @@ export function NewSessionSheet({ visible, request, servers, onClose, onAfterClo
           branch={effectiveBranch}
           current={branches.data?.current || listing.data?.branch || ''}
           agents={agents}
-          agentsLoading={!state}
+          agentsLoading={!state || installed.isPending}
           chosenAgent={chosenAgent}
           noMachines={options.length === 0}
           sending={sending}

@@ -84,13 +84,17 @@ export const dockStyles = themedStyleSheet(() => ({
     backgroundColor: colors.composerSurface
   },
   liveFieldFocused: { borderColor: colors.accentBlue },
-  liveStack: { flex: 1, minWidth: 0 },
+  liveStack: { flex: 1, minWidth: 0, justifyContent: 'center', paddingVertical: spacing.xs },
   liveLabel: { color: colors.textSecondary, fontSize: typography.metaSize, fontWeight: '600' },
   liveText: {
     color: colors.textPrimary,
     fontSize: 16,
     fontFamily: typography.monoFamily,
     paddingVertical: 0,
+    paddingHorizontal: 0,
+    marginTop: 1,
+    includeFontPadding: false,
+    textAlignVertical: 'center',
     minHeight: 22
   },
   roundButton: {
