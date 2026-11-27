@@ -1,1 +1,1 @@
-export { Composer, BUSY_TEXT, type ComposerProps, type SendPayload } from './Composer'
+export { Composer, BUSY_TEXT, type ComposerProps, type MicApi, type SendPayload } from './Composer'

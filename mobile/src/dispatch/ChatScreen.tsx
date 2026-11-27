@@ -25,6 +25,8 @@ import { BUSY_DELETE, dispatchHref, newChatHref, promptsHref } from './listModel
 import { promptToRun } from './prompts/model'
 import { PendingDock } from './PendingDock'
 import { Transcript } from './Transcript'
+import { MicButton } from './voice/MicButton'
+import { stopSpeaking, useSpokenReplies } from './voice/useSpokenReplies'
 import type { TriggerList } from './types'
 import { useConversation } from './useConversation'
 
@@ -106,8 +108,11 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
   const tracked = useMemo(() => trackedRows(chat.meta.sessions, state), [chat.meta.sessions, state])
   const note = chat.id ? backendNote(runsOn.data, chat.meta.backend) : null
 
+  useSpokenReplies(chat.events, !chat.loading && !chat.loadError, routeId === 'new')
+
   const send = useCallback(
     async (payload: Parameters<typeof chat.send>[0]) => {
+      stopSpeaking()
       setChosen(null)
       await chat.send(payload)
       queryClient.invalidateQueries({ queryKey: ['state', server.id] }).catch(() => {})
@@ -242,6 +247,7 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
         onSend={send}
         onStop={() => void chat.stop()}
         fill={fill}
+        micSlot={(mic) => <MicButton server={server} runsOn={runsOn.data} onText={mic.insert} onProblem={mic.notify} />}
       />
       <PullDownMenu visible={menuOpen} anchorRef={menuRef} groups={menu} onClose={() => setMenuOpen(false)} />
       <ConfirmModal

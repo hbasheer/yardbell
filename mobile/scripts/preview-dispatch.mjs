@@ -191,7 +191,7 @@ export async function dispatchApi(req, res, fx, { json, cors }) {
 
   if (path === '/dispatch/ask' && method === 'POST') return streamAsk(req, res, fx, json, cors), true
   if (path === '/dispatch/runs-on') {
-    json(res, 200, { runs_on: 'claude', label: 'Claude Code', model: 'sonnet', agents: { claude: { label: 'Claude Code', model: 'sonnet' }, codex: { label: 'Codex', model: 'gpt-5' } }, voice_input: true, voice_mode: 'hold' })
+    json(res, 200, { runs_on: 'claude', label: 'Claude Code', model: 'sonnet', agents: { claude: { label: 'Claude Code', model: 'sonnet' }, codex: { label: 'Codex', model: 'gpt-5' } }, voice_input: process.env.PREVIEW_VOICE !== 'off', voice_mode: 'hold' })
     return true
   }
   if (path === '/dispatch/transcribe' && method === 'POST') {

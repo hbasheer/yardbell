@@ -37,6 +37,15 @@ const config: ExpoConfig = {
       { backgroundColor: '#ffffff', image: './assets/icon.png', imageWidth: 160, dark: { backgroundColor: '#0a0a0a' } }
     ],
     ['expo-camera', { cameraPermission: "Scan the pairing code shown in Yardbell's Settings", recordAudioAndroid: false }],
+    [
+      'expo-audio',
+      {
+        microphonePermission: 'Yardbell uses the microphone to turn your voice into text for Dispatch',
+        recordAudioAndroid: true,
+        enableBackgroundRecording: false,
+        enableBackgroundPlayback: false
+      }
+    ],
     'expo-secure-store',
     ['expo-build-properties', { android: { minSdkVersion: 26, targetSdkVersion: 35, usesCleartextTraffic: true } }],
     './plugins/withReleaseSigning',

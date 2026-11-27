@@ -21,6 +21,7 @@ import { asyncDrafts, draftKey, restoreText, saveDraft, switchDraft } from './dr
 import { MentionMenu } from './MentionMenu'
 import { ModelSheet } from './ModelSheet'
 import { APPROVALS, approvalOf, currentModel, modelChange, modelsFor, type ApprovalMode } from './models'
+import { insertAtCursor } from '../voice/model'
 import { applyToken, findTrigger, nameItems, pickedTask, taskItems, type MenuItem } from './triggers'
 import {
   COMPOSER_CONTROL_HIT_SLOP,
@@ -30,6 +31,8 @@ import {
   MESSAGE_MAX_HEIGHT,
   MESSAGE_MIN_HEIGHT
 } from './sizes'
+
+export type MicApi = { insert: (text: string) => void; notify: (text: string) => void }
 
 export const BUSY_TEXT = 'Dispatch is still working on the last message. Stop it or wait, then send.'
 const DRAFT_DELAY_MS = 400
@@ -44,7 +47,7 @@ export type ComposerProps = {
   backend?: Backend
   onSend: (payload: SendPayload) => Promise<void>
   onStop: () => void
-  micSlot?: ReactNode
+  micSlot?: (mic: MicApi) => ReactNode
   seed?: { text?: string; files?: PickedFile[]; error?: string }
   fill?: { text: string; at: number }
 }
@@ -181,6 +184,19 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
     [trigger, text, prompts.data]
   )
 
+  const selectionRef = useRef(selection)
+  selectionRef.current = selection
+  const insertText = useCallback(
+    (piece: string) => {
+      const now = owned.current.key === keyRef.current ? owned.current.text : ''
+      const next = insertAtCursor(now, selectionRef.current, piece)
+      setText(next.text)
+      setSelection({ start: next.cursor, end: next.cursor })
+      setMenuHidden(true)
+    },
+    [setText]
+  )
+
   const addFiles = useCallback(
     async (incoming: PickedFile[]) => {
       if (!incoming.length) return
@@ -291,7 +307,7 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
           <RoundButton label="Attach files" onPress={() => setSheet('attach')} disabled={checking}>
             {checking ? <ActivityIndicator size="small" color={colors.textSecondary} /> : <Plus size={19} color={colors.textPrimary} strokeWidth={2.2} />}
           </RoundButton>
-          {micSlot}
+          {micSlot?.({ insert: insertText, notify: setNotice })}
           <View style={styles.pills}>
             <Pill label={`Model: ${modelLabel}`} onPress={() => setSheet('model')}>
               <Text style={styles.pillText} numberOfLines={1}>
