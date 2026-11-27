@@ -83,6 +83,7 @@ The direct npm dependencies of `mobile/` and their licences:
 | expo-splash-screen | MIT |
 | expo-status-bar | MIT |
 | lucide-react-native | ISC |
+| markdown-it | MIT |
 | react | MIT |
 | react-dom | MIT |
 | react-native | MIT |
@@ -94,6 +95,7 @@ The direct npm dependencies of `mobile/` and their licences:
 | react-native-web | MIT |
 | react-native-webview | MIT |
 | react-native-worklets | MIT |
+| remend | Apache-2.0 |
 
 ## Terminal fonts
 

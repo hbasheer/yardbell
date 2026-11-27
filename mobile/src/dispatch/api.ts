@@ -11,11 +11,14 @@ import type {
   DispatchEvent,
   PromptDiff,
   PromptHistory,
+  PullEvent,
   ReviewEvent,
+  ReviewTarget,
   RunsOn,
   SavedPrompt,
   SessionEvent,
-  StreamLine
+  StreamLine,
+  TriggerList
 } from './types'
 
 const POLL_MS = 2000
@@ -227,7 +230,7 @@ export function decideReview(
   id: string,
   card: number,
   body: ReviewDecision
-): Promise<ReviewEvent | { card: number; step: ActionEvent }> {
+): Promise<ReviewEvent | { card: ReviewEvent; step: ActionEvent }> {
   return client(server).post(conversationPath(id, `/reviews/${card}`), body)
 }
 
@@ -236,8 +239,20 @@ export function sendToSession(
   id: string,
   card: number,
   text?: string
-): Promise<{ card: number; step: ActionEvent }> {
+): Promise<{ card: PullEvent; step: ActionEvent }> {
   return client(server).post(conversationPath(id, '/pulls'), text === undefined ? { card } : { card, text })
+}
+
+export function reviewTargets(server: PairedServer, id: string, card: number): Promise<{ sessions: ReviewTarget[]; from?: string }> {
+  return client(server).get(conversationPath(id, `/reviews/${card}/sessions`))
+}
+
+export function getTriggers(server: PairedServer): Promise<TriggerList> {
+  return client(server).get('/api/triggers')
+}
+
+export function setTriggerEnabled(server: PairedServer, name: string, enabled: boolean): Promise<TriggerList> {
+  return client(server).post('/api/triggers/enable', { name, enabled })
 }
 
 export function reviewSession(
@@ -251,11 +266,11 @@ export function reviewSession(
 export type ScanRequest = {
   conversation?: string
   card?: number
-  machine: string
-  folder: string
-  inside: string
-  path: string
-  branch: string
+  machine?: string
+  folder?: string
+  inside?: string
+  path?: string
+  branch?: string
   kind: 'dead_code' | 'test_gaps' | 'security'
 }
 

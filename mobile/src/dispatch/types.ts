@@ -58,31 +58,36 @@ export type GroupChild = {
   step?: string
   refused?: string
   rule?: string
+  state?: string
+  worked?: boolean
 }
 
 export type GroupEvent = {
   role: 'group'
   id: string
   title: string
-  gather?: boolean
+  gather?: string | boolean
   minutes?: number
+  at?: string
+  started?: string
+  gathered?: string
   children: GroupChild[]
   status: GroupStatus
   follow?: boolean
 }
 
-export type ResultDetail = Record<string, unknown>
-
 export type ResultChild = {
   label: string
+  note?: string
   started?: boolean
+  worked?: boolean
   name?: string
   machine?: string
   path?: string
   branch?: string
   state?: string
   screen?: string
-  result?: { status: string; summary?: string; details?: ResultDetail[] }
+  result?: { status: string; summary?: string; details?: string[] }
 }
 
 export type ResultsEvent = {
@@ -90,8 +95,10 @@ export type ResultsEvent = {
   group: string
   title: string
   why?: string
+  minutes?: number
+  at?: string
   children: ResultChild[]
-  gather?: boolean
+  gather?: string | boolean
   follow?: boolean
 }
 
@@ -111,31 +118,60 @@ export type SessionEvent = {
   review?: unknown
 }
 
+export type PullRef = { number: number; url?: string; title?: string; base?: string; forge?: string; head?: string }
+
 export type Finding = { severity: string; place?: string; text: string }
+
+export type ReviewOf = {
+  name?: string
+  branch?: string
+  path?: string
+  scan?: string
+  pull?: PullRef
+}
+
+export type ReviewOutcome = {
+  decision: 'sent' | 'started' | 'dismissed'
+  findings?: number[]
+  to?: string
+  step?: string
+  at?: string
+}
 
 export type ReviewEvent = {
   role: 'review'
   machine: string
   name: string
-  of?: Record<string, unknown>
+  of?: ReviewOf
   verdict?: string
   summary?: string
   findings?: Finding[]
-  outcome?: unknown
+  outcome?: ReviewOutcome
+  at?: string
 }
+
+export type PullCheck = { name: string; url?: string; log?: string }
+
+export type PullNote = { kind?: string; author?: string; body?: string; url?: string; place?: string }
 
 export type PullEvent = {
   role: 'pull'
-  kind: 'ci' | 'conflict' | 'comments'
+  kind: 'ci' | 'conflict' | 'comments' | 'limit'
   key?: string
   machine: string
   name: string
   path?: string
   branch?: string
-  pull?: { number: number; url: string; title: string }
-  checks?: unknown[]
-  notes?: unknown[]
+  folder?: string
+  pull?: PullRef
+  checks?: PullCheck[]
+  notes?: PullNote[]
+  more?: number
+  error?: string
+  resets?: string
   instruction?: string
+  sent?: { at?: string; step?: string }
+  at?: string
 }
 
 export type ErrorEvent = { role: 'error'; text: string }
@@ -154,6 +190,12 @@ export type DispatchEvent =
   | ErrorEvent
 
 export type StreamLine = DispatchEvent | { role: 'conversation'; id: string } | { role: 'done' }
+
+export type TriggerState = { trigger: { name: string; enabled: boolean } }
+
+export type TriggerList = { triggers: TriggerState[] }
+
+export type ReviewTarget = { machine: string; name: string; agent?: string; branch?: string; path?: string }
 
 export type Trigger = {
   name: string

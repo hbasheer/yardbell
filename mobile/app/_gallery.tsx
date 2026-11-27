@@ -35,6 +35,7 @@ import { StatusDot } from '@/ui/StatusDot'
 import { SwipeCell } from '@/ui/SwipeCell'
 import { TabBar } from '@/ui/TabBar'
 import { TabStrip } from '@/ui/TabStrip'
+import { CARD_GROUPS, CardsGallery, type CardGroup } from '@/dispatch/cards/CardsGallery'
 import { STEP_GROUPS, StepGallery, type StepGroup } from '@/steps/StepGallery'
 import {
   colors,
@@ -46,7 +47,7 @@ import {
   useColorScheme
 } from '@/ui/theme'
 
-const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars', 'steps-pending', 'steps-tools', 'steps-receipts', 'steps-edit', 'steps-already', 'steps-error', 'steps-busy'] as const
+const SECTIONS = ['navigation', 'glyphs', 'lists', 'states', 'bars', 'steps-pending', 'steps-tools', 'steps-receipts', 'steps-edit', 'steps-already', 'steps-error', 'steps-busy', 'chat-markdown', 'chat-tools', 'chat-session', 'chat-pull', 'chat-group', 'chat-results', 'chat-review', 'chat-misc'] as const
 type Section = (typeof SECTIONS)[number]
 type Overlay = 'action' | 'pulldown' | 'confirm' | 'drawer'
 
@@ -57,6 +58,11 @@ function isOverlay(value: unknown): value is Overlay {
 function stepGroup(section: Section): StepGroup | null {
   const group = section.startsWith('steps-') ? section.slice(6) : null
   return STEP_GROUPS.find((name) => name === group) ?? null
+}
+
+function cardGroup(section: Section): CardGroup | null {
+  const group = section.startsWith('chat-') ? section.slice(5) : null
+  return CARD_GROUPS.find((name) => name === group) ?? null
 }
 
 function Block({ title, children, flush = false }: { title: string; children: ReactNode; flush?: boolean }) {
@@ -127,6 +133,10 @@ export default function Gallery() {
         {SECTIONS.map((section) => {
           const group = stepGroup(section)
           return group && show(section) ? <StepGallery key={section} group={group} /> : null
+        })}
+        {SECTIONS.map((section) => {
+          const group = cardGroup(section)
+          return group && show(section) ? <CardsGallery key={section} group={group} /> : null
         })}
 
         {show('navigation') ? (
