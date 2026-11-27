@@ -7,6 +7,7 @@ export function useSystemBars(): void {
   const scheme = useColorScheme()
   useEffect(() => {
     if (Platform.OS !== 'android') return
-    NavigationBar.setStyle(scheme === 'dark' ? 'dark' : 'light')
+    // The value is the button colour, whatever the type docs say.
+    NavigationBar.setStyle(scheme === 'dark' ? 'light' : 'dark')
   }, [scheme])
 }
