@@ -184,6 +184,55 @@ const RETRY = [1000, 2000, 5000, 10000];
 let socket = null;
 let attempt = 0;
 let ended = false;
+let wipe = false;
+let retryTimer = 0;
+let exits = [];
+const EXIT_BUDGET = 3;
+const EXIT_WINDOW = 60000;
+const gone = document.getElementById("gone");
+
+async function stillRunning() {
+  try {
+    const res = await fetch("/state", { headers: { Accept: "application/json" }, credentials: "same-origin", signal: AbortSignal.timeout(5000) });
+    if (!res.ok) return false;
+    const view = await res.json();
+    return (view.sessions || []).some((s) => s.machine === parts[1] && s.tmux === parts[2] && s.attachable && !s.stale && !s.stopped);
+  } catch {
+    return false;
+  }
+}
+
+async function onExit(msg) {
+  ended = true;
+  const now = Date.now();
+  exits = exits.filter((t) => now - t < EXIT_WINDOW);
+  exits.push(now);
+  if (exits.length <= EXIT_BUDGET && (await stillRunning())) {
+    ended = false;
+    wipe = true;
+    document.getElementById("banner").style.display = "inline";
+    scheduleConnect();
+    return;
+  }
+  term.write(`\r\n\x1b[33m[${msg}]\x1b[0m\r\n`);
+  gone.classList.add("show");
+}
+
+function reconnectNow() {
+  gone.classList.remove("show");
+  clearTimeout(retryTimer);
+  exits = [];
+  attempt = 0;
+  ended = false;
+  wipe = true;
+  connect();
+}
+gone.querySelector("button").addEventListener("click", reconnectNow);
+
+function scheduleConnect() {
+  clearTimeout(retryTimer);
+  retryTimer = setTimeout(connect, RETRY[Math.min(attempt++, RETRY.length - 1)]);
+}
 
 function send(frame) {
   if (socket && socket.readyState === WebSocket.OPEN) socket.send(JSON.stringify(frame));
@@ -232,12 +281,21 @@ function resize() {
 }
 
 function connect() {
+  if (socket) {
+    socket.onclose = null;
+    socket.onmessage = null;
+    socket.close();
+  }
   const proto = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${proto}://${location.host}${location.pathname}/ws`);
   socket.binaryType = "arraybuffer";
   socket.onopen = () => {
     attempt = 0;
     document.getElementById("banner").style.display = "none";
+    if (wipe) {
+      wipe = false;
+      term.reset();
+    }
     shown = null;
     sentSize = "";
     resize();
@@ -245,10 +303,7 @@ function connect() {
   socket.onmessage = (e) => {
     if (typeof e.data === "string") {
       const frame = JSON.parse(e.data);
-      if (frame.t === "exit") {
-        ended = true;
-        term.write(`\r\n\x1b[33m[${frame.msg}]\x1b[0m\r\n`);
-      }
+      if (frame.t === "exit") onExit(frame.msg);
       return;
     }
     term.write(new Uint8Array(e.data));
@@ -256,7 +311,7 @@ function connect() {
   socket.onclose = () => {
     if (ended) return;
     document.getElementById("banner").style.display = "inline";
-    setTimeout(connect, RETRY[Math.min(attempt++, RETRY.length - 1)]);
+    scheduleConnect();
   };
 }
 

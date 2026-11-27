@@ -1043,6 +1043,57 @@ class Suite:
         b.key("Enter")
         b.wait("screenText().split('\\n').some((l) => l.trim() === 'back3')", "the shell to still answer")
 
+    def open_extra_terminal(self, name):
+        b = self.b
+        self.y.tmux("new", "-d", "-s", name, "-c", os.path.join(self.y.root, "demo-app"), self.y.shell)
+        self.api("POST", "/refresh")
+        b.wait(f"(async () => (await (await fetch('/state')).json()).sessions.some((s) => s.tmux === {json.dumps(name)} && s.attachable))()",
+               f"{name} in /state", timeout=15)
+        b.goto(self.url(f"/term/{MACHINE}/{name}"))
+        b.wait("typeof term === 'object' && term.element && socket?.readyState === 1 && screenText().length > 0", "the terminal to open", timeout=15)
+
+    def test_terminal_reconnects_when_the_viewer_exits_but_the_session_lives(self):
+        b = self.b
+        name = "hp-demo-api-7"
+        try:
+            self.open_extra_terminal(name)
+            b.js("window.__first = socket; true")
+            self.y.tmux("detach-client", "-s", name)
+            b.wait("socket !== window.__first && socket.readyState === 1", "the terminal to reconnect on its own", timeout=20)
+            if b.js("document.getElementById('gone').classList.contains('show')"):
+                raise Failure("the Reconnect button showed for a session that is still running")
+            b.wait("screenText().length > 0", "the shell prompt after reconnecting", timeout=15)
+            b.click("#term")
+            b.type("echo re''conn")
+            b.key("Enter")
+            b.wait("screenText().split('\\n').some((l) => l.trim() === 'reconn')", "typing to work after reconnecting")
+            if b.js("screenText().includes('session ended')"):
+                raise Failure("the ended message stayed on the screen after reconnecting")
+            self.check_errors("reconnecting the terminal")
+        finally:
+            self.y.tmux("kill-session", "-t", f"={name}")
+            self.api("POST", "/refresh")
+
+    def test_terminal_offers_reconnect_when_the_session_is_gone(self):
+        b = self.b
+        name = "hp-demo-api-8"
+        try:
+            self.open_extra_terminal(name)
+            b.js("window.__first = socket; true")
+            self.y.tmux("kill-session", "-t", f"={name}")
+            self.api("POST", "/refresh")
+            b.wait("document.getElementById('gone').classList.contains('show')", "the Reconnect button", timeout=30)
+            if "session ended" not in b.js("screenText()"):
+                raise Failure("the ended message is not on the screen")
+            b.js("window.__second = socket; true")
+            b.click("#gone button")
+            b.wait("socket !== window.__second", "Reconnect to open a new socket", timeout=10)
+            b.wait("document.getElementById('gone').classList.contains('show')", "the button again once the session is still gone", timeout=30)
+            self.check_errors("the Reconnect button")
+        finally:
+            self.y.tmux("kill-session", "-t", f"={name}")
+            self.api("POST", "/refresh")
+
     TERM_STORE = ("yardbell.term.keys", "yardbell.term.fontSize")
 
     # Opens the session's terminal at phone size. With record, input frames are kept in __in and
