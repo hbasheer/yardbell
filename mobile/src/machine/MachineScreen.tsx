@@ -21,7 +21,7 @@ import { useNewSession } from '@/new-session/NewSessionProvider'
 import { useStopSession } from '@/session/useStopSession'
 import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
 import { useServerState } from '@/state/useServerState'
-import { machineSections, statusOf, type ServerSession, type ServerState } from '@/state/views'
+import { machineExtras, machineSections, statusOf, type ServerSession, type ServerState } from '@/state/views'
 import { ActionSheet, type ActionSheetAction } from '@/ui/ActionSheet'
 import { BottomSearchBar } from '@/ui/BottomSearchBar'
 import { ConfirmModal } from '@/ui/ConfirmModal'
@@ -44,6 +44,7 @@ import {
 } from './options'
 import { OptionsSheet } from './OptionsSheet'
 import { machineBody, machineStatus, stateLine } from './presentation'
+import { ExtrasSection } from './ExtrasSection'
 import { ServerMenus } from './ServerMenus'
 import { usePersisted } from './usePersisted'
 import { ROW_SEPARATOR_INSET, WorkspaceRow, sessionTitle } from './WorkspaceRow'
@@ -134,7 +135,9 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
     query
   ])
   const visibleSessions = sections.reduce((n, s) => n + s.sessions.length, 0)
-  const body = machineBody(entry, machine, query, visibleSessions)
+  const extras = useMemo(() => machineExtras(entry, machine, query), [entry, machine, query])
+  const extrasCount = extras.loose.length + extras.stale.length + extras.ended.length
+  const body = machineBody(entry, machine, query, visibleSessions, extrasCount)
 
   const listSections: Section[] =
     body === 'list'
@@ -292,6 +295,19 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
         scrollEventThrottle={16}
         {...collapsing.touchHandlers}
         ListHeaderComponent={header}
+        ListFooterComponent={
+          body === 'list' && extrasCount > 0 ? (
+            <ExtrasSection
+              server={server}
+              machine={machine}
+              extras={extras}
+              agents={live.state?.agents}
+              forceOpen={query.trim() !== ''}
+            />
+          ) : (
+            <View />
+          )
+        }
         ListEmptyComponent={empty ? <View style={styles.empty}>{empty}</View> : undefined}
         contentContainerStyle={{ flexGrow: 1, paddingBottom: covered + spacing.sm }}
         renderSectionHeader={({ section }: { section: Section }) => (

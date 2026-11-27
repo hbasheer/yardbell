@@ -81,6 +81,8 @@ const hpSessions = [
     pull: pull(77, 'closed', { title: 'Dedup imports' })
   }),
   session('hp', 5, { folder: 'sama', branch: 'wip-audio', activity: 'idle', attachable: false, tmux: null }),
+  session('hp', 8, { folder: 'feedgest', branch: 'inl-90-search', activity: 'active', attachable: false, tmux: null, path: '/home/dev/Projects/feedgest/app' }),
+  session('hp', 9, { folder: 'notes', branch: '', agent: 'codex', activity: 'idle', attachable: false, tmux: null, path: '/home/dev/Projects/notes' }),
   session('hp', 6, { folder: 'eitjar', branch: 'main', activity: 'idle', stale: true }),
   session('hp', 7, {
     folder: 'commslayer-checkout-flow-rewrite-with-a-long-name',
@@ -117,7 +119,10 @@ const servers = [
       machine('hp', { local: true }),
       machine('nas', { up: false, reason: 'ssh: connect to host nas port 22: Connection timed out', last_seen: '2026-11-27T08:12:00+00:00' })
     ],
-    sessions: hpSessions
+    sessions: hpSessions,
+    ended: [
+      { id: 'hp:old-1', machine: 'hp', folder: 'eitjar', ticket: '', branch: 'main', agent: 'claude', path: '/home/dev/Projects/eitjar', worktree: false }
+    ]
   },
   {
     port: Number(process.env.PREVIEW_PORT_B ?? 4211),
@@ -140,7 +145,7 @@ function stateFor(server) {
     machines: server.machines,
     folders: [],
     sessions: server.sessions,
-    ended: [],
+    ended: server.ended ?? [],
     host_terminal: { enabled: false },
     mesh: null,
     server: { machine: server.name, address: `http://${HOST}:${server.port}`, version: server.version },
@@ -249,6 +254,24 @@ function handler(server) {
           { number: 3, label: 'No', keys: '3', role: 'no' }
         ]
       })
+    }
+    const pidRoute = path.match(/^\/sessions\/([^/]+)\/(\d+)\/(move-to-tmux|stop-process)$/)
+    if (pidRoute && req.method === 'POST') {
+      const [, machineName, pid, action] = pidRoute
+      const found = server.sessions.find((s) => s.machine === machineName && String(s.pid) === pid)
+      if (!found) return json(res, 404, { error: 'no such process' })
+      if (action === 'stop-process') {
+        server.sessions = server.sessions.filter((s) => s !== found)
+        return json(res, 200, { ok: true })
+      }
+      found.attachable = true
+      found.tmux = `${found.folder}-moved`
+      return json(res, 200, { name: found.tmux })
+    }
+    const forgetRoute = path.match(/^\/ended\/([^/]+)\/forget$/)
+    if (forgetRoute && req.method === 'POST') {
+      server.ended = (server.ended ?? []).filter((e) => e.id !== decodeURIComponent(forgetRoute[1]))
+      return json(res, 200, { ok: true })
     }
     if (path === '/sessions' && req.method === 'POST') return startSession(req, res, server)
     if (path === '/dispatch/usage' || path === '/dispatch/usage/refresh') return json(res, 200, usage)

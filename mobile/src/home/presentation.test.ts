@@ -10,6 +10,7 @@ const row = (fields: Partial<MachineRow>): MachineRow => ({
   reason: null,
   sessions: 3,
   needsYou: 0,
+  outsideTmux: 0,
   ...fields
 })
 
@@ -19,6 +20,7 @@ describe('machineSubtitle', () => {
     expect(machineSubtitle(row({ sessions: 1 }))).toBe('Connected · 1 session')
     expect(machineSubtitle(row({ sessions: 0 }))).toBe('Connected · 0 sessions')
     expect(machineSubtitle(row({ needsYou: 2 }))).toBe('Connected · 3 sessions, 2 need you')
+    expect(machineSubtitle(row({ outsideTmux: 2 }))).toBe('Connected · 3 sessions · 2 outside tmux')
   })
 
   test('names the server when there are several', () => {

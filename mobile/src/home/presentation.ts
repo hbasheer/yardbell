@@ -8,7 +8,8 @@ export function machineSubtitle(row: MachineRow): string {
   const where = row.serverLabel && row.serverLabel !== row.machine ? ` on ${row.serverLabel}` : ''
   const count = `${row.sessions} ${row.sessions === 1 ? 'session' : 'sessions'}`
   const needs = row.needsYou > 0 ? `, ${row.needsYou} ${row.needsYou === 1 ? 'needs' : 'need'} you` : ''
-  return `Connected${where} · ${count}${needs}`
+  const outside = row.outsideTmux > 0 ? ` · ${row.outsideTmux} outside tmux` : ''
+  return `Connected${where} · ${count}${needs}${outside}`
 }
 
 export function previewParts(session: Pick<ServerSession, 'ticket' | 'branch'>): string {

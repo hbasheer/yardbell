@@ -4,6 +4,7 @@ import type { Connection } from './liveSocket'
 import type { MachineView, PullView, SessionView } from './types'
 import {
   feedSections,
+  machineExtras,
   machineRows,
   machineSections,
   prBadge,
@@ -153,7 +154,7 @@ describe('machineSections', () => {
   test('groups by project, urgent project first, status order inside, stopped last', () => {
     const sections = machineSections(server, 'mac', 'project', '')
     expect(sections.map((s) => s.title)).toEqual(['yardbell', 'site'])
-    expect(ids(sections)).toEqual([['block', 'idle1', 'dead', 'stale'], ['work']])
+    expect(ids(sections)).toEqual([['block', 'idle1', 'dead'], ['work']])
   })
 
   test('hides stopped when asked', () => {
@@ -258,5 +259,56 @@ describe('prBadge', () => {
     expect(prBadge(pull({ state: 'merged' }))?.state).toBe('merged')
     expect(prBadge(pull({ state: 'CLOSED' }))?.state).toBe('closed')
     expect(prBadge(pull({ state: 'merged', draft: true }))?.state).toBe('merged')
+  })
+})
+
+describe('sessions outside tmux and last known', () => {
+  const loose = session({ id: 'loose', attachable: false, tmux: null, pid: 7, activity: 'blocked' })
+  const stale = session({ id: 'stale', stale: true })
+  const live = session({ id: 'live', activity: 'blocked' })
+  const server: ServerState = {
+    ...srv('a', [machine('mac')], [live, loose, stale, session({ id: 'other', machine: 'box', attachable: false, tmux: null })]),
+    state: {
+      machines: [machine('mac')],
+      sessions: [live, loose, stale, session({ id: 'other', machine: 'box', attachable: false, tmux: null })],
+      ended: [
+        { id: 'mac:old', machine: 'mac', folder: 'old', agent: 'claude' },
+        { id: 'box:old', machine: 'box', folder: 'old', agent: 'claude' }
+      ]
+    }
+  }
+
+  test('feed, sessions tab, machine sections and tabs leave them out', () => {
+    expect(feedSections([server]).flatMap((s) => s.shown.map((x) => x.id))).toEqual(['live'])
+    expect(ids(sessionsTab([server], 'status', ''))).toEqual([['live']])
+    expect(ids(machineSections(server, 'mac', 'project', ''))).toEqual([['live']])
+    expect(siblingTabs(server, 'mac', 'live').sessions.map((s) => s.id)).toEqual(['live'])
+  })
+
+  test('machine row counts skip them and report the outside tmux count', () => {
+    const [row] = machineRows([server])
+    expect(row).toMatchObject({ sessions: 1, needsYou: 1, outsideTmux: 1 })
+  })
+
+  test('machineExtras splits them per machine', () => {
+    const extras = machineExtras(server, 'mac')
+    expect(extras.loose.map((s) => s.id)).toEqual(['loose'])
+    expect(extras.loose[0].serverId).toBe('a')
+    expect(extras.stale.map((s) => s.id)).toEqual(['stale'])
+    expect(extras.ended.map((e) => e.id)).toEqual(['mac:old'])
+    expect(machineExtras(server, 'box').loose.map((s) => s.id)).toEqual(['other'])
+  })
+
+  test('machineExtras honours the search text', () => {
+    expect(machineExtras(server, 'mac', 'zzz')).toEqual({ loose: [], stale: [], ended: [] })
+    expect(machineExtras(server, 'mac', 'old').ended).toHaveLength(1)
+  })
+
+  test('a server with no state has no extras', () => {
+    expect(machineExtras({ server: paired('a'), state: undefined, connection: 'unreachable' }, 'mac')).toEqual({
+      loose: [],
+      stale: [],
+      ended: []
+    })
   })
 })

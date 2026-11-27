@@ -25,6 +25,7 @@ export type SessionView = {
   id: string
   machine: string
   agent: string
+  pid?: number
   folder: string
   ticket?: string
   branch: string
@@ -36,6 +37,17 @@ export type SessionView = {
   pull?: PullView | null
   path?: string
   cwd?: string
+  worktree?: boolean
+}
+
+export type EndedView = {
+  id: string
+  machine: string
+  folder: string
+  ticket?: string
+  branch?: string
+  agent: string
+  path?: string
   worktree?: boolean
 }
 
@@ -52,5 +64,6 @@ export type StateView = {
   default_agent?: string
   machines: MachineView[]
   sessions: SessionView[]
+  ended?: EndedView[]
   server?: ServerView | null
 }

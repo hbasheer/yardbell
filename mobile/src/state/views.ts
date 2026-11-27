@@ -1,6 +1,6 @@
 import type { PairedServer } from '../servers/store'
 import type { Connection } from './liveSocket'
-import type { MachineView, PullView, SessionView, StateView } from './types'
+import type { EndedView, MachineView, PullView, SessionView, StateView } from './types'
 
 export type ServerState = {
   server: PairedServer
@@ -41,6 +41,13 @@ export type MachineRow = {
   reason: string | null
   sessions: number
   needsYou: number
+  outsideTmux: number
+}
+
+export type MachineExtras = {
+  loose: ServerSession[]
+  stale: ServerSession[]
+  ended: EndedView[]
 }
 
 export type Project = { key: string; label: string; path: string }
@@ -108,11 +115,15 @@ function matcher(query: string): (session: SessionView) => boolean {
   }
 }
 
+const isListed = (session: SessionView) => session.attachable && !session.stale
+
+const isLoose = (session: SessionView) => !session.attachable && !session.stale
+
 const owned = (server: PairedServer, sessions: SessionView[]): ServerSession[] =>
   sessions.map((s) => ({ ...s, serverId: server.id }))
 
 const allSessions = (servers: ServerState[]): ServerSession[] =>
-  servers.flatMap(({ server, state }) => owned(server, state?.sessions ?? []))
+  servers.flatMap(({ server, state }) => owned(server, (state?.sessions ?? []).filter(isListed)))
 
 function group(
   sessions: ServerSession[],
@@ -222,7 +233,8 @@ export function machineRows(servers: ServerState[]): MachineRow[] {
     return machines.map((machine) => {
       const name = machine?.name ?? server.machine
       const status = rowStatus(connection, machine)
-      const mine = (state?.sessions ?? []).filter((s) => s.machine === name && statusOf(s) !== 'stopped')
+      const mine = (state?.sessions ?? []).filter((s) => s.machine === name && isListed(s) && statusOf(s) !== 'stopped')
+      const outside = (state?.sessions ?? []).filter((s) => s.machine === name && isLoose(s))
       return {
         key: `${server.id}:${name}`,
         serverId: server.id,
@@ -231,7 +243,8 @@ export function machineRows(servers: ServerState[]): MachineRow[] {
         status,
         reason: rowReason(status, server, machine),
         sessions: mine.length,
-        needsYou: mine.filter((s) => statusOf(s) === 'needs-you').length
+        needsYou: mine.filter((s) => statusOf(s) === 'needs-you').length,
+        outsideTmux: outside.length
       }
     })
   })
@@ -248,10 +261,28 @@ export function machineSections(
   const sessions = owned(
     server.server,
     (server.state?.sessions ?? []).filter(
-      (s) => s.machine === machine && matches(s) && (showStopped || statusOf(s) !== 'stopped')
+      (s) => s.machine === machine && isListed(s) && matches(s) && (showStopped || statusOf(s) !== 'stopped')
     )
   )
   return sectionsFor(sessions, groupBy, false, () => '')
+}
+
+export function machineExtras(server: ServerState, machine: string, query = ''): MachineExtras {
+  const matches = matcher(query)
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+  const mine = owned(
+    server.server,
+    (server.state?.sessions ?? []).filter((s) => s.machine === machine && matches(s))
+  )
+  const endedMatches = (e: EndedView) => {
+    const haystack = [e.folder, e.branch ?? '', e.ticket ?? '', e.agent, e.machine].join('\n').toLowerCase()
+    return terms.every((term) => haystack.includes(term))
+  }
+  return {
+    loose: mine.filter(isLoose).sort(sessionOrder),
+    stale: mine.filter((s) => s.stale).sort(sessionOrder),
+    ended: (server.state?.ended ?? []).filter((e) => e.machine === machine && endedMatches(e))
+  }
 }
 
 export function sessionsTab(servers: ServerState[], groupBy: SessionGroupBy, query: string): SessionSection[] {

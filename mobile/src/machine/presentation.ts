@@ -27,15 +27,16 @@ export function machineBody(
   entry: ServerState,
   machine: string,
   query: string,
-  visibleSessions: number
+  visibleSessions: number,
+  extras = 0
 ): MachineBody {
   const { status } = machineStatus(entry, machine)
   if (status === 'loading') return 'loading'
   if (status === 'unreachable' && !entry.state) return 'unreachable'
   if (status === 'down') return 'down'
-  if (visibleSessions > 0) return 'list'
+  if (visibleSessions + extras > 0) return 'list'
   if (entry.connection !== 'connected') return 'unreachable'
-  const total = entry.state?.sessions.filter((s) => s.machine === machine).length ?? 0
+  const total = entry.state?.sessions.filter((s) => s.machine === machine && s.attachable && !s.stale).length ?? 0
   if (query.trim() !== '' && total > 0) return 'no-match'
   return 'empty'
 }

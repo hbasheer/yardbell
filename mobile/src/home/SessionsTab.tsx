@@ -39,7 +39,7 @@ export function SessionsTab(props: Props) {
   const sections = sessionsTab(props.servers, groupBy, query)
   const loaded = props.servers.some((s) => s.state)
   const unreachable = props.servers.length > 0 && props.servers.every((s) => s.connection === 'unreachable' && !s.state)
-  const total = props.servers.reduce((n, s) => n + (s.state?.sessions.length ?? 0), 0)
+  const total = props.servers.reduce((n, s) => n + (s.state?.sessions.filter((x) => x.attachable && !x.stale).length ?? 0), 0)
 
   const toggleSearch = () => {
     if (searching) setQuery('')
