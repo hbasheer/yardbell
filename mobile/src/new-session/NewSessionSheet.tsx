@@ -180,7 +180,7 @@ export function NewSessionSheet({ visible, request, servers, onClose, onAfterClo
   const serverLabel = (serverId: string) => servers.find((s) => s.id === serverId)?.machine ?? serverId
 
   return (
-    <BottomDrawer visible={visible} onClose={close} onAfterClose={onAfterClose}>
+    <BottomDrawer visible={visible} dismissible={!sending} onClose={close} onAfterClose={onAfterClose}>
       {page === 'main' ? (
         <MainPage
           machine={machine}
@@ -304,7 +304,7 @@ function MainPage(props: {
   const disabled = (props.blocker !== null && !props.warning) || props.sending
   return (
     <View>
-      <SheetHeader title="New session" subtitle={props.machine || undefined} onClose={props.onClose} />
+      <SheetHeader title="New session" subtitle={props.machine || undefined} onClose={props.sending ? undefined : props.onClose} />
       {props.noMachines ? (
         <EmptyState icon={Server} title="No machine is up" message="Start a session once a machine is connected." />
       ) : (
