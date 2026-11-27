@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { createServer } from 'node:http'
+import { counts, dispatchApi, dispatchFixtures } from './preview-dispatch.mjs'
 
 const WEB_PORT = Number(process.env.PREVIEW_WEB_PORT ?? 8099)
 const HOST = process.env.PREVIEW_HOST ?? '127.0.0.1'
@@ -140,6 +141,7 @@ const servers = [
 ]
 
 function stateFor(server) {
+  const { proposals, waiting } = counts(server.dispatch)
   return {
     agents: [
       { name: 'claude', label: 'Claude Code' },
@@ -149,13 +151,18 @@ function stateFor(server) {
     ],
     default_agent: 'claude',
     machines: server.machines,
-    folders: [],
+    folders: [
+      { machine: 'hp', label: 'yardbell', path: '/home/dev/Projects/yardbell', branch: 'main', worktree: false },
+      { machine: 'hp', label: 'yardbell-orca-style-ui', path: '/home/dev/Projects/yardbell-worktrees/orca-style-ui', branch: 'orca-style-ui', worktree: true },
+      { machine: 'hp', label: 'feedgest', path: '/home/dev/Projects/feedgest/app', branch: 'main', worktree: false }
+    ],
     sessions: server.sessions,
     ended: server.ended ?? [],
     host_terminal: { enabled: false },
     mesh: null,
     server: { machine: server.name, address: `http://${HOST}:${server.port}`, version: server.version },
-    proposals: []
+    proposals,
+    waiting
   }
 }
 
@@ -184,7 +191,7 @@ const usage = {
 const cors = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'Authorization, Content-Type, Accept',
-  'Access-Control-Allow-Methods': 'GET, POST, OPTIONS'
+  'Access-Control-Allow-Methods': 'GET, POST, DELETE, OPTIONS'
 }
 
 function json(res, status, body) {
@@ -237,7 +244,7 @@ function startSession(req, res, server) {
 }
 
 function handler(server) {
-  return (req, res) => {
+  return async (req, res) => {
     const path = new URL(req.url, 'http://x').pathname
     if (req.method === 'OPTIONS') {
       res.writeHead(204, cors)
@@ -281,6 +288,7 @@ function handler(server) {
     }
     if (path === '/sessions' && req.method === 'POST') return startSession(req, res, server)
     if (path === '/dispatch/usage' || path === '/dispatch/usage/refresh') return json(res, 200, usage)
+    if (await dispatchApi(req, res, server.dispatch, { json, cors })) return
     json(res, 404, { error: 'not found' })
   }
 }
@@ -295,6 +303,8 @@ function acceptSocket(req, socket) {
   socket.on('data', () => {})
   socket.on('error', () => {})
 }
+
+for (const server of servers) server.dispatch = dispatchFixtures(server.name)
 
 const listening = servers.map(
   (server) =>

@@ -100,6 +100,10 @@ export class ApiClient {
   post<T>(path: string, body?: unknown, timeoutMs?: number): Promise<T> {
     return send<T>(this.address, path, { method: 'POST', body, token: this.token, timeoutMs }, this.fetchImpl)
   }
+
+  delete<T>(path: string): Promise<T> {
+    return send<T>(this.address, path, { method: 'DELETE', token: this.token }, this.fetchImpl)
+  }
 }
 
 type PairReply = { token?: string; device?: { id?: string | number } }
