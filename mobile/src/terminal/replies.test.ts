@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'vitest'
-import { repliesFor } from './replies'
+import { comboOf, repliesFor } from './replies'
 
 describe('repliesFor', () => {
   test('a permission prompt offers Yes, Always and No in that order', () => {
@@ -39,5 +39,15 @@ describe('repliesFor', () => {
   test('nothing to offer while working or without choices', () => {
     expect(repliesFor({ agent: 'claude', state: 'working', choices: [{ number: 1, label: 'x', keys: '1' }] })).toEqual([])
     expect(repliesFor({ agent: 'claude', state: 'question', choices: [] })).toEqual([])
+  })
+})
+
+describe('comboOf', () => {
+  test('names the keys a reply presses', () => {
+    expect(comboOf('1')).toBe('1')
+    expect(comboOf('\r')).toBe('Enter')
+    expect(comboOf('2\r')).toBe('2 Enter')
+    expect(comboOf(null)).toBe('Esc')
+    expect(comboOf('\x1b')).toBe('Esc')
   })
 })

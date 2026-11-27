@@ -75,6 +75,7 @@ The direct npm dependencies of `mobile/` and their licences:
 | expo-clipboard | MIT |
 | expo-constants | MIT |
 | expo-haptics | MIT |
+| expo-image-picker | MIT |
 | expo-router | MIT |
 | expo-secure-store | MIT |
 | expo-status-bar | MIT |
@@ -90,3 +91,13 @@ The direct npm dependencies of `mobile/` and their licences:
 | react-native-web | MIT |
 | react-native-webview | MIT |
 | react-native-worklets | MIT |
+
+## Terminal fonts
+
+The phone app's terminal page bundles Geist Mono, JetBrains Mono and a small subset of Noto Sans
+Symbols 2, each under the SIL Open Font License 1.1. The licence texts are kept next to the font
+files in `mobile/terminal/fonts/`.
+
+- Geist Mono: Copyright 2024 The Geist Project Authors (https://github.com/vercel/geist-font)
+- JetBrains Mono: Copyright 2020 The JetBrains Mono Project Authors (https://github.com/JetBrains/JetBrainsMono)
+- Noto Sans Symbols 2: Copyright 2022 The Noto Project Authors (https://github.com/notofonts/symbols)

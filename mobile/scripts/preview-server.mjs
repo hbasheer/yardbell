@@ -237,6 +237,19 @@ function handler(server) {
     if (path === '/state') return json(res, 200, stateFor(server))
     const machinePart = path.match(/^\/machines\/([^/]+)\/(browse|branches|agents)$/)
     if (machinePart) return machineApi(req, res, machinePart[2])
+    if (/^\/sessions\/[^/]+\/[^/]+\/agent$/.test(path)) {
+      if (req.method === 'POST') return json(res, 200, {})
+      return json(res, 200, {
+        agent: 'claude',
+        state: 'permission',
+        screen: 'preview-screen',
+        choices: [
+          { number: 1, label: 'Yes', keys: '1', role: 'yes' },
+          { number: 2, label: 'Yes, always', keys: '2', role: 'always' },
+          { number: 3, label: 'No', keys: '3', role: 'no' }
+        ]
+      })
+    }
     if (path === '/sessions' && req.method === 'POST') return startSession(req, res, server)
     if (path === '/dispatch/usage' || path === '/dispatch/usage/refresh') return json(res, 200, usage)
     json(res, 404, { error: 'not found' })

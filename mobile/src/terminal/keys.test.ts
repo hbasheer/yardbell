@@ -1,9 +1,10 @@
 import { describe, expect, test } from 'vitest'
-import { keyBytes, withMods } from './keys'
+import { keyBytes, NO_MODS, withMods } from './keys'
 
-const none = { ctrl: false, alt: false }
-const ctrl = { ctrl: true, alt: false }
-const alt = { ctrl: false, alt: true }
+const none = NO_MODS
+const ctrl = { ...NO_MODS, ctrl: true }
+const alt = { ...NO_MODS, alt: true }
+const shift = { ...NO_MODS, shift: true }
 
 describe('keyBytes', () => {
   test('cursor keys', () => {
@@ -18,7 +19,21 @@ describe('keyBytes', () => {
   test('modified cursor keys carry the xterm parameter', () => {
     expect(keyBytes('up', ctrl)).toBe('\x1b[1;5A')
     expect(keyBytes('left', alt)).toBe('\x1b[1;3D')
-    expect(keyBytes('end', { ctrl: true, alt: true })).toBe('\x1b[1;7F')
+    expect(keyBytes('end', { ...NO_MODS, ctrl: true, alt: true })).toBe('\x1b[1;7F')
+  })
+
+  test('shift', () => {
+    expect(keyBytes('tab', shift)).toBe('\x1b[Z')
+    expect(keyBytes('up', shift)).toBe('\x1b[1;2A')
+    expect(keyBytes('up', { ...NO_MODS, shift: true, ctrl: true })).toBe('\x1b[1;6A')
+    expect(keyBytes('a', shift)).toBe('A')
+    expect(keyBytes('a', { ...NO_MODS, shift: true, ctrl: true })).toBe('\x01')
+  })
+
+  test('backspace and delete', () => {
+    expect(keyBytes('bksp', none)).toBe('\x7f')
+    expect(keyBytes('del', none)).toBe('\x1b[3~')
+    expect(keyBytes('del', ctrl)).toBe('\x1b[3;5~')
   })
 
   test('page keys', () => {

@@ -19,3 +19,7 @@ export function sessionHref(session: Pick<ServerSession, 'serverId' | 'machine' 
   if (!session.tmux) return null
   return `/session/${encodeURIComponent(session.serverId)}/${encodeURIComponent(session.machine)}/${encodeURIComponent(session.tmux)}`
 }
+
+export function machineHref(target: { serverId: string; machine: string }): string {
+  return `/machine/${encodeURIComponent(target.serverId)}/${encodeURIComponent(target.machine)}`
+}

@@ -2,23 +2,31 @@ import { useQuery } from '@tanstack/react-query'
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router'
 import { ChevronLeft, Eraser, ExternalLink, Info, MoreHorizontal, Square, Terminal, Type } from 'lucide-react-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { AppState, KeyboardAvoidingView, Linking, Pressable, StyleSheet, Text, View, type HostInstance } from 'react-native'
+import { AppState, Keyboard, KeyboardAvoidingView, Linking, Pressable, StyleSheet, Text, View, type HostInstance } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { WebView, type WebViewMessageEvent } from 'react-native-webview'
 import { ApiClient } from '@/api/client'
-import { usePersisted } from '@/machine/usePersisted'
+import * as Clipboard from 'expo-clipboard'
+import { machineHref } from '@/home/presentation'
 import { useNewSession } from '@/new-session/NewSessionProvider'
 import { listServers, onServersChanged, type PairedServer } from '@/servers/store'
 import { useServerState } from '@/state/useServerState'
 import { statusOf, type ServerState } from '@/state/views'
-import { KeyBar } from '@/terminal/KeyBar'
-import { keyBytes, withMods, type KeyName, type Mods } from '@/terminal/keys'
+import { AddCustomKeySheet } from '@/terminal/AddCustomKeySheet'
+import { AttachStatus } from '@/terminal/AttachStatus'
+import { addCustomKey, removeCustomKey, useCustomKeys, type CustomKey } from '@/terminal/customKeys'
+import { defBytes, type KeyDef } from '@/terminal/keyDefs'
+import { KeyRow } from '@/terminal/KeyRow'
+import { hasMods, keyBytes, withMods } from '@/terminal/keys'
+import { consumeLatches, modsOf, NO_LATCHES, tapLatch, type LatchName } from '@/terminal/latches'
+import { LiveInput } from '@/terminal/LiveInput'
 import { toBase64 } from '@/terminal/protocol'
-import { QuickReplies } from '@/terminal/QuickReplies'
 import type { AgentInfo } from '@/terminal/replies'
+import { SmartKeys } from '@/terminal/SmartKeys'
+import { useTerminalPrefs } from '@/terminal/terminalPrefs'
+import { useAttach } from '@/terminal/useAttach'
 import { terminalHtml } from '@/terminal/terminalHtml'
 import { useTerminalSocket } from '@/terminal/useTerminalSocket'
-import { terminalColors } from '@/theme/colors'
 import { ActionSheet, type ActionSheetAction } from '@/ui/ActionSheet'
 import { ConfirmModal } from '@/ui/ConfirmModal'
 import { NAV_BAR_HEIGHT, NavBar } from '@/ui/NavBar'
@@ -27,14 +35,13 @@ import { OfflineState, StateView } from '@/ui/StateView'
 import { StatusDot } from '@/ui/StatusDot'
 import { TabStrip } from '@/ui/TabStrip'
 import { PullDownMenu } from '@/ui/PullDownMenu'
+import { useKeyboardHeight } from '@/ui/useKeyboardHeight'
 import { colors, pressedStyle, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import {
   CLEAR_TERMINAL,
   TEXT_SIZES,
-  DEFAULT_TEXT_SIZE,
   dotState,
   othersNeedYou,
-  parseTextSize,
   sessionBody,
   statusLine,
   stepTarget,
@@ -48,16 +55,13 @@ type FromPage =
   | { type: 'input'; d: string }
   | { type: 'resize'; rows: number; cols: number }
   | { type: 'scroll'; lines: number }
+  | { type: 'fontSize'; size: number }
   | { type: 'ready' }
 
-const NO_MODS: Mods = { ctrl: false, alt: false }
 const ESC = '\x1b'
 const PAGE_URL = 'about:blank'
 
 const param = (value: string | string[] | undefined) => (Array.isArray(value) ? value[0] : value) ?? ''
-
-const parseSize = (raw: string | null): number | null => (raw === null ? null : parseTextSize(raw))
-const serializeSize = (size: number | null) => String(size ?? DEFAULT_TEXT_SIZE)
 
 function useAppActive(): boolean {
   const [active, setActive] = useState(AppState.currentState === 'active')
@@ -103,9 +107,10 @@ export function SessionScreen() {
 }
 
 function Session({ server, machine, name }: { server: PairedServer; machine: string; name: string }) {
-  const scheme = useColorScheme()
+  useColorScheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
+  const keyboard = useKeyboardHeight()
   const newSession = useNewSession()
   const serverId = server.id
   const sessionPath = `/sessions/${encodeURIComponent(machine)}/${encodeURIComponent(name)}`
@@ -124,10 +129,13 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   const ready = useRef(false)
   const backlog = useRef<string[]>([])
   const [ended, setEnded] = useState<string | null>(null)
-  const [textSize, setTextSize] = usePersisted<number | null>('yardbell:terminal-text-size', null, parseSize, serializeSize)
-  const textSizeRef = useRef(textSize)
-  textSizeRef.current = textSize
-  const [mods, setMods] = useState<Mods>(NO_MODS)
+  const { fontSize, fontFamily, setFontSize } = useTerminalPrefs()
+  const prefsRef = useRef({ fontSize, fontFamily })
+  prefsRef.current = { fontSize, fontFamily }
+  const [latches, setLatches] = useState(NO_LATCHES)
+  const latchesRef = useRef(latches)
+  latchesRef.current = latches
+  const customKeys = useCustomKeys()
 
   const toPage = useCallback((message: object) => {
     const text = JSON.stringify(message)
@@ -152,12 +160,22 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   }, [view, visible])
 
   useEffect(() => {
-    if (ready.current) toPage({ type: 'theme', colors: terminalColors[scheme] })
-  }, [scheme, toPage])
+    toPage({ type: 'fontSize', size: fontSize })
+  }, [fontSize, toPage])
 
   useEffect(() => {
-    if (textSize !== null) toPage({ type: 'fontSize', size: textSize })
-  }, [textSize, toPage])
+    toPage({ type: 'font', family: fontFamily })
+  }, [fontFamily, toPage])
+
+  const takeMods = useCallback(() => {
+    const mods = modsOf(latchesRef.current)
+    if (hasMods(mods)) {
+      const next = consumeLatches(latchesRef.current)
+      latchesRef.current = next
+      setLatches(next)
+    }
+    return mods
+  }, [])
 
   const shownName = useRef(name)
   useEffect(() => {
@@ -176,25 +194,37 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
     }
     if (message.type === 'ready') {
       ready.current = true
-      web.current?.postMessage(JSON.stringify({ type: 'theme', colors: terminalColors[scheme] }))
-      if (textSizeRef.current !== null) web.current?.postMessage(JSON.stringify({ type: 'fontSize', size: textSizeRef.current }))
+      web.current?.postMessage(JSON.stringify({ type: 'font', family: prefsRef.current.fontFamily }))
+      web.current?.postMessage(JSON.stringify({ type: 'fontSize', size: prefsRef.current.fontSize }))
       for (const text of backlog.current.splice(0)) web.current?.postMessage(text)
     } else if (message.type === 'input') {
-      const changed = mods.ctrl || mods.alt ? withMods(message.d, mods) : null
-      if (changed !== null) setMods(NO_MODS)
+      const mods = modsOf(latchesRef.current)
+      const changed = hasMods(mods) ? withMods(message.d, mods) : null
+      if (changed !== null) takeMods()
       term.send(changed ?? message.d)
     } else if (message.type === 'resize') {
       term.resize(message.rows, message.cols)
     } else if (message.type === 'scroll') {
       term.scroll(message.lines)
+    } else if (message.type === 'fontSize') {
+      setFontSize(message.size)
     }
   }
 
-  const onKey = (key: KeyName) => {
-    term.send(keyBytes(key, mods))
-    setMods(NO_MODS)
+  const onKey = (def: KeyDef) => term.send(defBytes(def, takeMods()))
+  const onLatch = (name: LatchName, doubleTap: boolean) => setLatches((current) => tapLatch(current, name, doubleTap))
+  const onTypedChar = (char: string) => {
+    const mods = modsOf(latchesRef.current)
+    if (!hasMods(mods)) return null
+    takeMods()
+    return keyBytes(char, mods)
   }
-
+  const dismissKeyboard = () => {
+    Keyboard.dismiss()
+    toPage({ type: 'blur' })
+  }
+  const [addKeyOpen, setAddKeyOpen] = useState(false)
+  const [deleting, setDeleting] = useState<CustomKey | null>(null)
 
   const client = useMemo(() => new ApiClient(server), [server])
   const meta = { serverId }
@@ -221,10 +251,21 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   const [actionsOpen, setActionsOpen] = useState(false)
   const [sizeOpen, setSizeOpen] = useState(false)
   const moreRef = useRef<HostInstance>(null)
-  const stopSession = useStopSession(server, () => router.back())
+  const stopSession = useStopSession(server, () =>
+    router.canGoBack() ? router.back() : router.replace(machineHref({ serverId, machine }) as never)
+  )
 
   const report = (title: string) => (error: unknown) =>
     setFailure({ title, message: error instanceof Error ? error.message : String(error) })
+
+  const attach = useAttach(server, machine, name, term.send)
+  const paste = () => {
+    Clipboard.getStringAsync()
+      .then((text) => {
+        if (text) toPage({ type: 'paste', text })
+      })
+      .catch(report('Could not read the clipboard'))
+  }
 
   const answer = (keys: string) => {
     client.post(`${sessionPath}/keys`, { keys }).catch(report('Could not send the reply'))
@@ -265,7 +306,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
             }
           ]
         : []),
-      { label: 'Text size', icon: Type, status: `${textSize ?? DEFAULT_TEXT_SIZE}`, closeBeforePress: true, onPress: () => setSizeOpen(true) }
+      { label: 'Text size', icon: Type, status: `${fontSize}`, closeBeforePress: true, onPress: () => setSizeOpen(true) }
     ],
     [stop]
   ]
@@ -277,8 +318,8 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
     id: String(size),
     icon: Type,
     label: `${size}`,
-    checked: size === (textSize ?? DEFAULT_TEXT_SIZE),
-    onPress: () => setTextSize(size)
+    checked: size === fontSize,
+    onPress: () => setFontSize(size)
   }))
 
   const banner = !terminalShown
@@ -290,7 +331,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   return (
     <KeyboardAvoidingView
       behavior="padding"
-      style={{ flex: 1, backgroundColor: terminalColors[scheme].background }}
+      style={{ flex: 1, backgroundColor: colors.terminalBg }}
     >
       <View style={[styles.chrome, { paddingTop: insets.top }]}>
         <NavBar
@@ -353,7 +394,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
           hideKeyboardAccessoryView
           bounces={false}
           overScrollMode="never"
-          style={{ flex: 1, backgroundColor: terminalColors[scheme].background }}
+          style={{ flex: 1, backgroundColor: colors.terminalBg }}
         />
         {body.kind === 'terminal' ? null : (
           <View style={[StyleSheet.absoluteFill, styles.gone]}>
@@ -370,12 +411,50 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
           </View>
         )}
       </View>
-      {terminalShown ? (
-        <QuickReplies info={ended ? undefined : agent.data} onKeys={answer} onCancel={() => term.send(ESC)} />
-      ) : null}
-      <View style={{ paddingBottom: insets.bottom, backgroundColor: colors.bgPanel }}>
-        <KeyBar mods={mods} onToggle={(mod) => setMods((m) => ({ ...m, [mod]: !m[mod] }))} onKey={onKey} />
+      <View style={[styles.dock, { paddingBottom: keyboard.height > 0 ? 0 : insets.bottom }]}>
+        <KeyRow
+          latches={latches}
+          keyboardUp={keyboard.height > 0}
+          smart={
+            terminalShown ? (
+              <SmartKeys info={ended ? undefined : agent.data} onKeys={answer} onCancel={() => term.send(ESC)} />
+            ) : undefined
+          }
+          customKeys={customKeys}
+          disabled={!terminalShown}
+          onDismissKeyboard={dismissKeyboard}
+          onPaste={paste}
+          onLatch={onLatch}
+          onKey={onKey}
+          onCustom={(custom) => term.send(custom.bytes)}
+          onDeleteCustom={setDeleting}
+          onAddCustom={() => setAddKeyOpen(true)}
+        />
+        <AttachStatus state={attach.state} onDismiss={attach.dismiss} />
+        <LiveInput
+          disabled={!terminalShown}
+          onBytes={term.send}
+          onTypedChar={onTypedChar}
+          onAttach={attach.pickPhoto}
+          attachBusy={attach.state.kind === 'uploading'}
+        />
       </View>
+      <AddCustomKeySheet
+        visible={addKeyOpen}
+        onAdd={addCustomKey}
+        onClose={() => setAddKeyOpen(false)}
+      />
+      <ConfirmModal
+        visible={deleting !== null}
+        title={`Delete ${deleting?.label ?? 'key'}?`}
+        message="The key is removed from the key row on every session."
+        confirmLabel="Delete"
+        destructive
+        onConfirm={() => {
+          if (deleting) removeCustomKey(deleting.id).catch(report('Could not delete the key'))
+        }}
+        onCancel={() => setDeleting(null)}
+      />
       <PullDownMenu visible={menuOpen} anchorRef={moreRef} groups={menuGroups} onClose={() => setMenuOpen(false)} />
       <DetailsSheet
         visible={detailsOpen}
@@ -419,6 +498,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
 
 const styles = themedStyleSheet(() => ({
   blank: { flex: 1, backgroundColor: colors.bgBase },
+  dock: { backgroundColor: colors.bgPanel },
   chrome: { backgroundColor: colors.bgPanel },
   navBar: { backgroundColor: colors.bgPanel, borderBottomWidth: 0 },
   titleBlock: { alignItems: 'center', maxWidth: '100%', minHeight: NAV_BAR_HEIGHT - spacing.sm, justifyContent: 'center' },

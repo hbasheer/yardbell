@@ -1,6 +1,10 @@
-export type KeyName = 'esc' | 'tab' | 'up' | 'down' | 'left' | 'right' | 'home' | 'end' | 'pgup' | 'pgdn' | 'enter'
+export type KeyName = 'esc' | 'tab' | 'up' | 'down' | 'left' | 'right' | 'home' | 'end' | 'pgup' | 'pgdn' | 'enter' | 'bksp' | 'del'
 
-export type Mods = { ctrl: boolean; alt: boolean }
+export type Mods = { ctrl: boolean; alt: boolean; shift: boolean }
+
+export const NO_MODS: Mods = { ctrl: false, alt: false, shift: false }
+
+export const hasMods = (m: Mods) => m.ctrl || m.alt || m.shift
 
 type Key = { csi: string } | { tilde: number } | { name: 'esc' | 'tab' | 'enter' | 'bksp' } | { char: string }
 
@@ -8,6 +12,8 @@ const NAMED: Record<KeyName, Key> = {
   esc: { name: 'esc' },
   tab: { name: 'tab' },
   enter: { name: 'enter' },
+  bksp: { name: 'bksp' },
+  del: { tilde: 3 },
   up: { csi: 'A' },
   down: { csi: 'B' },
   right: { csi: 'C' },
@@ -28,12 +34,12 @@ function ctrlChar(c: string): string {
 }
 
 function encode(k: Key, m: Mods): string {
-  const p = 1 + (m.alt ? 2 : 0) + (m.ctrl ? 4 : 0)
+  const p = 1 + (m.shift ? 1 : 0) + (m.alt ? 2 : 0) + (m.ctrl ? 4 : 0)
   if ('csi' in k) return p > 1 ? `\x1b[1;${p}${k.csi}` : `\x1b[${k.csi}`
   if ('tilde' in k) return p > 1 ? `\x1b[${k.tilde};${p}~` : `\x1b[${k.tilde}~`
   let s: string
-  if ('char' in k) s = m.ctrl ? ctrlChar(k.char) : k.char
-  else if (k.name === 'tab') s = '\t'
+  if ('char' in k) s = m.ctrl ? ctrlChar(k.char) : m.shift ? k.char.toUpperCase() : k.char
+  else if (k.name === 'tab') s = m.shift ? '\x1b[Z' : '\t'
   else if (k.name === 'enter') s = '\r'
   else if (k.name === 'esc') s = '\x1b'
   else s = m.ctrl ? '\x08' : '\x7f'

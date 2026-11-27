@@ -83,12 +83,21 @@ try {
       expression: `(() => {
         const want = ${JSON.stringify(text)}
         let best = null
+        let bestEl = null
         for (const el of document.querySelectorAll('body *')) {
           const have = ${byLabel} ? el.getAttribute('aria-label') || '' : (el.textContent || '').trim()
           if (have !== want) continue
           const r = el.getBoundingClientRect()
           if (!r.width || !r.height) continue
-          if (!best || r.width * r.height <= best.w * best.h) best = { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height }
+          if (!best || r.width * r.height <= best.w * best.h) {
+            best = { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height }
+            bestEl = el
+          }
+        }
+        if (bestEl) {
+          bestEl.scrollIntoView({ inline: 'center', block: 'nearest' })
+          const r = bestEl.getBoundingClientRect()
+          best = { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height }
         }
         return best ? JSON.stringify(best) : ''
       })()`,

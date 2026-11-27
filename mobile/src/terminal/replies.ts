@@ -26,3 +26,12 @@ export function repliesFor(info: AgentInfo): Reply[] {
   }
   return []
 }
+
+const NAMED_KEYS: Record<string, string> = { '\r': 'Enter', '\x1b': 'Esc', '\t': 'Tab', '\x7f': 'Backspace' }
+
+export function comboOf(keys: string | null): string {
+  if (keys === null) return 'Esc'
+  if (keys in NAMED_KEYS) return NAMED_KEYS[keys]
+  if (keys.length > 1 && keys.endsWith('\r')) return `${comboOf(keys.slice(0, -1))} Enter`
+  return keys
+}

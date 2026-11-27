@@ -17,7 +17,7 @@ import { triggerMediumImpact } from '@/ui/haptics'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { EmptyHero } from './EmptyHero'
 import { FeedTab } from './FeedTab'
-import { sessionHref } from './presentation'
+import { machineHref, sessionHref } from './presentation'
 import { SessionsTab } from './SessionsTab'
 import { UsageTab } from './UsageTab'
 
@@ -107,7 +107,7 @@ export function HomeScreen() {
     if (href) router.push(href as never)
   }
   const openMachine = (row: MachineRow) =>
-    router.push(`/machine/${encodeURIComponent(row.serverId)}/${encodeURIComponent(row.machine)}` as never)
+    router.push(machineHref(row) as never)
   const openSettings = () => router.push('/settings' as never)
   const pair = () => router.push('/pair')
 

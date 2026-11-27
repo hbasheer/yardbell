@@ -1,15 +1,19 @@
 import { FitAddon } from '@xterm/addon-fit'
-import { Terminal, type ITheme } from '@xterm/xterm'
+import { Terminal } from '@xterm/xterm'
+import { TOKYONIGHT } from './theme'
 
 type FromApp =
   | { type: 'output'; b64: string }
-  | { type: 'theme'; colors: ITheme }
   | { type: 'reset' }
   | { type: 'fontSize'; size: number }
+  | { type: 'font'; family: string }
+  | { type: 'paste'; text: string }
+  | { type: 'blur' }
 type ToApp =
   | { type: 'input'; d: string }
   | { type: 'resize'; rows: number; cols: number }
   | { type: 'scroll'; lines: number }
+  | { type: 'fontSize'; size: number }
   | { type: 'ready' }
 
 declare global {
@@ -19,24 +23,25 @@ declare global {
 }
 
 const FONT_SIZES = [10, 11, 12, 13, 14, 16, 18, 20]
-const FONT_KEY = 'yardbell.term.fontSize'
 const DEFAULT_FONT = 13
 
-function storedFont(): number {
-  try {
-    const size = Number(localStorage.getItem(FONT_KEY))
-    return FONT_SIZES.includes(size) ? size : DEFAULT_FONT
-  } catch {
-    return DEFAULT_FONT
-  }
+const SYMBOLS = '"Yardbell Terminal Symbols"'
+const FALLBACK = 'ui-monospace, Menlo, monospace'
+const STACKS: Record<string, { family: string | null; stack: string }> = {
+  'geist-mono': { family: 'Geist Mono', stack: `"Geist Mono", ${SYMBOLS}, ${FALLBACK}` },
+  'jetbrains-mono': { family: 'JetBrains Mono', stack: `"JetBrains Mono", ${SYMBOLS}, ${FALLBACK}` },
+  system: { family: null, stack: `${SYMBOLS}, ${FALLBACK}` }
 }
 
 const post = (message: ToApp) => window.ReactNativeWebView?.postMessage(JSON.stringify(message))
 
 const term = new Terminal({
-  cursorBlink: true,
-  fontFamily: '"JetBrainsMono Nerd Font", "JetBrains Mono", ui-monospace, Menlo, monospace',
-  fontSize: storedFont(),
+  cursorBlink: false,
+  cursorStyle: 'bar',
+  cursorInactiveStyle: 'block',
+  theme: TOKYONIGHT,
+  fontFamily: STACKS['geist-mono'].stack,
+  fontSize: DEFAULT_FONT,
   lineHeight: 1.15,
   scrollback: 5000
 })
@@ -63,11 +68,15 @@ function fromBase64(b64: string): Uint8Array {
 
 function handle(message: FromApp) {
   if (message.type === 'output') term.write(fromBase64(message.b64))
-  else if (message.type === 'theme') {
-    term.options.theme = message.colors
-    document.documentElement.style.background = message.colors.background ?? ''
-  } else if (message.type === 'reset') term.reset()
-  else if (message.type === 'fontSize') setFontSize(message.size)
+  else if (message.type === 'reset') term.reset()
+  else if (message.type === 'fontSize') {
+    if (typeof message.size === 'number' && Number.isFinite(message.size)) setFontSize(message.size)
+  } else if (message.type === 'font') setFontFamily(message.family)
+  else if (message.type === 'paste') term.paste(message.text)
+  else if (message.type === 'blur') {
+    term.blur()
+    ;(document.activeElement as HTMLElement | null)?.blur()
+  }
 }
 
 // The app's messages reach the page on window or on document depending on the platform, and one
@@ -164,7 +173,7 @@ function showPinch(origin: string) {
   el.style.transformOrigin = pinchScale !== 1 ? origin : ''
 }
 
-function setFontSize(px: number) {
+function setFontSize(px: number, fromPinch = false) {
   const size = nearestFont(px)
   pinchScale = 1
   showPinch('')
@@ -172,9 +181,30 @@ function setFontSize(px: number) {
     term.options.fontSize = size
     refit()
   }
-  try {
-    localStorage.setItem(FONT_KEY, String(size))
-  } catch {}
+  if (fromPinch) post({ type: 'fontSize', size })
+}
+
+let fontRequest = 0
+let remeasure = false
+function setFontFamily(id: string) {
+  const choice = STACKS[id] ?? STACKS['geist-mono']
+  const request = ++fontRequest
+  term.options.fontFamily = choice.stack
+  if (!choice.family) {
+    refit()
+    return
+  }
+  document.fonts
+    .load(`${term.options.fontSize ?? DEFAULT_FONT}px "${choice.family}"`)
+    .then(() => {
+      if (request !== fontRequest) return
+      // xterm measures a cell when the family option changes, and an identical string changes nothing, so a
+      // font that finished loading afterwards needs a different string to be measured.
+      remeasure = !remeasure
+      term.options.fontFamily = remeasure ? `${choice.stack}, monospace` : choice.stack
+      refit()
+    })
+    .catch((error) => console.error('could not load the terminal font', error))
 }
 
 function startPinch(e: TouchEvent) {
@@ -198,7 +228,7 @@ function startPinch(e: TouchEvent) {
     target.removeEventListener('touchmove', move)
     target.removeEventListener('touchend', end)
     target.removeEventListener('touchcancel', end)
-    setFontSize(size * pinchScale)
+    setFontSize(size * pinchScale, true)
   }
   target.addEventListener('touchmove', move, { passive: false })
   target.addEventListener('touchend', end)
