@@ -568,6 +568,7 @@ mod tests {
                 server: None,
                 proposals: 0,
                 waiting: 0,
+                runs_waiting: 0,
             },
             screens: BTreeMap::new(),
             pulls: vec![],

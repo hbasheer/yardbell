@@ -27,6 +27,7 @@ export type YardbellState = {
   projects: Project[]
   agents: Agent[]
   proposals?: number
+  runs_waiting?: number
 }
 
 export async function getJson<T>(url: string): Promise<T> {

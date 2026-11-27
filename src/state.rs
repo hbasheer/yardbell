@@ -159,6 +159,9 @@ pub struct StateView {
     // Dispatch steps waiting for the person, across conversations.
     #[serde(default)]
     pub waiting: usize,
+    // Pipeline runs asking for the person, for the sidebar's badge.
+    #[serde(default)]
+    pub runs_waiting: usize,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -446,6 +449,7 @@ impl State {
             server: None,
             proposals: 0,
             waiting: 0,
+            runs_waiting: 0,
         };
         for m in &cfg.machines {
             let status = inner.statuses.get(&m.name);

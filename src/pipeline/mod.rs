@@ -163,6 +163,18 @@ impl Pipelines {
             .collect()
     }
 
+    pub fn waiting_for_person(&self) -> usize {
+        self.runs().iter().filter(|r| r.asks_for_person()).count()
+    }
+
+    fn touch_when_asking_changes(&self, state: &crate::state::State, last: &mut usize) {
+        let now = self.waiting_for_person();
+        if now != *last {
+            *last = now;
+            state.touch();
+        }
+    }
+
     pub fn run(&self, id: &str) -> Option<Run> {
         self.store.get(id)
     }
@@ -712,6 +724,7 @@ impl Pipelines {
         tokio::spawn(async move {
             let mut every = tokio::time::interval(TICK);
             every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+            let mut asking = self.waiting_for_person();
             loop {
                 every.tick().await;
                 let Ok(cfg) = app.config() else {
@@ -753,6 +766,7 @@ impl Pipelines {
                 {
                     app.state.touch();
                 }
+                self.touch_when_asking_changes(&app.state, &mut asking);
             }
         })
     }

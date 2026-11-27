@@ -178,6 +178,7 @@ impl World for Fake {
             server: None,
             proposals: 0,
             waiting: 0,
+            runs_waiting: 0,
         }
     }
 
@@ -1707,6 +1708,28 @@ mod pipelines {
         for handle in p.tick(&world, settings, src, now).await {
             handle.await.unwrap();
         }
+    }
+
+    #[test]
+    fn state_is_touched_when_the_runs_asking_for_the_person_change() {
+        let (p, _dir) = pipelines();
+        let state = crate::state::State::default();
+        let seen = state.changes();
+        let mut asking = p.waiting_for_person();
+        p.touch_when_asking_changes(&state, &mut asking);
+        assert_eq!(*seen.borrow(), 0, "nothing changed, nothing touched");
+        let mut run = run_of("Implement my tickets");
+        run.state = RunState::Waiting;
+        p.put(run);
+        p.touch_when_asking_changes(&state, &mut asking);
+        assert_eq!((asking, *seen.borrow()), (1, 1));
+        p.touch_when_asking_changes(&state, &mut asking);
+        assert_eq!(*seen.borrow(), 1, "the same count is not news");
+        let mut run = p.run("r1").unwrap();
+        run.state = RunState::Done;
+        p.put(run);
+        p.touch_when_asking_changes(&state, &mut asking);
+        assert_eq!((asking, *seen.borrow()), (0, 2));
     }
 
     fn memory_limit_90() -> crate::config::Pipelines {

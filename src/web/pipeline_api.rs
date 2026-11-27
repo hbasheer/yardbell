@@ -4,7 +4,7 @@ use crate::pipeline::linear::Ticket;
 use crate::pipeline::record::{PrRef, Run, RunState, Subject, TicketRef};
 use crate::pipeline::Refusal;
 use crate::triggers::LINEAR_SECRET;
-use axum::extract::{Path, State as AxState};
+use axum::extract::{Path, Query, State as AxState};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
@@ -357,8 +357,39 @@ async fn runs(
     Ok(Json(json!({ "runs": with_terminals(&app, newest_first(runs))? })).into_response())
 }
 
-async fn all_runs(AxState(app): AxState<Arc<AppState>>) -> Result<Response, ApiError> {
-    let runs = newest_first(app.pipelines.runs());
+#[derive(Deserialize)]
+struct RunsQuery {
+    brief: Option<String>,
+    state: Option<String>,
+}
+
+fn brief(run: &Run) -> Value {
+    json!({
+        "id": run.id,
+        "pipeline": run.pipeline,
+        "pipeline_name": run.pipeline_name,
+        "state": run.state,
+        "step": run.step,
+        "step_since": run.step_since,
+        "waiting": run.waiting,
+        "held": run.held,
+        "subject": run.subject,
+        "conversation": run.conversation,
+    })
+}
+
+async fn all_runs(
+    AxState(app): AxState<Arc<AppState>>,
+    Query(q): Query<RunsQuery>,
+) -> Result<Response, ApiError> {
+    let mut runs = newest_first(app.pipelines.runs());
+    if let Some(word) = q.state.as_deref().filter(|w| !w.is_empty()) {
+        runs.retain(|r| json!(r.state) == json!(word));
+    }
+    if q.brief.as_deref().is_some_and(|b| !matches!(b, "" | "0")) {
+        let runs: Vec<Value> = runs.iter().map(brief).collect();
+        return Ok(Json(json!({ "runs": runs })).into_response());
+    }
     Ok(Json(json!({ "runs": with_terminals(&app, runs)? })).into_response())
 }
 
