@@ -16,6 +16,7 @@ export type PullView = {
   draft: boolean
   review: string
   ci?: string
+  mergeable?: string
   head?: string
   base?: string
 }
