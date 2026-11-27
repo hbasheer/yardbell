@@ -9,7 +9,7 @@ describe('key definitions', () => {
   test('order of the row', () => {
     expect(KEY_DEFS.map((d) => d.label)).toEqual(['Esc', 'Tab'])
     expect(KEY_DEFS_AFTER_LATCHES.map((d) => d.label)).toEqual([
-      'Enter', 'Shift+Tab', 'Space', '⌫', 'Del', '↑', '↓', '←', '→',
+      'Enter', 'Shift+Tab', 'Space', '⌫', 'Del', '↑', '↓', '←', '→', 'Home', 'End', 'PgUp', 'PgDn',
       'Ctrl+C', 'Ctrl+D', 'Ctrl+L', 'Ctrl+Z', 'Ctrl+R', 'Ctrl+A', 'Ctrl+E', 'Ctrl+W', 'Ctrl+U'
     ])
   })
@@ -28,6 +28,10 @@ describe('key definitions', () => {
       arrowDown: '\x1b[B',
       arrowLeft: '\x1b[D',
       arrowRight: '\x1b[C',
+      home: '\x1b[H',
+      end: '\x1b[F',
+      pageUp: '\x1b[5~',
+      pageDown: '\x1b[6~',
       ctrlC: '\x03',
       ctrlD: '\x04',
       ctrlL: '\x0c',
@@ -47,6 +51,7 @@ describe('key definitions', () => {
     expect(defBytes(byId('space'), { ...NO_MODS, ctrl: true })).toBe('\x00')
     expect(defBytes(byId('ctrlC'), { ...NO_MODS, alt: true })).toBe('\x1b\x03')
     expect(defBytes(byId('delete'), { ...NO_MODS, shift: true })).toBe('\x1b[3;2~')
+    expect(defBytes(byId('pageUp'), { ...NO_MODS, ctrl: true })).toBe('\x1b[5;5~')
   })
 
   test('only the movement and delete keys repeat', () => {

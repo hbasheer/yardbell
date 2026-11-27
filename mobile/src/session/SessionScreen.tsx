@@ -19,6 +19,7 @@ import { defBytes, type KeyDef } from '@/terminal/keyDefs'
 import { KeyRow } from '@/terminal/KeyRow'
 import { hasMods, keyBytes, withMods } from '@/terminal/keys'
 import { consumeLatches, modsOf, NO_LATCHES, tapLatch, type LatchName } from '@/terminal/latches'
+import { endsLine } from '@/terminal/liveInput'
 import { LiveInput } from '@/terminal/LiveInput'
 import { toBase64 } from '@/terminal/protocol'
 import type { AgentInfo } from '@/terminal/replies'
@@ -167,6 +168,17 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
     toPage({ type: 'font', family: fontFamily })
   }, [fontFamily, toPage])
 
+  const [liveReset, setLiveReset] = useState(0)
+  const clearLive = useCallback(() => setLiveReset((n) => n + 1), [])
+  const send = useCallback(
+    (bytes: string) => {
+      term.send(bytes)
+      if (endsLine(bytes)) clearLive()
+    },
+    [term.send, clearLive]
+  )
+  useEffect(clearLive, [name, clearLive])
+
   const takeMods = useCallback(() => {
     const mods = modsOf(latchesRef.current)
     if (hasMods(mods)) {
@@ -201,7 +213,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
       const mods = modsOf(latchesRef.current)
       const changed = hasMods(mods) ? withMods(message.d, mods) : null
       if (changed !== null) takeMods()
-      term.send(changed ?? message.d)
+      send(changed ?? message.d)
     } else if (message.type === 'resize') {
       term.resize(message.rows, message.cols)
     } else if (message.type === 'scroll') {
@@ -211,7 +223,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
     }
   }
 
-  const onKey = (def: KeyDef) => term.send(defBytes(def, takeMods()))
+  const onKey = (def: KeyDef) => send(defBytes(def, takeMods()))
   const onLatch = (name: LatchName, doubleTap: boolean) => setLatches((current) => tapLatch(current, name, doubleTap))
   const onTypedChar = (char: string) => {
     const mods = modsOf(latchesRef.current)
@@ -258,16 +270,30 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   const report = (title: string) => (error: unknown) =>
     setFailure({ title, message: error instanceof Error ? error.message : String(error) })
 
-  const attach = useAttach(server, machine, name, term.send)
+  const attach = useAttach(
+    server,
+    machine,
+    name,
+    useCallback(
+      (text: string) => {
+        term.send(text)
+        clearLive()
+      },
+      [term.send, clearLive]
+    )
+  )
   const paste = () => {
     Clipboard.getStringAsync()
       .then((text) => {
-        if (text) toPage({ type: 'paste', text })
+        if (!text) return
+        toPage({ type: 'paste', text })
+        clearLive()
       })
       .catch(report('Could not read the clipboard'))
   }
 
   const answer = (keys: string) => {
+    clearLive()
     client.post(`${sessionPath}/keys`, { keys }).catch(report('Could not send the reply'))
     setTimeout(() => client.post(`${sessionPath}/agent`).catch(() => {}), 400)
   }
@@ -417,7 +443,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
           keyboardUp={keyboard.height > 0}
           smart={
             terminalShown ? (
-              <SmartKeys info={ended ? undefined : agent.data} onKeys={answer} onCancel={() => term.send(ESC)} />
+              <SmartKeys info={ended ? undefined : agent.data} onKeys={answer} onCancel={() => send(ESC)} />
             ) : undefined
           }
           customKeys={customKeys}
@@ -426,16 +452,18 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
           onPaste={paste}
           onLatch={onLatch}
           onKey={onKey}
-          onCustom={(custom) => term.send(custom.bytes)}
+          onCustom={(custom) => send(custom.bytes)}
           onDeleteCustom={setDeleting}
           onAddCustom={() => setAddKeyOpen(true)}
         />
         <AttachStatus state={attach.state} onDismiss={attach.dismiss} />
         <LiveInput
           disabled={!terminalShown}
-          onBytes={term.send}
+          onBytes={send}
           onTypedChar={onTypedChar}
+          resetSignal={liveReset}
           onAttach={attach.pickPhoto}
+          onAttachFile={attach.pickFile}
           attachBusy={attach.state.kind === 'uploading'}
         />
       </View>

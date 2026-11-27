@@ -1,14 +1,13 @@
 import { Clipboard as ClipboardIcon, ChevronDown, Keyboard as KeyboardIcon, Plus } from 'lucide-react-native'
-import { useEffect, useRef, type ReactNode } from 'react'
+import { useEffect, useMemo, useRef, type ReactNode } from 'react'
 import { Pressable, ScrollView, Text, View } from 'react-native'
 import { colors } from '@/ui/theme'
 import type { CustomKey } from './customKeys'
 import { dockStyles as styles, KEY_HIT_SLOP } from './dockStyles'
 import { KEY_DEFS, KEY_DEFS_AFTER_LATCHES, type KeyDef } from './keyDefs'
 import { DOUBLE_TAP_MS, type LatchName, type Latches } from './latches'
+import { createRepeater } from './repeat'
 
-const REPEAT_DELAY_MS = 400
-const REPEAT_INTERVAL_MS = 45
 const LATCHES: { id: LatchName; label: string; a11y: string }[] = [
   { id: 'shift', label: 'Shift', a11y: 'Shift' },
   { id: 'ctrl', label: 'Ctrl', a11y: 'Control' },
@@ -45,22 +44,11 @@ export function KeyRow({
   onAddCustom
 }: Props) {
   const lastTap = useRef<{ name: LatchName; at: number } | null>(null)
-  const repeat = useRef<{ delay?: ReturnType<typeof setTimeout>; every?: ReturnType<typeof setInterval> }>({})
-
-  const stopRepeat = () => {
-    clearTimeout(repeat.current.delay)
-    clearInterval(repeat.current.every)
-    repeat.current = {}
-  }
-  useEffect(() => stopRepeat, [])
-
-  const startRepeat = (def: KeyDef) => {
-    stopRepeat()
-    onKey(def)
-    repeat.current.delay = setTimeout(() => {
-      repeat.current.every = setInterval(() => onKey(def), REPEAT_INTERVAL_MS)
-    }, REPEAT_DELAY_MS)
-  }
+  const held = useRef<KeyDef | null>(null)
+  const sendKey = useRef(onKey)
+  sendKey.current = onKey
+  const repeater = useMemo(() => createRepeater(() => held.current && sendKey.current(held.current)), [])
+  useEffect(() => repeater.pressOut, [repeater])
 
   const tapLatch = (name: LatchName) => {
     const now = Date.now()
@@ -76,9 +64,16 @@ export function KeyRow({
       style={({ pressed }) => [styles.key, pressed && styles.keyPressed, disabled && styles.disabled]}
       disabled={disabled}
       hitSlop={KEY_HIT_SLOP}
-      onPressIn={def.repeatable ? () => startRepeat(def) : undefined}
-      onPressOut={def.repeatable ? stopRepeat : undefined}
-      onPress={def.repeatable ? undefined : () => onKey(def)}
+      onPressIn={
+        def.repeatable
+          ? () => {
+              held.current = def
+              repeater.pressIn()
+            }
+          : undefined
+      }
+      onPressOut={def.repeatable ? repeater.pressOut : undefined}
+      onPress={def.repeatable ? repeater.press : () => onKey(def)}
       accessibilityRole="button"
       accessibilityLabel={def.a11y}
     >

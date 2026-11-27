@@ -74,6 +74,7 @@ The direct npm dependencies of `mobile/` and their licences:
 | expo-camera | MIT |
 | expo-clipboard | MIT |
 | expo-constants | MIT |
+| expo-document-picker | MIT |
 | expo-haptics | MIT |
 | expo-image-picker | MIT |
 | expo-router | MIT |

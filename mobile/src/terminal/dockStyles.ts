@@ -25,7 +25,6 @@ const key = {
 } as const
 
 export const dockStyles = themedStyleSheet(() => ({
-  dock: { backgroundColor: colors.bgPanel },
   keyRow: {
     height: KEY_ROW_HEIGHT,
     flexDirection: 'row',

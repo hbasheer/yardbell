@@ -1,38 +1,51 @@
 import { ImagePlus, Keyboard as KeyboardIcon } from 'lucide-react-native'
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { Pressable, Text, TextInput, View, type TextInputInstance } from 'react-native'
 import { colors } from '@/ui/theme'
 import { dockStyles as styles } from './dockStyles'
-import { DEL, diffToBytes } from './liveInput'
+import { DEL, diffToBytes, singleAddedChar } from './liveInput'
 
 type Props = {
   disabled: boolean
   onBytes: (bytes: string) => void
   onTypedChar: (char: string) => string | null
+  resetSignal: number
   onAttach: () => void
+  onAttachFile: () => void
   attachBusy: boolean
 }
 
-export function LiveInput({ disabled, onBytes, onTypedChar, onAttach, attachBusy }: Props) {
+export function LiveInput({ disabled, onBytes, onTypedChar, resetSignal, onAttach, onAttachFile, attachBusy }: Props) {
   const [text, setText] = useState('')
   const [focused, setFocused] = useState(false)
   const previous = useRef('')
   const input = useRef<TextInputInstance>(null)
 
+  const clear = () => {
+    previous.current = ''
+    setText('')
+  }
+
+  useEffect(clear, [resetSignal])
+
   const change = (next: string) => {
     const before = previous.current
+    const added = singleAddedChar(before, next)
+    const modified = added === null ? null : onTypedChar(added)
+    if (modified !== null) {
+      onBytes(modified)
+      setText(before)
+      return
+    }
     previous.current = next
     setText(next)
-    const added = Array.from(next.slice(before.length))
-    const modified = next.startsWith(before) && added.length === 1 ? onTypedChar(added[0]) : null
-    const bytes = modified ?? diffToBytes(before, next)
+    const bytes = diffToBytes(before, next)
     if (bytes) onBytes(bytes)
   }
 
   const submit = () => {
     onBytes('\r')
-    previous.current = ''
-    setText('')
+    clear()
   }
 
   return (
@@ -76,8 +89,11 @@ export function LiveInput({ disabled, onBytes, onTypedChar, onAttach, attachBusy
         style={({ pressed }) => [styles.roundButton, pressed && styles.keyPressed, (disabled || attachBusy) && styles.disabled]}
         disabled={disabled || attachBusy}
         onPress={onAttach}
+        onLongPress={onAttachFile}
+        delayLongPress={350}
         accessibilityRole="button"
         accessibilityLabel="Attach a photo"
+        accessibilityHint="Long press to attach a file"
       >
         <ImagePlus size={17} color={colors.textPrimary} strokeWidth={2.4} />
       </Pressable>
