@@ -178,6 +178,8 @@ export type FollowOptions = {
   onUpdate?: (conversation: Conversation) => void
 }
 
+const worthRetrying = (error: unknown) => error instanceof UnreachableError || (error instanceof ServerError && error.status >= 500)
+
 export async function followTurn(
   server: PairedServer,
   id: string,
@@ -191,7 +193,7 @@ export async function followTurn(
       onUpdate?.(conversation)
       if (!conversation.busy) return conversation
     } catch (error) {
-      if (!(error instanceof UnreachableError)) throw error
+      if (!worthRetrying(error)) throw error
     }
     await pause(intervalMs, signal)
   }

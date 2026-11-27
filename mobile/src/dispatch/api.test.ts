@@ -113,6 +113,24 @@ describe('followTurn', () => {
     }
   })
 
+  it('keeps polling through a server error such as a restart', async () => {
+    const original = globalThis.fetch
+    let calls = 0
+    globalThis.fetch = vi.fn(async () => {
+      calls += 1
+      if (calls === 1) return new Response(JSON.stringify({ error: 'bad gateway' }), { status: 502 })
+      if (calls === 2) return new Response('{}', { status: 500 })
+      return new Response(JSON.stringify({ id: 'abc', title: 't', updated: '', events: [], sessions: [], busy: false }))
+    }) as unknown as typeof fetch
+    try {
+      const done = await followTurn(server, 'abc', { intervalMs: 1 })
+      expect(done?.busy).toBe(false)
+      expect(calls).toBe(3)
+    } finally {
+      globalThis.fetch = original
+    }
+  })
+
   it('keeps polling through a dropped connection but not through a refusal', async () => {
     const original = globalThis.fetch
     let calls = 0

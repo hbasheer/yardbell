@@ -29,7 +29,7 @@ function rolesTour() {
     { role: 'user', text: 'Here is the failing log and a screenshot.', attachments: [{ file: '1-failure.png', name: 'failure.png', kind: 'image', size: 184320 }, { file: '2-build.log', name: 'build.log', kind: 'text', size: 9211 }, { file: '3-spec.pdf', name: 'spec.pdf', kind: 'pdf', size: 2411000 }] },
     { role: 'user', text: 'Sent by Yardbell once the results were in.', by: 'yardbell' },
     { role: 'user', text: 'Suggest a better prompt for the fix-a-bug prompt on hp.', improve: { machine: 'hp', name: 'yardbell-2', task: { name: 'Fix a bug', version: 2 } } },
-    { role: 'assistant', text: 'Here is a better prompt:\n\n```\nFind the failing test first. Change the smallest amount of code that makes it pass. Add one regression test.\n```' }
+    { role: 'assistant', text: 'Here is a better prompt:\n\n```prompt\nFind the failing test first. Change the smallest amount of code that makes it pass. Add one regression test.\n```' }
   ]
   return events
 }
@@ -41,7 +41,7 @@ function groupChat() {
     { role: 'group', id: 'g1000001', title: 'Dead code scan on three apps', gather: true, minutes: 30, status: 'waiting', follow: true, children: [{ label: 'yardbell', step: 'a2000001' }, { label: 'feedgest', step: 'a2000002' }, { label: 'sama', refused: 'Your rule does not allow scans on sama', rule: 'No scans on sama' }] },
     step('a2000001', 'start_session', { machine: 'hp', folder: 'yardbell', agent: 'claude', prompt: 'Scan for dead code.' }, { group: 'g1000001', label: 'yardbell' }),
     step('a2000002', 'start_session', { machine: 'hp', folder: 'feedgest', agent: 'codex', prompt: 'Scan for dead code.' }, { group: 'g1000001', label: 'feedgest' }),
-    { role: 'results', group: 'g0000000', title: 'Test gap scan', why: 'Two of three apps finished.', gather: true, follow: false, children: [{ label: 'yardbell', started: true, name: 'yardbell-5', machine: 'hp', path: '/home/dev/Projects/yardbell', branch: 'main', state: 'ended', result: { status: 'done', summary: 'Found 6 untested functions.', details: [{ text: 'src/dispatch.rs: 3' }, { text: 'src/proposals.rs: 3' }] } }, { label: 'feedgest', started: true, name: 'feedgest-2', machine: 'hp', branch: 'main', state: 'blocked', screen: 'Waiting for an answer', result: { status: 'running', summary: 'Still reading.' } }, { label: 'sama', started: false, result: { status: 'failed', summary: 'The folder was not found.' } }] }
+    { role: 'results', group: 'g0000000', title: 'Test gap scan', why: 'Two of three apps finished.', gather: true, follow: false, children: [{ label: 'yardbell', started: true, name: 'yardbell-5', machine: 'hp', path: '/home/dev/Projects/yardbell', branch: 'main', state: 'ended', result: { status: 'done', summary: 'Found 6 untested functions.', details: ['src/dispatch.rs: 3', 'src/proposals.rs: 3'] } }, { label: 'feedgest', started: true, name: 'feedgest-2', machine: 'hp', branch: 'main', state: 'blocked', screen: 'Waiting for an answer', result: { status: 'running', summary: 'Still reading.' } }, { label: 'sama', started: false, result: { status: 'failed', summary: 'The folder was not found.' } }] }
   ]
 }
 
@@ -153,7 +153,9 @@ async function streamAsk(req, res, fx, json, cors) {
     chat = { id, title: text.slice(0, 80), updated: new Date().toISOString(), events: [], sessions: [], busy: false, trigger: null, backend: 'claude' }
     fx.chats.set(id, chat)
   }
-  for (const e of chat.events) if (e.role === 'action' && e.status === 'pending') e.status = 'withdrawn'
+  for (const e of chat.events) {
+    if (e.role === 'action' && e.status === 'pending') Object.assign(e, { status: 'withdrawn', decided: new Date().toISOString() })
+  }
   const user = { role: 'user', text }
   if (body.task) user.task = body.task
   if (body.improve) user.improve = body.improve
@@ -175,7 +177,7 @@ async function streamAsk(req, res, fx, json, cors) {
   await send({ role: 'tool', name: 'list_sessions', input: {} })
   await send({ role: 'tool_result', name: 'list_sessions', text: '[{"machine":"hp","name":"yardbell-1","state":"blocked"}]' })
   await send({ role: 'assistant', text: 'This is a preview answer.\n\n1. One session is blocked.\n2. The rest are idle.' })
-  await send(step('a9000001', 'send_to_session', { machine: 'hp', name: 'yardbell-1', text: 'Answer yes.' }))
+  await send(step(`a9${Date.now().toString(36)}`.slice(0, 8), 'send_to_session', { machine: 'hp', name: 'yardbell-1', text: 'Answer yes.' }))
   chat.busy = false
   res.write(`${JSON.stringify({ role: 'done' })}\n`)
   res.end()

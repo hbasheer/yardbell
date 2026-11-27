@@ -1,23 +1,21 @@
-import { useLocalSearchParams, useRouter } from 'expo-router'
-import { ChevronLeft } from 'lucide-react-native'
-import { View } from 'react-native'
-import { useSafeAreaInsets } from 'react-native-safe-area-context'
-import { NavBar } from '@/ui/NavBar'
-import { NavBarButton } from '@/ui/NavBarButton'
-import { StateView } from '@/ui/StateView'
+import { useLocalSearchParams } from 'expo-router'
+import { ActivityIndicator, View } from 'react-native'
+import { ChatScreen } from '@/dispatch/ChatScreen'
+import { useServers } from '@/settings/useServers'
+import { SettingsScreen } from '@/settings/SettingsScreen'
 import { colors } from '@/ui/theme'
 
 export default function ChatRoute() {
-  const { id } = useLocalSearchParams<{ id?: string }>()
-  const router = useRouter()
-  const insets = useSafeAreaInsets()
-  return (
-    <View style={{ flex: 1, backgroundColor: colors.bgBase, paddingTop: insets.top }}>
-      <NavBar
-        title={id === 'new' ? 'New chat' : 'Chat'}
-        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />}
-      />
-      <StateView title="Chat coming next" />
-    </View>
-  )
+  const { server: serverId, id } = useLocalSearchParams<{ server?: string; id?: string }>()
+  const servers = useServers()
+  const server = servers?.find((s) => s.id === serverId)
+  if (servers === null) {
+    return (
+      <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', backgroundColor: colors.bgBase }}>
+        <ActivityIndicator color={colors.textSecondary} />
+      </View>
+    )
+  }
+  if (!server || !id) return <SettingsScreen title="Chat">{null}</SettingsScreen>
+  return <ChatScreen server={server} routeId={id} serverCount={servers.length} />
 }

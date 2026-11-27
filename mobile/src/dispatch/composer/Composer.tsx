@@ -46,13 +46,14 @@ export type ComposerProps = {
   onStop: () => void
   micSlot?: ReactNode
   seed?: { text?: string; files?: PickedFile[]; error?: string }
+  fill?: { text: string; at: number }
 }
 
 const APPROVAL_ICON: Record<ApprovalMode, LucideIcon> = { prompt: ShieldCheck, allow: ShieldAlert, deny: ShieldX }
 
 const messageOf = (error: unknown, fallback: string) => (error instanceof Error && error.message ? error.message : fallback)
 
-export function Composer({ server, conversationId, busy, backend, onSend, onStop, micSlot, seed }: ComposerProps) {
+export function Composer({ server, conversationId, busy, backend, onSend, onStop, micSlot, seed, fill }: ComposerProps) {
   useColorScheme()
   const queryClient = useQueryClient()
   const keyboardHeight = useKeyboardHeight().height
@@ -124,6 +125,15 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
     const timer = setTimeout(() => saveDraft(key, text), DRAFT_DELAY_MS)
     return () => clearTimeout(timer)
   }, [key, text, sending])
+
+  const fillAt = fill?.at
+  const fillText = fill?.text
+  useEffect(() => {
+    if (fillAt === undefined || fillText === undefined) return
+    setText(fillText)
+    setSelection({ start: fillText.length, end: fillText.length })
+    setMenuHidden(true)
+  }, [fillAt, fillText, setText])
 
   const trigger = useMemo(() => (menuHidden || selection.start !== selection.end ? null : findTrigger(text, selection.start)), [menuHidden, selection, text])
 

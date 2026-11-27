@@ -1,5 +1,5 @@
 // Option --click "<visible text>" (repeatable, applied in order, 1.2 s wait after each) taps the smallest element whose text is exactly that, before the screenshot.
-// Prefix the value with "swipe:" to drag the text left, "label:" to match an accessibility label instead of text, with "hold:" to press and hold (long-press) the text, or with "type:" to type the rest into the focused field.
+// Prefix the value with "swipe:" to drag the text left, "label:" to match an accessibility label instead of text, with "hold:" to press and hold (long-press) the text, with "type:" to type the rest into the focused field, or "wait:<ms>" to wait.
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -67,6 +67,10 @@ try {
   await call('browsingContext.navigate', { context, url, wait: 'complete' })
   await sleep(wait)
   for (const target of clicks) {
+    if (target.startsWith('wait:')) {
+      await sleep(Number(target.slice(5)))
+      continue
+    }
     if (target.startsWith('type:')) {
       const keys = [...target.slice(5)].flatMap((value) => [
         { type: 'keyDown', value },
