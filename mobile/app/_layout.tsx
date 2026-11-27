@@ -12,10 +12,12 @@ import { routeForLink } from '@/notifications/route'
 import { listServers, onServersChanged } from '@/servers/store'
 import '@/preview/seed'
 import { startAppearance } from '@/ui/theme'
+import { settleWithin } from '@/ui/theme/settleWithin'
 import { addOpenListener, getInitialLink, start as startNotifications } from '../modules/yardbell-notify'
 
 SplashScreen.preventAutoHideAsync().catch((error) => console.error('Could not hold the splash screen', error))
-startAppearance().finally(() => {
+const SPLASH_HOLD_MS = 1500
+settleWithin(startAppearance, SPLASH_HOLD_MS).then(() => {
   SplashScreen.hideAsync().catch((error) => console.error('Could not hide the splash screen', error))
 })
 

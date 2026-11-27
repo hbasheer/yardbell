@@ -106,7 +106,7 @@ export default function Pair() {
   if (confirming && link) {
     return (
       <PairFrame>
-        <CenteredMessage title="Pair with this server?" message={`${linkTarget?.address}. Only pair with a Yardbell server you run yourself.`}>
+        <CenteredMessage title={`Pair with ${linkTarget?.address}?`} titleLines={2} message="Only pair with a Yardbell server you run yourself.">
           <View style={styles.actions}>
             <ActionButton
               label="Pair"

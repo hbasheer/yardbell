@@ -22,11 +22,11 @@ export function PairFrame({ children, back = true }: { children: ReactNode; back
   )
 }
 
-export function CenteredMessage({ title, message, children }: { title: string; message?: string; children?: ReactNode }) {
+export function CenteredMessage({ title, titleLines, message, children }: { title: string; titleLines?: number; message?: string; children?: ReactNode }) {
   useColorScheme()
   return (
     <View style={styles.centered}>
-      <Text style={styles.title}>{title}</Text>
+      <Text style={styles.title} numberOfLines={titleLines}>{title}</Text>
       {message ? <Text style={styles.message}>{message}</Text> : null}
       {children}
     </View>
