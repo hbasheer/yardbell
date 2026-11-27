@@ -1,6 +1,6 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router'
-import { ChevronLeft, Eraser, ExternalLink, FileDiff, Info, MoreHorizontal, Square, Terminal, Type } from 'lucide-react-native'
+import { ChevronLeft, Eraser, ExternalLink, FileDiff, FolderTree, Info, MoreHorizontal, Square, Terminal, Type } from 'lucide-react-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppState, Keyboard, KeyboardAvoidingView, Linking, Pressable, StyleSheet, Text, View, type HostInstance } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -379,6 +379,13 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
         disabled: !sessionRoot,
         hint: sessionRoot ? undefined : 'No folder known',
         onPress: () => sessionRoot && router.push(placeHref('changes', serverId, machine, sessionRoot) as never)
+      },
+      {
+        label: 'Files',
+        icon: FolderTree,
+        disabled: !sessionRoot,
+        hint: sessionRoot ? undefined : 'No folder known',
+        onPress: () => sessionRoot && router.push(placeHref('files', serverId, machine, sessionRoot) as never)
       },
       { label: 'Text size', icon: Type, status: `${fontSize}`, closeBeforePress: true, onPress: () => setSizeOpen(true) }
     ],

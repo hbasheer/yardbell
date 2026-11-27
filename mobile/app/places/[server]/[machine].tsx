@@ -4,7 +4,8 @@ import { PlacePicker } from '@/places/PlacePicker'
 import { RouteServer, routeParam } from '@/places/RouteServer'
 
 const DESTINATIONS: Record<string, { title: string; destination: PlaceDestination }> = {
-  changes: { title: 'Changes in', destination: 'changes' }
+  changes: { title: 'Changes in', destination: 'changes' },
+  files: { title: 'Files in', destination: 'files' }
 }
 
 export default function PlacesRoute() {

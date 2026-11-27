@@ -74,5 +74,7 @@ describe('hrefs', () => {
   it('encodes the server, machine and root', () => {
     expect(placeHref('changes', 'http://h:1', 'hp', '/a b')).toBe('/changes/http%3A%2F%2Fh%3A1/hp?root=%2Fa%20b')
     expect(pickerHref('changes', 'http://h:1', 'hp')).toBe('/places/http%3A%2F%2Fh%3A1/hp?then=changes')
+    expect(placeHref('files', 's', 'hp', '/a')).toBe('/files/s/hp?root=%2Fa')
+    expect(pickerHref('files', 's', 'hp')).toBe('/places/s/hp?then=files')
   })
 })

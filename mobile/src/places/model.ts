@@ -62,7 +62,7 @@ export function filterGroups(groups: PlaceGroup[], query: string): PlaceGroup[] 
     .filter((group) => group.places.length > 0)
 }
 
-export type PlaceDestination = 'changes'
+export type PlaceDestination = 'changes' | 'files'
 
 export function placeHref(destination: PlaceDestination, serverId: string, machine: string, root: string): string {
   return `/${destination}/${encodeURIComponent(serverId)}/${encodeURIComponent(machine)}?root=${encodeURIComponent(root)}`

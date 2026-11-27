@@ -9,6 +9,7 @@ import {
   ChevronLeft,
   Copy,
   FileDiff,
+  FileText,
   GitBranch,
   MoreHorizontal,
   Minus,
@@ -37,6 +38,7 @@ import { triggerMediumImpact } from '../ui/haptics'
 import { colors, feedback, radii, spacing, themedStyleSheet, typography, useColorScheme } from '../ui/theme'
 import { useAppActive } from '../ui/useAppActive'
 import { useKeyboardHeight } from '../ui/useKeyboardHeight'
+import { fileHref } from '../files/model'
 import { changePaths, commitChanges, draftMessage, gitAction, type Change, type GitAction } from './api'
 import { ChangeRow } from './ChangeRow'
 import {
@@ -186,6 +188,13 @@ export function ChangesScreen({ server, machine, root, multipleServers }: { serv
     const untracked = file.status === 'untracked'
     return [
       { label: 'Open Changes', icon: FileDiff, onPress: () => open(file) },
+      {
+        label: 'Open File',
+        icon: FileText,
+        disabled: file.status === 'deleted',
+        hint: file.status === 'deleted' ? 'File was deleted' : undefined,
+        onPress: () => router.push(fileHref({ serverId: server.id, machine, root, path: file.path }) as never)
+      },
       { label: file.staged ? 'Unstage' : 'Stage', icon: file.staged ? Minus : Plus, disabled: inflight, onPress: () => toggleStage(file) },
       ...(file.staged
         ? []

@@ -165,12 +165,13 @@ const dir = (name) => ({ name, kind: 'dir', size: 0 })
 const file = (name, size) => ({ name, kind: 'file', size })
 
 const TREE = {
-  '': [dir('.github'), dir('assets'), dir('docs'), dir('src'), file('.gitignore', 41), file('Cargo.toml', 612), file('README.md', 1480), file('big.log', 640_000), file('dump.sql', 3_400_000)],
+  '': [dir('.github'), dir('assets'), dir('docs'), dir('notes'), dir('src'), file('.env.example', 22), file('.gitignore', 41), file('Cargo.toml', 612), file('README.md', 1480), file('big.log', 640_000), file('dump.sql', 3_400_000)],
   '.github': [dir('workflows'), file('CODEOWNERS', 30)],
   '.github/workflows': [file('ci.yml', 920)],
   assets: [file('logo.png', 18_400), file('icon.svg', 1200)],
   docs: [file('guide.md', 2400), file('notes.txt', 300)],
-  src: [file('lib.rs', 2200), file('main.rs', 900), file('web.rs', 5100)]
+  notes: [file('todo.md', 80)],
+  src: [file('huge_generated.rs', 4200), file('lib.rs', 2200), file('main.rs', 900), file('web.rs', 5100)]
 }
 
 const README = `# Yardbell
@@ -207,6 +208,9 @@ const TEXTS = {
   '.github/CODEOWNERS': '* @acme/core\n',
   '.github/workflows/ci.yml': 'name: ci\non: [push]\njobs:\n  test:\n    runs-on: ubuntu-latest\n    steps:\n      - uses: actions/checkout@v4\n      - run: cargo test\n',
   'assets/icon.svg': '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16"><circle cx="8" cy="8" r="7"/></svg>\n',
+  'notes/todo.md': '- Files screen\n- Changes colours\n',
+  '.env.example': 'TOKEN=changeme\n',
+  'src/huge_generated.rs': '// generated\npub const TABLE: [u32; 3] = [1, 2, 3];\n',
   'src/lib.rs': 'pub mod web;\n\npub fn version() -> &\'static str {\n    env!("CARGO_PKG_VERSION")\n}\n',
   'src/main.rs': 'fn main() {\n    yardbell::serve();\n}\n',
   'src/web.rs': Array.from({ length: 180 }, (_, i) => `// route ${i + 1}\npub fn route_${i + 1}() -> u32 { ${i + 1} }`).join('\n') + '\n'

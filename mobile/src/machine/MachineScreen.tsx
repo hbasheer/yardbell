@@ -199,6 +199,11 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
         icon: FileDiff,
         onPress: () => router.push(placeHref('changes', server.id, machine, root) as never)
       })
+      actions.push({
+        label: 'Files',
+        icon: FolderTree,
+        onPress: () => router.push(placeHref('files', server.id, machine, root) as never)
+      })
     }
     if (branch) {
       actions.push({
@@ -371,7 +376,10 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
         anchorRef={moreRef}
         onClose={() => setMenuOpen(false)}
         onReconnect={reconnect}
-        before={[{ label: 'Changes', icon: FileDiff, onPress: () => router.push(pickerHref('changes', server.id, machine) as never) }]}
+        before={[
+          { label: 'Changes', icon: FileDiff, onPress: () => router.push(pickerHref('changes', server.id, machine) as never) },
+          { label: 'Files', icon: FolderTree, onPress: () => router.push(pickerHref('files', server.id, machine) as never) }
+        ]}
       />
       <ActionSheet
         visible={rowMenu !== null}
