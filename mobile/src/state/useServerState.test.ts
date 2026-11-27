@@ -100,6 +100,28 @@ describe('openLiveSocket', () => {
     expect(FakeSocket.all).toHaveLength(2)
   })
 
+  test('restart drops the open socket and connects again at once', () => {
+    const { events, live } = start()
+    const first = latest()
+    first.open()
+    live.restart()
+    expect(first.closed).toBe(true)
+    expect(FakeSocket.all).toHaveLength(2)
+    expect(events.onConnection).toHaveBeenLastCalledWith('reconnecting')
+    first.drop()
+    vi.advanceTimersByTime(60_000)
+    expect(FakeSocket.all).toHaveLength(2)
+    latest().open()
+    expect(events.onConnection).toHaveBeenLastCalledWith('connected')
+  })
+
+  test('restart after stop does nothing', () => {
+    const { live } = start()
+    live.stop()
+    live.restart()
+    expect(FakeSocket.all).toHaveLength(1)
+  })
+
   test('stop closes the socket and stops reconnecting', () => {
     const { live } = start()
     const socket = latest()

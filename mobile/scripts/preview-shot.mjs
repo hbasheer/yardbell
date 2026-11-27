@@ -1,4 +1,5 @@
 // Option --click "<visible text>" (repeatable, applied in order, 1.2 s wait after each) taps the smallest element whose text is exactly that, before the screenshot.
+// Prefix the value with "label:" to match an accessibility label instead of text, or with "hold:" to press and hold (long-press) the text.
 import { spawn } from 'node:child_process'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -65,13 +66,17 @@ try {
   await call('browsingContext.setViewport', { context, viewport: { width, height } })
   await call('browsingContext.navigate', { context, url, wait: 'complete' })
   await sleep(wait)
-  for (const text of clicks) {
+  for (const target of clicks) {
+    const byLabel = target.startsWith('label:')
+    const hold = target.startsWith('hold:')
+    const text = byLabel ? target.slice(6) : hold ? target.slice(5) : target
     const found = await call('script.evaluate', {
       expression: `(() => {
         const want = ${JSON.stringify(text)}
         let best = null
         for (const el of document.querySelectorAll('body *')) {
-          if ((el.textContent || '').trim() !== want) continue
+          const have = ${byLabel} ? el.getAttribute('aria-label') || '' : (el.textContent || '').trim()
+          if (have !== want) continue
           const r = el.getBoundingClientRect()
           if (!r.width || !r.height) continue
           if (!best || r.width * r.height <= best.w * best.h) best = { x: r.x + r.width / 2, y: r.y + r.height / 2, w: r.width, h: r.height }
@@ -93,6 +98,7 @@ try {
           actions: [
             { type: 'pointerMove', x: Math.round(where.x), y: Math.round(where.y) },
             { type: 'pointerDown', button: 0 },
+            ...(hold ? [{ type: 'pause', duration: 700 }] : []),
             { type: 'pointerUp', button: 0 }
           ]
         }

@@ -7,6 +7,7 @@ export type LiveSocketEvents = {
 
 export type LiveSocket = {
   reconnectNow: () => void
+  restart: () => void
   stop: () => void
 }
 
@@ -71,6 +72,16 @@ export function openLiveSocket(
   return {
     reconnectNow() {
       if (stopped || isOpen || socket) return
+      connect()
+    },
+    restart() {
+      if (stopped) return
+      const old = socket
+      socket = null
+      isOpen = false
+      failures = 0
+      old?.close()
+      events.onConnection('reconnecting')
       connect()
     },
     stop() {

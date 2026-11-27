@@ -1,0 +1,16 @@
+import type { MachineRow, ServerSession } from '@/state/views'
+
+export function machineSubtitle(row: MachineRow): string {
+  if (row.status !== 'up') {
+    const reason = row.reason ?? 'Not connected'
+    return row.serverLabel && row.serverLabel !== row.machine ? `${reason} · ${row.serverLabel}` : reason
+  }
+  const where = row.serverLabel && row.serverLabel !== row.machine ? ` on ${row.serverLabel}` : ''
+  const count = `${row.sessions} ${row.sessions === 1 ? 'session' : 'sessions'}`
+  const needs = row.needsYou > 0 ? `, ${row.needsYou} ${row.needsYou === 1 ? 'needs' : 'need'} you` : ''
+  return `Connected${where} · ${count}${needs}`
+}
+
+export function previewParts(session: Pick<ServerSession, 'ticket' | 'branch'>): string {
+  return [session.ticket, session.branch].filter((part) => part && part !== '-').join(' · ')
+}

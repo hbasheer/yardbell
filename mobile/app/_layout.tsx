@@ -45,7 +45,7 @@ function useRouteGuard() {
 
   const first = segments[0] as string | undefined
   useEffect(() => {
-    if (hasServers === false && !PUBLIC_ROUTES.includes(first ?? '')) router.replace('/pair')
+    if (hasServers === false && first !== undefined && !PUBLIC_ROUTES.includes(first)) router.replace('/pair')
   }, [hasServers, first, router])
 
   return hasServers
