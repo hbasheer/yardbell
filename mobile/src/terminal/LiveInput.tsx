@@ -1,6 +1,7 @@
 import { ImagePlus, Keyboard as KeyboardIcon } from 'lucide-react-native'
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react'
 import { Pressable, Text, TextInput, View, type TextInputInstance } from 'react-native'
+import type { DictationPhase } from '@/dispatch/voice/useDictation'
 import { colors } from '@/ui/theme'
 import { dockStyles as styles } from './dockStyles'
 import { DEL, diffToBytes, singleAddedChar } from './liveInput'
@@ -13,13 +14,16 @@ type Props = {
   onAttach: () => void
   onAttachFile: () => void
   attachBusy: boolean
+  renderMic: (onPhase: (phase: DictationPhase) => void) => ReactNode
 }
 
-export function LiveInput({ disabled, onBytes, onTypedChar, resetSignal, onAttach, onAttachFile, attachBusy }: Props) {
+export function LiveInput({ disabled, onBytes, onTypedChar, resetSignal, onAttach, onAttachFile, attachBusy, renderMic }: Props) {
   const [text, setText] = useState('')
   const [focused, setFocused] = useState(false)
   const previous = useRef('')
+  const [dictating, setDictating] = useState(false)
   const input = useRef<TextInputInstance>(null)
+  const onPhase = useCallback((phase: DictationPhase) => setDictating(phase !== 'idle'), [])
 
   const clear = () => {
     previous.current = ''
@@ -85,18 +89,21 @@ export function LiveInput({ disabled, onBytes, onTypedChar, resetSignal, onAttac
           />
         </View>
       </Pressable>
-      <Pressable
-        style={({ pressed }) => [styles.roundButton, pressed && styles.keyPressed, (disabled || attachBusy) && styles.disabled]}
-        disabled={disabled || attachBusy}
-        onPress={onAttach}
-        onLongPress={onAttachFile}
-        delayLongPress={350}
-        accessibilityRole="button"
-        accessibilityLabel="Attach a photo"
-        accessibilityHint="Long press to attach a file"
-      >
-        <ImagePlus size={17} color={colors.textPrimary} strokeWidth={2.4} />
-      </Pressable>
+      {renderMic(onPhase)}
+      {dictating ? null : (
+        <Pressable
+          style={({ pressed }) => [styles.roundButton, pressed && styles.keyPressed, (disabled || attachBusy) && styles.disabled]}
+          disabled={disabled || attachBusy}
+          onPress={onAttach}
+          onLongPress={onAttachFile}
+          delayLongPress={350}
+          accessibilityRole="button"
+          accessibilityLabel="Attach a photo"
+          accessibilityHint="Long press to attach a file"
+        >
+          <ImagePlus size={17} color={colors.textPrimary} strokeWidth={2.4} />
+        </Pressable>
+      )}
     </View>
   )
 }

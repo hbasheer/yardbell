@@ -7,6 +7,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { WebView, type WebViewMessageEvent } from 'react-native-webview'
 import { ApiClient } from '@/api/client'
 import * as Clipboard from 'expo-clipboard'
+import { getRunsOn } from '@/dispatch/api'
+import { MicButton } from '@/dispatch/voice/MicButton'
 import { InsightsSheet } from '@/dispatch/insights/InsightsSheet'
 import { suggestHref } from '@/dispatch/insights/model'
 import { useReviewBranch } from '@/dispatch/useReviewBranch'
@@ -315,6 +317,8 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
     setFailure({ title, message: error instanceof Error ? error.message : String(error) })
   const review = useReviewBranch(server, setFailure)
 
+  const runsOn = useQuery({ queryKey: ['dispatch', 'runs-on', server.id], queryFn: () => getRunsOn(server), staleTime: 30_000 })
+
   const attach = useAttach(
     server,
     machine,
@@ -335,6 +339,11 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
         clearLive()
       })
       .catch(report('Could not read the clipboard'))
+  }
+
+  const pasteText = (text: string) => {
+    toPage({ type: 'paste', text: text.trim() })
+    clearLive()
   }
 
   const answer = (keys: string) => {
@@ -529,6 +538,15 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
           onAttach={attach.pickPhoto}
           onAttachFile={attach.pickFile}
           attachBusy={attach.state.kind === 'uploading'}
+          renderMic={(onPhase) => (
+            <MicButton
+              server={server}
+              runsOn={runsOn.data}
+              onText={pasteText}
+              onProblem={(message) => setFailure({ title: 'Dictation', message })}
+              onPhase={onPhase}
+            />
+          )}
         />
       </View>
       <AddCustomKeySheet

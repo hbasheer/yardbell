@@ -1,5 +1,5 @@
 import { Check, Mic, Settings, Square } from 'lucide-react-native'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ActivityIndicator, Linking, Pressable } from 'react-native'
 import type { PairedServer } from '../../servers/store'
 import { ActionSheet } from '../../ui/ActionSheet'
@@ -7,21 +7,23 @@ import { colors, feedback, radii, themedStyleSheet, useColorScheme } from '../..
 import type { RunsOn } from '../types'
 import { COMPOSER_CONTROL_HIT_SLOP, COMPOSER_CONTROL_SIZE } from '../composer/sizes'
 import { MIC_DENIED_TEXT, MIC_DENIED_TITLE, VOICE_OFF_TEXT, VOICE_OFF_TITLE, micHint, micMode } from './model'
-import { useDictation } from './useDictation'
+import { useDictation, type DictationPhase } from './useDictation'
 
 type Props = {
   server: PairedServer
   runsOn: RunsOn | undefined
   onText: (text: string) => void
   onProblem: (text: string) => void
+  onPhase?: (phase: DictationPhase) => void
 }
 
-export function MicButton({ server, runsOn, onText, onProblem }: Props) {
+export function MicButton({ server, runsOn, onText, onProblem, onPhase }: Props) {
   useColorScheme()
   const [sheet, setSheet] = useState<'off' | 'denied' | null>(null)
   const mode = micMode(runsOn?.voice_mode)
   const on = runsOn?.voice_input === true
   const { phase, pressIn, pressOut } = useDictation(server, { mode, onText, onProblem, onDenied: () => setSheet('denied') })
+  useEffect(() => onPhase?.(phase), [phase, onPhase])
   const recording = phase === 'recording'
   const working = phase === 'starting' || phase === 'transcribing'
 
