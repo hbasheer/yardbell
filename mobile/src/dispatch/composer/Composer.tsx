@@ -13,7 +13,8 @@ import { triggerError, triggerSelection } from '../../ui/haptics'
 import { colors, feedback, radii, spacing, themedStyleSheet, useColorScheme } from '../../ui/theme'
 import { useKeyboardHeight } from '../../ui/useKeyboardHeight'
 import { listPrompts } from '../api'
-import { getServerSettings, setDispatchSettings } from '../../settings/serverApi'
+import { setDispatchSettings, type ServerSettings } from '../../settings/serverApi'
+import { mergeSettings, serverSettingsKey, serverSettingsQuery } from '../../settings/server/queries'
 import { AttachmentError, MAX_FILES, checkAttachments, prepareAttachments, type PickedFile } from '../attachments'
 import { deviceFiles } from '../files'
 import type { AskAttachment, Backend, ImproveMark, SavedPrompt, TaskMark } from '../types'
@@ -148,7 +149,7 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
     staleTime: 15_000,
     enabled: trigger?.kind === 'tasks'
   })
-  const settings = useQuery({ queryKey: ['dispatch', 'settings', server.id], queryFn: () => getServerSettings(server), staleTime: 15_000 })
+  const settings = useQuery(serverSettingsQuery(server))
   const dispatch = settings.data?.dispatch
 
   const items = useMemo(() => {
@@ -161,13 +162,14 @@ export function Composer({ server, conversationId, busy, backend, onSend, onStop
   const save = useMutation({
     mutationFn: (change: Parameters<typeof setDispatchSettings>[1]) => setDispatchSettings(server, change),
     onMutate: (change) => {
-      queryClient.setQueryData(['dispatch', 'settings', server.id], { dispatch: { ...dispatch, ...change } })
+      queryClient.setQueryData<ServerSettings>(serverSettingsKey(server.id), (old) => mergeSettings(old, { dispatch: { ...old?.dispatch, ...change } }))
     },
+    onSuccess: (saved) => queryClient.setQueryData(serverSettingsKey(server.id), saved),
     onError: (e) => {
       triggerError()
       setNotice(messageOf(e, 'Could not save the setting'))
     },
-    onSettled: () => queryClient.invalidateQueries({ queryKey: ['dispatch', 'settings', server.id] })
+    onSettled: () => queryClient.invalidateQueries({ queryKey: serverSettingsKey(server.id) })
   })
 
   const pick = useCallback(

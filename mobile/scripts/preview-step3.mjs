@@ -610,10 +610,10 @@ function transcript(run, stepId) {
 
 function triggerFixtures() {
   return [
-    { trigger: { name: 'Morning check', task: 'Stuck pull requests', enabled: true, schedule: 'every weekday at 08:00' }, kind: 'schedule', describe: 'Every weekday at 08:00', next: new Date(Date.now() + 9 * 3600_000).toISOString(), last: { at: minutes(900), outcome: 'started', text: 'Started by schedule', conversation: 'trigger000000001' }, note: '', problem: '', checked: null, busy: false },
+    { trigger: { name: 'Hourly digest', task: 'Summarise the day', enabled: true, schedule: 'every hour' }, kind: 'schedule', describe: 'Every hour', next: new Date(Date.now() + 1800_000).toISOString(), last: { at: minutes(30), outcome: 'failed', text: 'The task Summarise the day is hidden', conversation: '' }, note: '', problem: '', checked: null, busy: true },
     { trigger: { name: 'My Linear tickets', task: 'Fix a bug', enabled: true, linear: { assigned: true, states: ['Todo'] } }, kind: 'linear', describe: 'When a Linear ticket assigned to me moves to Todo', next: null, last: null, note: 'Checked, nothing new', problem: '', checked: minutes(2), busy: false },
     { trigger: { name: 'Review requests', task: 'Review the open branch', enabled: false, github: { review_requested: true } }, kind: 'github', describe: 'When someone asks me to review a pull request', next: null, last: null, note: '', problem: 'The GitHub token is missing. Add it under Settings, Integrations', checked: null, busy: false },
-    { trigger: { name: 'Hourly digest', task: 'Summarise the day', enabled: true, schedule: 'every hour' }, kind: 'schedule', describe: 'Every hour', next: new Date(Date.now() + 1800_000).toISOString(), last: { at: minutes(30), outcome: 'failed', text: 'The task Summarise the day is hidden', conversation: '' }, note: '', problem: '', checked: null, busy: true }
+    { trigger: { name: 'Morning check', task: 'Stuck pull requests', enabled: true, schedule: 'every weekday at 08:00' }, kind: 'schedule', describe: 'Every weekday at 08:00', next: new Date(Date.now() + 9 * 3600_000).toISOString(), last: { at: minutes(900), outcome: 'started', text: 'Started by schedule', conversation: 'trigger000000001' }, note: '', problem: '', checked: null, busy: false }
   ]
 }
 
@@ -635,6 +635,13 @@ function triggersApi(fx, path, method, body, json, res) {
     return json(res, 200, { conversation: null, text: 'Checked, nothing new' }), true
   }
   return false
+}
+
+const longInstructions = () => Array.from({ length: 62 }, (_, i) => `Rule ${i + 1}: work for acme/web${i} goes to devbox unless it is down.`).join('\n').slice(0, 3720)
+
+function fullMemory() {
+  const entries = Array.from({ length: 14 }, (_, i) => `Note ${i + 1}: ` + 'The deploy for acme/web goes through the shared docker stack on devbox, and the staging site follows the main branch. '.repeat(4).slice(0, 470))
+  return { entries, history: [{ change: 'add', entry: entries[13], at: minutes(60), by: 'dispatch' }] }
 }
 
 function memoryFixtures() {
@@ -788,7 +795,7 @@ export function step3Fixtures(dispatch, serverName) {
       codex_model: 'gpt-5',
       approval: 'prompt',
       agent: 'claude',
-      instructions: 'Keep answers short. Ask before touching production.',
+      instructions: hp ? 'Keep answers short. Ask before touching production.' : longInstructions(),
       rules: [
         { action: 'start_session', machine: 'hp', folder: '/home/dev/Projects/yardbell', approval: 'allow' },
         { action: 'merge_pull', machine: 'any', folder: '', approval: 'deny' },
@@ -797,14 +804,17 @@ export function step3Fixtures(dispatch, serverName) {
     },
     phone: { app_connected: true, wait_minutes: 5, agent_waiting: true, session_ended: false, machines: true, memory: true, pipeline_waiting: true, pipeline_finished: true, proposals: true, dispatch: true, pull_ci_failed: true, pull_conflicts: true, pull_ready: false, pull_merged: false, pull_closed: false, limit_reset: true },
     dispatch_runs_on: ['claude', 'codex'],
-    codex_models: [{ id: 'gpt-5', label: 'GPT-5' }, { id: 'gpt-5-codex', label: 'GPT-5 Codex' }]
+    codex_models: ['gpt-5', 'gpt-5-codex'],
+    agents: [{ name: 'claude', label: 'Claude Code' }, { name: 'codex', label: 'Codex' }],
+    default_agent: 'claude',
+    machines: [{ name: serverName, local: true }, ...(hp ? [{ name: 'nas', local: false }] : [])]
   })
   return {
     dispatch,
     changes: hp ? changeFixtures() : {},
     pipelines: { defs, runs: hp ? runs(defs) : [] },
     triggers: hp ? triggerFixtures() : [],
-    memory: memoryFixtures(),
+    memory: hp ? memoryFixtures() : fullMemory(),
     promptHistory: {
       'Fix a bug': [
         { n: 1, text: 'Find the failing test. Change code until it passes.', at: '' },

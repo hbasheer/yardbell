@@ -45,6 +45,6 @@ export function modelChange(settings: DispatchSettings | undefined, id: string):
 }
 
 export function filterModels(models: ModelChoice[], query: string): ModelChoice[] {
-  const q = query.trim().toLowerCase()
-  return q ? models.filter((m) => m.label.toLowerCase().includes(q) || m.id.includes(q)) : models
+  const terms = query.toLowerCase().split(/\s+/).filter(Boolean)
+  return terms.length ? models.filter((m) => terms.every((t) => `${m.id} ${m.label} ${m.description ?? ''}`.toLowerCase().includes(t))) : models
 }

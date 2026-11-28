@@ -38,8 +38,13 @@ export type ServerSettings = {
   dispatch?: DispatchSettings
   phone?: PhoneSettings
   dispatch_runs_on?: string[]
-  codex_models?: { id: string; label?: string; description?: string }[]
+  codex_models?: string[]
+  agents?: { name: string; label: string }[]
+  default_agent?: string
+  machines?: { name: string; local?: boolean }[]
 }
+
+export type DispatchChange = Partial<DispatchSettings> | ((current: DispatchSettings) => Partial<DispatchSettings>)
 
 export type TriggerDefinition = {
   name: string
@@ -91,7 +96,7 @@ export function getServerSettings(server: PairedServer): Promise<ServerSettings>
   return client(server).get('/api/settings')
 }
 
-export async function setDispatchSettings(server: PairedServer, change: Partial<DispatchSettings>): Promise<ServerSettings> {
+export async function setDispatchSettings(server: PairedServer, change: DispatchChange): Promise<ServerSettings> {
   const api = client(server)
   const current = await api.get<ServerSettings>('/api/settings')
   const d = current.dispatch ?? {}
@@ -103,7 +108,7 @@ export async function setDispatchSettings(server: PairedServer, change: Partial<
     codex_model: d.codex_model ?? '',
     ...(d.approval ? { approval: d.approval } : {}),
     rules: d.rules ?? [],
-    ...change
+    ...(typeof change === 'function' ? change(d) : change)
   })
   return api.get<ServerSettings>('/api/settings')
 }
@@ -116,6 +121,11 @@ export async function setPhoneSettings(server: PairedServer, change: PhoneSettin
   await api.post('/api/settings/phone', { ...saved, ...change })
   const fresh = (await api.get<ServerSettings>('/api/settings')).phone
   return fresh ?? { ...saved, ...change }
+}
+
+export async function installedAgents(server: PairedServer, machine: string): Promise<string[]> {
+  const found = await client(server).get<{ installed: string[] }>(`/machines/${encodeURIComponent(machine)}/agents`)
+  return found.installed
 }
 
 export function getTriggers(server: PairedServer): Promise<TriggerList> {

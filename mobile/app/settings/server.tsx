@@ -1,7 +1,8 @@
 import { useQuery } from '@tanstack/react-query'
 import { useLocalSearchParams, useRouter } from 'expo-router'
-import { Plus } from 'lucide-react-native'
+import { Plus, SlidersHorizontal } from 'lucide-react-native'
 import { useState } from 'react'
+import { serverSettingsHref } from '@/settings/server/hrefs'
 import { SettingsFooter, SettingsScreen } from '@/settings/SettingsScreen'
 import { useServers } from '@/settings/useServers'
 import { forgetServer, listServers, type PairedServer } from '@/servers/store'
@@ -35,6 +36,17 @@ function ServerDetails({ server }: { server: PairedServer }) {
         <ListRow key="address" title="Address" value={server.address} />
         <ListRow key="version" title="Version" value={data?.server?.version || (isError ? 'Unreachable' : '...')} />
         <ListRow key="machines" title="Machines" value={data ? String(data.machines.length) : '...'} />
+      </ListGroup>
+      <ListGroup style={{ marginTop: 24 }}>
+        <ListRow
+          key="settings"
+          title="Server settings"
+          subtitle="Dispatch, phone notifications and triggers"
+          subtitleLines={1}
+          leading={<SlidersHorizontal size={18} color={colors.textSecondary} strokeWidth={2} />}
+          navigates
+          onPress={() => router.push(serverSettingsHref(server.id) as never)}
+        />
       </ListGroup>
       <ListGroup style={{ marginTop: 24 }}>
         <ListRow

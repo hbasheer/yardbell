@@ -78,6 +78,28 @@ describe('setDispatchSettings', () => {
   })
 })
 
+describe('setDispatchSettings with a change computed from the fresh settings', () => {
+  const web = { action: 'merge_pull', machine: 'any', folder: '', approval: 'deny' }
+  const mine = { action: 'start_session', machine: 'hp', folder: '', approval: 'allow' }
+
+  it('adds to the rules the web has now, so a rule added there survives', async () => {
+    const seen = script([{ dispatch: { instructions: 'Edited on the web', rules: [web] } }, { ok: true }, { dispatch: { rules: [web, mine] } }])
+    const saved = await setDispatchSettings(server, (current) => ({ rules: [...(current.rules ?? []), mine] }))
+    expect(seen[1].body).toMatchObject({ instructions: 'Edited on the web', rules: [web, mine] })
+    expect(saved.dispatch?.rules).toEqual([web, mine])
+  })
+
+  it('does not post when computing the change fails', async () => {
+    const seen = script([{ dispatch: { rules: [] } }])
+    await expect(
+      setDispatchSettings(server, () => {
+        throw new Error('That rule was changed on the computer in the meantime.')
+      })
+    ).rejects.toThrow('changed on the computer')
+    expect(seen).toHaveLength(1)
+  })
+})
+
 describe('setPhoneSettings', () => {
   it('saves the whole object over the freshly read one, without app_connected', async () => {
     const seen = script([{ phone }, { ok: true }, { phone: { ...phone, pipeline_finished: true } }])
