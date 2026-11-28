@@ -116,6 +116,14 @@ describe('layoutOf and gutter', () => {
     expect(wide.old).toBeGreaterThan(narrow.old)
     expect(wide.total).toBe(wide.old + wide.new + wide.sign)
   })
+
+  it('gives the old side no width when no line has an old number', () => {
+    const added: DiffLine[] = [{ k: 'add', o: null, n: 1, t: 'a' }, { k: 'add', o: null, n: 2, t: 'b' }]
+    const gutter = diffGutter(buildRows(added))
+    expect(gutter.old).toBe(0)
+    expect(gutter.new).toBeGreaterThan(0)
+    expect(gutter.total).toBe(gutter.new + gutter.sign)
+  })
 })
 
 describe('paging', () => {

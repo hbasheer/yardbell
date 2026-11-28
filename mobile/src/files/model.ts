@@ -64,6 +64,9 @@ export function splitResult(path: string): { name: string; dir: string } {
   return at < 0 ? { name: path, dir: '' } : { name: path.slice(at + 1), dir: path.slice(0, at) }
 }
 
+export const filesHref = (serverId: string, machine: string, root: string): string =>
+  `/files/${encodeURIComponent(serverId)}/${encodeURIComponent(machine)}?root=${encodeURIComponent(root)}`
+
 export function fileHref(target: { serverId: string; machine: string; root: string; path: string; line?: number | null; find?: string }): string {
   const query = [`root=${encodeURIComponent(target.root)}`, `path=${encodeURIComponent(target.path)}`]
   if (target.line) query.push(`line=${Math.floor(target.line)}`)

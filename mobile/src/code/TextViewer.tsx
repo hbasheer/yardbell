@@ -17,6 +17,8 @@ export type TextViewerProps = {
   style?: StyleProp<ViewStyle>
 }
 
+export const PREVIEW_LIMIT = 200 * 1024
+
 type RowProps = { index: number; text: string; gutter: number; width: number; marked: boolean; onCopy: (text: string) => void }
 
 const Row = memo(function Row({ index, text, gutter, width, marked, onCopy }: RowProps) {
@@ -34,7 +36,8 @@ const Row = memo(function Row({ index, text, gutter, width, marked, onCopy }: Ro
 export function TextViewer({ text, line = null, markdown = false, binary = false, tooLarge = false, cut = false, notes = [], style }: TextViewerProps) {
   useColorScheme()
   const [viewport, setViewport] = useState(0)
-  const [preview, setPreview] = useState(markdown)
+  const startsInPreview = markdown && line === null && text.length <= PREVIEW_LIMIT
+  const [preview, setPreview] = useState(startsInPreview)
   const [copied, setCopied] = useState(false)
   const list = useRef<FlatList<string>>(null)
   const lines = useMemo(() => splitLines(text), [text])
@@ -42,7 +45,7 @@ export function TextViewer({ text, line = null, markdown = false, binary = false
   const width = useMemo(() => Math.max(viewport, gutter + codeWidth(lines)), [lines, gutter, viewport])
   const marked = line === null ? null : clampLine(line, lines.length)
 
-  useEffect(() => setPreview(markdown), [markdown])
+  useEffect(() => setPreview(startsInPreview), [startsInPreview])
   useEffect(() => {
     if (!copied) return
     const timer = setTimeout(() => setCopied(false), 1500)

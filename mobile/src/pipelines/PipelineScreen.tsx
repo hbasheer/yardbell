@@ -41,6 +41,7 @@ import {
   nextWords,
   nodeOrder,
   noRunsText,
+  pipelinesHref,
   runHref,
   triggerIcon
 } from './screenModel'
@@ -139,7 +140,7 @@ export function PipelineScreen({ server, id, multipleServers }: { server: Paired
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <NavBar
-        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => router.back()} />}
+        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace(pipelinesHref(server.id) as never))} />}
         title={d?.name ?? 'Pipeline'}
         subtitle={d ? [`v${d.version}`, multipleServers ? server.machine : ''].filter(Boolean).join(' · ') : undefined}
         refreshing={(list.isFetching || runsQuery.isFetching) && !list.isPending}

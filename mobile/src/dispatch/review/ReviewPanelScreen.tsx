@@ -5,6 +5,7 @@ import { useCallback } from 'react'
 import { FlatList, StyleSheet, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DiffList } from '../../code/DiffList'
+import { usePagedDiff } from '../../code/usePagedDiff'
 import { statsWord } from '../../changes/model'
 import type { PairedServer } from '../../servers/store'
 import { ListGroup } from '../../ui/ListGroup'
@@ -16,7 +17,6 @@ import { colors, spacing, themedStyleSheet, typography, useColorScheme } from '.
 import { reviewChanges, reviewFilePage, scanFiles, scanFilePage } from '../api'
 import type { ReviewFileStat } from '../types'
 import { changeLetter, changeTotals, changeWord, diffNote, fileWord, MOVED_WORDS } from './model'
-import { usePagedFile } from './usePagedFile'
 
 export type ReviewPanel = 'changes' | 'files'
 
@@ -158,10 +158,9 @@ function FileBody({ server, conversation, card, scan, file }: { server: PairedSe
     (from: number) => (scan ? scanFilePage : reviewFilePage)(server, conversation, card, { file, from }),
     [server, conversation, card, scan, file]
   )
-  const { loaded, error, loadingMore, more, retry } = usePagedFile(fetchPage, `${scan}:${file}`)
+  const { first, pages, error, moreError, loadingMore, more, retry } = usePagedDiff(fetchPage, `${scan}:${file}`)
   if (error) return <LoadErrorState message={error} onRetry={retry} />
-  if (!loaded) return <StateView loading title={scan ? 'Reading the file' : 'Reading the diff'} />
-  const { first, pages } = loaded
+  if (!first || !pages) return <StateView loading title={scan ? 'Reading the file' : 'Reading the diff'} />
   return (
     <DiffList
       style={styles.diff}
@@ -172,6 +171,7 @@ function FileBody({ server, conversation, card, scan, file }: { server: PairedSe
       cut={first.cut}
       notes={first.notes}
       loadingMore={loadingMore}
+      moreError={moreError}
       onMore={more}
     />
   )

@@ -144,11 +144,11 @@ export function PromptHistoryScreen({ server, name, serverCount }: { server: Pai
                         disabled={busy}
                         hitSlop={8}
                         accessibilityRole="button"
-                        accessibilityLabel={`Restore version ${version.n}`}
+                        accessibilityLabel={version.n === 1 && history.builtin ? 'Reset to the default' : `Restore version ${version.n}`}
                         accessibilityState={{ disabled: busy }}
                         style={[styles.restore, busy && styles.disabled]}
                       >
-                        <Text style={styles.restoreText}>Restore</Text>
+                        <Text style={styles.restoreText}>{version.n === 1 && history.builtin ? 'Reset to the default' : 'Restore'}</Text>
                       </Pressable>
                     )}
                   </View>

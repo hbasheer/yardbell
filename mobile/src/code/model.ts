@@ -105,8 +105,8 @@ export function diffGutter(rows: DiffRow[]): DiffGutter {
     if (row.o !== null && row.o > highestOld) highestOld = row.o
     if (row.n !== null && row.n > highestNew) highestNew = row.n
   }
-  const old = numberWidth(digitsOf(highestOld))
-  const added = numberWidth(digitsOf(highestNew))
+  const old = highestOld === 0 ? 0 : numberWidth(digitsOf(highestOld))
+  const added = highestNew === 0 ? 0 : numberWidth(digitsOf(highestNew))
   return { old, new: added, sign: SIGN_WIDTH, total: old + added + SIGN_WIDTH }
 }
 

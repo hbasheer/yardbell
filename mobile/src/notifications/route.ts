@@ -17,9 +17,12 @@ function dispatchRoute(server: PairedServer, query: string): string {
 }
 
 function pipelineRoute(server: PairedServer, query: string): string {
-  const run = new URLSearchParams(query).get('run')
+  const params = new URLSearchParams(query)
+  const run = params.get('run')
+  const pipeline = params.get('p')
   const base = `/pipelines/${encodeURIComponent(server.id)}`
-  return run ? `${base}/run/${encodeURIComponent(run)}` : base
+  if (run) return `${base}/run/${encodeURIComponent(run)}${pipeline ? `?p=${encodeURIComponent(pipeline)}` : ''}`
+  return pipeline ? `${base}/${encodeURIComponent(pipeline)}` : base
 }
 
 const atBoundary = (next: string) => next === '' || next === '/' || next === '?' || next === '#'

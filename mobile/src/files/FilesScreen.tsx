@@ -18,6 +18,7 @@ import { LoadErrorState, NoMatchState, StateView } from '../ui/StateView'
 import { triggerMediumImpact } from '../ui/haptics'
 import { colors, feedback, spacing, themedStyleSheet, typography, useColorScheme } from '../ui/theme'
 import { listFiles, type SearchMode } from './api'
+import { machineHref } from '../home/presentation'
 import { fileHref, flattenTree, moreWord, splitResult, type Listing, type TreeRow } from './model'
 import { useChangeStatuses, useFileSearch } from './useFiles'
 
@@ -262,7 +263,7 @@ export function FilesScreen({ server, machine, root, multipleServers }: { server
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <NavBar
-        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => router.back()} />}
+        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace(machineHref({ serverId: server.id, machine }) as never))} />}
         title={rootName(root)}
         subtitle={subtitle}
         refreshing={refreshing}

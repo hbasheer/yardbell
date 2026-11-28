@@ -14,7 +14,7 @@ import { NavBarButton } from '../ui/NavBarButton'
 import { PullDownMenu } from '../ui/PullDownMenu'
 import { LoadErrorState, StateView } from '../ui/StateView'
 import { colors, themedStyleSheet, useColorScheme } from '../ui/theme'
-import { findLine, isMarkdown, sizeWord, splitResult } from './model'
+import { filesHref, findLine, isMarkdown, sizeWord, splitResult } from './model'
 import { useFileText } from './useFiles'
 
 type Props = { server: PairedServer; machine: string; root: string; path: string; line: number | null; find: string; multipleServers: boolean }
@@ -65,7 +65,7 @@ export function FileViewScreen({ server, machine, root, path, line, find, multip
   return (
     <View style={[styles.screen, { paddingTop: insets.top, paddingBottom: insets.bottom }]}>
       <NavBar
-        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => router.back()} />}
+        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace(filesHref(server.id, machine, root) as never))} />}
         title={name}
         subtitle={subtitle}
         trailing={

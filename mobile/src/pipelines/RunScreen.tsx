@@ -90,7 +90,11 @@ export function RunScreen({ server, runId, pipelineHint, multipleServers }: { se
     return done === true
   }
 
-  const leave = () => (router.canGoBack() ? router.back() : router.replace(pipelinesHref(server.id) as never))
+  const leave = () => {
+    if (router.canGoBack()) return router.back()
+    const pipeline = r?.pipeline || pipelineHint
+    router.replace((pipeline ? pipelineHref(server.id, pipeline) : pipelinesHref(server.id)) as never)
+  }
 
   const confirmAsked = () => {
     const ask = asking
@@ -257,7 +261,7 @@ export function RunScreen({ server, runId, pipelineHint, multipleServers }: { se
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <NavBar
-        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => router.back()} />}
+        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={leave} />}
         title={r ? runLabel(r) : 'Run'}
         subtitle={r ? [r.pipeline_name || r.pipeline, multipleServers ? server.machine : ''].filter(Boolean).join(' · ') : undefined}
         refreshing={query.isFetching && !query.isPending}

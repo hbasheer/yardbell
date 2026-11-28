@@ -126,7 +126,7 @@ export function PipelinesScreen({ server, multipleServers }: { server: PairedSer
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <NavBar
-        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => router.back()} />}
+        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace('/'))} />}
         title="Pipelines"
         subtitle={multipleServers ? server.machine : undefined}
         refreshing={(list.isFetching || brief.isFetching) && !list.isPending}

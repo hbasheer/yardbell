@@ -2,6 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useCallback, useEffect, useRef, useState } from 'react'
 import type { PairedServer } from '../servers/store'
 import { UnreachableError } from '../api/client'
+import { routeIfSignedOut } from '../api/signedOut'
 import { createGuard } from './guard'
 import { listChanges } from './api'
 
@@ -27,7 +28,7 @@ export function messageOf(error: unknown): string {
   return error instanceof Error ? error.message : String(error)
 }
 
-export function useGuardedActions(before: () => Promise<unknown>, afterEach: () => void) {
+export function useGuardedActions(serverId: string, before: () => Promise<unknown>, afterEach: () => void) {
   const guard = useRef(createGuard()).current
   const [busy, setBusy] = useState<string | null>(null)
   const [notice, setNotice] = useState<Notice | null>(null)
@@ -52,6 +53,7 @@ export function useGuardedActions(before: () => Promise<unknown>, afterEach: () 
         await prepare.current().catch(() => {})
         return await task()
       } catch (error) {
+        if (routeIfSignedOut(error, serverId)) return undefined
         if (mounted.current) setNotice({ kind: 'error', text: messageOf(error) })
         return undefined
       } finally {
@@ -60,7 +62,7 @@ export function useGuardedActions(before: () => Promise<unknown>, afterEach: () 
         after.current()
       }
     },
-    [guard]
+    [guard, serverId]
   )
 
   return { busy, notice, setNotice, run }

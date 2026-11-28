@@ -30,6 +30,7 @@ import {
   filterPrompts,
   formOf,
   hasHiddenDefaults,
+  hasUnsavedEdits,
   NAME_LIMIT,
   runHref,
   savedMessage,
@@ -121,6 +122,8 @@ export function PromptsScreen({ server, serverCount }: { server: PairedServer; s
     await query.refetch()
     setRefreshing(false)
   }
+
+  const unsaved = hasUnsavedEdits(prompts, form)
 
   const openHistory = () => {
     const name = form.editing
@@ -276,9 +279,10 @@ export function PromptsScreen({ server, serverCount }: { server: PairedServer; s
           {formVersion(prompts, form) ? (
             <View style={styles.versionRow}>
               <Text style={styles.version}>{formVersion(prompts, form)}</Text>
-              <Pressable onPress={openHistory} disabled={saving} hitSlop={8} accessibilityRole="link" accessibilityLabel={`History of ${form.name}`}>
-                <Text style={styles.historyLink}>History</Text>
+              <Pressable onPress={openHistory} disabled={saving || unsaved} hitSlop={8} accessibilityRole="link" accessibilityLabel={`History of ${form.name}`} accessibilityState={{ disabled: saving || unsaved }}>
+                <Text style={[styles.historyLink, unsaved && styles.historyOff]}>History</Text>
               </Pressable>
+              {unsaved ? <Text style={styles.version}>Save or discard first</Text> : null}
             </View>
           ) : null}
           {formError ? <Text style={styles.formError}>{formError}</Text> : null}
@@ -330,6 +334,7 @@ const styles = themedStyleSheet(() => ({
   textBox: { backgroundColor: colors.sheetGroup, minHeight: 140, maxHeight: 220, paddingTop: spacing.md },
   versionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
   version: { fontSize: 12, color: colors.textMuted },
+  historyOff: { color: colors.textMuted, textDecorationLine: 'none' },
   historyLink: { fontSize: 12, fontWeight: '600', color: colors.accentBlue, textDecorationLine: 'underline' },
   formError: { fontSize: 13, color: colors.statusRed, marginTop: spacing.sm }
 }))

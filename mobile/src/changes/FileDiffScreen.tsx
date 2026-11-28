@@ -1,9 +1,10 @@
 import { useRouter } from 'expo-router'
 import { Check, ChevronDown, ChevronLeft, ChevronUp } from 'lucide-react-native'
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useMemo, useState } from 'react'
 import { Pressable, Text, View } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { DiffList } from '../code/DiffList'
+import { usePagedDiff } from '../code/usePagedDiff'
 import type { PairedServer } from '../servers/store'
 import { BottomDrawer } from '../ui/BottomDrawer'
 import { ListGroup } from '../ui/ListGroup'
@@ -15,62 +16,8 @@ import { LoadErrorState, StateView } from '../ui/StateView'
 import { colors, pressedStyle, spacing, themedStyleSheet, typography, useColorScheme } from '../ui/theme'
 import { changeDiff, type ChangeDiff } from './api'
 import { statusColor } from './ChangeRow'
-import { appendPage, fileKey, neighbour, ordered, splitPath, statsWord, statusLetter, type DiffPages } from './model'
+import { changesHref, fileKey, neighbour, ordered, splitPath, statsWord, statusLetter } from './model'
 import { useChangesList } from './useChangesActions'
-
-type Loaded = { diff: ChangeDiff; pages: DiffPages }
-
-function useDiff(server: PairedServer, machine: string, root: string, path: string, staged: boolean) {
-  const [loaded, setLoaded] = useState<Loaded | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loadingMore, setLoadingMore] = useState(false)
-  const token = useRef(0)
-  const fetching = useRef(false)
-
-  const first = useCallback(() => {
-    const mine = ++token.current
-    fetching.current = false
-    setLoaded(null)
-    setError(null)
-    setLoadingMore(false)
-    changeDiff(server, machine, { root, path, staged })
-      .then((diff) => {
-        if (token.current === mine) setLoaded({ diff, pages: appendPage(null, diff) })
-      })
-      .catch((e) => {
-        if (token.current === mine) setError(e instanceof Error ? e.message : String(e))
-      })
-  }, [server, machine, root, path, staged])
-
-  useEffect(() => {
-    first()
-    return () => {
-      token.current += 1
-    }
-  }, [first])
-
-  const more = useCallback(() => {
-    if (!loaded || fetching.current) return
-    const mine = token.current
-    fetching.current = true
-    setLoadingMore(true)
-    changeDiff(server, machine, { root, path, staged, from: loaded.pages.next })
-      .then((page) => {
-        if (token.current === mine) setLoaded((current) => (current ? { diff: current.diff, pages: appendPage(current.pages, page) } : current))
-      })
-      .catch((e) => {
-        if (token.current === mine) setError(e instanceof Error ? e.message : String(e))
-      })
-      .finally(() => {
-        if (token.current === mine) {
-          fetching.current = false
-          setLoadingMore(false)
-        }
-      })
-  }, [loaded, server, machine, root, path, staged])
-
-  return { loaded, error, loadingMore, more, retry: first }
-}
 
 export function FileDiffScreen({ server, machine, root, path, staged }: { server: PairedServer; machine: string; root: string; path: string; staged: boolean }) {
   useColorScheme()
@@ -82,18 +29,21 @@ export function FileDiffScreen({ server, machine, root, path, staged }: { server
   const current = { path, staged }
   const previous = neighbour(files, current, -1)
   const next = neighbour(files, current, 1)
-  const { loaded, error, loadingMore, more, retry } = useDiff(server, machine, root, path, staged)
+  const fetchPage = useCallback(
+    (from: number) => changeDiff(server, machine, from === 0 ? { root, path, staged } : { root, path, staged, from }),
+    [server, machine, root, path, staged]
+  )
+  const { first: diff, pages, error, moreError, loadingMore, more, retry } = usePagedDiff(fetchPage, `${machine}:${root}:${path}:${staged}`)
 
   const go = (file: { path: string; staged: boolean }) => router.setParams({ path: file.path, staged: file.staged ? '1' : '0' })
   const { name, dir } = splitPath(path)
-  const diff = loaded?.diff
   const subtitle = [staged ? 'Staged' : 'Working tree', diff ? statsWord(diff) : ''].filter(Boolean).join(' · ')
   const renamedFrom = diff?.old_path && diff.old_path !== path ? diff.old_path : null
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <NavBar
-        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => router.back()} />}
+        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace(changesHref(server.id, machine, root) as never))} />}
         center={
           <Pressable
             onPress={() => setSheet(true)}
@@ -122,18 +72,19 @@ export function FileDiffScreen({ server, machine, root, path, staged }: { server
       />
       {error ? (
         <LoadErrorState message={error} onRetry={retry} />
-      ) : !loaded ? (
+      ) : !diff || !pages ? (
         <StateView loading title="Reading the diff" />
       ) : (
         <DiffList
           style={styles.list}
-          lines={loaded.pages.lines}
-          next={loaded.pages.next}
-          total={loaded.pages.total}
-          binary={loaded.diff.binary}
-          cut={loaded.diff.cut}
-          notes={loaded.diff.notes}
+          lines={pages.lines}
+          next={pages.next}
+          total={pages.total}
+          binary={diff.binary}
+          cut={diff.cut}
+          notes={diff.notes}
           loadingMore={loadingMore}
+          moreError={moreError}
           onMore={more}
           header={
             <View style={styles.pathRow}>

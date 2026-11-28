@@ -319,7 +319,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
     setFailure({ title, message: error instanceof Error ? error.message : String(error) })
   const review = useReviewBranch(server, setFailure)
 
-  const runsOn = useQuery({ queryKey: ['dispatch', 'runs-on', server.id], queryFn: () => getRunsOn(server), staleTime: 30_000 })
+  const runsOn = useQuery({ queryKey: ['dispatch', 'runs-on', server.id], queryFn: () => getRunsOn(server), staleTime: 30_000, meta: { serverId: server.id } })
 
   const attach = useAttach(
     server,
@@ -553,7 +553,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
               onProblem={(message) => setFailure({ title: 'Dictation', message })}
               onPhase={onPhase}
               disabled={!terminalShown}
-              loading={!runsOn.isSuccess}
+              loading={runsOn.isPending}
             />
           )}
         />

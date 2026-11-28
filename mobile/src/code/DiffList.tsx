@@ -14,6 +14,7 @@ export type DiffListProps = {
   tooLarge?: boolean
   notes?: string[]
   loadingMore?: boolean
+  moreError?: string | null
   onMore?: () => void
   header?: ReactNode
   style?: StyleProp<ViewStyle>
@@ -62,7 +63,7 @@ const Row = memo(function Row({ row, gutter, width, onCopy }: RowProps) {
   )
 })
 
-export function DiffList({ lines, next, total, binary = false, cut = false, tooLarge = false, notes = [], loadingMore = false, onMore, header, style }: DiffListProps) {
+export function DiffList({ lines, next, total, binary = false, cut = false, tooLarge = false, notes = [], loadingMore = false, moreError = null, onMore, header, style }: DiffListProps) {
   useColorScheme()
   const [viewport, setViewport] = useState(0)
   const rows = useMemo(() => buildRows(lines), [lines])
@@ -112,10 +113,17 @@ export function DiffList({ lines, next, total, binary = false, cut = false, tooL
         </ScrollView>
       ) : null}
       {more && onMore ? (
-        <Pressable style={({ pressed }) => [styles.more, pressed && styles.morePressed, loadingMore && styles.moreBusy]} onPress={onMore} disabled={loadingMore} accessibilityRole="button">
-          {loadingMore ? <ActivityIndicator size="small" color={colors.textMuted} /> : null}
-          <Text style={styles.moreText}>{more}</Text>
-        </Pressable>
+        <View style={styles.moreBox}>
+          {moreError ? (
+            <Text style={styles.moreError} selectable>
+              {moreError}
+            </Text>
+          ) : null}
+          <Pressable style={({ pressed }) => [styles.more, pressed && styles.morePressed, loadingMore && styles.moreBusy]} onPress={onMore} disabled={loadingMore} accessibilityRole="button">
+            {loadingMore ? <ActivityIndicator size="small" color={colors.textMuted} /> : null}
+            <Text style={styles.moreText}>{moreError && !loadingMore ? `Try again: ${more}` : more}</Text>
+          </Pressable>
+        </View>
       ) : null}
     </View>
   )
@@ -141,7 +149,9 @@ const styles = themedStyleSheet(() => ({
   foldMark: { color: colors.textMuted, fontFamily: typography.monoFamily, fontSize: typography.metaSize },
   metaText: { flex: 1, paddingHorizontal: spacing.sm, color: colors.textMuted, fontFamily: typography.monoFamily, fontSize: typography.metaSize, fontStyle: 'italic' },
   foldText: { flex: 1, paddingHorizontal: spacing.sm, color: colors.diffFoldText, fontFamily: typography.monoFamily, fontSize: typography.metaSize },
-  more: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm, borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderSubtle, backgroundColor: colors.bgPanel },
+  moreBox: { borderTopWidth: StyleSheet.hairlineWidth, borderTopColor: colors.borderSubtle, backgroundColor: colors.bgPanel },
+  moreError: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, color: colors.statusRed, fontSize: typography.metaSize },
+  more: { minHeight: 44, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: spacing.sm },
   morePressed: { opacity: feedback.pressedOpacity },
   moreBusy: { opacity: feedback.disabledOpacity },
   moreText: { color: colors.accentBlue, fontSize: typography.bodySize, fontWeight: '600' }

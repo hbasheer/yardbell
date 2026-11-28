@@ -82,6 +82,9 @@ export function committedNotice(short: string, pushFailed: string | null): strin
   return pushFailed ? `Committed ${short}, then the push failed.\n${pushFailed}` : `Committed ${short}`
 }
 
+export const changesHref = (serverId: string, machine: string, root: string): string =>
+  `/changes/${encodeURIComponent(serverId)}/${encodeURIComponent(machine)}?root=${encodeURIComponent(root)}`
+
 export function diffHref(serverId: string, machine: string, root: string, file: Pick<Change, 'path' | 'staged'>): string {
   const query = `root=${encodeURIComponent(root)}&path=${encodeURIComponent(file.path)}&staged=${file.staged ? 1 : 0}`
   return `/changes/${encodeURIComponent(serverId)}/${encodeURIComponent(machine)}/diff?${query}`

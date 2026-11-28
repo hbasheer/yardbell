@@ -1,4 +1,5 @@
 import * as Clipboard from 'expo-clipboard'
+import { machineHref } from '../home/presentation'
 import { useQueryClient } from '@tanstack/react-query'
 import { useIsFocused, useRouter } from 'expo-router'
 import {
@@ -72,6 +73,7 @@ export function ChangesScreen({ server, machine, root, multipleServers }: { serv
   const queryClient = useQueryClient()
   const key = changesKey(server.id, machine, root)
   const { busy, notice, setNotice, run } = useGuardedActions(
+    server.id,
     () => queryClient.cancelQueries({ queryKey: key }),
     () => {
       queryClient.refetchQueries({ queryKey: key }).catch(() => {})
@@ -341,7 +343,7 @@ export function ChangesScreen({ server, machine, root, multipleServers }: { serv
   return (
     <View style={[styles.screen, { paddingTop: insets.top }]}>
       <NavBar
-        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => router.back()} />}
+        leading={<NavBarButton icon={ChevronLeft} accessibilityLabel="Back" onPress={() => (router.canGoBack() ? router.back() : router.replace(machineHref({ serverId: server.id, machine }) as never))} />}
         title={rootName(root)}
         subtitle={`${machine}${serverLabel}`}
         refreshing={query.isFetching && !query.isPending}

@@ -58,7 +58,7 @@ export function ChatScreen({ server, routeId, run, ask, suggest, serverCount }: 
   const chat = useConversation(server, routeId, onCreated, onMoved)
   const { reload } = chat
 
-  const runsOn = useQuery({ queryKey: ['dispatch', 'runs-on', server.id], queryFn: () => getRunsOn(server), staleTime: 30_000 })
+  const runsOn = useQuery({ queryKey: ['dispatch', 'runs-on', server.id], queryFn: () => getRunsOn(server), staleTime: 30_000, meta: { serverId: server.id } })
   const prompts = useQuery({ queryKey: ['dispatch', 'prompts', server.id], queryFn: () => listPrompts(server), staleTime: 15_000 })
 
   const waitingOnServer = state?.waiting
@@ -289,7 +289,7 @@ export function ChatScreen({ server, routeId, run, ask, suggest, serverCount }: 
         onSend={send}
         onStop={() => void chat.stop()}
         fill={fill}
-        micSlot={(mic) => <MicButton server={server} runsOn={runsOn.data} loading={!runsOn.isSuccess} onText={mic.insert} onProblem={mic.notify} />}
+        micSlot={(mic) => <MicButton server={server} runsOn={runsOn.data} loading={runsOn.isPending} onText={mic.insert} onProblem={mic.notify} />}
       />
       <PullDownMenu visible={menuOpen} anchorRef={menuRef} groups={menu} onClose={() => setMenuOpen(false)} />
       <InsightsSheet server={server} target={insights} onClose={() => setInsights(null)} onSuggest={(suggestion) => void suggestHere(suggestion)} />
