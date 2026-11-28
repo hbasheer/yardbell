@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { DispatchEvent } from '../types'
-import { HOLD_MS, abortsOnBackground, MIN_RECORDING_MS, eventKey, insertAtCursor, keysOf, micHint, micMode, onRelease, parseSpeak, speechFor, speechPieces, spokenText, takeNew, tooShort } from './model'
+import { HOLD_MS, abortsOnBackground, MIN_RECORDING_MS, eventKey, insertAtCursor, micBlocked, keysOf, micHint, micMode, onRelease, parseSpeak, speechFor, speechPieces, spokenText, takeNew, tooShort } from './model'
 
 const assistant = (text: string): DispatchEvent => ({ role: 'assistant', text })
 const user = (text: string): DispatchEvent => ({ role: 'user', text })
@@ -168,5 +168,22 @@ describe('parseSpeak', () => {
     expect(parseSpeak('1')).toBe(true)
     expect(parseSpeak(null)).toBe(false)
     expect(parseSpeak('0')).toBe(false)
+  })
+})
+
+describe('micBlocked', () => {
+  it('blocks starting while disabled or loading', () => {
+    expect(micBlocked('idle', true, false)).toBe(true)
+    expect(micBlocked('idle', false, true)).toBe(true)
+    expect(micBlocked('idle', false, false)).toBe(false)
+  })
+
+  it('never blocks stopping a recording', () => {
+    expect(micBlocked('recording', true, true)).toBe(false)
+    expect(micBlocked('starting', true, false)).toBe(false)
+  })
+
+  it('blocks while transcribing', () => {
+    expect(micBlocked('transcribing', false, false)).toBe(true)
   })
 })

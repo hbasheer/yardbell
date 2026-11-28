@@ -129,3 +129,6 @@ export const parseSpeak = (raw: string | null): boolean => raw === '1'
 
 export const abortsOnBackground = (phase: 'idle' | 'starting' | 'recording' | 'transcribing', permissionPending: boolean): boolean =>
   phase === 'recording' || (phase === 'starting' && !permissionPending)
+
+export const micBlocked = (phase: 'idle' | 'starting' | 'recording' | 'transcribing', disabled: boolean, loading: boolean): boolean =>
+  phase === 'transcribing' || (phase === 'idle' && (disabled || loading))

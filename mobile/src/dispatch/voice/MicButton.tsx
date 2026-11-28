@@ -6,7 +6,7 @@ import { ActionSheet } from '../../ui/ActionSheet'
 import { colors, feedback, radii, themedStyleSheet, useColorScheme } from '../../ui/theme'
 import type { RunsOn } from '../types'
 import { COMPOSER_CONTROL_HIT_SLOP, COMPOSER_CONTROL_SIZE } from '../composer/sizes'
-import { MIC_DENIED_TEXT, MIC_DENIED_TITLE, VOICE_OFF_TEXT, VOICE_OFF_TITLE, micHint, micMode } from './model'
+import { MIC_DENIED_TEXT, MIC_DENIED_TITLE, VOICE_OFF_TEXT, VOICE_OFF_TITLE, micBlocked, micHint, micMode } from './model'
 import { useDictation, type DictationPhase } from './useDictation'
 
 type Props = {
@@ -26,6 +26,7 @@ export function MicButton({ server, runsOn, onText, onProblem, onPhase, disabled
   const on = runsOn?.voice_input === true
   const { phase, pressIn, pressOut } = useDictation(server, { mode, onText, onProblem, onDenied: () => setSheet('denied') })
   useEffect(() => onPhase?.(phase), [phase, onPhase])
+  const blocked = micBlocked(phase, disabled, loading)
   const recording = phase === 'recording'
   const working = phase === 'starting' || phase === 'transcribing'
 
@@ -37,12 +38,12 @@ export function MicButton({ server, runsOn, onText, onProblem, onPhase, disabled
         onPress={on ? undefined : () => setSheet('off')}
         onPressIn={on ? pressIn : undefined}
         onPressOut={on ? pressOut : undefined}
-        disabled={disabled || loading || phase === 'transcribing'}
+        disabled={blocked}
         hitSlop={COMPOSER_CONTROL_HIT_SLOP}
         accessibilityRole="button"
         accessibilityLabel={label}
         accessibilityState={{ busy: working, selected: recording }}
-        style={({ pressed }) => [styles.round, recording && styles.recording, (!on || disabled || loading) && styles.off, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.round, recording && styles.recording, (!on || blocked) && styles.off, pressed && styles.pressed]}
       >
         {working ? (
           <ActivityIndicator size="small" color={colors.textSecondary} />
