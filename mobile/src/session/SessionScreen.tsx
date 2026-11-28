@@ -297,7 +297,9 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   const tabs = useMemo(() => tabSessions(entry, machine, name), [entry, machine, name])
   const session = tabs.index >= 0 ? tabs.sessions[tabs.index] : undefined
   const body = sessionBody(entry, machine, name, term.status)
+  const terminalShownRef = useRef(false)
   const terminalShown = body.kind === 'terminal'
+  terminalShownRef.current = terminalShown
   const folder = session?.folder || name
   const line = statusLine(session)
 
@@ -342,7 +344,12 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   }
 
   const pasteText = (text: string) => {
-    toPage({ type: 'paste', text: text.trim() })
+    const words = text.trim()
+    if (!terminalShownRef.current) {
+      setFailure({ title: 'Dictation not sent', message: `The terminal was not connected, so these words were not sent:\n\n${words}` })
+      return
+    }
+    toPage({ type: 'paste', text: `${words} ` })
     clearLive()
   }
 
@@ -545,6 +552,8 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
               onText={pasteText}
               onProblem={(message) => setFailure({ title: 'Dictation', message })}
               onPhase={onPhase}
+              disabled={!terminalShown}
+              loading={!runsOn.isSuccess}
             />
           )}
         />

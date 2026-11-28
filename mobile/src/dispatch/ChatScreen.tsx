@@ -289,7 +289,7 @@ export function ChatScreen({ server, routeId, run, ask, suggest, serverCount }: 
         onSend={send}
         onStop={() => void chat.stop()}
         fill={fill}
-        micSlot={(mic) => <MicButton server={server} runsOn={runsOn.data} onText={mic.insert} onProblem={mic.notify} />}
+        micSlot={(mic) => <MicButton server={server} runsOn={runsOn.data} loading={!runsOn.isSuccess} onText={mic.insert} onProblem={mic.notify} />}
       />
       <PullDownMenu visible={menuOpen} anchorRef={menuRef} groups={menu} onClose={() => setMenuOpen(false)} />
       <InsightsSheet server={server} target={insights} onClose={() => setInsights(null)} onSuggest={(suggestion) => void suggestHere(suggestion)} />

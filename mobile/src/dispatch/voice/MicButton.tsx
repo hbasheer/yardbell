@@ -15,9 +15,11 @@ type Props = {
   onText: (text: string) => void
   onProblem: (text: string) => void
   onPhase?: (phase: DictationPhase) => void
+  disabled?: boolean
+  loading?: boolean
 }
 
-export function MicButton({ server, runsOn, onText, onProblem, onPhase }: Props) {
+export function MicButton({ server, runsOn, onText, onProblem, onPhase, disabled = false, loading = false }: Props) {
   useColorScheme()
   const [sheet, setSheet] = useState<'off' | 'denied' | null>(null)
   const mode = micMode(runsOn?.voice_mode)
@@ -35,12 +37,12 @@ export function MicButton({ server, runsOn, onText, onProblem, onPhase }: Props)
         onPress={on ? undefined : () => setSheet('off')}
         onPressIn={on ? pressIn : undefined}
         onPressOut={on ? pressOut : undefined}
-        disabled={working && phase === 'transcribing'}
+        disabled={disabled || loading || phase === 'transcribing'}
         hitSlop={COMPOSER_CONTROL_HIT_SLOP}
         accessibilityRole="button"
         accessibilityLabel={label}
         accessibilityState={{ busy: working, selected: recording }}
-        style={({ pressed }) => [styles.round, recording && styles.recording, !on && styles.off, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.round, recording && styles.recording, (!on || disabled || loading) && styles.off, pressed && styles.pressed]}
       >
         {working ? (
           <ActivityIndicator size="small" color={colors.textSecondary} />
