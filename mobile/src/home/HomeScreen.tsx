@@ -22,6 +22,7 @@ import { colors, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { EmptyHero } from './EmptyHero'
 import { FeedTab } from './FeedTab'
 import { inboxHref } from '@/inbox/model'
+import { pipelinesHref } from '@/pipelines/screenModel'
 import { machineHref, sessionHref } from './presentation'
 import { SessionsTab } from './SessionsTab'
 import { UsageTab } from './UsageTab'
@@ -183,6 +184,7 @@ export function HomeScreen() {
             setMenuFor(row)
           }}
           onOpenInbox={(serverId) => router.push(inboxHref(serverId) as never)}
+          onOpenPipelines={(serverId) => router.push(pipelinesHref(serverId) as never)}
           dispatchRows={dispatchRows}
           dispatchActive={dispatchActive}
           onOpenChat={openChat}

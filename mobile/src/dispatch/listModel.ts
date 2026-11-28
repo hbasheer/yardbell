@@ -1,6 +1,10 @@
 import type { ConversationSummary } from './types'
 
-export type ConversationRow = ConversationSummary & { serverId: string; machine: string }
+export type ConversationRow = ConversationSummary & { serverId: string; machine: string; pipeline?: boolean }
+
+export function pipelinedIds(runs: readonly { conversation?: string }[]): Set<string> {
+  return new Set(runs.flatMap((run) => (run.conversation ? [run.conversation] : [])))
+}
 
 export type ChatState = 'waiting' | 'working' | 'idle'
 

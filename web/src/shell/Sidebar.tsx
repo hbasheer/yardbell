@@ -234,6 +234,7 @@ function OptionsMenu({ state }: { state: YardbellState | null }) {
 
 export function Sidebar({ page, go, state, live, theme, cycleTheme, onSearch, onCollapse, tree, onNewSession, width, onWidth }: Props) {
   const proposals = state?.proposals ?? 0
+  const runsWaiting = state?.runs_waiting ?? 0
   const ThemeIcon = theme === 'dark' ? Moon : theme === 'light' ? Sun : Monitor
   const [folded, setFolded] = useState(() => localStorage.getItem(FOLDED_KEY) === '1')
   const [adding, setAdding] = useState(false)
@@ -298,6 +299,7 @@ export function Sidebar({ page, go, state, live, theme, cycleTheme, onSearch, on
               >
                 <p.icon className={cn('size-4 shrink-0', !active && dimmedIcon)} strokeWidth={active ? 2.25 : 1.75} />
                 <span className="flex-1">{p.name}</span>
+                {p.id === 'pipeline' && runsWaiting > 0 && <span className="rounded-full bg-status-warning px-1.5 text-3xs leading-4 font-semibold text-background">{runsWaiting}</span>}
                 {p.id === 'proposals' && <span className="rounded-full bg-status-warning px-1.5 text-3xs leading-4 font-semibold text-background">{proposals}</span>}
               </button>
             )

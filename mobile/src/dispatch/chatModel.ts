@@ -7,6 +7,7 @@ import type {
   Backend,
   Conversation,
   DispatchEvent,
+  ImproveMark,
   RunsOn,
   SavedPrompt,
   TaskMark,
@@ -92,9 +93,10 @@ export function hasNews(shown: { updated: string; count: number }, conversation:
   return conversation.updated !== shown.updated || conversation.events.length > shown.count
 }
 
-export function sentEvent(text: string, attachments: readonly AskAttachment[], task?: TaskMark): UserEvent {
+export function sentEvent(text: string, attachments: readonly AskAttachment[], task?: TaskMark, improve?: ImproveMark): UserEvent {
   const event: UserEvent = { role: 'user', text }
   if (task) event.task = task
+  if (improve) event.improve = improve
   if (attachments.length) {
     event.attachments = attachments.map((a) => ({ file: '', name: a.name, kind: 'file', size: Math.floor((a.data.length * 3) / 4) }))
   }

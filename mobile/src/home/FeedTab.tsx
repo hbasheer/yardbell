@@ -1,8 +1,9 @@
-import { Inbox, Plus, Settings } from 'lucide-react-native'
+import { Inbox, Plus, Settings, Workflow } from 'lucide-react-native'
 import { RefreshControl, ScrollView, Text, View } from 'react-native'
 import { ChatRow } from '@/dispatch/ChatRow'
 import type { ConversationRow } from '@/dispatch/listModel'
 import { inboxRows, inboxRowSubtitle } from '@/inbox/model'
+import { pipelineFeedRows, pipelineFeedSubtitle } from '@/pipelines/screenModel'
 import { feedSections, machineRows, type MachineRow, type ServerSession, type ServerState } from '@/state/views'
 import { LIST_LEADING_INSET, ListGroup } from '@/ui/ListGroup'
 import { ListRow } from '@/ui/ListRow'
@@ -22,6 +23,7 @@ type Props = {
   onOpenMachine: (row: MachineRow) => void
   onMachineMenu: (row: MachineRow) => void
   onOpenInbox: (serverId: string) => void
+  onOpenPipelines: (serverId: string) => void
   dispatchRows: ConversationRow[]
   dispatchActive: number
   onOpenChat: (row: ConversationRow) => void
@@ -35,6 +37,8 @@ export function FeedTab(props: Props) {
   const sections = feedSections(props.servers)
   const rows = machineRows(props.servers)
   const inbox = inboxRows(props.servers)
+  const pipelines = pipelineFeedRows(props.servers)
+  const topCount = inbox.length + pipelines.length
   const isLocal = (row: MachineRow) =>
     props.servers.find((s) => s.server.id === row.serverId)?.state?.machines.find((m) => m.name === row.machine)?.local ?? false
 
@@ -56,7 +60,7 @@ export function FeedTab(props: Props) {
           />
         }
       >
-        {inbox.length > 0 ? (
+        {topCount > 0 ? (
           <View style={styles.inbox}>
             <ListGroup surface="page" separatorInset={LIST_LEADING_INSET}>
               {inbox.map((row) => (
@@ -76,6 +80,23 @@ export function FeedTab(props: Props) {
                   onPress={() => props.onOpenInbox(row.serverId)}
                 />
               ))}
+              {pipelines.map((row) => (
+                <ListRow
+                  key={`pipelines:${row.serverId}`}
+                  title="Pipelines"
+                  subtitle={pipelineFeedSubtitle(row, props.servers.length)}
+                  subtitleLines={1}
+                  leading={<Workflow size={18} color={colors.textSecondary} strokeWidth={2} />}
+                  accessory={
+                    <View style={styles.count}>
+                      <Text style={styles.countText}>{row.waiting > 99 ? '99+' : row.waiting}</Text>
+                    </View>
+                  }
+                  navigates
+                  accessibilityLabel={`Pipelines, ${pipelineFeedSubtitle(row, props.servers.length)}`}
+                  onPress={() => props.onOpenPipelines(row.serverId)}
+                />
+              ))}
             </ListGroup>
           </View>
         ) : null}
@@ -84,7 +105,7 @@ export function FeedTab(props: Props) {
             <HomeSectionHeading
               title="Dispatch"
               count={props.dispatchActive}
-              first={inbox.length === 0}
+              first={topCount === 0}
               link={{ label: 'See all', onPress: props.onSeeDispatch }}
             />
             <ListGroup surface="page" separatorInset={LIST_LEADING_INSET}>
@@ -104,7 +125,7 @@ export function FeedTab(props: Props) {
             <HomeSectionHeading
               title={section.title}
               count={section.total}
-              first={index === 0 && inbox.length === 0 && props.dispatchRows.length === 0}
+              first={index === 0 && topCount === 0 && props.dispatchRows.length === 0}
               link={{ label: 'See all', onPress: props.onSeeAll }}
             />
             <ListGroup surface="page" separatorInset={LIST_LEADING_INSET}>
@@ -114,7 +135,7 @@ export function FeedTab(props: Props) {
             </ListGroup>
           </View>
         ))}
-        <HomeSectionHeading title="Machines" count={rows.length} first={sections.length === 0 && inbox.length === 0 && props.dispatchRows.length === 0} />
+        <HomeSectionHeading title="Machines" count={rows.length} first={sections.length === 0 && topCount === 0 && props.dispatchRows.length === 0} />
         <ListGroup surface="page" separatorInset={MACHINE_SEPARATOR_INSET}>
           {rows.map((row) => (
             <MachineRowItem key={row.key} row={row} local={isLocal(row)} onOpen={props.onOpenMachine} onMenu={props.onMachineMenu} />

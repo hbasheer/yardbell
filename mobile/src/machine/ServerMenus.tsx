@@ -14,14 +14,16 @@ type Props = {
   onClose: () => void
   onReconnect: () => void
   anchorRef?: RefObject<HostInstance | null>
+  before?: ActionSheetAction[]
 }
 
-export function ServerMenus({ server, title, visible, onClose, onReconnect, anchorRef }: Props) {
+export function ServerMenus({ server, title, visible, onClose, onReconnect, anchorRef, before = [] }: Props) {
   const [forgetting, setForgetting] = useState<PairedServer | null>(null)
   const [error, setError] = useState<string | null>(null)
 
   const actions: ActionSheetAction[] = server
     ? [
+        ...before,
         { label: 'Reconnect', icon: RefreshCw, onPress: onReconnect },
         {
           label: 'Copy address',

@@ -5,6 +5,39 @@ and the project uses [Semantic Versioning](https://semver.org).
 
 ## [Unreleased]
 
+## [0.11.111] - 2026-11-28
+
+- **Changes and commit on the phone.** Open Changes from a session, a machine or a folder to see
+  each changed file and its diff. Swipe to stage, unstage or discard, write or draft a commit
+  message, and Commit, Commit and Push, Push, Pull or Fetch. When nothing is staged, the phone
+  asks first and says every change will be committed. Git's own message shows in full when a
+  push is refused.
+- **Files on the phone.** Browse a folder, search file names or contents, and read a file with
+  line numbers, or markdown as formatted text. The phone only reads files.
+- **Reviews show their changes.** A Dispatch review card opens the branch's diff page by page,
+  each finding opens its file at the line, scans list the files they read, and evidence images
+  open full screen with zoom.
+- **Pipelines on the phone.** See your pipelines with an On/Off switch, the runs waiting for you,
+  and each run: answer a step, retry it, continue, raise the token limit, stop a session, drop or
+  delete the run, read a step's transcript, and Run now. Home shows how many runs wait for you,
+  and Dispatch chats started by a pipeline are marked. Building and editing pipelines stays on
+  the computer.
+- **Saved prompt history and Insights on the phone.** Compare a prompt's versions, restore one or
+  reset a built-in prompt, open a session's Insights and ask for a better prompt, and start a
+  review of a session's branch from its menu.
+- **Server settings on the phone.** Under each paired server: Dispatch's agent, model, approval,
+  rules, instructions and memory, the server's phone notification switches, and triggers with
+  Run now. The phone reads the latest settings before each save, so a change made on the computer
+  at the same time is kept.
+- **Dictate into a terminal.** A mic next to Attach types your words into the session without
+  pressing Enter.
+- **Smaller fixes on the phone.** A long session name no longer pushes the pull request badge and
+  ticket off the row, New session no longer flashes every agent before showing the installed
+  ones, and the live input text lines up under its label.
+- **The web Pipelines badge counts runs waiting for you.**
+- **The phone needs a 0.11.111 server.** Update Yardbell on your server before you update the
+  phone.
+
 ## [0.11.110] - 2026-11-27
 
 - **Dispatch comes to the phone.** A new Dispatch tab lists your chats, with search and swipe to

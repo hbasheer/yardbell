@@ -57,28 +57,30 @@ export function WorkspaceRow({
         <AgentGlyph activity={session.activity} stopped={session.stopped} />
       </View>
       <View style={styles.main}>
-        <View style={styles.nameRow}>
-          <Text style={styles.name} numberOfLines={1}>
-            {title}
-          </Text>
-          {pr && PrIcon ? (
-            <View style={styles.badge} accessibilityLabel={`Pull request ${pr.label}, ${pr.state}`}>
-              <PrIcon size={10} color={prColor(pr.state)} strokeWidth={2.2} />
-              <Text style={[styles.badgeText, { color: prColor(pr.state) }]}>{pr.label}</Text>
-            </View>
-          ) : null}
-          {ticket ? (
-            <View style={styles.badge}>
-              <Text style={[styles.badgeText, { color: colors.textSecondary }]} numberOfLines={1}>
-                {ticket}
+        <Text style={styles.name} numberOfLines={1}>
+          {title}
+        </Text>
+        {pr || ticket || branch ? (
+          <View style={styles.metaRow}>
+            {pr && PrIcon ? (
+              <View style={styles.badge} accessibilityLabel={`Pull request ${pr.label}, ${pr.state}`}>
+                <PrIcon size={10} color={prColor(pr.state)} strokeWidth={2.2} />
+                <Text style={[styles.badgeText, { color: prColor(pr.state) }]}>{pr.label}</Text>
+              </View>
+            ) : null}
+            {ticket ? (
+              <View style={[styles.badge, styles.ticket]}>
+                <Text style={[styles.badgeText, { color: colors.textSecondary }]} numberOfLines={1}>
+                  {ticket}
+                </Text>
+              </View>
+            ) : null}
+            {branch ? (
+              <Text style={styles.branch} numberOfLines={1} ellipsizeMode="middle">
+                {branch}
               </Text>
-            </View>
-          ) : null}
-        </View>
-        {branch ? (
-          <Text style={styles.branch} numberOfLines={1} ellipsizeMode="middle">
-            {branch}
-          </Text>
+            ) : null}
+          </View>
         ) : null}
         <Text style={styles.agent} numberOfLines={1}>
           {session.agent ? `${session.agent} · ` : ''}
@@ -104,13 +106,13 @@ const styles = themedStyleSheet(() => ({
   dimmed: { opacity: 0.6 },
   indicator: { width: 20, paddingTop: 6, marginRight: spacing.sm },
   main: { flex: 1, minWidth: 0 },
-  nameRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.sm },
-  name: { flexShrink: 1, fontSize: 14, lineHeight: 19, fontWeight: '600', color: colors.textPrimary },
+  metaRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.xs, marginTop: 3 },
+  name: { fontSize: 14, lineHeight: 19, fontWeight: '600', color: colors.textPrimary },
   badge: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 3,
-    flexShrink: 1,
+    flexShrink: 0,
     paddingHorizontal: 5,
     paddingVertical: 1,
     borderRadius: radii.pill,
@@ -118,7 +120,8 @@ const styles = themedStyleSheet(() => ({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.borderSubtle
   },
+  ticket: { maxWidth: 140 },
   badgeText: { fontSize: 10, fontWeight: '600', fontVariant: ['tabular-nums'] },
-  branch: { marginTop: 2, fontSize: 11, color: colors.textMuted, fontFamily: typography.monoFamily },
+  branch: { flexShrink: 1, fontSize: 11, color: colors.textMuted, fontFamily: typography.monoFamily },
   agent: { marginTop: 3, fontSize: 11, color: colors.textMuted }
 }))

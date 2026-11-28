@@ -6,7 +6,7 @@ import { SettingsScreen } from '@/settings/SettingsScreen'
 import { colors } from '@/ui/theme'
 
 export default function ChatRoute() {
-  const { server: serverId, id, run } = useLocalSearchParams<{ server?: string; id?: string; run?: string }>()
+  const { server: serverId, id, run, ask, suggest } = useLocalSearchParams<{ server?: string; id?: string; run?: string; ask?: string; suggest?: string }>()
   const servers = useServers()
   const server = servers?.find((s) => s.id === serverId)
   if (servers === null) {
@@ -17,5 +17,5 @@ export default function ChatRoute() {
     )
   }
   if (!server || !id) return <SettingsScreen title="Chat">{null}</SettingsScreen>
-  return <ChatScreen server={server} routeId={id} run={run} serverCount={servers.length} />
+  return <ChatScreen server={server} routeId={id} run={run} ask={ask} suggest={suggest} serverCount={servers.length} />
 }

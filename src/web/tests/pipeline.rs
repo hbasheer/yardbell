@@ -1,5 +1,5 @@
 use super::*;
-use crate::pipeline::record::{RunState, Subject, WaitKind, Waiting};
+use crate::pipeline::record::{Held, HoldKind, RunState, Subject, WaitKind, Waiting};
 
 async fn call(
     r: &Rig,
@@ -1170,4 +1170,101 @@ async fn a_linear_preview_says_linear_filtered() {
         "the states count as in a real check: {out}"
     );
     assert!(out["how"].as_str().unwrap().contains("No filter"), "{out}");
+}
+
+fn held(told: bool) -> Held {
+    Held {
+        kind: HoldKind::Memory,
+        machine: "hp".into(),
+        reason: "short of memory".into(),
+        since: "2026-11-01T10:00:00+00:00".into(),
+        told,
+    }
+}
+
+async fn runs_in_states(r: &Rig, c: &str) -> Vec<String> {
+    let id = copy(r, c, IMPLEMENT).await;
+    let subjects = (0..5).map(|_| Subject::default()).collect();
+    let mut runs = r.app.pipelines.start(&id, subjects, "you").unwrap();
+    let waiting = Waiting {
+        kind: WaitKind::NeedsYou,
+        step: runs[0].step.clone(),
+        reason: "which one?".into(),
+        screen: String::new(),
+        tool_hash: String::new(),
+    };
+    runs[0].state = RunState::Waiting;
+    runs[0].waiting = Some(waiting);
+    runs[1].state = RunState::Queued;
+    runs[1].held = Some(held(true));
+    runs[2].state = RunState::Queued;
+    runs[2].held = Some(held(false));
+    runs[3].state = RunState::Running;
+    runs[4].state = RunState::Done;
+    let ids = runs.iter().map(|x| x.id.clone()).collect();
+    for run in runs {
+        r.app.pipelines.put(run);
+    }
+    ids
+}
+
+#[tokio::test]
+async fn state_counts_runs_asking_for_the_person() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let (_, before) = call(&r, &c, "GET", "/state", None).await;
+    assert_eq!(before["runs_waiting"], 0);
+    runs_in_states(&r, &c).await;
+    let (status, state) = call(&r, &c, "GET", "/state", None).await;
+    assert_eq!(status, StatusCode::OK, "{state}");
+    assert_eq!(state["runs_waiting"], 2);
+}
+
+#[tokio::test]
+async fn brief_runs_carry_no_definition_and_filter_by_state() {
+    let r = rig();
+    let c = cookie(&r.app).await;
+    let ids = runs_in_states(&r, &c).await;
+    let (status, body) = call(&r, &c, "GET", "/api/runs?brief=1", None).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let list = body["runs"].as_array().unwrap();
+    assert_eq!(list.len(), 5);
+    let first = list.iter().find(|x| x["id"] == ids[0]).unwrap();
+    let mut keys: Vec<&str> = first
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "conversation",
+            "held",
+            "id",
+            "pipeline",
+            "pipeline_name",
+            "state",
+            "step",
+            "step_since",
+            "subject",
+            "waiting"
+        ]
+    );
+    assert_eq!(first["state"], "waiting");
+    assert_eq!(first["waiting"]["reason"], "which one?");
+    let held_run = list.iter().find(|x| x["id"] == ids[1]).unwrap();
+    assert_eq!(held_run["held"]["told"], true);
+
+    let (_, waiting) = call(&r, &c, "GET", "/api/runs?brief=1&state=waiting", None).await;
+    assert_eq!(waiting["runs"].as_array().unwrap().len(), 1);
+    assert_eq!(waiting["runs"][0]["id"], ids[0]);
+
+    let (_, full) = call(&r, &c, "GET", "/api/runs", None).await;
+    assert_eq!(full["runs"].as_array().unwrap().len(), 5);
+    assert!(full["runs"][0]["definition"].is_object());
+    let (_, only) = call(&r, &c, "GET", "/api/runs?state=done", None).await;
+    assert_eq!(only["runs"].as_array().unwrap().len(), 1);
+    assert!(only["runs"][0]["definition"].is_object());
 }

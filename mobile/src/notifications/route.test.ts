@@ -60,4 +60,24 @@ describe('routeForLink', () => {
     expect(routeForLink('http://100.64.0.10:400/proposals', [short])).toBe('/inbox/http%3A%2F%2F100.64.0.10%3A400')
     expect(routeForLink('http://100.64.0.10:400?x=1', [short])).toBe('/')
   })
+
+  it('opens the run a pipeline notification names', () => {
+    expect(routeForLink('http://100.64.0.10:4000/pipeline?p=nightly&run=r-1', [s])).toBe(
+      '/pipelines/http%3A%2F%2F100.64.0.10%3A4000/run/r-1?p=nightly'
+    )
+    expect(routeForLink('http://100.64.0.10:4000/pipeline/?p=a%20b&run=r%202#x', [s])).toBe(
+      '/pipelines/http%3A%2F%2F100.64.0.10%3A4000/run/r%202?p=a%20b'
+    )
+  })
+
+  it('opens the run without a pipeline name when the link has none', () => {
+    expect(routeForLink('http://100.64.0.10:4000/pipeline?run=r-1', [s])).toBe('/pipelines/http%3A%2F%2F100.64.0.10%3A4000/run/r-1')
+  })
+
+  it('opens the pipeline for a link without a run, and the list without either, and ignores look-alikes', () => {
+    expect(routeForLink('http://100.64.0.10:4000/pipeline?p=nightly', [s])).toBe('/pipelines/http%3A%2F%2F100.64.0.10%3A4000/nightly')
+    expect(routeForLink('http://100.64.0.10:4000/pipeline', [s])).toBe('/pipelines/http%3A%2F%2F100.64.0.10%3A4000')
+    expect(routeForLink('http://100.64.0.10:4000/pipelines?run=1', [s])).toBe('/')
+    expect(routeForLink('http://100.64.0.10:40000/pipeline?run=1', [s])).toBe('/')
+  })
 })

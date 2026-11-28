@@ -1,27 +1,32 @@
 import { Check, Mic, Settings, Square } from 'lucide-react-native'
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { ActivityIndicator, Linking, Pressable } from 'react-native'
 import type { PairedServer } from '../../servers/store'
 import { ActionSheet } from '../../ui/ActionSheet'
 import { colors, feedback, radii, themedStyleSheet, useColorScheme } from '../../ui/theme'
 import type { RunsOn } from '../types'
 import { COMPOSER_CONTROL_HIT_SLOP, COMPOSER_CONTROL_SIZE } from '../composer/sizes'
-import { MIC_DENIED_TEXT, MIC_DENIED_TITLE, VOICE_OFF_TEXT, VOICE_OFF_TITLE, micHint, micMode } from './model'
-import { useDictation } from './useDictation'
+import { MIC_DENIED_TEXT, MIC_DENIED_TITLE, VOICE_OFF_TEXT, VOICE_OFF_TITLE, micBlocked, micHint, micMode } from './model'
+import { useDictation, type DictationPhase } from './useDictation'
 
 type Props = {
   server: PairedServer
   runsOn: RunsOn | undefined
   onText: (text: string) => void
   onProblem: (text: string) => void
+  onPhase?: (phase: DictationPhase) => void
+  disabled?: boolean
+  loading?: boolean
 }
 
-export function MicButton({ server, runsOn, onText, onProblem }: Props) {
+export function MicButton({ server, runsOn, onText, onProblem, onPhase, disabled = false, loading = false }: Props) {
   useColorScheme()
   const [sheet, setSheet] = useState<'off' | 'denied' | null>(null)
   const mode = micMode(runsOn?.voice_mode)
   const on = runsOn?.voice_input === true
   const { phase, pressIn, pressOut } = useDictation(server, { mode, onText, onProblem, onDenied: () => setSheet('denied') })
+  useEffect(() => onPhase?.(phase), [phase, onPhase])
+  const blocked = micBlocked(phase, disabled, loading)
   const recording = phase === 'recording'
   const working = phase === 'starting' || phase === 'transcribing'
 
@@ -33,12 +38,12 @@ export function MicButton({ server, runsOn, onText, onProblem }: Props) {
         onPress={on ? undefined : () => setSheet('off')}
         onPressIn={on ? pressIn : undefined}
         onPressOut={on ? pressOut : undefined}
-        disabled={working && phase === 'transcribing'}
+        disabled={blocked}
         hitSlop={COMPOSER_CONTROL_HIT_SLOP}
         accessibilityRole="button"
         accessibilityLabel={label}
         accessibilityState={{ busy: working, selected: recording }}
-        style={({ pressed }) => [styles.round, recording && styles.recording, !on && styles.off, pressed && styles.pressed]}
+        style={({ pressed }) => [styles.round, recording && styles.recording, (!on || blocked) && styles.off, pressed && styles.pressed]}
       >
         {working ? (
           <ActivityIndicator size="small" color={colors.textSecondary} />

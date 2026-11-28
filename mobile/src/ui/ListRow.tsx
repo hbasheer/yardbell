@@ -8,6 +8,7 @@ import { colors, feedback, spacing, themedStyleSheet, typography, useColorScheme
 type ListRowProps = {
   title: string
   wrapTitle?: boolean
+  titleLines?: number
   subtitle?: string
   subtitleMono?: boolean
   subtitleColor?: string
@@ -39,6 +40,7 @@ type ListRowProps = {
 export function ListRow({
   title,
   wrapTitle = false,
+  titleLines = 1,
   subtitle,
   subtitleMono = false,
   subtitleColor,
@@ -79,7 +81,7 @@ export function ListRow({
           destructive && styles.titleDestructive,
           accent && styles.titleAccent
         ]}
-        numberOfLines={wrapTitle ? undefined : 1}
+        numberOfLines={wrapTitle ? undefined : titleLines}
       >
         {titlePrefix !== undefined ? <Text style={styles.titlePrefix}>{`${titlePrefix} `}</Text> : null}
         {title}

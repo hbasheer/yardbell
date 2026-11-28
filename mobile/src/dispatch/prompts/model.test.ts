@@ -9,6 +9,7 @@ import {
   filterPrompts,
   formOf,
   hasHiddenDefaults,
+  hasUnsavedEdits,
   promptToRun,
   runHref,
   versionLine
@@ -35,6 +36,13 @@ describe('saved prompt model', () => {
     expect(canSave({ editing: null, name: '  ', text: 'x' })).toBe(false)
     expect(canSave({ editing: null, name: 'a', text: ' ' })).toBe(false)
     expect(canSave({ editing: null, name: 'a', text: 'b' })).toBe(true)
+  })
+
+  it('sees unsaved edits to the prompt being edited', () => {
+    expect(hasUnsavedEdits(list, formOf(list[1]))).toBe(false)
+    expect(hasUnsavedEdits(list, { ...formOf(list[1]), text: 'Review it' })).toBe(true)
+    expect(hasUnsavedEdits(list, { ...formOf(list[1]), name: 'Review 2' })).toBe(true)
+    expect(hasUnsavedEdits(list, emptyForm())).toBe(true)
   })
 
   it('limits the name to 60 characters', () => {

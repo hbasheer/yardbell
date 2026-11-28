@@ -16,6 +16,15 @@ function dispatchRoute(server: PairedServer, query: string): string {
   return `/dispatch/${encodeURIComponent(server.id)}/${encodeURIComponent(conversation)}`
 }
 
+function pipelineRoute(server: PairedServer, query: string): string {
+  const params = new URLSearchParams(query)
+  const run = params.get('run')
+  const pipeline = params.get('p')
+  const base = `/pipelines/${encodeURIComponent(server.id)}`
+  if (run) return `${base}/run/${encodeURIComponent(run)}${pipeline ? `?p=${encodeURIComponent(pipeline)}` : ''}`
+  return pipeline ? `${base}/${encodeURIComponent(pipeline)}` : base
+}
+
 const atBoundary = (next: string) => next === '' || next === '/' || next === '?' || next === '#'
 
 export function routeForLink(link: string, servers: PairedServer[]): string {
@@ -26,6 +35,7 @@ export function routeForLink(link: string, servers: PairedServer[]): string {
     const [path, query = ''] = rest.split('#')[0].split('?')
     if (path === '/proposals' || path === '/proposals/') return `/inbox/${encodeURIComponent(server.id)}`
     if (path === '/dispatch' || path === '/dispatch/') return dispatchRoute(server, query)
+    if (path === '/pipeline' || path === '/pipeline/') return pipelineRoute(server, query)
     if (!rest.startsWith('/term/')) continue
     const session = sessionPath(rest.slice('/term/'.length))
     if (!session) return '/'

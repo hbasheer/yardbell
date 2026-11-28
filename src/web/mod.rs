@@ -996,6 +996,7 @@ async fn state_json(
     view.server = Some(server_view(&cfg));
     view.proposals = app.proposals.waiting();
     view.waiting = app.dispatch.waiting();
+    view.runs_waiting = app.pipelines.waiting_for_person();
     with_reviews(&app, &mut view);
     let projects = projects_api::group(&cfg, &view);
     let reply = StateReply {

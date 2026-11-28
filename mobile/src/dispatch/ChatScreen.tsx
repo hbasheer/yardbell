@@ -16,10 +16,13 @@ import { PullDownMenu } from '../ui/PullDownMenu'
 import { LoadErrorState, StateView } from '../ui/StateView'
 import { colors, spacing, themedStyleSheet, useColorScheme } from '../ui/theme'
 import { useKeyboardHeight } from '../ui/useKeyboardHeight'
-import { attachmentSource, deleteConversation, getRunsOn, getTriggers, listPrompts, setTriggerEnabled } from './api'
+import { attachmentSource, deleteConversation, getRunsOn, listPrompts } from './api'
+import { getTriggers, setTriggerEnabled, type TriggerList } from '../settings/serverApi'
 import { triggerStanding } from './cards'
 import { backendNote, dockOf, liveLookup, shownPending, starters, trackedRows } from './chatModel'
 import { Intro, SessionsStrip } from './chatParts'
+import { InsightsSheet, type InsightsTarget } from './insights/InsightsSheet'
+import { parseSuggestion, type Suggestion } from './insights/model'
 import { Composer } from './composer'
 import { BUSY_DELETE, dispatchHref, newChatHref, promptsHref } from './listModel'
 import { promptToRun } from './prompts/model'
@@ -27,7 +30,6 @@ import { PendingDock } from './PendingDock'
 import { Transcript } from './Transcript'
 import { MicButton } from './voice/MicButton'
 import { stopSpeaking, useSpokenReplies } from './voice/useSpokenReplies'
-import type { TriggerList } from './types'
 import { useConversation } from './useConversation'
 
 const DOCK_BODY = 160
@@ -35,7 +37,7 @@ const DOCK_BODY_TYPING = 72
 
 const messageOf = (error: unknown) => (error instanceof Error ? error.message : String(error))
 
-export function ChatScreen({ server, routeId, run, serverCount }: { server: PairedServer; routeId: string; run?: string; serverCount: number }) {
+export function ChatScreen({ server, routeId, run, ask, suggest, serverCount }: { server: PairedServer; routeId: string; run?: string; ask?: string; suggest?: string; serverCount: number }) {
   useColorScheme()
   const router = useRouter()
   const insets = useSafeAreaInsets()
@@ -47,15 +49,16 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [chosen, setChosen] = useState<string | null>(null)
   const [fill, setFill] = useState<{ text: string; at: number } | undefined>()
+  const [insights, setInsights] = useState<InsightsTarget | null>(null)
   const [triggers, setTriggers] = useState<TriggerList | null>(null)
   const menuRef = useRef<HostInstance>(null)
 
-  const onCreated = useCallback((id: string) => router.setParams({ id, run: undefined }), [router])
+  const onCreated = useCallback((id: string) => router.setParams({ id, run: undefined, suggest: undefined }), [router])
   const onMoved = useCallback((id: string) => router.push(dispatchHref(server.id, id) as never), [router, server.id])
   const chat = useConversation(server, routeId, onCreated, onMoved)
   const { reload } = chat
 
-  const runsOn = useQuery({ queryKey: ['dispatch', 'runs-on', server.id], queryFn: () => getRunsOn(server), staleTime: 30_000 })
+  const runsOn = useQuery({ queryKey: ['dispatch', 'runs-on', server.id], queryFn: () => getRunsOn(server), staleTime: 30_000, meta: { serverId: server.id } })
   const prompts = useQuery({ queryKey: ['dispatch', 'prompts', server.id], queryFn: () => listPrompts(server), staleTime: 15_000 })
 
   const waitingOnServer = state?.waiting
@@ -100,6 +103,8 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
 
   const source = useCallback((file: string) => (chat.id ? attachmentSource(server, chat.id, file) : null), [server, chat.id])
 
+  const reviewing = useMemo(() => ({ server, conversation: chat.id }), [server, chat.id])
+
   const dock = useMemo(() => dockOf(chat.events), [chat.events])
   const shown = shownPending(dock.steps, chosen)
   const live = useMemo(() => liveLookup(state), [state])
@@ -142,6 +147,35 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
       setRunError(`Could not run "${prompt.name}": ${messageOf(error)}`)
     )
   }, [run, routeId, prompts.data, prompts.isError, prompts.error])
+
+  const suggestRef = useRef(false)
+  useEffect(() => {
+    if (!suggest || routeId !== 'new' || suggestRef.current) return
+    suggestRef.current = true
+    const suggestion = parseSuggestion(suggest)
+    if (!suggestion) {
+      setRunError('The suggestion could not be read. Open Insights again and tap Suggest a better prompt.')
+      return
+    }
+    sendRef.current({ text: suggestion.text, attachments: [], improve: suggestion.improve }).catch((error) =>
+      setRunError(`Could not ask Dispatch for a better prompt: ${messageOf(error)}`)
+    )
+  }, [suggest, routeId])
+
+  const suggestHere = useCallback(
+    (suggestion: Suggestion) =>
+      sendRef.current({ text: suggestion.text, attachments: [], improve: suggestion.improve }).catch((error) =>
+        setRunError(`Could not ask Dispatch for a better prompt: ${messageOf(error)}`)
+      ),
+    []
+  )
+
+  const asked = useRef(false)
+  useEffect(() => {
+    if (!ask || routeId !== 'new' || asked.current) return
+    asked.current = true
+    setFill({ text: ask, at: Date.now() })
+  }, [ask, routeId])
 
   const confirmDelete = async () => {
     setDeleting(false)
@@ -192,7 +226,9 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
         shownStep={shown?.id ?? null}
         onShowStep={setChosen}
         onOpenSession={openSession}
+        onInsights={(machine, name) => setInsights({ machine, name })}
         source={source}
+        review={reviewing}
       />
     )
 
@@ -253,9 +289,10 @@ export function ChatScreen({ server, routeId, run, serverCount }: { server: Pair
         onSend={send}
         onStop={() => void chat.stop()}
         fill={fill}
-        micSlot={(mic) => <MicButton server={server} runsOn={runsOn.data} onText={mic.insert} onProblem={mic.notify} />}
+        micSlot={(mic) => <MicButton server={server} runsOn={runsOn.data} loading={runsOn.isPending} onText={mic.insert} onProblem={mic.notify} />}
       />
       <PullDownMenu visible={menuOpen} anchorRef={menuRef} groups={menu} onClose={() => setMenuOpen(false)} />
+      <InsightsSheet server={server} target={insights} onClose={() => setInsights(null)} onSuggest={(suggestion) => void suggestHere(suggestion)} />
       <ConfirmModal
         visible={deleting}
         title="Delete this chat?"

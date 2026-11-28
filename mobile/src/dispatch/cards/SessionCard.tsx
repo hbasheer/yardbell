@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Pressable, StyleSheet, Text, View } from 'react-native'
-import { ScanLine, Search, SquareTerminal } from 'lucide-react-native'
+import { Activity, ScanLine, Search, SquareTerminal } from 'lucide-react-native'
 import { isAlreadyDecided } from '../api'
 import type { SessionEvent } from '../types'
 import { ActionSheet } from '../../ui/ActionSheet'
@@ -12,6 +12,7 @@ export type SessionCardProps = {
   event: SessionEvent
   onAnswer: (key: string) => Promise<void>
   onOpen?: (machine: string, name: string) => void
+  onInsights?: (machine: string, name: string) => void
   onReview?: () => Promise<void>
   onScan?: (kind: 'dead_code' | 'test_gaps' | 'security') => Promise<void>
 }
@@ -20,7 +21,7 @@ function errorText(caught: unknown, fallback: string): string {
   return caught instanceof Error && caught.message ? caught.message : fallback
 }
 
-export function SessionCard({ event, onAnswer, onOpen, onReview, onScan }: SessionCardProps) {
+export function SessionCard({ event, onAnswer, onOpen, onInsights, onReview, onScan }: SessionCardProps) {
   useColorScheme()
   const [open, setOpen] = useState(false)
   const [asking, setAsking] = useState<string | null>(null)
@@ -101,6 +102,7 @@ export function SessionCard({ event, onAnswer, onOpen, onReview, onScan }: Sessi
         ))}
         {reviewable && onReview ? <CardButton label="Review branch" icon={Search} busy={working === 'review'} disabled={working !== null} onPress={() => void ask('review', onReview)} /> : null}
         {reviewable && event.path && onScan ? <CardButton label="Scan" icon={ScanLine} busy={working === 'scan'} disabled={working !== null} onPress={() => setMenu(true)} /> : null}
+        {onInsights ? <CardButton label="Insights" icon={Activity} onPress={() => onInsights(event.machine, event.name)} /> : null}
         {event.state !== 'ended' && onOpen ? <CardButton label="Open" icon={SquareTerminal} onPress={() => onOpen(event.machine, event.name)} /> : null}
       </Buttons>
       {event.answer ? <NoteLine text={answeredLine(event)} /> : null}

@@ -305,6 +305,11 @@ impl Run {
             .expect("a run carries its definition")
     }
 
+    pub fn asks_for_person(&self) -> bool {
+        self.state == RunState::Waiting
+            || (self.state == RunState::Queued && self.held.as_ref().is_some_and(|h| h.told))
+    }
+
     // The end of the run's id, which its session names and result markers carry.
     pub fn tag(&self) -> &str {
         &self.id[self.id.len().saturating_sub(6)..]

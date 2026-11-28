@@ -13,38 +13,48 @@ type Props = {
   models: ModelChoice[]
   current: string
   agentLabel: string
+  title?: string
+  searchLabel?: string
+  allowCustom?: boolean
+  note?: string
   onPick: (id: string) => void
   onClose: () => void
 }
 
-export function ModelSheet({ visible, models, current, agentLabel, onPick, onClose }: Props) {
+const COMPOSER_NOTE = 'The change applies from the next message. It is a setting of this server, the same one the web page uses.'
+
+export function ModelSheet({ visible, models, current, agentLabel, title = 'Model', searchLabel = 'models', allowCustom = false, note = COMPOSER_NOTE, onPick, onClose }: Props) {
   useColorScheme()
   const [query, setQuery] = useState('')
   const shown = useMemo(() => filterModels(models, query), [models, query])
+  const typed = query.trim()
+  const custom = allowCustom && typed && !models.some((m) => m.id === typed)
+  const choose = (id: string) => {
+    onPick(id)
+    onClose()
+  }
   return (
     <BottomDrawer visible={visible} onClose={onClose} onAfterClose={() => setQuery('')}>
-      <SheetHeader title="Model" subtitle={agentLabel} onClose={onClose} />
-      <SearchField value={query} onChangeText={setQuery} placeholder="Search models" accessibilityLabel="Search models" style={styles.search} />
-      {shown.length ? (
+      <SheetHeader title={title} subtitle={agentLabel} onClose={onClose} />
+      <SearchField
+        value={query}
+        onChangeText={setQuery}
+        placeholder={allowCustom ? 'Search or type a model' : `Search ${searchLabel}`}
+        accessibilityLabel={`Search ${searchLabel}`}
+        style={styles.search}
+      />
+      {shown.length || custom ? (
         <ListGroup>
           {shown.map((model) => (
-            <ListRow
-              key={model.id}
-              title={model.label}
-              subtitle={model.description}
-              selected={model.id === current}
-              onPress={() => {
-                onPick(model.id)
-                onClose()
-              }}
-            />
+            <ListRow key={model.id || 'default'} title={model.label} subtitle={model.description} selected={model.id === current} onPress={() => choose(model.id)} />
           ))}
+          {custom ? <ListRow key="custom" title={`Use ${typed}`} accent onPress={() => choose(typed)} /> : null}
         </ListGroup>
       ) : (
-        <Text style={styles.note}>No model matches</Text>
+        <Text style={styles.note}>Nothing matches.</Text>
       )}
       <View style={styles.footer}>
-        <Text style={styles.note}>The change applies from the next message. It is a setting of this server, the same one the web page uses.</Text>
+        <Text style={styles.note}>{note}</Text>
       </View>
     </BottomDrawer>
   )

@@ -19,6 +19,11 @@ export function filterPrompts(prompts: readonly SavedPrompt[], query: string): S
   return shown.filter((prompt) => `${prompt.name} ${prompt.text}`.toLowerCase().includes(needle))
 }
 
+export function hasUnsavedEdits(prompts: readonly SavedPrompt[] | undefined, form: PromptForm): boolean {
+  const saved = form.editing ? prompts?.find((prompt) => prompt.name === form.editing) : undefined
+  return !saved || saved.name !== form.name || saved.text !== form.text
+}
+
 export const canSave = (form: PromptForm) => form.name.trim().length > 0 && form.text.trim().length > 0
 
 export const clampName = (name: string) => name.slice(0, NAME_LIMIT)

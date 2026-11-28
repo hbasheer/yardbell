@@ -1,5 +1,5 @@
 import { useRouter } from 'expo-router'
-import { Ellipsis, Inbox, MessagesSquare, Plus, Search, Server, Trash2 } from 'lucide-react-native'
+import { Ellipsis, Inbox, MessagesSquare, Plus, Search, Server, Trash2, Workflow } from 'lucide-react-native'
 import { useRef, useState } from 'react'
 import { RefreshControl, ScrollView, Text, View, type HostInstance } from 'react-native'
 import { routeIfSignedOut } from '@/api/signedOut'
@@ -7,6 +7,7 @@ import { ServerError } from '@/api/client'
 import { HeaderIconButton, HomeHeader } from '@/home/HomeHeader'
 import { HomeSectionHeading } from '@/home/HomeSectionHeading'
 import { inboxHref } from '@/inbox/model'
+import { pipelinesHref } from '@/pipelines/screenModel'
 import type { PairedServer } from '@/servers/store'
 import { ActionSheet, type ActionSheetAction } from '@/ui/ActionSheet'
 import { ConfirmModal } from '@/ui/ConfirmModal'
@@ -121,6 +122,11 @@ export function ListScreen({ servers, rows, ready, errors, refresh, bottomPad }:
       onPress: () => onServer('Which server for saved prompts?', (s) => router.push(promptsHref(s.id) as never))
     },
     { label: 'Inbox', icon: Inbox, onPress: () => onServer('Which server for the inbox?', (s) => router.push(inboxHref(s.id) as never)) },
+    {
+      label: 'Pipelines',
+      icon: Workflow,
+      onPress: () => onServer('Which server for pipelines?', (s) => router.push(pipelinesHref(s.id) as never))
+    },
     {
       label: 'Clear all',
       icon: Trash2,

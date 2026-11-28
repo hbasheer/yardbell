@@ -132,6 +132,7 @@ describe('isOlder', () => {
 describe('sentEvent and captions', () => {
   it('builds the message shown while it is sent', () => {
     expect(sentEvent('hi', [], { name: 'Fix a bug', version: 2 })).toEqual({ role: 'user', text: 'hi', task: { name: 'Fix a bug', version: 2 } })
+    expect(sentEvent('hi', [], undefined, { machine: 'hp', name: 'yardbell-2' }).improve).toEqual({ machine: 'hp', name: 'yardbell-2' })
     expect(sentEvent('', [{ name: 'a.txt', data: 'aGVsbG8h' }]).attachments).toEqual([{ file: '', name: 'a.txt', kind: 'file', size: 6 }])
   })
 

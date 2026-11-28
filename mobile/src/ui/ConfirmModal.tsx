@@ -44,7 +44,7 @@ export function ConfirmContent({
       <View style={styles.content}>
         {media ? <View style={styles.media}>{media}</View> : null}
         <Text style={[styles.title, media ? styles.centred : null]}>{title}</Text>
-        {message ? <Text style={[styles.message, media ? styles.centred : null]}>{message}</Text> : null}
+        {message ? <Text selectable style={[styles.message, media ? styles.centred : null]}>{message}</Text> : null}
         {details}
       </View>
       <View style={styles.buttons}>
