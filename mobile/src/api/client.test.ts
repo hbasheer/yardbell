@@ -73,14 +73,14 @@ test('old_server_is_reported', async () => {
   const fetchImpl = vi.fn(async () => json(PRE_APP_API_REFUSAL, 403))
   const err = await failure(pair(LINK, 'Pixel', fetchImpl as unknown as typeof fetch))
   expect(err).toBeInstanceOf(ServerTooOldError)
-  expect(err.message).toBe('Update Yardbell on http://100.64.0.10:4000 to 0.11.110 or later')
+  expect(err.message).toBe('Update Yardbell on http://100.64.0.10:4000 to 0.11.111 or later')
 })
 
 test('old server refusing the passcode sign-in is reported', async () => {
   const fetchImpl = vi.fn(async () => json(PRE_APP_API_REFUSAL, 403))
   const err = await failure(signIn('100.64.0.10:4000', '1234', 'Pixel', fetchImpl as unknown as typeof fetch))
   expect(err).toBeInstanceOf(ServerTooOldError)
-  expect(err.message).toBe('Update Yardbell on http://100.64.0.10:4000 to 0.11.110 or later')
+  expect(err.message).toBe('Update Yardbell on http://100.64.0.10:4000 to 0.11.111 or later')
 })
 
 test('other 403 replies to pairing stay server errors', async () => {
@@ -111,7 +111,7 @@ test('about without api is reported with the machine name', async () => {
     .mockResolvedValueOnce(json({ machine: 'hp', version: '0.11.100' }))
   const err = await failure(pair(LINK, 'Pixel', fetchImpl as unknown as typeof fetch))
   expect(err).toBeInstanceOf(ServerTooOldError)
-  expect(err.message).toBe('Update Yardbell on hp to 0.11.110 or later')
+  expect(err.message).toBe('Update Yardbell on hp to 0.11.111 or later')
 })
 
 test('pair_saves_machine_from_about', async () => {
