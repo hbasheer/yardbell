@@ -1,12 +1,15 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router'
-import { ChevronLeft, Eraser, ExternalLink, FileDiff, FolderTree, Info, MoreHorizontal, Square, Terminal, Type } from 'lucide-react-native'
+import { Activity, ChevronLeft, Eraser, ExternalLink, FileDiff, FolderTree, Info, MoreHorizontal, Search, Square, Terminal, Type } from 'lucide-react-native'
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppState, Keyboard, KeyboardAvoidingView, Linking, Pressable, StyleSheet, Text, View, type HostInstance } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { WebView, type WebViewMessageEvent } from 'react-native-webview'
 import { ApiClient } from '@/api/client'
 import * as Clipboard from 'expo-clipboard'
+import { InsightsSheet } from '@/dispatch/insights/InsightsSheet'
+import { suggestHref } from '@/dispatch/insights/model'
+import { useReviewBranch } from '@/dispatch/useReviewBranch'
 import { machineHref } from '@/home/presentation'
 import { placeHref } from '@/places/model'
 import { useNewSession } from '@/new-session/NewSessionProvider'
@@ -302,6 +305,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
   const [tabsOpen, setTabsOpen] = useState(false)
   const [actionsOpen, setActionsOpen] = useState(false)
   const [sizeOpen, setSizeOpen] = useState(false)
+  const [insightsOpen, setInsightsOpen] = useState(false)
   const moreRef = useRef<HostInstance>(null)
   const stopSession = useStopSession(server, () =>
     router.canGoBack() ? router.back() : router.replace(machineHref({ serverId, machine }) as never)
@@ -309,6 +313,7 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
 
   const report = (title: string) => (error: unknown) =>
     setFailure({ title, message: error instanceof Error ? error.message : String(error) })
+  const review = useReviewBranch(server, setFailure)
 
   const attach = useAttach(
     server,
@@ -387,6 +392,8 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
         hint: sessionRoot ? undefined : 'No folder known',
         onPress: () => sessionRoot && router.push(placeHref('files', serverId, machine, sessionRoot) as never)
       },
+      { label: 'Insights', icon: Activity, onPress: () => setInsightsOpen(true) },
+      { label: 'Review branch', icon: Search, disabled: review.busy, loading: review.busy, onPress: () => void review.start(machine, name) },
       { label: 'Text size', icon: Type, status: `${fontSize}`, closeBeforePress: true, onPress: () => setSizeOpen(true) }
     ],
     [stop]
@@ -568,6 +575,12 @@ function Session({ server, machine, name }: { server: PairedServer; machine: str
         onClose={() => setActionsOpen(false)}
       />
       <ActionSheet visible={sizeOpen} title="Text size" actions={sizeActions} onClose={() => setSizeOpen(false)} />
+      <InsightsSheet
+        server={server}
+        target={insightsOpen ? { machine, name } : null}
+        onClose={() => setInsightsOpen(false)}
+        onSuggest={(suggestion) => router.push(suggestHref(serverId, suggestion) as never)}
+      />
       {stopSession.modals}
       <ConfirmModal
         visible={failure !== null}

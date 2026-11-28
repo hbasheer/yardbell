@@ -20,6 +20,7 @@ import { SwipeCell } from '@/ui/SwipeCell'
 import { colors, radii, spacing, themedStyleSheet, useColorScheme } from '@/ui/theme'
 import { deletePrompt, listPrompts, restorePrompts, savePrompt } from '../api'
 import type { SavedPrompt } from '../types'
+import { historyHref } from './history'
 import {
   canSave,
   clampName,
@@ -119,6 +120,13 @@ export function PromptsScreen({ server, serverCount }: { server: PairedServer; s
     setRefreshing(true)
     await query.refetch()
     setRefreshing(false)
+  }
+
+  const openHistory = () => {
+    const name = form.editing
+    if (!name) return
+    setEditing(false)
+    router.push(historyHref(server.id, name) as never)
   }
 
   const run = (prompt: SavedPrompt) => router.push(runHref(server.id, prompt.name) as never)
@@ -265,7 +273,14 @@ export function PromptsScreen({ server, serverCount }: { server: PairedServer; s
             accessibilityLabel="What to ask Dispatch"
             style={styles.textBox}
           />
-          {formVersion(prompts, form) ? <Text style={styles.version}>{formVersion(prompts, form)}</Text> : null}
+          {formVersion(prompts, form) ? (
+            <View style={styles.versionRow}>
+              <Text style={styles.version}>{formVersion(prompts, form)}</Text>
+              <Pressable onPress={openHistory} disabled={saving} hitSlop={8} accessibilityRole="link" accessibilityLabel={`History of ${form.name}`}>
+                <Text style={styles.historyLink}>History</Text>
+              </Pressable>
+            </View>
+          ) : null}
           {formError ? <Text style={styles.formError}>{formError}</Text> : null}
         </View>
       </BottomDrawer>
@@ -313,6 +328,8 @@ const styles = themedStyleSheet(() => ({
   counter: { alignSelf: 'flex-end', fontSize: 11, color: colors.textMuted },
   field: { backgroundColor: colors.sheetGroup },
   textBox: { backgroundColor: colors.sheetGroup, minHeight: 140, maxHeight: 220, paddingTop: spacing.md },
-  version: { fontSize: 12, color: colors.textMuted, marginTop: spacing.sm },
+  versionRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.md, marginTop: spacing.sm },
+  version: { fontSize: 12, color: colors.textMuted },
+  historyLink: { fontSize: 12, fontWeight: '600', color: colors.accentBlue, textDecorationLine: 'underline' },
   formError: { fontSize: 13, color: colors.statusRed, marginTop: spacing.sm }
 }))

@@ -16,7 +16,7 @@ import { listPrompts } from '../api'
 import { getServerSettings, setDispatchSettings } from '../../settings/serverApi'
 import { AttachmentError, MAX_FILES, checkAttachments, prepareAttachments, type PickedFile } from '../attachments'
 import { deviceFiles } from '../files'
-import type { AskAttachment, Backend, SavedPrompt, TaskMark } from '../types'
+import type { AskAttachment, Backend, ImproveMark, SavedPrompt, TaskMark } from '../types'
 import { AttachmentStrip } from './AttachmentStrip'
 import { asyncDrafts, draftKey, restoreText, saveDraft, switchDraft } from './drafts'
 import { MentionMenu } from './MentionMenu'
@@ -39,7 +39,7 @@ export const BUSY_TEXT = 'Dispatch is still working on the last message. Stop it
 const DRAFT_DELAY_MS = 400
 const PLACEHOLDER = 'Ask Dispatch anything. @ names a machine, session or folder, / inserts a saved prompt'
 
-export type SendPayload = { text: string; attachments: AskAttachment[]; task?: TaskMark }
+export type SendPayload = { text: string; attachments: AskAttachment[]; task?: TaskMark; improve?: ImproveMark }
 
 export type ComposerProps = {
   server: PairedServer

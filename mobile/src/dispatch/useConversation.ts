@@ -230,10 +230,10 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
   )
 
   const send = useCallback(
-    async ({ text, attachments, task }: SendPayload) => {
+    async ({ text, attachments, task, improve }: SendPayload) => {
       if (busyRef.current || phase.current !== 'idle') throw new Error(BUSY_TEXT)
       const before = eventsRef.current
-      const sent = sentEvent(text, attachments, task)
+      const sent = sentEvent(text, attachments, task, improve)
       local((list) => [...list, sent])
       phase.current = 'sending'
       setBusy(true)
@@ -258,7 +258,7 @@ export function useConversation(server: PairedServer, routeId: string, onCreated
       try {
         await ask(
           server,
-          { ...(cid ? { conversation: cid } : {}), text, ...(task ? { task } : {}), ...(attachments.length ? { attachments } : {}) },
+          { ...(cid ? { conversation: cid } : {}), text, ...(task ? { task } : {}), ...(improve ? { improve } : {}), ...(attachments.length ? { attachments } : {}) },
           {
             signal: controller.signal,
             onConversation: (next) => {

@@ -689,12 +689,12 @@ function promptHistoryApi(fx, path, url, method, body, json, res) {
     const versions = history[name] ?? []
     const text = (n) => versions.find((v) => v.n === n)?.text
     if (text(from) === undefined || text(to) === undefined) return json(res, 404, { error: `version ${text(from) === undefined ? from : to} of ${name} does not exist` }), true
-    const a = text(from).split(' ')
-    const b = text(to).split(' ')
+    const a = text(from).split(/(\s+)/)
+    const b = text(to).split(/(\s+)/)
     const table = Array.from({ length: a.length + 1 }, () => new Array(b.length + 1).fill(0))
     for (let i = a.length - 1; i >= 0; i--) for (let j = b.length - 1; j >= 0; j--) table[i][j] = a[i] === b[j] ? table[i + 1][j + 1] + 1 : Math.max(table[i + 1][j], table[i][j + 1])
     const parts = []
-    const push = (op, t) => (parts.at(-1)?.op === op ? (parts.at(-1).text += ` ${t}`) : parts.push({ op, text: t }))
+    const push = (op, t) => (parts.at(-1)?.op === op ? (parts.at(-1).text += t) : parts.push({ op, text: t }))
     let i = 0
     let j = 0
     while (i < a.length || j < b.length) {
@@ -715,6 +715,12 @@ function promptHistoryApi(fx, path, url, method, body, json, res) {
     return json(res, 200, { tasks: fx.dispatch.prompts, history: { name: body.name, builtin: Boolean(prompt.builtin), current: prompt.version, versions: [...versions].sort((a, b) => b.n - a.n) } }), true
   }
   return false
+}
+
+function reviewApi(path, method, body, json, res) {
+  if (path !== '/dispatch/reviews' || method !== 'POST') return false
+  if (body.name === 'gone-1') return json(res, 502, { error: `${body.machine} is not reachable. Check that its Yardbell is running.` }), true
+  return json(res, 200, { conversation: 'roles00000000001', step: { role: 'action', id: 'review-1', tool: 'review_session', input: { machine: body.machine, name: body.name }, status: 'approved' } }), true
 }
 
 function insightsApi(path, json, res) {
@@ -801,9 +807,8 @@ export function step3Fixtures(dispatch, serverName) {
     memory: memoryFixtures(),
     promptHistory: {
       'Fix a bug': [
-        { n: 1, text: 'Find the failing test. Change code until it passes.', at: minutes(9000), restored: 0 },
-        { n: 2, text: 'Find the failing test first. Change the smallest amount of code that makes it pass.', at: minutes(2000) },
-        { n: 3, text: 'Find the failing test. Change code until it passes.', at: minutes(300), restored: 1 }
+        { n: 1, text: 'Find the failing test. Change code until it passes.', at: '' },
+        { n: 2, text: 'Find the failing test first. Change the smallest amount of code that makes it pass.', at: minutes(2000) }
       ]
     }
   }
@@ -813,7 +818,7 @@ export function runsWaiting(fx) {
   return fx.pipelines.runs.filter(asksForYou).length
 }
 
-const OWNED = /^\/(machines\/[^/]+\/(changes|files|file)(\/|$)|api\/(pipelines|runs|triggers|diagrams$|settings\/phone)|dispatch\/(memory|tasks\/(history|diff|versions\/restore))|sessions\/[^/]+\/[^/]+\/insights$)/
+const OWNED = /^\/(machines\/[^/]+\/(changes|files|file)(\/|$)|api\/(pipelines|runs|triggers|diagrams$|settings\/phone)|dispatch\/(memory|reviews$|tasks\/(history|diff|versions\/restore))|sessions\/[^/]+\/[^/]+\/insights$)/
 
 export async function step3Api(req, res, fx, { json }) {
   const url = new URL(req.url, 'http://x')
@@ -832,6 +837,7 @@ export async function step3Api(req, res, fx, { json }) {
     pipelineApi(fx, path, url, method, body, json, res) ||
     triggersApi(fx, path, method, body, json, res) ||
     memoryApi(fx, path, method, body, json, res) ||
+    reviewApi(path, method, body, json, res) ||
     promptHistoryApi(fx, path, url, method, body, json, res) ||
     insightsApi(path, json, res)
   )

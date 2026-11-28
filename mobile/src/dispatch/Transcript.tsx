@@ -40,6 +40,7 @@ export type TranscriptProps = {
   shownStep: string | null
   onShowStep: (id: string) => void
   onOpenSession: (machine: string, name: string) => void
+  onInsights?: (machine: string, name: string) => void
   source: (file: string) => Source | null
   review?: { server: PairedServer; conversation: string | null }
 }
@@ -104,6 +105,7 @@ export function Transcript(props: TranscriptProps) {
             shownStep={props.shownStep}
             onShowStep={props.onShowStep}
             onOpenSession={props.onOpenSession}
+            onInsights={props.onInsights}
             source={props.source}
             review={props.review}
           />
@@ -157,11 +159,12 @@ type BlockProps = {
   shownStep: string | null
   onShowStep: (id: string) => void
   onOpenSession: (machine: string, name: string) => void
+  onInsights?: (machine: string, name: string) => void
   source: (file: string) => Source | null
   review?: { server: PairedServer; conversation: string | null }
 }
 
-const BlockView = memo(function BlockView({ block, running, streaming, events, steps, actions, live, machines, agents, prompts, shownStep, onShowStep, onOpenSession, source, review: reviewing }: BlockProps) {
+const BlockView = memo(function BlockView({ block, running, streaming, events, steps, actions, live, machines, agents, prompts, shownStep, onShowStep, onOpenSession, onInsights, source, review: reviewing }: BlockProps) {
   const index = block.key
   const answer = useCallback((key: string) => actions.answer(index, key), [actions, index])
   const review = useCallback(() => actions.review(index), [actions, index])
@@ -217,7 +220,7 @@ const BlockView = memo(function BlockView({ block, running, streaming, events, s
       body = <ResultsCard event={event} live={live} onReview={reviewChild} onOpen={onOpenSession} />
       break
     case 'session':
-      body = <SessionCard event={event} onAnswer={answer} onOpen={onOpenSession} onReview={review} onScan={scan} />
+      body = <SessionCard event={event} onAnswer={answer} onOpen={onOpenSession} onInsights={onInsights} onReview={review} onScan={scan} />
       break
     case 'review':
       body = <ReviewCard event={event} view={reviewing?.conversation ? { server: reviewing.server, conversation: reviewing.conversation, card: index } : undefined} onSettle={settle} loadTargets={loadTargets} />

@@ -2,6 +2,7 @@ import * as Clipboard from 'expo-clipboard'
 import { useLocalSearchParams, useRouter } from 'expo-router'
 import {
   ChevronLeft,
+  Activity,
   ExternalLink,
   FileDiff,
   FolderOpen,
@@ -9,6 +10,7 @@ import {
   GitBranch,
   MoreHorizontal,
   Plus,
+  Search,
   SlidersHorizontal,
   Square,
   Terminal,
@@ -18,6 +20,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { Animated, Linking, Pressable, SectionList, StyleSheet, Text, View, type HostInstance } from 'react-native'
 import { useSafeAreaInsets } from 'react-native-safe-area-context'
 import { sessionHref } from '@/home/presentation'
+import { InsightsSheet, type InsightsTarget } from '@/dispatch/insights/InsightsSheet'
+import { suggestHref } from '@/dispatch/insights/model'
+import { useReviewBranch } from '@/dispatch/useReviewBranch'
 import { pickerHref, placeHref } from '@/places/model'
 import { useNewSession } from '@/new-session/NewSessionProvider'
 import { useStopSession } from '@/session/useStopSession'
@@ -119,6 +124,8 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
   const [rowMenu, setRowMenu] = useState<ServerSession | null>(null)
   const stopSession = useStopSession(server)
   const [failure, setFailure] = useState<{ title: string; message: string } | null>(null)
+  const [insights, setInsights] = useState<InsightsTarget | null>(null)
+  const review = useReviewBranch(server, setFailure)
   const moreRef = useRef<HostInstance>(null)
   const listRef = useRef<SectionList<Row, Section>>(null)
 
@@ -188,6 +195,17 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
             setFailure({ title: 'Could not open the pull request', message: error instanceof Error ? error.message : String(error) })
           )
         }
+      })
+    }
+    if (session.tmux) {
+      const name = session.tmux
+      actions.push({ label: 'Insights', icon: Activity, onPress: () => setInsights({ machine, name }) })
+      actions.push({
+        label: 'Review branch',
+        icon: Search,
+        disabled: review.busy,
+        loading: review.busy,
+        onPress: () => void review.start(machine, name)
       })
     }
     const branch = session.branch && session.branch !== '-' ? session.branch : null
@@ -387,6 +405,12 @@ function Machine({ server, machine, multipleServers }: { server: PairedServer; m
         message={rowMenu?.branch && rowMenu.branch !== '-' ? rowMenu.branch : undefined}
         actions={rowMenu ? rowActions(rowMenu) : []}
         onClose={() => setRowMenu(null)}
+      />
+      <InsightsSheet
+        server={server}
+        target={insights}
+        onClose={() => setInsights(null)}
+        onSuggest={(suggestion) => router.push(suggestHref(server.id, suggestion) as never)}
       />
       {stopSession.modals}
       <ConfirmModal
